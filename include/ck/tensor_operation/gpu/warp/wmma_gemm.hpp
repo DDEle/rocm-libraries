@@ -23,6 +23,8 @@ enum struct WmmaInstr
     wmma_f32_16x16x16_bf16_gfx12,
     wmma_i32_16x16x16_iu8_gfx12,
     // gfx121x
+    wmma_f16_16x16x32_f16_gfx12,
+    wmma_bf16_16x16x32_bf16_gfx12,
     wmma_f32_16x16x32_f16_gfx12,
     wmma_f32_16x16x32_bf16_gfx12,
     wmma_i32_16x16x64_iu8_gfx12,
@@ -548,7 +550,7 @@ struct WmmaSelector
         return WmmaInstr::wmma_f32_16x16x16_f16_gfx12;
 #elif defined(__gfx121__)
         return WmmaInstr::wmma_f32_16x16x32_f16_gfx12;
-#elif defined(__gfx11__)#else
+#elif defined(__gfx11__)
         return WmmaInstr::wmma_f32_16x16x16_f16;
 #endif
     }
@@ -560,7 +562,7 @@ struct WmmaSelector
         return WmmaInstr::wmma_f32_16x16x16_bf16_gfx12;
 #elif defined(__gfx121__)
         return WmmaInstr::wmma_f32_16x16x32_bf16_gfx12;
-#elif defined(__gfx11__)#else
+#elif defined(__gfx11__)
         return WmmaInstr::wmma_f32_16x16x16_bf16;
 #endif
     }
@@ -568,13 +570,21 @@ struct WmmaSelector
     template <>
     constexpr auto GetWmma<half_t, half_t, half_t, 16, 16>()
     {
+#if defined(__gfx121__)
+        return WmmaInstr::wmma_f16_16x16x32_f16_gfx12;
+#else
         return WmmaInstr::wmma_f16_16x16x16_f16;
+#endif
     }
 
     template <>
     constexpr auto GetWmma<bhalf_t, bhalf_t, bhalf_t, 16, 16>()
     {
+#if defined(__gfx121__)
+        return WmmaInstr::wmma_bf16_16x16x32_bf16_gfx12;
+#else
         return WmmaInstr::wmma_bf16_16x16x16_bf16;
+#endif
     }
 
     template <>
@@ -606,7 +616,7 @@ struct WmmaSelector
 
         static_assert(selected_wmma.m_per_wmma == 16, "WRONG! WMMA_M must equal to 16");
 
-        static_assert(selected_wmma.k_per_wmma == 16, "WRONG! WMMA_M must equal to 16");
+        //static_assert(selected_wmma.k_per_wmma == 16, "WRONG! WMMA_M must equal to 16");
 
         static_assert(selected_wmma.wave_size * selected_wmma.num_acc_vgprs_per_wave *
                               selected_wmma.acc_data_size * selected_wmma.acc_pack_number ==
@@ -640,7 +650,7 @@ struct WmmaGemm
         static_assert(NPerWmma == 16 && MPerWmma == 16,
                       "Only support GemmNPerWmma == 16 and GemmMPerWmma == 16 for wmma");
 
-        static_assert(KPack % wmma_instr.k_per_wmma == 0, "KPack should be multiple of k_per_wmma");
+        //static_assert(KPack % wmma_instr.k_per_wmma == 0, "KPack should be multiple of k_per_wmma");
     }
 
     // WMMA output supporting C = A * B

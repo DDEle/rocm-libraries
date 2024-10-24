@@ -69,10 +69,15 @@ CK_DECLARE_ENV_VAR_BOOL(CK_LOGGING)
 #if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__)
 #define __gfx11__
 #endif
-#if defined(__gfx1200__) || defined(__gfx1201__)
+#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx1210__) || defined(__gfx1211__)
 #define __gfx12__
 #endif
-
+#if defined(__gfx1200__) || defined(__gfx1201__) 
+#define __gfx120__
+#endif
+#if defined(__gfx1210__) || defined(__gfx1211__)
+#define __gfx121__
+#endif
 // buffer resource
 #ifndef __HIP_DEVICE_COMPILE__ // for host code
 #define CK_BUFFER_RESOURCE_3RD_DWORD -1
@@ -145,8 +150,11 @@ CK_DECLARE_ENV_VAR_BOOL(CK_LOGGING)
 
 // V_DOT inline instructions, less efficient since they require adding
 // `s_nop`s to avoid hazard
+#ifdef __gfx121__
+#define CK_USE_AMD_V_DOT_INLINE_ASM 1
+#else
 #define CK_USE_AMD_V_DOT_INLINE_ASM 0
-
+#endif
 // inner product using V_DOT with DPP8 modifiers
 #define CK_USE_AMD_V_DOT_DPP8_INLINE_ASM 1
 

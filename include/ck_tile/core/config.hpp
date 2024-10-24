@@ -17,8 +17,14 @@
 #if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__)
 #define __gfx11__
 #endif
-#if defined(__gfx1200__) || defined(__gfx1201__)
+#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx1210__) || defined(__gfx1211__)
 #define __gfx12__
+#endif
+#if defined(__gfx1200__) || defined(__gfx1201__) 
+#define __gfx120__
+#endif
+#if defined(__gfx1210__) || defined(__gfx1211__)
+#define __gfx121__
 #endif
 
 #include "hip/hip_version.h"

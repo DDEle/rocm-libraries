@@ -595,11 +595,6 @@ struct wmma_type<WmmaInstr::wmma_i32_16x16x64_iu8_gfx12,
     }
 };
 
-
-
-
-
-
 template <typename src_type_a,
           typename src_type_b,
           typename dst_type,
@@ -621,7 +616,7 @@ struct WmmaSelector
         return WmmaInstr::wmma_f32_16x16x16_f16_gfx12;
 #elif defined(__gfx121__)
         return WmmaInstr::wmma_f32_16x16x32_f16_gfx12;
-#elif defined(__gfx11__)
+#else
         return WmmaInstr::wmma_f32_16x16x16_f16;
 #endif
     }
@@ -633,7 +628,7 @@ struct WmmaSelector
         return WmmaInstr::wmma_f32_16x16x16_bf16_gfx12;
 #elif defined(__gfx121__)
         return WmmaInstr::wmma_f32_16x16x32_bf16_gfx12;
-#elif defined(__gfx11__)
+#else
         return WmmaInstr::wmma_f32_16x16x16_bf16;
 #endif
     }
@@ -665,7 +660,7 @@ struct WmmaSelector
         return WmmaInstr::wmma_i32_16x16x16_iu8_gfx12;
 #elif defined(__gfx121__)
         return WmmaInstr::wmma_i32_16x16x64_iu8_gfx12;
-#elif defined(__gfx11__)
+#else
         return WmmaInstr::wmma_i32_16x16x16_iu8;
 #endif
     }

@@ -360,8 +360,9 @@ struct intrin_wmma_f16_16x16x32_f16_w32_gfx12<16, 16, Opsel>
         // false: D0.[0:15] = result
         // true : D0.[16:31]= result
 #if defined(__gfx121__)
-        reg_c.template AsType<half16_t>()(Number<0>{}) = __builtin_amdgcn_wmma_f16_16x16x32_f16_w32_gfx12(
-            reg_a, reg_b, reg_c.template AsType<half16_t>()[Number<0>{}], Opsel);
+        reg_c.template AsType<half16_t>()(Number<0>{}) =
+            __builtin_amdgcn_wmma_f16_16x16x32_f16_w32_gfx12(
+                reg_a, reg_b, reg_c.template AsType<half16_t>()[Number<0>{}], Opsel);
 #else
         ignore = reg_a;
         ignore = reg_b;

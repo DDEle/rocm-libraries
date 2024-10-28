@@ -20,7 +20,7 @@
 #if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx1210__) || defined(__gfx1211__)
 #define __gfx12__
 #endif
-#if defined(__gfx1200__) || defined(__gfx1201__) 
+#if defined(__gfx1200__) || defined(__gfx1201__)
 #define __gfx120__
 #endif
 #if defined(__gfx1210__) || defined(__gfx1211__)

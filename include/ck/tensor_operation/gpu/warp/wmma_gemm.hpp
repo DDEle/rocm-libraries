@@ -406,8 +406,6 @@ struct wmma_type<WmmaInstr::wmma_i32_16x16x16_iu8_gfx12,
     }
 };
 
-
-
 // gfx121x
 
 template <index_t WaveSize>
@@ -682,7 +680,7 @@ struct WmmaSelector
 
         static_assert(selected_wmma.m_per_wmma == 16, "WRONG! WMMA_M must equal to 16");
 
-        //static_assert(selected_wmma.k_per_wmma == 16, "WRONG! WMMA_M must equal to 16");
+        // static_assert(selected_wmma.k_per_wmma == 16, "WRONG! WMMA_M must equal to 16");
 
         static_assert(selected_wmma.wave_size * selected_wmma.num_acc_vgprs_per_wave *
                               selected_wmma.acc_data_size * selected_wmma.acc_pack_number ==
@@ -716,7 +714,8 @@ struct WmmaGemm
         static_assert(NPerWmma == 16 && MPerWmma == 16,
                       "Only support GemmNPerWmma == 16 and GemmMPerWmma == 16 for wmma");
 
-        //static_assert(KPack % wmma_instr.k_per_wmma == 0, "KPack should be multiple of k_per_wmma");
+        // static_assert(KPack % wmma_instr.k_per_wmma == 0, "KPack should be multiple of
+        // k_per_wmma");
     }
 
     // WMMA output supporting C = A * B

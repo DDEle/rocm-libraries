@@ -4,20 +4,22 @@
 #pragma once
 
 #if defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx940__) || defined(__gfx941__) || \
-    defined(__gfx942__) || defined(__gfx950__)
+    defined(__gfx942__)
 #define __gfx9__
 #endif
-#if defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__) || defined(__gfx950__)
+#if defined(__gfx940__) || defined(__gfx941__) || defined(__gfx942__)
 #define __gfx94__
 #endif
 #if defined(__gfx1030__) || defined(__gfx1031__) || defined(__gfx1032__) || \
-    defined(__gfx1034__) || defined(__gfx1035__) || defined(__gfx1036__)
+    defined(__gfx1034__) || defined(__gfx1035__) || defined(__gfx1036__) || \
+    defined(__gfx10_3_generic__)
 #define __gfx103__
 #endif
-#if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__)
+#if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || \
+    defined(__gfx1103__) || defined(__gfx11_generic__)
 #define __gfx11__
 #endif
-#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx1210__) || defined(__gfx1211__)
+#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__) || defined(__gfx1210__) || defined(__gfx1211__)
 #define __gfx12__
 #endif
 #if defined(__gfx1200__) || defined(__gfx1201__)
@@ -68,6 +70,7 @@
 #define CK_TILE_FLOAT_TO_BFLOAT16_TRUNCATE_WITH_NAN 1
 #define CK_TILE_FLOAT_TO_BFLOAT16_TRUNCATE 2
 #define CK_TILE_FLOAT_TO_BFLOAT16_STANDARD_ASM 3
+#define CK_TILE_FLOAT_TO_BFLOAT16_RTA_ASM 4
 
 #ifndef CK_TILE_FLOAT_TO_BFLOAT16_DEFAULT
 #define CK_TILE_FLOAT_TO_BFLOAT16_DEFAULT CK_TILE_FLOAT_TO_BFLOAT16_TRUNCATE
@@ -228,4 +231,8 @@
 // workaround: compiler not emiting reciprocal instruction frm __frcp_rn()
 #ifndef CK_TILE_WORKAROUND_SWDEV_383542
 #define CK_TILE_WORKAROUND_SWDEV_383542 1
+#endif
+
+#ifndef CK_TILE_REFERENCE_MOE_SORTING_MOCK_ID
+#define CK_TILE_REFERENCE_MOE_SORTING_MOCK_ID 1
 #endif

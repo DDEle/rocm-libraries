@@ -66,6 +66,79 @@ struct GemmKernel
         return max(GemmPipeline::GetSmemSize(), EpiloguePipeline::GetSmemSize());
     }
 
+    CK_TILE_HOST static bool IsSupportedArgument(const GemmCommonKargs& kargs)
+    {
+        if constexpr(std::is_same_v<ALayout, tensor_layout::gemm::RowMajor>)
+        {
+            if(kargs.K % TilePartitioner::kK != 0 && GemmPipeline::kPadK == false)
+            {
+                return false;
+            }
+            if(kargs.K % GemmPipeline::VectorSizeA != 0)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            if(kargs.M % TilePartitioner::kM != 0 && GemmPipeline::kPadM == false)
+            {
+                return false;
+            }
+            if(kargs.M % GemmPipeline::VectorSizeA != 0)
+            {
+                return false;
+            }
+        }
+
+        if constexpr(std::is_same_v<BLayout, tensor_layout::gemm::RowMajor>)
+        {
+            if(kargs.N % TilePartitioner::kN != 0 && GemmPipeline::kPadN == false)
+            {
+                return false;
+            }
+            if(kargs.N % GemmPipeline::VectorSizeB != 0)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            if(kargs.K % TilePartitioner::kK != 0 && GemmPipeline::kPadK == false)
+            {
+                return false;
+            }
+            if(kargs.K % GemmPipeline::VectorSizeB != 0)
+            {
+                return false;
+            }
+        }
+
+        if constexpr(std::is_same_v<CLayout, tensor_layout::gemm::RowMajor>)
+        {
+            if(kargs.N % TilePartitioner::kN != 0 && GemmPipeline::kPadN == false)
+            {
+                return false;
+            }
+            if(kargs.N % GemmPipeline::VectorSizeC != 0)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            if(kargs.M % TilePartitioner::kM != 0 && GemmPipeline::kPadM == false)
+            {
+                return false;
+            }
+            if(kargs.M % GemmPipeline::VectorSizeC != 0)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     CK_TILE_DEVICE void operator()(GemmCommonKargs kargs) const
     {
         const auto [i_m, i_n] = TilePartitioner{}();
@@ -115,12 +188,22 @@ struct GemmKernel
             }
         }();
 
-        auto a_pad_view = pad_tensor_view(
-            a_tensor_view,
-            make_tuple(number<TilePartitioner::kM>{}, number<TilePartitioner::kK>{}),
-            // somehow clang-format is splitting below line into multiple.
-            // clang-format off
-            sequence<false, GemmPipeline::kPadA>{});
+        auto a_pad_view = [&]() {
+            if constexpr(std::is_same_v<ALayout, tensor_layout::gemm::RowMajor>)
+            {
+                return pad_tensor_view(
+                    a_tensor_view,
+                    make_tuple(number<TilePartitioner::kM>{}, number<TilePartitioner::kK>{}),
+                    sequence<false, GemmPipeline::kPadK>{});
+            }
+            else
+            {
+                return pad_tensor_view(
+                    a_tensor_view,
+                    make_tuple(number<TilePartitioner::kM>{}, number<TilePartitioner::kK>{}),
+                    sequence<GemmPipeline::kPadM, false>{});
+            }
+        }();
         // clang-format on
 
         auto a_block_window = make_tile_window(
@@ -128,12 +211,22 @@ struct GemmKernel
             make_tuple(number<TilePartitioner::kM>{}, number<TilePartitioner::kK>{}),
             {i_m, 0});
 
-        auto b_pad_view = pad_tensor_view(
-            b_tensor_view,
-            make_tuple(number<TilePartitioner::kN>{}, number<TilePartitioner::kK>{}),
-            // clang-format off
-            sequence<false, GemmPipeline::kPadB>{});
-        // clang-format on
+        auto b_pad_view = [&]() {
+            if constexpr(std::is_same_v<BLayout, tensor_layout::gemm::ColumnMajor>)
+            {
+                return pad_tensor_view(
+                    b_tensor_view,
+                    make_tuple(number<TilePartitioner::kN>{}, number<TilePartitioner::kK>{}),
+                    sequence<false, GemmPipeline::kPadK>{});
+            }
+            else
+            {
+                return pad_tensor_view(
+                    b_tensor_view,
+                    make_tuple(number<TilePartitioner::kN>{}, number<TilePartitioner::kK>{}),
+                    sequence<GemmPipeline::kPadN, false>{});
+            }
+        }();
 
         auto b_block_window = make_tile_window(
             b_pad_view,
@@ -171,18 +264,28 @@ struct GemmKernel
             }
         }();
 
-        auto c_pad_view = pad_tensor_view(
-            c_tensor_view,
-            make_tuple(number<TilePartitioner::kM>{}, number<TilePartitioner::kN>{}),
-            // clang-format off
-            sequence<false, GemmPipeline::kPadC>{});
-        // clang-format on
-        auto c_block_window = make_tile_window(
+        auto c_pad_view = [&]() {
+            if constexpr(std::is_same_v<CLayout, tensor_layout::gemm::RowMajor>)
+            {
+                return pad_tensor_view(
+                    c_tensor_view,
+                    make_tuple(number<TilePartitioner::kM>{}, number<TilePartitioner::kN>{}),
+                    sequence<false, GemmPipeline::kPadN>{});
+            }
+            else
+            {
+                return pad_tensor_view(
+                    c_tensor_view,
+                    make_tuple(number<TilePartitioner::kM>{}, number<TilePartitioner::kN>{}),
+                    sequence<GemmPipeline::kPadM, false>{});
+            }
+        }();
+        auto CBlockWindow_pad = make_tile_window(
             c_pad_view,
             make_tuple(number<TilePartitioner::kM>{}, number<TilePartitioner::kN>{}),
             {i_m, i_n});
 
-        EpiloguePipeline{}(c_block_window, c_block_tile);
+        EpiloguePipeline{}(CBlockWindow_pad, c_block_tile);
     }
 };
 

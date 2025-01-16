@@ -20,14 +20,14 @@
 #define __gfx11__
 #endif
 #if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__) || \
-    defined(__gfx1210__) || defined(__gfx1211__)
+    defined(__gfx1250__) || defined(__gfx1251__)
 #define __gfx12__
 #endif
 #if defined(__gfx1200__) || defined(__gfx1201__)
 #define __gfx120__
 #endif
-#if defined(__gfx1210__) || defined(__gfx1211__)
-#define __gfx121__
+#if defined(__gfx1250__) || defined(__gfx1251__)
+#define __gfx125__
 #endif
 
 #include "hip/hip_version.h"

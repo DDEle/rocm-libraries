@@ -22,7 +22,7 @@ enum struct WmmaInstr
     wmma_f32_16x16x16_f16_gfx12,
     wmma_f32_16x16x16_bf16_gfx12,
     wmma_i32_16x16x16_iu8_gfx12,
-    // gfx121x
+    // gfx125x
     wmma_f16_16x16x32_f16_gfx12,
     wmma_bf16_16x16x32_bf16_gfx12,
     wmma_f32_16x16x32_f16_gfx12,
@@ -406,7 +406,7 @@ struct wmma_type<WmmaInstr::wmma_i32_16x16x16_iu8_gfx12,
     }
 };
 
-// gfx121x
+// gfx125x
 
 template <index_t WaveSize>
 struct wmma_type<WmmaInstr::wmma_f16_16x16x32_f16_gfx12,
@@ -612,7 +612,7 @@ struct WmmaSelector
     {
 #if defined(__gfx120__)
         return WmmaInstr::wmma_f32_16x16x16_f16_gfx12;
-#elif defined(__gfx121__)
+#elif defined(__gfx125__)
         return WmmaInstr::wmma_f32_16x16x32_f16_gfx12;
 #else
         return WmmaInstr::wmma_f32_16x16x16_f16;
@@ -624,7 +624,7 @@ struct WmmaSelector
     {
 #if defined(__gfx120__)
         return WmmaInstr::wmma_f32_16x16x16_bf16_gfx12;
-#elif defined(__gfx121__)
+#elif defined(__gfx125__)
         return WmmaInstr::wmma_f32_16x16x32_bf16_gfx12;
 #else
         return WmmaInstr::wmma_f32_16x16x16_bf16;
@@ -634,7 +634,7 @@ struct WmmaSelector
     template <>
     constexpr auto GetWmma<half_t, half_t, half_t, 16, 16>()
     {
-#if defined(__gfx121__)
+#if defined(__gfx125__)
         return WmmaInstr::wmma_f16_16x16x32_f16_gfx12;
 #else
         return WmmaInstr::wmma_f16_16x16x16_f16;
@@ -644,7 +644,7 @@ struct WmmaSelector
     template <>
     constexpr auto GetWmma<bhalf_t, bhalf_t, bhalf_t, 16, 16>()
     {
-#if defined(__gfx121__)
+#if defined(__gfx125__)
         return WmmaInstr::wmma_bf16_16x16x32_bf16_gfx12;
 #else
         return WmmaInstr::wmma_bf16_16x16x16_bf16;
@@ -656,7 +656,7 @@ struct WmmaSelector
     {
 #if defined(__gfx120__)
         return WmmaInstr::wmma_i32_16x16x16_iu8_gfx12;
-#elif defined(__gfx121__)
+#elif defined(__gfx125__)
         return WmmaInstr::wmma_i32_16x16x64_iu8_gfx12;
 #else
         return WmmaInstr::wmma_i32_16x16x16_iu8;

@@ -154,7 +154,7 @@ if(NOT ENABLE_ASAN_PACKAGING)
         # WORKAROUND: compiler does not yet fully support gfx12 targets, need to fix version above
         set(CK_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1102")
     else()
-        set(CK_GPU_TARGETS "gfx1210;gfx1211")
+        set(CK_GPU_TARGETS "gfx1250;gfx1251")
     endif()
 else()
     #build CK only for xnack-supported targets when using ASAN

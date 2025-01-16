@@ -93,7 +93,7 @@ inline bool is_gfx11_supported()
 inline bool is_gfx12_supported()
 {
     return ck::get_device_name() == "gfx1200" || ck::get_device_name() == "gfx1201" ||
-           ck::get_device_name() == "gfx1210" || ck::get_device_name() == "gfx1211";
+           ck::get_device_name() == "gfx1250" || ck::get_device_name() == "gfx1251";
 }
 
 inline bool is_gfx120_supported()
@@ -101,8 +101,8 @@ inline bool is_gfx120_supported()
     return ck::get_device_name() == "gfx1200" || ck::get_device_name() == "gfx1201";
 }
 
-inline bool is_gfx121_supported()
+inline bool is_gfx125_supported()
 {
-    return ck::get_device_name() == "gfx1210" || ck::get_device_name() == "gfx1211";
+    return ck::get_device_name() == "gfx1250" || ck::get_device_name() == "gfx1251";
 }
 } // namespace ck

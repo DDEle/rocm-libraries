@@ -92,7 +92,8 @@ set(DEFAULT_GPUS
   gfx1102
   gfx1151
   gfx1200
-  gfx1201)
+  gfx1201
+  gfx1250)
 
 if(BUILD_ADDRESS_SANITIZER)
   add_compile_options(-fsanitize=address)

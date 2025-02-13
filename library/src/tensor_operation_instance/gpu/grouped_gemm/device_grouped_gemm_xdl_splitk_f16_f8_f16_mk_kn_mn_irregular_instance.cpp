@@ -27,7 +27,7 @@ using S = ck::Sequence<Is...>;
 
 using Empty_Tuple = ck::Tuple<>;
 
-using PassThrough = ck::tensor_operation::element_wise::PassThrough;
+using PassThrough                    = ck::tensor_operation::element_wise::PassThrough;
 static constexpr auto GemmMNKPadding = ck::tensor_operation::device::GemmSpecialization::MNKPadding;
 using device_grouped_gemm_xdl_splitk_f16_f8_f16_mk_kn_mn_irregular_tile_instances = std::tuple<
 // clang-format off

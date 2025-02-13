@@ -85,7 +85,7 @@ using device_gemm_add_relu_add_xdl_c_shuffle_layernorm_f16_km_kn_mn_mn_mn_irregu
         ,
         DeviceGemmMultipleDLayernorm_Xdl_CShuffle<    Col,    Row, Row_Row_Tuple,    Row,   F16,   F16,     F32,      F32, F16_F16_Tuple,          F16,       F16,       F16,   F16, PassThrough, PassThrough,     AddReluAdd, PassThrough, GemmMNKPadding,        1,    64,    16,    16,    32,   8,   8,   16,   16,    1,    1,     S<4, 16, 1>,     S<0, 2, 1>,     S<0, 2, 1>,              1,              1,              8,         1,     S<4, 16, 1>,     S<0, 2, 1>,     S<0, 2, 1>,             1,              1,              8,         1,           1,           1,               S<16, 4>,              1,             S<16, 4>,               1, LoopScheduler::Default,  PipelineVersion::v2>
 #endif
-       // clang-format on
+        // clang-format on
         >;
 
 void add_device_gemm_add_relu_add_xdl_c_shuffle_layernorm_f16_km_kn_mn_mn_mn_instances(

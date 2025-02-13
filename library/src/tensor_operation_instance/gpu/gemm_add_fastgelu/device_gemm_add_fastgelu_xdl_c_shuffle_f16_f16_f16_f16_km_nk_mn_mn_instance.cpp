@@ -33,7 +33,7 @@ using device_gemm_add_fastgelu_xdl_c_shuffle_f16_f16_f16_f16_km_nk_mn_mn_generic
         DeviceGemmMultipleD_Xdl_CShuffle<    Col,    Col,     Row_Tuple,    Row,   F16,   F16,     F32,      F32,     F16_Tuple,   F16, PassThrough, PassThrough,    AddFastGelu, GemmMNKPadding,        1,    64,    16,    16,    64,  16,  16,   16,   16,    1,    1,     S<4, 16, 1>,     S<0, 2, 1>,     S<0, 2, 1>,              1,              1,              8,         1,     S<4, 16, 1>,     S<1, 0, 2>,     S<1, 0, 2>,             2,              1,              8,         1,           1,           1,               S<1, 16, 1, 4>,               1, LoopScheduler::Default,        PipelineVersion::v1>,
 #endif // defined(CK_USE_AMD_MFMA_GFX950)
         DeviceGemmMultipleD_Xdl_CShuffle<    Col,    Col,     Row_Tuple,    Row,   F16,   F16,     F32,      F32,     F16_Tuple,   F16, PassThrough, PassThrough,    AddFastGelu, GemmMNKPadding,        1,    64,    16,    16,    32,   8,   8,   16,   16,    1,    1,     S<4, 16, 1>,     S<0, 2, 1>,     S<0, 2, 1>,              1,              1,              8,         1,     S<4, 16, 1>,     S<1, 0, 2>,     S<1, 0, 2>,             2,              1,              8,         1,           1,           1,               S<1, 16, 1, 4>,               1, LoopScheduler::Default,        PipelineVersion::v1>
-       // clang-format on
+        // clang-format on
         >;
 using device_gemm_add_fastgelu_xdl_c_shuffle_f16_f16_f16_f16_km_nk_mn_mn_instances = std::tuple<
 // clang-format off
@@ -127,7 +127,7 @@ using device_gemm_add_fastgelu_xdl_c_shuffle_f16_f16_f16_f16_km_nk_mn_mn_irregul
         ,
         DeviceGemmMultipleD_Xdl_CShuffle<    Col,    Col,     Row_Tuple,    Row,   F16,   F16,     F32,      F32,     F16_Tuple,   F16, PassThrough, PassThrough,    AddFastGelu, GemmMNKPadding,        1,    64,    16,    16,    32,   8,   8,   16,   16,    1,    1,     S<4, 16, 1>,     S<0, 2, 1>,     S<0, 2, 1>,              1,              1,              8,         1,     S<4, 16, 1>,     S<1, 0, 2>,     S<1, 0, 2>,             2,              1,              8,         1,           1,           1,               S<1, 16, 1, 4>,               1, LoopScheduler::Default,        PipelineVersion::v2>
 #endif
-       // clang-format on
+        // clang-format on
         >;
 
 void add_device_gemm_add_fastgelu_xdl_c_shuffle_f16_f16_f16_f16_km_nk_mn_mn_instances(

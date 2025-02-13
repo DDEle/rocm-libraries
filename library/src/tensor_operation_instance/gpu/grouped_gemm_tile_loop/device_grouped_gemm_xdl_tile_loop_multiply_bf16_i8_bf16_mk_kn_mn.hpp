@@ -89,8 +89,8 @@ using device_grouped_gemm_xdl_tile_loop_bf16_i8_bf16_mk_kn_mn_mem_instances =
         // DeviceGroupedGemmMultipleDXdlCShuffleTileLoop<   Row,     Row,    DsLayout,    Row,  BF16,    I8,     F32,      F32,  DsDataType,  BF16, PassThrough, PassThrough, CDEElementwiseOp,       GemmSpec,        1,   128,    32,   128,    64,   8,   4,   32,   32,    1,    2,     S<8, 16, 1>,     S<1, 0, 2>,     S<1, 0, 2>,              2,              8,              8,         0,     S<16, 8, 1>,     S<0, 2, 1>,     S<0, 2, 1>,             1,             16,              4,          0,          1,           1,               S<1, 16, 1, 8>,        S<8,8,1>,  BlkGemmPipeSched, BlockGemmPipelineVersion::v2>,
         // DeviceGroupedGemmMultipleDXdlCShuffleTileLoop<   Row,     Row,    DsLayout,    Row,  BF16,    I8,     F32,      F32,  DsDataType,  BF16, PassThrough, PassThrough, CDEElementwiseOp,       GemmSpec,        1,   256,    16,   256,    64,   8,   4,   16,   16,    1,    4,     S<8, 16, 1>,     S<1, 0, 2>,     S<1, 0, 2>,              2,              8,              8,         0,    S<16, 16, 1>,     S<0, 2, 1>,     S<0, 2, 1>,             1,             16,              4,          0,          1,           1,              S<1, 16, 1, 16>,        S<4,4,1>,  BlkGemmPipeSched, BlockGemmPipelineVersion::v2>,
         // DeviceGroupedGemmMultipleDXdlCShuffleTileLoop<   Row,     Row,    DsLayout,    Row,  BF16,    I8,     F32,      F32,  DsDataType,  BF16, PassThrough, PassThrough, CDEElementwiseOp,       GemmSpec,        1,   256,    32,   256,    64,   8,   4,   32,   32,    1,    2,     S<8, 32, 1>,     S<1, 0, 2>,     S<1, 0, 2>,              2,              8,              8,         0,    S<16, 16, 1>,     S<0, 2, 1>,     S<0, 2, 1>,             1,             16,              4,          0,          1,           1,              S<1, 16, 1, 16>,        S<8,8,1>,  BlkGemmPipeSched, BlockGemmPipelineVersion::v2>
-       // clang-format on
-    >;
+        // clang-format on
+        >;
 
 } // namespace instance
 } // namespace device

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2023-2024, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025, Advanced Micro Devices, Inc. All rights reserved.
 
 #pragma once
 
@@ -9,6 +9,7 @@
 #include <numeric>
 #include <sstream>
 
+#include "ck/library/utility/numeric.hpp"
 #include "ck/utility/common_header.hpp"
 #include "ck/tensor_description/tensor_descriptor.hpp"
 #include "ck/tensor_description/tensor_descriptor_helper.hpp"
@@ -117,7 +118,7 @@ __global__ void
                                         c_grid_desc_mblock_mperblock_nblock_nperblock);
 #else
     ignore = karg;
-#endif // end of if (defined(__gfx908__) || defined(__gfx90a__))
+#endif // end of if (defined(__gfx9__))
 }
 
 template <typename GridwiseGemm,
@@ -183,7 +184,7 @@ __global__ void
                                              c_grid_desc_mblock_mperblock_nblock_nperblock);
 #else
     ignore = karg;
-#endif // end of if (defined(__gfx908__) || defined(__gfx90a__))
+#endif // end of if (defined(__gfx9__))
 }
 
 } // namespace
@@ -585,12 +586,16 @@ struct DeviceGroupedConvFwdMultipleABD_Xdl_CShuffle_V3
 
         std::size_t GetWorkspaceATensorSizeBytes() const
         {
-            return sizeof(ADataType) * a_in_transpose_desc_.GetElementSpaceSize();
+            const long_index_t a_acum = ck::accumulate_n<long_index_t>(
+                a_g_n_c_wis_lengths_.begin(), NDimSpatial + I3, 1, std::multiplies<>());
+            return sizeof(ADataType) * a_acum;
         }
 
         std::size_t GetWorkspaceETensorSizeBytes() const
         {
-            return sizeof(EDataType) * e_out_transpose_desc_.GetElementSpaceSize();
+            const long_index_t e_accum = ck::accumulate_n<long_index_t>(
+                e_g_n_k_wos_lengths_.begin(), NDimSpatial + I3, 1, std::multiplies<>());
+            return sizeof(EDataType) * e_accum;
         }
 
         std::size_t GetWorkspaceSizeBytes() const
@@ -1203,6 +1208,25 @@ struct DeviceGroupedConvFwdMultipleABD_Xdl_CShuffle_V3
             }
 
             if(output_spatial_acum % CDEBlockTransferScalarPerVector_NPerBlock != 0)
+            {
+                return false;
+            }
+
+            if(!arg.p_workspace_)
+            {
+                if(ck::EnvIsEnabled(CK_ENV(CK_LOGGING)))
+                {
+                    std::cout << "Warning: Workspace for "
+                                 "DeviceGroupedConvFwdMultipleABD_Xdl_CShuffle_V3::Argument is not "
+                                 "allocated, use SetWorkSpacePointer."
+                              << std::endl;
+                }
+                return false;
+            }
+
+            constexpr long_index_t TwoGB = (long_index_t{1} << 31);
+            if(!(arg.a_out_transpose_desc_.GetElementSpaceSize() * sizeof(ADataType) <= TwoGB &&
+                 arg.e_in_transpose_desc_.GetElementSpaceSize() * sizeof(EDataType) <= TwoGB))
             {
                 return false;
             }

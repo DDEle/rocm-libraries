@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2018-2024, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2018-2025, Advanced Micro Devices, Inc. All rights reserved.
 
 #pragma once
 
@@ -294,7 +294,7 @@ struct tuple : impl::tuple_base<make_index_sequence<sizeof...(T)>, T...>
 #undef TP_COM_
 };
 
-template <typename>
+template <typename, typename = void>
 struct vector_traits;
 
 // specialization for array
@@ -546,7 +546,7 @@ CK_TILE_HOST_DEVICE constexpr auto tuple_reverse(const tuple<Ts...>& t)
             using Idx = number<tuple<Ts...>::size() - i - 1>;
             return t.at(Idx{});
         },
-        number<tuple<Ts...>::size()()>{});
+        number<tuple<Ts...>::size()>{});
 }
 
 // Reduce tuple values in specific range using Function

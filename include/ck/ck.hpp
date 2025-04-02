@@ -104,7 +104,7 @@ CK_DECLARE_ENV_VAR_BOOL(CK_LOGGING)
 #define CK_USE_AMD_V_FMAC_F32
 #define CK_USE_AMD_V_DOT2_F32_F16
 #define CK_USE_AMD_V_DOT4_I32_I8
-#elif defined(__gfx11__) || defined(__gfx12__)
+#elif defined(__gfx11__) || defined(__gfx120__)
 #define CK_USE_AMD_V_FMAC_F32
 #define CK_USE_AMD_V_DOT2_F32_F16
 #define CK_USE_AMD_V_DOT4_I32_I8_GFX11

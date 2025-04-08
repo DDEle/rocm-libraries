@@ -359,11 +359,12 @@ namespace GPUArchitectureGenerator
     inline std::vector<rocRoller::GPUArchitectureTarget> gfx12ISAs()
     {
         std::vector<rocRoller::GPUArchitectureTarget> retval;
-        std::copy_if(
-            rocRoller::SupportedArchitectures.begin(),
-            rocRoller::SupportedArchitectures.end(),
-            std::back_inserter(retval),
-            [](rocRoller::GPUArchitectureTarget const& x) -> bool { return x.isRDNA4GPU(); });
+        std::copy_if(rocRoller::SupportedArchitectures.begin(),
+                     rocRoller::SupportedArchitectures.end(),
+                     std::back_inserter(retval),
+                     [](rocRoller::GPUArchitectureTarget const& x) -> bool {
+                         return x.isRDNA4GPU() || x.isCDNA5GPU();
+                     });
         return retval;
     }
 
@@ -411,19 +412,24 @@ namespace GPUArchitectureGenerator
              [](rocRoller::GPUArchitectureTarget x) -> bool { return !x.isRDNAGPU(); }},
 
             {rocRoller::GPUCapability::HasWave32,
-             [](rocRoller::GPUArchitectureTarget x) -> bool { return x.isRDNAGPU(); }},
+             [](rocRoller::GPUArchitectureTarget x) -> bool {
+                 return x.isRDNAGPU() || x.isCDNA5GPU();
+             }},
 
             {rocRoller::GPUCapability::HasXnack,
              [](rocRoller::GPUArchitectureTarget x) -> bool { return x.features.xnack; }},
 
             {rocRoller::GPUCapability::PackedWorkitemIDs,
              [](rocRoller::GPUArchitectureTarget x) -> bool {
-                 return x.isCDNA2GPU() || x.isCDNA3GPU() || x.isCDNA35GPU() || x.isRDNA4GPU();
+                 return x.isCDNA2GPU() || x.isCDNA3GPU() || x.isCDNA35GPU() || x.isRDNA4GPU()
+                        || x.isCDNA5GPU();
              }},
             {rocRoller::GPUCapability::WorkgroupIdxViaTTMP,
              [](rocRoller::GPUArchitectureTarget x) -> bool { return x.isGFX12GPU(); }},
             {rocRoller::GPUCapability::HasBufferOutOfBoundsCheckOption,
              [](rocRoller::GPUArchitectureTarget x) -> bool { return x.isGFX12GPU(); }},
+            {rocRoller::GPUCapability::HasBufferFormatSpecInSOffsetField,
+             [](rocRoller::GPUArchitectureTarget x) -> bool { return x.isCDNA5GPU(); }},
 
     };
     // This is the way to add a set of instructions that have the same wait value and wait queues.

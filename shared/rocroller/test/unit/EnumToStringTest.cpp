@@ -164,6 +164,7 @@ TEST(EnumToStringTest, ALL)
         {GPUArchitectureGFX::GFX1030, "gfx1030"},
         {GPUArchitectureGFX::GFX1200, "gfx1200"},
         {GPUArchitectureGFX::GFX1201, "gfx1201"},
+        {GPUArchitectureGFX::GFX1250, "gfx1250"},
     });
 
     verify<Graph::ElementType>({

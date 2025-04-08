@@ -481,9 +481,35 @@ namespace MemoryInstructionsTest
                                   hipMemcpyDefault),
                         HasHipSuccess(0));
 
+            // If format specification is passed via SOFFSET, then the partial
+            // layout of the buffer descriptor is:
+            //
+            // 56:0     BaseAddress
+            // 101:57   Num Records
+            // 107:102  Reserved (must be set to zero)
+            // 121:108  Stride
+            //
+            // Otherwise, it is:
+            //
+            // 47:0   Base Address
+            // 61:48  Stride
+            // 63:62  Swizzle Enable
+            // 95:64  Num Records
+            //
+            // See also BufferDescriptor::setSize()
+            // & BufferDescritor::setOptions() for more details.
             EXPECT_EQ(result[0], 0x00000001);
-            EXPECT_EQ(result[1], 0x00000000);
-            EXPECT_EQ(result[2], 0x00000001);
+            if(m_context->targetArchitecture().HasCapability(
+                   GPUCapability::HasBufferFormatSpecInSOffsetField))
+            {
+                EXPECT_EQ(result[1], 1u << 25);
+                EXPECT_EQ(result[2], 0x00000000);
+            }
+            else
+            {
+                EXPECT_EQ(result[1], 0x00000000);
+                EXPECT_EQ(result[2], 0x00000001);
+            }
             EXPECT_EQ(result[3], BufferDescriptor::getDefaultOptionsValue(m_context));
             EXPECT_EQ(result[4], BufferDescriptor::getDefaultOptionsValue(m_context));
         }
@@ -542,6 +568,7 @@ namespace MemoryInstructionsTest
 
                 co_yield m_context->mem()->loadBuffer(v_a, vgprSerial, 0, bufDesc, bufInstOpts, N);
                 co_yield bufDesc->setBasePointer(s_result);
+                co_yield bufDesc->setSize(Register::Value::Literal(N));
                 co_yield m_context->mem()->storeBuffer(v_a, vgprSerial, 0, bufDesc, bufInstOpts, N);
             };
 
@@ -1283,6 +1310,7 @@ namespace MemoryInstructionsTest
 
                 co_yield m_context->mem()->loadBuffer(v_a, vgprSerial, 0, bufDesc, bufInstOpts, N);
                 co_yield bufDesc->setBasePointer(s_result);
+                co_yield bufDesc->setSize(Register::Value::Literal(N));
                 co_yield m_context->mem()->storeBuffer(v_a, vgprSerial, 0, bufDesc, bufInstOpts, N);
 
                 co_yield m_context->mem()->loadBuffer(

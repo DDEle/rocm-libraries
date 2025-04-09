@@ -102,7 +102,8 @@ namespace GEMMDriverTest
             if constexpr(isF8<TA> || isF8<TB>)
             {
                 REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasMFMA_fp8,
-                                        GPUCapability::HasWMMA_f32_16x16x16_f8);
+                                        GPUCapability::HasWMMA_f32_16x16x16_f8,
+                                        GPUCapability::HasWMMA_f32_16x16x64_f8);
             }
 
             if constexpr(isF6F4<TA> || isF6F4<TB>)
@@ -112,7 +113,16 @@ namespace GEMMDriverTest
 
             if((isF8<TA> || isF8<TB>)&&(gemm.waveK >= 64))
             {
-                REQUIRE_ARCH_CAP(GPUCapability::HasMFMA_f8f6f4);
+                auto const& arch = m_context->targetArchitecture();
+                if(arch.HasCapability(GPUCapability::HasMFMA))
+                {
+                    REQUIRE_ARCH_CAP(GPUCapability::HasMFMA_f8f6f4);
+                }
+                else
+                {
+                    AssertFatal(arch.HasCapability(GPUCapability::HasWMMA) && gemm.waveK <= 64,
+                                "F8F6F4 WMMAs not supported yet.");
+                }
             }
 
             if(gemm.scaleAMode != Operations::ScaleMode::None
@@ -3803,12 +3813,22 @@ namespace GEMMDriverTest
 
         switch(waveK)
         {
+        case 4:
+            REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f32_16x16x4_f32);
+            break;
         case 16:
             REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f32_16x16x16_f16);
+            break;
+        case 32:
+            REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f32_16x16x32_f16);
             break;
         default:
             Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
         }
+
+        AssertFatal((waveK == 4) || (waveK == 16) || (waveK == 32),
+                    "Invalid waveK value.",
+                    ShowValue(waveK));
 
         GEMMProblem gemm;
         gemm.waveM = 16;
@@ -3825,6 +3845,11 @@ namespace GEMMDriverTest
         else if(typeAB == DataType::BFloat16)
         {
             basicGEMM<BFloat16, BFloat16, float>(gemm);
+        }
+        else if(typeAB == DataType::Float)
+        {
+            REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f32_16x16x4_f32);
+            basicGEMM<float, float, float>(gemm);
         }
         else
         {
@@ -3878,6 +3903,9 @@ namespace GEMMDriverTest
         {
         case 16:
             REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f32_16x16x16_f8);
+            break;
+        case 64:
+            REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f32_16x16x64_f8);
             break;
         default:
             Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
@@ -4048,6 +4076,20 @@ namespace GEMMDriverTest
                                   std::pair<std::string, std::string>("T", "T")))));
 
     INSTANTIATE_TEST_SUITE_P(
+        GEMMTestWMMA1250,
+        GEMMTestWMMAGPU,
+        ::testing::Combine(
+            currentGPUISA(),
+            ::testing::Combine(
+                ::testing::Values(std::make_pair(rocRoller::DataType::Half, /*waveK*/ 32),
+                                  std::make_pair(rocRoller::DataType::BFloat16, /*waveK*/ 32),
+                                  std::make_pair(rocRoller::DataType::Float, /*waveK*/ 4)),
+                ::testing::Values(std::pair<std::string, std::string>("N", "N"),
+                                  std::pair<std::string, std::string>("N", "T"),
+                                  std::pair<std::string, std::string>("T", "N"),
+                                  std::pair<std::string, std::string>("T", "T")))));
+
+    INSTANTIATE_TEST_SUITE_P(
         GEMMTestWMMA,
         GEMMTestWMMAF16AccumGPU,
         ::testing::Combine(
@@ -4069,6 +4111,19 @@ namespace GEMMDriverTest
                 ::testing::Values(rocRoller::DataType::FP8, rocRoller::DataType::BF8),
                 ::testing::Values(rocRoller::DataType::FP8, rocRoller::DataType::BF8),
                 ::testing::Values(16),
+                ::testing::Values(std::pair<std::string, std::string>("N", "N"),
+                                  std::pair<std::string, std::string>("N", "T"),
+                                  std::pair<std::string, std::string>("T", "N"),
+                                  std::pair<std::string, std::string>("T", "T")))));
+    INSTANTIATE_TEST_SUITE_P(
+        MixedGEMMTestWMMA1250,
+        MixedGEMMTestWMMAGPU,
+        ::testing::Combine(
+            currentGPUISA(),
+            ::testing::Combine(
+                ::testing::Values(rocRoller::DataType::FP8, rocRoller::DataType::BF8),
+                ::testing::Values(rocRoller::DataType::FP8, rocRoller::DataType::BF8),
+                ::testing::Values(/*waveK*/ 64),
                 ::testing::Values(std::pair<std::string, std::string>("N", "N"),
                                   std::pair<std::string, std::string>("N", "T"),
                                   std::pair<std::string, std::string>("T", "N"),

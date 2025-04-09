@@ -169,9 +169,12 @@ namespace rocRoller
 
             const auto isBF16 = [](DataType type) { return type == DataType::BFloat16x2; };
 
+            const auto isF32 = [](DataType type) { return type == DataType::Float; };
+
             if(arch.HasCapability(GPUCapability::HasWMMA))
             {
-                AssertFatal((mi.m == 16) && (mi.n == 16) && (mi.k == 16 || mi.k == 32),
+                AssertFatal((mi.m == 16) && (mi.n == 16)
+                                && (mi.k == 4 || mi.k == 16 || mi.k == 32 || mi.k == 64),
                             "Invalid inputs",
                             ShowValue(mi.m),
                             ShowValue(mi.n),
@@ -185,6 +188,10 @@ namespace rocRoller
                 else if(typeA == typeB && isF16(typeA))
                 {
                     inputType = isFP16(typeA) ? "f16" : "bf16";
+                }
+                else if(typeA == typeB && isF32(typeA))
+                {
+                    inputType = "f32";
                 }
                 else
                 {

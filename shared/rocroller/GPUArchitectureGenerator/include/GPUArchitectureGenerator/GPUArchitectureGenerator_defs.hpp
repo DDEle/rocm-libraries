@@ -117,7 +117,9 @@ namespace GPUArchitectureGenerator
              {{"v_mfma_f32_32x32x16_bf16 a[0:15], v[32:35], v[36:39], a[0:15]"}, ""}},
 
             {rocRoller::GPUCapability::HasWMMA,
-             {{"v_wmma_f32_16x16x16_f16 v[0:7], v[32:35], v[36:39], v[0:7]"}, ""}},
+             {{"v_wmma_f32_16x16x16_f16 v[0:7], v[32:35], v[36:39], v[0:7]",
+               "v_wmma_f32_16x16x4_f32  v[0:7], v[32:33], v[40:41], v[0:7]"},
+              ""}},
             {rocRoller::GPUCapability::HasWMMA_F16_ACC,
              {{"v_wmma_f16_16x16x16_f16 v[0:3], v[32:35], v[36:39], v[0:3]"}, ""}},
             {rocRoller::GPUCapability::HasWMMA_f32_16x16x16_f16,
@@ -126,8 +128,14 @@ namespace GPUArchitectureGenerator
              {{"v_wmma_f16_16x16x16_f16 v[0:3], v[32:35], v[36:39], v[0:3]"}, ""}},
             {rocRoller::GPUCapability::HasWMMA_bf16_16x16x16_bf16,
              {{"v_wmma_bf16_16x16x16_bf16 v[0:3], v[32:35], v[36:39], v[0:3]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_f32_16x16x32_f16,
+             {{"v_wmma_f32_16x16x32_f16 v[0:7], v[32:39], v[40:47], v[0:7]"}, ""}},
             {rocRoller::GPUCapability::HasWMMA_f32_16x16x16_f8,
              {{"v_wmma_f32_16x16x16_fp8_fp8 v[0:7], v[32:33], v[34:35], v[0:7]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_f32_16x16x64_f8,
+             {{"v_wmma_f32_16x16x64_fp8_fp8 v[0:7], v[32:39], v[40:47], v[0:7]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_f32_16x16x4_f32,
+             {{"v_wmma_f32_16x16x4_f32 v[0:7], v[32:33], v[34:35], v[0:7]"}, ""}},
 
             {rocRoller::GPUCapability::HasAccumOffset,
              {{".amdhsa_kernel hello_world\n  .amdhsa_next_free_vgpr .amdgcn.next_free_vgpr\n  "
@@ -342,6 +350,17 @@ namespace GPUArchitectureGenerator
                          return x.isCDNA1GPU() || x.isCDNA2GPU() || x.isCDNA3GPU()
                                 || x.isCDNA35GPU();
                      });
+        return retval;
+    }
+
+    inline std::vector<rocRoller::GPUArchitectureTarget> gfx125XISAs()
+    {
+        std::vector<rocRoller::GPUArchitectureTarget> retval;
+        std::copy_if(
+            rocRoller::SupportedArchitectures.begin(),
+            rocRoller::SupportedArchitectures.end(),
+            std::back_inserter(retval),
+            [](rocRoller::GPUArchitectureTarget const& x) -> bool { return x.isCDNA5GPU(); });
         return retval;
     }
 
@@ -1083,6 +1102,50 @@ namespace GPUArchitectureGenerator
                  rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_fp8_bf8", 0, {}, 8),
                  rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_bf8_fp8", 0, {}, 8),
                  rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_bf8_bf8", 0, {}, 8),
+             }},
+            {gfx125XISAs(),
+             {
+                 rocRoller::GPUInstructionInfo("v_wmma_f64_16x16x4_f64", 0, {}, 32),
+                 rocRoller::GPUInstructionInfo("v_wmma_f64_16x16x8_f64", 0, {}, 32),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x4_f32", 0, {}, 16),
+                 // V_WMMA_F32_16x16x32_{F16,BF16}
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x32_bf16", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x32_f16", 0, {}, 8),
+                 // V_WMMA_{F16,BF16}_16x16x32_{F16,BF16}
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x32_f16", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_bf16_16x16x32_bf16", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_bf16f32_16x16x32_bf16", 0, {}, 8),
+                 // V_WMMA_F32_16x16x64_{fp8,bf8}_{fp8,bf8}
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_bf8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_bf8_fp8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_fp8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_fp8_fp8", 0, {}, 8),
+                 // V_WMMA_F16_16x16x64_{fp8,bf8}_{fp8,bf8}
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_bf8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_bf8_fp8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_fp8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_fp8_fp8", 0, {}, 8),
+                 // V_WMMA_F32_*_F8F6F4
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x128_f8f6f4", 0, {}, 16),
+                 rocRoller::GPUInstructionInfo("v_wmma_scale16_f32_16x16x128_f8f6f4", 0, {}, 16),
+                 rocRoller::GPUInstructionInfo("v_wmma_scale_f32_16x16x128_f8f6f4", 0, {}, 16),
+                 // V_WMMA_I32_*_{IU4,IU8}
+                 rocRoller::GPUInstructionInfo("v_wmma_i32_16x16x128_iu4", 0, {}, 16),
+                 rocRoller::GPUInstructionInfo("v_wmma_i32_16x16x64_iu8", 0, {}, 16),
+
+                 // TODO: Remove when MRISA is fixed
+                 // V_WMMA_F32_16x16x16_{fp8,bf8}_{fp8,bf8}
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_bf8_bf8", -1, {}, -1),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_bf8_fp8", -1, {}, -1),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_fp8_bf8", -1, {}, -1),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_fp8_fp8", -1, {}, -1),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_bf16", -1, {}, -1),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_f16", -1, {}, -1),
+                 rocRoller::GPUInstructionInfo("v_wmma_bf16_16x16x16_bf16", -1, {}, -1),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x16_f16", -1, {}, -1),
+                 rocRoller::GPUInstructionInfo("v_wmma_i32_16x16x16_iu4", -1, {}, -1),
+                 rocRoller::GPUInstructionInfo("v_wmma_i32_16x16x32_iu4", -1, {}, -1),
+                 rocRoller::GPUInstructionInfo("v_wmma_i32_16x16x16_iu8", -1, {}, -1),
              }},
             {gfx9ISAs(),
              {

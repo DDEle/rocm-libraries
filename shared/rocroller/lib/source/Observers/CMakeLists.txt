@@ -35,4 +35,9 @@ target_sources(rocroller
         "${CMAKE_CURRENT_SOURCE_DIR}/XDLWrite908.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/XDLWrite90a.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/XDLWrite94x.cpp"
+
+        "${CMAKE_CURRENT_SOURCE_DIR}/WMMA/VALUReadDAfterWMMAOrSWMMAC.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/WMMA/VALUWriteAfterWMMAOrSWMMACRead.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/WMMA/VALUWriteAfterWMMAOrSWMMACWrite.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/WMMA/WMMAOrSWMMACReadDAfterWMMA.cpp"
 )

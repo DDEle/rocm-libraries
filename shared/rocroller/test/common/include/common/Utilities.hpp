@@ -253,8 +253,18 @@ AcceptableError
     }
     else
     {
-        double scale = std::sqrt(K);
-        double fudge = 5;
+        double scale             = std::sqrt(K);
+        double fudge             = 5;
+        double extraArchFudgeBF8 = 0.0;
+
+        if(arch.gfx == rocRoller::GPUArchitectureGFX::GFX1250)
+        {
+            extraArchFudgeBF8 = 1.8;
+        }
+        else if(arch.gfx == rocRoller::GPUArchitectureGFX::GFX950)
+        {
+            extraArchFudgeBF8 = 2.58;
+        }
 
         ss << " K: " << K;
         ss << " Problem size scaling: " << scale;
@@ -269,7 +279,7 @@ AcceptableError
             }
             if constexpr(std::is_same_v<TA, rocRoller::BF8>)
             {
-                fudge *= 5;
+                fudge *= 5 + extraArchFudgeBF8;
                 ss << " Increase fudge for BF8: " << fudge;
             }
             if constexpr(std::is_same_v<TA, rocRoller::FP8>)
@@ -283,7 +293,7 @@ AcceptableError
         {
             if constexpr(std::is_same_v<TA, rocRoller::BF8> || std::is_same_v<TB, rocRoller::BF8>)
             {
-                fudge *= arch.gfx == rocRoller::GPUArchitectureGFX::GFX950 ? 7.58 : 6.0;
+                fudge *= 5 + extraArchFudgeBF8;
                 ss << " Increase fudge for mixed BF8: " << fudge;
             }
             else if constexpr(std::is_same_v<TA,

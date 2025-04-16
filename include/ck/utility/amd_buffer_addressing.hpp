@@ -113,17 +113,17 @@ llvm_amdgcn_raw_buffer_load_fp16(int32x4_t srsrc,
                                  index_t soffset,
                                  index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.load.f16");
 
-__device__ half2_t llvm_amdgcn_raw_buffer_load_fp16x2(
-    int32x4_t srsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.load.v2f16");
+__device__ half2_t
+llvm_amdgcn_raw_buffer_load_fp16x2(int32x4_t srsrc,
+                                   index_t voffset,
+                                   index_t soffset,
+                                   index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.load.v2f16");
 
-__device__ half4_t llvm_amdgcn_raw_buffer_load_fp16x4(
-    int32x4_t srsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.load.v4f16");
+__device__ half4_t
+llvm_amdgcn_raw_buffer_load_fp16x4(int32x4_t srsrc,
+                                   index_t voffset,
+                                   index_t soffset,
+                                   index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.load.v4f16");
 
 // buffer load fp32
 __device__ float
@@ -132,17 +132,17 @@ llvm_amdgcn_raw_buffer_load_fp32(int32x4_t srsrc,
                                  index_t soffset,
                                  index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.load.f32");
 
-__device__ float2_t llvm_amdgcn_raw_buffer_load_fp32x2(
-    int32x4_t srsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.load.v2f32");
+__device__ float2_t
+llvm_amdgcn_raw_buffer_load_fp32x2(int32x4_t srsrc,
+                                   index_t voffset,
+                                   index_t soffset,
+                                   index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.load.v2f32");
 
-__device__ float4_t llvm_amdgcn_raw_buffer_load_fp32x4(
-    int32x4_t srsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.load.v4f32");
+__device__ float4_t
+llvm_amdgcn_raw_buffer_load_fp32x4(int32x4_t srsrc,
+                                   index_t voffset,
+                                   index_t soffset,
+                                   index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.load.v4f32");
 
 // buffer store i8
 __device__ void
@@ -174,19 +174,19 @@ llvm_amdgcn_raw_buffer_store_i16(bhalf_t vdata,
                                  index_t soffset,
                                  index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.i16");
 
-__device__ void llvm_amdgcn_raw_buffer_store_i16x2(
-    bhalf2_t vdata,
-    int32x4_t rsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v2i16");
+__device__ void
+llvm_amdgcn_raw_buffer_store_i16x2(bhalf2_t vdata,
+                                   int32x4_t rsrc,
+                                   index_t voffset,
+                                   index_t soffset,
+                                   index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v2i16");
 
-__device__ void llvm_amdgcn_raw_buffer_store_i16x4(
-    bhalf4_t vdata,
-    int32x4_t rsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v4i16");
+__device__ void
+llvm_amdgcn_raw_buffer_store_i16x4(bhalf4_t vdata,
+                                   int32x4_t rsrc,
+                                   index_t voffset,
+                                   index_t soffset,
+                                   index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v4i16");
 
 // buffer store i32
 __device__ void
@@ -196,19 +196,19 @@ llvm_amdgcn_raw_buffer_store_i32(int32_t vdata,
                                  index_t soffset,
                                  index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.i32");
 
-__device__ void llvm_amdgcn_raw_buffer_store_i32x2(
-    int32x2_t vdata,
-    int32x4_t rsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v2i32");
+__device__ void
+llvm_amdgcn_raw_buffer_store_i32x2(int32x2_t vdata,
+                                   int32x4_t rsrc,
+                                   index_t voffset,
+                                   index_t soffset,
+                                   index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v2i32");
 
-__device__ void llvm_amdgcn_raw_buffer_store_i32x4(
-    int32x4_t vdata,
-    int32x4_t rsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v4i32");
+__device__ void
+llvm_amdgcn_raw_buffer_store_i32x4(int32x4_t vdata,
+                                   int32x4_t rsrc,
+                                   index_t voffset,
+                                   index_t soffset,
+                                   index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v4i32");
 
 // buffer store fp16
 __device__ void
@@ -218,19 +218,19 @@ llvm_amdgcn_raw_buffer_store_fp16(half_t vdata,
                                   index_t soffset,
                                   index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.f16");
 
-__device__ void llvm_amdgcn_raw_buffer_store_fp16x2(
-    half2_t vdata,
-    int32x4_t rsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v2f16");
+__device__ void
+llvm_amdgcn_raw_buffer_store_fp16x2(half2_t vdata,
+                                    int32x4_t rsrc,
+                                    index_t voffset,
+                                    index_t soffset,
+                                    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v2f16");
 
-__device__ void llvm_amdgcn_raw_buffer_store_fp16x4(
-    half4_t vdata,
-    int32x4_t rsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v4f16");
+__device__ void
+llvm_amdgcn_raw_buffer_store_fp16x4(half4_t vdata,
+                                    int32x4_t rsrc,
+                                    index_t voffset,
+                                    index_t soffset,
+                                    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v4f16");
 
 // buffer store fp32
 __device__ void
@@ -240,19 +240,19 @@ llvm_amdgcn_raw_buffer_store_fp32(float vdata,
                                   index_t soffset,
                                   index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.f32");
 
-__device__ void llvm_amdgcn_raw_buffer_store_fp32x2(
-    float2_t vdata,
-    int32x4_t rsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v2f32");
+__device__ void
+llvm_amdgcn_raw_buffer_store_fp32x2(float2_t vdata,
+                                    int32x4_t rsrc,
+                                    index_t voffset,
+                                    index_t soffset,
+                                    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v2f32");
 
-__device__ void llvm_amdgcn_raw_buffer_store_fp32x4(
-    float4_t vdata,
-    int32x4_t rsrc,
-    index_t voffset,
-    index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v4f32");
+__device__ void
+llvm_amdgcn_raw_buffer_store_fp32x4(float4_t vdata,
+                                    int32x4_t rsrc,
+                                    index_t voffset,
+                                    index_t soffset,
+                                    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.store.v4f32");
 
 // buffer atomic-add fp16
 __device__ half2_t llvm_amdgcn_raw_buffer_atomic_add_fp16x2(
@@ -279,12 +279,12 @@ __device__ float llvm_amdgcn_raw_buffer_atomic_add_fp32(
     index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.atomic.fadd.f32");
 
 // buffer atomic-add fp32
-__device__ double llvm_amdgcn_raw_buffer_atomic_max_fp64(
-    double vdata,
-    int32x4_t rsrc, // dst_wave_buffer_resource
-    int voffset,    // dst_thread_addr_offset
-    int soffset,    // dst_wave_addr_offset
-    int glc_slc) __asm("llvm.amdgcn.raw.buffer.atomic.fmax.f64");
+__device__ double
+llvm_amdgcn_raw_buffer_atomic_max_fp64(double vdata,
+                                       int32x4_t rsrc, // dst_wave_buffer_resource
+                                       int voffset,    // dst_thread_addr_offset
+                                       int soffset,    // dst_wave_addr_offset
+                                       int glc_slc) __asm("llvm.amdgcn.raw.buffer.atomic.fmax.f64");
 
 // memory coherency bit for buffer store/load instruction
 // check ISA manual for each GFX target

@@ -437,7 +437,7 @@ struct wmma_type<WmmaInstr::wmma_f16_16x16x32_f16_gfx12,
         static_assert(wave_size == 32, "only support wave32 for gfx12 wmma");
         if constexpr(wave_size == 32)
         {
-            intrin_wmma_f16_16x16x32_f16_w32_gfx12<MPerWmma, NPerWmma, false>::Run(a, b, reg_c);
+            intrin_wmma_f16_16x16x32_f16<MPerWmma, NPerWmma>::Run(a, b, reg_c);
         }
     }
 };
@@ -475,7 +475,7 @@ struct wmma_type<WmmaInstr::wmma_bf16_16x16x32_bf16_gfx12,
         static_assert(wave_size == 32, "only support wave32 for gfx12 wmma");
         if constexpr(wave_size == 32)
         {
-            intrin_wmma_bf16_16x16x32_bf16_w32_gfx12<MPerWmma, NPerWmma, false>::Run(a, b, reg_c);
+            intrin_wmma_bf16_16x16x32_bf16<MPerWmma, NPerWmma>::Run(a, b, reg_c);
         }
     }
 };
@@ -514,7 +514,7 @@ struct wmma_type<WmmaInstr::wmma_f32_16x16x32_f16_gfx12,
         static_assert(wave_size == 32, "only support wave32 for gfx12 wmma");
         if constexpr(wave_size == 32)
         {
-            intrin_wmma_f32_16x16x32_f16_w32_gfx12<MPerWmma, NPerWmma>::Run(a, b, reg_c);
+            intrin_wmma_f32_16x16x32_f16<MPerWmma, NPerWmma>::Run(a, b, reg_c);
         }
     }
 };
@@ -547,7 +547,7 @@ struct wmma_type<WmmaInstr::wmma_f32_16x16x32_bf16_gfx12,
         static_assert(wave_size == 32, "only support wave32 for gfx12 wmma");
         if constexpr(wave_size == 32)
         {
-            intrin_wmma_f32_16x16x32_bf16_w32_gfx12<MPerWmma, NPerWmma>::Run(a, b, reg_c);
+            intrin_wmma_f32_16x16x32_bf16<MPerWmma, NPerWmma>::Run(a, b, reg_c);
         }
     }
 };
@@ -580,15 +580,13 @@ struct wmma_type<WmmaInstr::wmma_i32_16x16x64_iu8_gfx12,
               class FloatB,
               class FloatC,
               bool neg_a = false,
-              bool neg_b = false,
-              bool clamp = false>
+              bool neg_b = false>
     __device__ void run(const FloatA& a, const FloatB& b, FloatC& reg_c) const
     {
         static_assert(wave_size == 32, "only support wave32 for gfx12 wmma");
         if constexpr(wave_size == 32)
         {
-            intrin_wmma_i32_16x16x64_iu8_w32_gfx12<MPerWmma, NPerWmma, neg_a, neg_b, clamp>::Run(
-                a, b, reg_c);
+            intrin_wmma_i32_16x16x64_iu8<MPerWmma, NPerWmma, neg_a, neg_b>::Run(a, b, reg_c);
         }
     }
 };

@@ -93,20 +93,20 @@ __global__ void
                                                 cde_element_op,
                                                 block_2_ctile_map);
 #else
-    ignore = p_a_grid;
-    ignore = p_b_grid;
-    ignore = p_ds_grid;
-    ignore = p_e_grid;
-    ignore = batch_count;
-    ignore = a_grid_desc;
-    ignore = b_grid_desc;
-    ignore = ds_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore = e_grid_desc_mblock_mperblock_nblock_nperblock_;
-    ignore = a_element_op;
-    ignore = b_element_op;
-    ignore = cde_element_op;
-    ignore = compute_ptr_offset_of_batch;
-    ignore = block_2_ctile_map;
+    ignore                      = p_a_grid;
+    ignore                      = p_b_grid;
+    ignore                      = p_ds_grid;
+    ignore                      = p_e_grid;
+    ignore                      = batch_count;
+    ignore                      = a_grid_desc;
+    ignore                      = b_grid_desc;
+    ignore                      = ds_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore                      = e_grid_desc_mblock_mperblock_nblock_nperblock_;
+    ignore                      = a_element_op;
+    ignore                      = b_element_op;
+    ignore                      = cde_element_op;
+    ignore                      = compute_ptr_offset_of_batch;
+    ignore                      = block_2_ctile_map;
 #endif
 }
 
@@ -186,20 +186,20 @@ __global__ void
                                                 cde_element_op,
                                                 block_2_etile_map);
 #else
-    ignore = p_a_grid;
-    ignore = p_b_grid;
-    ignore = p_ds_grid;
-    ignore = p_e_grid;
-    ignore = batch_count;
-    ignore = a_element_op;
-    ignore = b_element_op;
-    ignore = cde_element_op;
-    ignore = a_grid_desc;
-    ignore = b_grid_desc;
-    ignore = ds_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore = e_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore = block_2_etile_map;
-    ignore = compute_ptr_offset_of_batch;
+    ignore                      = p_a_grid;
+    ignore                      = p_b_grid;
+    ignore                      = p_ds_grid;
+    ignore                      = p_e_grid;
+    ignore                      = batch_count;
+    ignore                      = a_element_op;
+    ignore                      = b_element_op;
+    ignore                      = cde_element_op;
+    ignore                      = a_grid_desc;
+    ignore                      = b_grid_desc;
+    ignore                      = ds_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore                      = e_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore                      = block_2_etile_map;
+    ignore                      = compute_ptr_offset_of_batch;
 #endif
 }
 
@@ -254,18 +254,18 @@ __global__ void
                                                 cde_element_op,
                                                 block_2_ctile_map);
 #else
-    ignore = p_a_grid;
-    ignore = p_b_grid;
-    ignore = p_ds_grid;
-    ignore = p_e_grid;
-    ignore = a_grid_desc;
-    ignore = b_grid_desc;
-    ignore = ds_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore = e_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore = a_element_op;
-    ignore = b_element_op;
-    ignore = cde_element_op;
-    ignore = block_2_ctile_map;
+    ignore                      = p_a_grid;
+    ignore                      = p_b_grid;
+    ignore                      = p_ds_grid;
+    ignore                      = p_e_grid;
+    ignore                      = a_grid_desc;
+    ignore                      = b_grid_desc;
+    ignore                      = ds_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore                      = e_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore                      = a_element_op;
+    ignore                      = b_element_op;
+    ignore                      = cde_element_op;
+    ignore                      = block_2_ctile_map;
 #endif // end of if (defined(__gfx11__ ))
 }
 
@@ -340,7 +340,11 @@ struct GridwiseGemmMultipleD_Wmma
 
     static constexpr auto MWaves = MPerBlock / (MRepeat * MPerWmma);
     static constexpr auto NWaves = NPerBlock / (NRepeat * NPerWmma);
-    static constexpr auto WmmaK  = K1 == 16 ? 32 : 16;
+#ifdef __gfx125__
+    static constexpr auto WmmaK = is_same<ADataType, int8_t>::value ? 64 : 32;
+#else
+    static constexpr auto WmmaK = K1 == 16 ? 32 : 16;
+#endif
 
     using ThisThreadBlock = ThisThreadBlock<BlockSize>;
 

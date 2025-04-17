@@ -112,8 +112,13 @@ struct GridwiseBatchedGemmSoftmaxGemm_Wmma
     static constexpr auto MWaves = MPerBlock / (MRepeat * MPerWmma);
     static constexpr auto LWaves = LPerBlock / (LRepeat * LPerWmma);
     static constexpr auto NWaves = NPerBlock / (NRepeat * NPerWmma);
-    static constexpr auto WmmaK  = 16;
-    static constexpr auto WmmaL  = 16;
+#ifdef __gfx125__
+    static constexpr auto WmmaK = is_same<ADataType, int8_t>::value ? 64 : 32;
+    static constexpr auto WmmaL = is_same<Acc0DataType, int8_t>::value ? 64 : 32;
+#else
+    static constexpr auto WmmaK = 16;
+    static constexpr auto WmmaL = 16;
+#endif
 
     using ThisThreadBlock = ThisThreadBlock<BlockSize>;
 

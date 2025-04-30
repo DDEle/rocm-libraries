@@ -1,5 +1,5 @@
 # ########################################################################
-# Copyright 2019-2024 Advanced Micro Devices, Inc.
+# Copyright 2019-2025 Advanced Micro Devices, Inc.
 # ########################################################################
 
 set(INSTALL_TEST_FILE "${CMAKE_CURRENT_BINARY_DIR}/install_CTestTestfile.cmake")
@@ -49,8 +49,13 @@ endfunction()
 
 function(add_rocthrust_test TEST)
     set(TEST_SOURCE "test_${TEST}.cpp")
+    if(USE_HIPCXX)
+        set_source_files_properties(${TEST_SOURCE} PROPERTIES LANGUAGE HIP)
+    endif()
+
     set(TEST_TARGET "${TEST}.hip")
     add_executable(${TEST_TARGET} ${TEST_SOURCE})
+    target_compile_options(${TEST_TARGET} PRIVATE ${COMPILE_OPTIONS})
     target_include_directories(${TEST_TARGET} SYSTEM BEFORE
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
@@ -245,7 +250,7 @@ if(BUILD_TEST)
 endif()
 
 # hipstdpar tests
-if(BUILD_TEST OR BUILD_HIPSTDPAR_TEST)
+if(BUILD_HIPSTDPAR_TEST)
     if(WIN32)
         message(
             STATUS

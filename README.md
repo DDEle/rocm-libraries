@@ -1,7 +1,7 @@
 # rocThrust
 
 > [!NOTE]
-> The published documentation is available at [rocThrust](https://rocm.docs.amd.com/projects/rocThrust/en/latest/) in an organized, easy-to-read format, with search and a table of contents. The documentation source files reside in the `docs` folder of this repository. As with all ROCm projects, the documentation is open source. For more information on contributing to the documentation, see [Contribute to ROCm documentation](https://rocm.docs.amd.com/en/latest/contribute/contributing.html).
+> The published rocThrust documentation is available [here](https://rocm.docs.amd.com/projects/rocThrust/en/latest/) in an organized, easy-to-read format, with search and a table of contents. The documentation source files reside in the `docs` folder of this repository. As with all ROCm projects, the documentation is open source. For more information on contributing to the documentation, see [Contribute to ROCm documentation](https://rocm.docs.amd.com/en/latest/contribute/contributing.html).
 
 Thrust is a parallel algorithm library. It has been ported to
 [HIP](https://github.com/ROCm/HIP) and [ROCm](https://www.github.com/ROCm/ROCm), which use
@@ -34,28 +34,6 @@ For ROCm hardware requirements, refer to:
 
 * [Linux support](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/reference/system-requirements.html)
 * [Windows support](https://rocm.docs.amd.com/projects/install-on-windows/en/latest/reference/system-requirements.html)
-
-## Documentation
-
-Documentation for rocThrust available at
-[https://rocm.docs.amd.com/projects/rocThrust/en/latest/](https://rocm.docs.amd.com/projects/rocThrust/en/latest/).
-
-You can build our documentation locally using the following commands:
-
-```shell
-# Go to rocThrust docs directory
-cd rocThrust; cd docs
-
-# Install Python dependencies
-python3 -m pip install -r sphinx/requirements.txt
-
-# Build the documentation
-python3 -m sphinx -T -E -b html -d _build/doctrees -D language=en . _build/html
-
-# For e.g. serve the HTML docs locally
-cd _build/html
-python3 -m http.server
-```
 
 ## Build and install
 
@@ -282,8 +260,7 @@ When compiling with the proper flags (see [LLVM (AMD's fork) docs](https://githu
 HIPSTDPAR is currently packaged along rocThrust. The `hipstdpar` package is set up as a virtual package provided by `rocthrust`, so the latter needs to be installed entirely for getting HIPSTDPAR's headers. Conversely, installing the `rocthrust` package will also include HIPSTDPAR's headers in the system.
 
 ### Tests
-
-rocThrust also includes some tests for checking the correct building of HIPSTDPAR implementations. These are located under the [tests/hipstdpar](/test/hipstdpar/) folder. When configuring the project with the `BUILD_TEST` option on, these tests will also be enabled. Additionally, one can configure **only** HIPSTDPAR's tests by disabling `BUILD_TEST` and enabling `BUILD_HIPSTDPAR_TEST`. In general, the following steps can be followed for building and running the tests:
+rocThrust also includes tests to check the correct building of HIPSTDPAR implementations. They are located in the [tests/hipstdpar](/test/hipstdpar/) folder. When configuring the project with the `BUILD_TEST` option, these tests will not be enabled by default. To enable them, set `BUILD_HIPSTDPAR_TEST=ON`. Additionally, you can configure only HIPSTDPAR's tests by disabling `BUILD_TEST` and enabling `BUILD_HIPSTDPAR_TEST`. In general, the following steps can be followed for building and running the tests:
 
 ```sh
 git clone https://github.com/ROCm/rocThrust
@@ -292,7 +269,8 @@ git clone https://github.com/ROCm/rocThrust
 cd rocThrust; mkdir build; cd build
 
 # Configure rocThrust.
-[CXX=hipcc] cmake ../. -D BUILD_TEST=ON # Configure rocThrust's and HIPSTDPAR's tests.
+[CXX=hipcc] cmake ../. -D BUILD_TEST=ON # Configure rocThrust's tests.
+[CXX=hipcc] cmake ../. -D BUILD_TEST=ON -D BUILD_HIPSTDPAR_TEST=ON # Configure both rocThrust's tests and HIPSTDPAR's tests.
 [CXX=hipcc] cmake ../. -D BUILD_TEST=OFF -D BUILD_HIPSTDPAR_TEST=ON # Only configure HIPSTDPAR's tests.
 
 # Build
@@ -308,6 +286,58 @@ ctest --output-on-failure
 * [TBB](https://www.intel.com/content/www/us/en/developer/tools/oneapi/onetbb.html) library
   * Notice that oneTBB (oneAPI TBB) may fail to compile when libstdc++-9 or -10 is used, due to them using legacy TBB interfaces that are incompatible with the oneTBB ones (see the [release notes](https://www.intel.com/content/www/us/en/developer/articles/release-notes/intel-oneapi-threading-building-blocks-release-notes.html)).
 * CMake (3.10.2 or later)
+
+## Building the documentation locally
+
+### Requirements
+
+#### Doxygen
+
+The build system uses Doxygen [version 1.9.4](https://github.com/doxygen/doxygen/releases/tag/Release_1_9_4). You can try using a newer version, but that might cause issues.
+
+After you have downloaded Doxygen version 1.9.4:
+
+```shell
+# Add doxygen to your PATH
+echo 'export PATH=<doxygen 1.9.4 path>/bin:$PATH' >> ~/.bashrc
+
+# Apply the updated .bashrc
+source ~/.bashrc
+
+# Confirm that you are using version 1.9.4
+doxygen --version
+```
+
+#### Python
+
+The build system uses Python version 3.10. You can try using a newer version, but that might cause issues.
+
+You can install Python 3.10 alongside your other Python versions using [pyenv](https://github.com/pyenv/pyenv?tab=readme-ov-file#installation):
+
+```shell
+# Install Python 3.10
+pyenv install 3.10
+
+# Create a Python 3.10 virtual environment
+pyenv virtualenv 3.10 venv_rocthrust
+
+# Activate the virtual environment
+pyenv activate venv_rocthrust
+```
+
+### Building
+
+After cloning this repository, and `cd`ing into it:
+
+```shell
+# Install Python dependencies
+python3 -m pip install -r docs/sphinx/requirements.txt
+
+# Build the documentation
+python3 -m sphinx -T -E -b html -d docs/_build/doctrees -D language=en docs docs/_build/html
+```
+
+You can then open `docs/_build/html/index.html` in your browser to view the documentation.
 
 ## Support
 

@@ -76,6 +76,7 @@ def check_host() {
     if ("${env.CK_SCCACHE}" != "null"){
         def SCCACHE_SERVER="${env.CK_SCCACHE.split(':')[0]}"
         echo "sccache server: ${SCCACHE_SERVER}"
+        sh "chmod +w -R ${env.WORKSPACE}"
         sh '''ping -c 1 -p 6379 "${SCCACHE_SERVER}" | echo $? > tmp.txt'''
         def output = readFile(file: "tmp.txt")
         echo "tmp.txt contents: \$output"
@@ -530,8 +531,11 @@ def Build_CK(Map conf=[:]){
                     if ( params.RUN_INDUCTOR_TESTS && !params.BUILD_LEGACY_OS && arch_type == 1 ){
                             echo "Run inductor codegen tests"
                             sh """
-                                  pip install --target ${env.WORKSPACE} --break-system-packages --verbose .
-                                  pytest python/test/test_gen_instances.py
+                                  python3 -m venv ${env.WORKSPACE}
+                                  . ${env.WORKSPACE}/bin/activate
+                                  python3 -m pip install pytest build setuptools setuptools_scm
+                                  python3 -m pip install .
+                                  python3 -m pytest python/test/test_gen_instances.py
                             """
                     }
                     dir("build"){
@@ -830,8 +834,8 @@ pipeline {
             description: "Try building CK with legacy OS dockers: RHEL8 and SLES15 (default: OFF)")
         booleanParam(
             name: "RUN_INDUCTOR_TESTS",
-            defaultValue: false,
-            description: "Run inductor codegen tests (default: OFF)")
+            defaultValue: true,
+            description: "Run inductor codegen tests (default: ON)")
     }
     environment{
         dbuser = "${dbuser}"

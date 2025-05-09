@@ -108,21 +108,14 @@ namespace GEMMDriverTest
 
             if constexpr(isF6F4<TA> || isF6F4<TB>)
             {
-                REQUIRE_ARCH_CAP(GPUCapability::HasMFMA_f8f6f4);
+                REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasMFMA_f8f6f4,
+                                        GPUCapability::HasWMMA_f8f6f4);
             }
 
             if((isF8<TA> || isF8<TB>)&&(gemm.waveK >= 64))
             {
-                auto const& arch = m_context->targetArchitecture();
-                if(arch.HasCapability(GPUCapability::HasMFMA))
-                {
-                    REQUIRE_ARCH_CAP(GPUCapability::HasMFMA_f8f6f4);
-                }
-                else
-                {
-                    AssertFatal(arch.HasCapability(GPUCapability::HasWMMA) && gemm.waveK <= 64,
-                                "F8F6F4 WMMAs not supported yet.");
-                }
+                REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasMFMA_f8f6f4,
+                                        GPUCapability::HasWMMA_f8f6f4);
             }
 
             if(gemm.scaleAMode != Operations::ScaleMode::None
@@ -958,6 +951,15 @@ namespace GEMMDriverTest
 
     // Params are: A type, B type, K tile size, (transA, transB)
     class MixedGEMMTestWMMAGPU
+        : public BaseGEMMContextFixture<std::tuple<rocRoller::DataType,
+                                                   rocRoller::DataType,
+                                                   int,
+                                                   std::pair<std::string, std::string>>>
+    {
+    };
+
+    // Params are: A type, B type, K tile size, (transA, transB)
+    class MixedGEMMTestF8F6F4WMMAGPU
         : public BaseGEMMContextFixture<std::tuple<rocRoller::DataType,
                                                    rocRoller::DataType,
                                                    int,
@@ -3922,6 +3924,23 @@ namespace GEMMDriverTest
         basicGEMMMixed(typeA, typeB, gemm);
     }
 
+    TEST_P(MixedGEMMTestF8F6F4WMMAGPU, GPU_BasicGEMM)
+    {
+        REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f8f6f4);
+        auto [typeA, typeB, waveK, transOp] = std::get<1>(GetParam());
+        AssertFatal(waveK == 128, "Invalid waveK value.", ShowValue(waveK));
+
+        GEMMProblem gemm = setup_GEMMF8F6F4(16, 16, waveK);
+        gemm.wavefrontSize
+            = m_context->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
+        // TODO: change setup_GEMMF8F6F4 to query wavefrontSize
+        gemm.workgroupSizeX                = 2 * gemm.wavefrontSize;
+        gemm.workgroupSizeY                = 2;
+        std::tie(gemm.transA, gemm.transB) = transOp;
+
+        basicGEMMMixed(typeA, typeB, gemm);
+    }
+
     TEST_P(GEMMTestLargeMacroTileGPU, DISABLED_GPU_BasicGEMM)
     {
         // NOTE: This test takes hours to finish
@@ -4128,4 +4147,26 @@ namespace GEMMDriverTest
                                   std::pair<std::string, std::string>("N", "T"),
                                   std::pair<std::string, std::string>("T", "N"),
                                   std::pair<std::string, std::string>("T", "T")))));
+
+    INSTANTIATE_TEST_SUITE_P(
+        MixedGEMMTestWMMA1250,
+        MixedGEMMTestF8F6F4WMMAGPU,
+        ::testing::Combine(
+            currentGPUISA(),
+            ::testing::Combine(::testing::Values(rocRoller::DataType::FP8,
+                                                 rocRoller::DataType::BF8,
+                                                 rocRoller::DataType::FP6,
+                                                 rocRoller::DataType::BF6,
+                                                 rocRoller::DataType::FP4),
+                               ::testing::Values(rocRoller::DataType::FP8,
+                                                 rocRoller::DataType::BF8,
+                                                 rocRoller::DataType::FP6,
+                                                 rocRoller::DataType::BF6,
+                                                 rocRoller::DataType::FP4),
+                               ::testing::Values(/*waveK*/ 128),
+                               // TODO: add non-TN cases
+                               // std::pair<std::string, std::string>("N", "N"),
+                               // std::pair<std::string, std::string>("N", "T"),
+                               // std::pair<std::string, std::string>("T", "T"),
+                               ::testing::Values(std::pair<std::string, std::string>("T", "N")))));
 }

@@ -143,11 +143,18 @@ namespace MatrixMultiplyTest
             }
             if constexpr(isF6F4<TA> || isF6F4<TB>)
             {
-                REQUIRE_ARCH_CAP(GPUCapability::HasMFMA_f8f6f4);
+                REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasMFMA_f8f6f4,
+                                        GPUCapability::HasWMMA_f8f6f4);
             }
             if constexpr(isF32<TA> || isF32<TB>)
             {
                 REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f32_16x16x4_f32);
+            }
+
+            if((isF8<TA> || isF8<TB>)&&(wave_k >= 64))
+            {
+                REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasMFMA_f8f6f4,
+                                        GPUCapability::HasWMMA_f8f6f4);
             }
 
             const bool scaleA         = scaleParams.scaleTypeA != DataType::None;
@@ -842,6 +849,15 @@ namespace MatrixMultiplyTest
     {
     };
 
+    // Params are: A type, B type, waveK, (transA, transB)
+    class MatrixMultiplyMixedWMMAF8F6F4TestGPU
+        : public BaseMatrixMultiplyContextFixture<std::tuple<rocRoller::DataType,
+                                                             rocRoller::DataType,
+                                                             int,
+                                                             std::pair<std::string, std::string>>>
+    {
+    };
+
     // Params: waveK
     class MatrixMultiplyABCWMMATestGPU : public BaseMatrixMultiplyContextFixture<int>
     {
@@ -1072,6 +1088,19 @@ namespace MatrixMultiplyTest
 
         const auto        numWMMAs = 2; // F8 mac_k = 2 * wave_k
         const std::string wmmaMnemonic{fmt::format("v_wmma_f32_16x16x{}_{}", waveK, typeStr)};
+        std::string       generatedCode = m_context->instructions()->toString();
+        EXPECT_EQ(countSubstring(generatedCode, wmmaMnemonic), numWMMAs);
+    }
+
+    TEST_P(MatrixMultiplyMixedWMMAF8F6F4TestGPU, GPU_MatrixMultiplyMacroTileMixedWMMA)
+    {
+        const auto [typeA, typeB, waveK, transOp] = std::get<1>(GetParam());
+        const auto [transA, transB]               = transOp;
+
+        matrixMultiplyMacroTileMixed(typeA, typeB, 16, 16, waveK, 1, true, transA, transB);
+
+        const auto        numWMMAs = 2; // F8, F6, and F4 mac_k = 2 * wave_k
+        const std::string wmmaMnemonic{fmt::format("v_wmma_f32_16x16x{}_f8f6f4", waveK)};
         std::string       generatedCode = m_context->instructions()->toString();
         EXPECT_EQ(countSubstring(generatedCode, wmmaMnemonic), numWMMAs);
     }
@@ -1772,6 +1801,29 @@ namespace MatrixMultiplyTest
                                   std::pair<std::string, std::string>("N", "T"),
                                   std::pair<std::string, std::string>("T", "N"),
                                   std::pair<std::string, std::string>("T", "T")))));
+
+    INSTANTIATE_TEST_SUITE_P(
+        MatrixMultiply1250,
+        MatrixMultiplyMixedWMMAF8F6F4TestGPU,
+        ::testing::Combine(
+            ::testing::Values(GPUArchitectureTarget{GPUArchitectureGFX::GFX1250}),
+            ::testing::Combine(::testing::Values(rocRoller::DataType::FP8,
+                                                 rocRoller::DataType::BF8,
+                                                 rocRoller::DataType::FP6,
+                                                 rocRoller::DataType::BF6,
+                                                 rocRoller::DataType::FP4),
+                               ::testing::Values(rocRoller::DataType::FP8,
+                                                 rocRoller::DataType::BF8,
+                                                 rocRoller::DataType::FP6,
+                                                 rocRoller::DataType::BF6,
+                                                 rocRoller::DataType::FP4),
+                               ::testing::Values(/*waveK*/ 128),
+                               // TODO: add non-TN cases
+                               // std::pair<std::string, std::string>("N", "N"),
+                               // std::pair<std::string, std::string>("N", "T"),
+                               // std::pair<std::string, std::string>("T", "T")
+                               ::testing::Values(std::pair<std::string, std::string>("T", "N")))));
+
 
     INSTANTIATE_TEST_SUITE_P(MatrixMultiplyTest,
                              MatrixMultiplyTestGPUF8,

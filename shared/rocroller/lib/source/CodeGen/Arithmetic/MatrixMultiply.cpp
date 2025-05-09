@@ -161,6 +161,12 @@ namespace rocRoller
 
             const auto isBF8 = [](DataType type) { return type == DataType::BF8x4; };
 
+            const auto isF6 = [](DataType type) {
+                return type == DataType::FP6x16 || type == DataType::BF6x16;
+            };
+
+            const auto isF4 = [](DataType type) { return type == DataType::FP4x8; };
+
             const auto isF16 = [](DataType type) {
                 return type == DataType::Halfx2 || type == DataType::BFloat16x2;
             };
@@ -173,14 +179,21 @@ namespace rocRoller
 
             if(arch.HasCapability(GPUCapability::HasWMMA))
             {
-                AssertFatal((mi.m == 16) && (mi.n == 16)
-                                && (mi.k == 4 || mi.k == 16 || mi.k == 32 || mi.k == 64),
-                            "Invalid inputs",
-                            ShowValue(mi.m),
-                            ShowValue(mi.n),
-                            ShowValue(mi.k));
+                AssertFatal(
+                    (mi.m == 16) && (mi.n == 16)
+                        && (mi.k == 4 || mi.k == 16 || mi.k == 32 || mi.k == 64 || mi.k == 128),
+                    "Invalid inputs",
+                    ShowValue(mi.m),
+                    ShowValue(mi.n),
+                    ShowValue(mi.k));
 
-                if(isF8(typeA) && isF8(typeB))
+                if(mi.m == 16 && mi.n == 16 && mi.k == 128
+                   && (isF8(typeA) || isF6(typeA) || isF4(typeA))
+                   && (isF8(typeB) || isF6(typeB) || isF4(typeB)))
+                {
+                    inputType = "f8f6f4";
+                }
+                else if(isF8(typeA) && isF8(typeB))
                 {
                     inputType = isFP8(typeA) ? "fp8" : "bf8";
                     inputType += isFP8(typeB) ? "_fp8" : "_bf8";
@@ -203,9 +216,17 @@ namespace rocRoller
                                       typeB);
                 }
 
+                if(inputType == "f8f6f4")
+                {
+                    modifier = concatenate("matrix_a_fmt:",
+                                           Arithmetic::getModifier(typeA),
+                                           " matrix_b_fmt:",
+                                           Arithmetic::getModifier(typeB));
+                }
+
                 auto wmma = concatenate(
                     "v_wmma_", typeStr(typeD), "_", mi.m, "x", mi.n, "x", mi.k, "_", inputType);
-                co_yield_(Instruction(wmma, {D}, {A, B, C}, {}, ""));
+                co_yield_(Instruction(wmma, {D}, {A, B, C}, {modifier}, ""));
             }
             else if(arch.HasCapability(GPUCapability::HasMFMA))
             {

@@ -25,6 +25,7 @@ Architectures:
       HasWMMA_f32_16x16x32_f16: 0
       HasWMMA_f32_16x16x4_f32: 0
       HasWMMA_f32_16x16x64_f8: 0
+      HasWMMA_f8f6f4: 0
       HasWave32: 0
       HasWave64: 0
       MaxExpcnt: 7
@@ -632,49 +633,9 @@ Architectures:
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
-      buffer_load_d16_format_x:
-        ImplicitAccess: false
-        Instruction: buffer_load_d16_format_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_d16_format_xy:
-        ImplicitAccess: false
-        Instruction: buffer_load_d16_format_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_d16_format_xyz:
-        ImplicitAccess: false
-        Instruction: buffer_load_d16_format_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_d16_format_xyzw:
-        ImplicitAccess: false
-        Instruction: buffer_load_d16_format_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       buffer_load_d16_hi_b16:
         ImplicitAccess: false
         Instruction: buffer_load_d16_hi_b16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_d16_hi_format_x:
-        ImplicitAccess: false
-        Instruction: buffer_load_d16_hi_format_x
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -748,78 +709,6 @@ Architectures:
         WaitCount: 1
         WaitQueues:
         - LoadQueue
-      buffer_load_format_d16_hi_x:
-        ImplicitAccess: false
-        Instruction: buffer_load_format_d16_hi_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_format_d16_x:
-        ImplicitAccess: false
-        Instruction: buffer_load_format_d16_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_format_d16_xy:
-        ImplicitAccess: false
-        Instruction: buffer_load_format_d16_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_format_d16_xyz:
-        ImplicitAccess: false
-        Instruction: buffer_load_format_d16_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_format_d16_xyzw:
-        ImplicitAccess: false
-        Instruction: buffer_load_format_d16_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_format_x:
-        ImplicitAccess: false
-        Instruction: buffer_load_format_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_format_xy:
-        ImplicitAccess: false
-        Instruction: buffer_load_format_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_format_xyz:
-        ImplicitAccess: false
-        Instruction: buffer_load_format_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_load_format_xyzw:
-        ImplicitAccess: false
-        Instruction: buffer_load_format_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       buffer_load_i16:
         ImplicitAccess: false
         Instruction: buffer_load_i16
@@ -1008,38 +897,6 @@ Architectures:
         WaitCount: 1
         WaitQueues:
         - StoreQueue
-      buffer_store_d16_format_x:
-        ImplicitAccess: false
-        Instruction: buffer_store_d16_format_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_d16_format_xy:
-        ImplicitAccess: false
-        Instruction: buffer_store_d16_format_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_d16_format_xyz:
-        ImplicitAccess: false
-        Instruction: buffer_store_d16_format_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_d16_format_xyzw:
-        ImplicitAccess: false
-        Instruction: buffer_store_d16_format_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       buffer_store_d16_hi_b16:
         ImplicitAccess: false
         Instruction: buffer_store_d16_hi_b16
@@ -1051,14 +908,6 @@ Architectures:
       buffer_store_d16_hi_b8:
         ImplicitAccess: false
         Instruction: buffer_store_d16_hi_b8
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_d16_hi_format_x:
-        ImplicitAccess: false
-        Instruction: buffer_store_d16_hi_format_x
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -1100,78 +949,6 @@ Architectures:
         WaitCount: 1
         WaitQueues:
         - StoreQueue
-      buffer_store_format_d16_hi_x:
-        ImplicitAccess: false
-        Instruction: buffer_store_format_d16_hi_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_format_d16_x:
-        ImplicitAccess: false
-        Instruction: buffer_store_format_d16_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_format_d16_xy:
-        ImplicitAccess: false
-        Instruction: buffer_store_format_d16_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_format_d16_xyz:
-        ImplicitAccess: false
-        Instruction: buffer_store_format_d16_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_format_d16_xyzw:
-        ImplicitAccess: false
-        Instruction: buffer_store_format_d16_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_format_x:
-        ImplicitAccess: false
-        Instruction: buffer_store_format_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_format_xy:
-        ImplicitAccess: false
-        Instruction: buffer_store_format_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_format_xyz:
-        ImplicitAccess: false
-        Instruction: buffer_store_format_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      buffer_store_format_xyzw:
-        ImplicitAccess: false
-        Instruction: buffer_store_format_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       buffer_store_short:
         ImplicitAccess: false
         Instruction: buffer_store_short
@@ -1190,38 +967,6 @@ Architectures:
         WaitCount: 1
         WaitQueues:
         - StoreQueue
-      bvh64_intersect_ray:
-        ImplicitAccess: false
-        Instruction: bvh64_intersect_ray
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      bvh8_intersect_ray:
-        ImplicitAccess: false
-        Instruction: bvh8_intersect_ray
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      bvh_dual_intersect_ray:
-        ImplicitAccess: false
-        Instruction: bvh_dual_intersect_ray
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      bvh_intersect_ray:
-        ImplicitAccess: false
-        Instruction: bvh_intersect_ray
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       cluster_load_async_to_lds_b128:
         ImplicitAccess: false
         Instruction: cluster_load_async_to_lds_b128
@@ -1414,30 +1159,6 @@ Architectures:
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
-      ds_bvh_stack_push4_pop1_rtn_b32:
-        ImplicitAccess: false
-        Instruction: ds_bvh_stack_push4_pop1_rtn_b32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      ds_bvh_stack_push8_pop1_rtn_b32:
-        ImplicitAccess: false
-        Instruction: ds_bvh_stack_push8_pop1_rtn_b32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      ds_bvh_stack_push8_pop2_rtn_b64:
-        ImplicitAccess: false
-        Instruction: ds_bvh_stack_push8_pop2_rtn_b64
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       ds_cmpst_b32:
         ImplicitAccess: false
         Instruction: ds_cmpst_b32
@@ -1561,14 +1282,6 @@ Architectures:
       ds_dec_u64:
         ImplicitAccess: false
         Instruction: ds_dec_u64
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      ds_direct_load:
-        ImplicitAccess: false
-        Instruction: ds_direct_load
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -2161,14 +1874,6 @@ Architectures:
       ds_or_rtn_b64:
         ImplicitAccess: false
         Instruction: ds_or_rtn_b64
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      ds_param_load:
-        ImplicitAccess: false
-        Instruction: ds_param_load
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -2849,22 +2554,6 @@ Architectures:
       ds_xor_rtn_b64:
         ImplicitAccess: false
         Instruction: ds_xor_rtn_b64
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      exp:
-        ImplicitAccess: false
-        Instruction: exp
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      export:
-        ImplicitAccess: false
-        Instruction: export
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -4951,846 +4640,6 @@ Architectures:
       global_wbinv:
         ImplicitAccess: false
         Instruction: global_wbinv
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_add:
-        ImplicitAccess: false
-        Instruction: image_atomic_add
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_add_flt:
-        ImplicitAccess: false
-        Instruction: image_atomic_add_flt
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_add_uint:
-        ImplicitAccess: false
-        Instruction: image_atomic_add_uint
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_and:
-        ImplicitAccess: false
-        Instruction: image_atomic_and
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_cmpswap:
-        ImplicitAccess: false
-        Instruction: image_atomic_cmpswap
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_dec:
-        ImplicitAccess: false
-        Instruction: image_atomic_dec
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_dec_uint:
-        ImplicitAccess: false
-        Instruction: image_atomic_dec_uint
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_fmax:
-        ImplicitAccess: false
-        Instruction: image_atomic_fmax
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_fmin:
-        ImplicitAccess: false
-        Instruction: image_atomic_fmin
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_inc:
-        ImplicitAccess: false
-        Instruction: image_atomic_inc
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_inc_uint:
-        ImplicitAccess: false
-        Instruction: image_atomic_inc_uint
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_max_flt:
-        ImplicitAccess: false
-        Instruction: image_atomic_max_flt
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_max_int:
-        ImplicitAccess: false
-        Instruction: image_atomic_max_int
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_max_num_flt:
-        ImplicitAccess: false
-        Instruction: image_atomic_max_num_flt
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_max_uint:
-        ImplicitAccess: false
-        Instruction: image_atomic_max_uint
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_min_flt:
-        ImplicitAccess: false
-        Instruction: image_atomic_min_flt
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_min_int:
-        ImplicitAccess: false
-        Instruction: image_atomic_min_int
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_min_num_flt:
-        ImplicitAccess: false
-        Instruction: image_atomic_min_num_flt
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_min_uint:
-        ImplicitAccess: false
-        Instruction: image_atomic_min_uint
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_or:
-        ImplicitAccess: false
-        Instruction: image_atomic_or
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_pk_add_bf16:
-        ImplicitAccess: false
-        Instruction: image_atomic_pk_add_bf16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_pk_add_f16:
-        ImplicitAccess: false
-        Instruction: image_atomic_pk_add_f16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_smax:
-        ImplicitAccess: false
-        Instruction: image_atomic_smax
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_smin:
-        ImplicitAccess: false
-        Instruction: image_atomic_smin
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_sub:
-        ImplicitAccess: false
-        Instruction: image_atomic_sub
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_sub_uint:
-        ImplicitAccess: false
-        Instruction: image_atomic_sub_uint
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_swap:
-        ImplicitAccess: false
-        Instruction: image_atomic_swap
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_umax:
-        ImplicitAccess: false
-        Instruction: image_atomic_umax
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_umin:
-        ImplicitAccess: false
-        Instruction: image_atomic_umin
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_atomic_xor:
-        ImplicitAccess: false
-        Instruction: image_atomic_xor
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_bvh64_intersect_ray:
-        ImplicitAccess: false
-        Instruction: image_bvh64_intersect_ray
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_bvh8_intersect_ray:
-        ImplicitAccess: false
-        Instruction: image_bvh8_intersect_ray
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_bvh_dual_intersect_ray:
-        ImplicitAccess: false
-        Instruction: image_bvh_dual_intersect_ray
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_bvh_intersect_ray:
-        ImplicitAccess: false
-        Instruction: image_bvh_intersect_ray
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4:
-        ImplicitAccess: false
-        Instruction: image_gather4
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_b:
-        ImplicitAccess: false
-        Instruction: image_gather4_b
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_b_cl:
-        ImplicitAccess: false
-        Instruction: image_gather4_b_cl
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_c:
-        ImplicitAccess: false
-        Instruction: image_gather4_c
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_c_b:
-        ImplicitAccess: false
-        Instruction: image_gather4_c_b
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_c_b_cl:
-        ImplicitAccess: false
-        Instruction: image_gather4_c_b_cl
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_c_cl:
-        ImplicitAccess: false
-        Instruction: image_gather4_c_cl
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_c_l:
-        ImplicitAccess: false
-        Instruction: image_gather4_c_l
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_c_lz:
-        ImplicitAccess: false
-        Instruction: image_gather4_c_lz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_c_lz_o:
-        ImplicitAccess: false
-        Instruction: image_gather4_c_lz_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_cl:
-        ImplicitAccess: false
-        Instruction: image_gather4_cl
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_l:
-        ImplicitAccess: false
-        Instruction: image_gather4_l
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_lz:
-        ImplicitAccess: false
-        Instruction: image_gather4_lz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_lz_o:
-        ImplicitAccess: false
-        Instruction: image_gather4_lz_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4_o:
-        ImplicitAccess: false
-        Instruction: image_gather4_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_gather4h:
-        ImplicitAccess: false
-        Instruction: image_gather4h
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_get_lod:
-        ImplicitAccess: false
-        Instruction: image_get_lod
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_get_resinfo:
-        ImplicitAccess: false
-        Instruction: image_get_resinfo
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_load:
-        ImplicitAccess: false
-        Instruction: image_load
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_load_mip:
-        ImplicitAccess: false
-        Instruction: image_load_mip
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_load_mip_pck:
-        ImplicitAccess: false
-        Instruction: image_load_mip_pck
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_load_mip_pck_sgn:
-        ImplicitAccess: false
-        Instruction: image_load_mip_pck_sgn
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_load_pck:
-        ImplicitAccess: false
-        Instruction: image_load_pck
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_load_pck_sgn:
-        ImplicitAccess: false
-        Instruction: image_load_pck_sgn
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_msaa_load:
-        ImplicitAccess: false
-        Instruction: image_msaa_load
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample:
-        ImplicitAccess: false
-        Instruction: image_sample
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_b:
-        ImplicitAccess: false
-        Instruction: image_sample_b
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_b_cl:
-        ImplicitAccess: false
-        Instruction: image_sample_b_cl
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_b_cl_o:
-        ImplicitAccess: false
-        Instruction: image_sample_b_cl_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_b_o:
-        ImplicitAccess: false
-        Instruction: image_sample_b_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c:
-        ImplicitAccess: false
-        Instruction: image_sample_c
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_b:
-        ImplicitAccess: false
-        Instruction: image_sample_c_b
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_b_cl:
-        ImplicitAccess: false
-        Instruction: image_sample_c_b_cl
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_b_cl_o:
-        ImplicitAccess: false
-        Instruction: image_sample_c_b_cl_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_b_o:
-        ImplicitAccess: false
-        Instruction: image_sample_c_b_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_cl:
-        ImplicitAccess: false
-        Instruction: image_sample_c_cl
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_cl_o:
-        ImplicitAccess: false
-        Instruction: image_sample_c_cl_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_d:
-        ImplicitAccess: false
-        Instruction: image_sample_c_d
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_d_cl:
-        ImplicitAccess: false
-        Instruction: image_sample_c_d_cl
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_d_cl_g16:
-        ImplicitAccess: false
-        Instruction: image_sample_c_d_cl_g16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_d_cl_o:
-        ImplicitAccess: false
-        Instruction: image_sample_c_d_cl_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_d_cl_o_g16:
-        ImplicitAccess: false
-        Instruction: image_sample_c_d_cl_o_g16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_d_g16:
-        ImplicitAccess: false
-        Instruction: image_sample_c_d_g16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_d_o:
-        ImplicitAccess: false
-        Instruction: image_sample_c_d_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_d_o_g16:
-        ImplicitAccess: false
-        Instruction: image_sample_c_d_o_g16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_l:
-        ImplicitAccess: false
-        Instruction: image_sample_c_l
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_l_o:
-        ImplicitAccess: false
-        Instruction: image_sample_c_l_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_lz:
-        ImplicitAccess: false
-        Instruction: image_sample_c_lz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_lz_o:
-        ImplicitAccess: false
-        Instruction: image_sample_c_lz_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_c_o:
-        ImplicitAccess: false
-        Instruction: image_sample_c_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_cl:
-        ImplicitAccess: false
-        Instruction: image_sample_cl
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_cl_o:
-        ImplicitAccess: false
-        Instruction: image_sample_cl_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_d:
-        ImplicitAccess: false
-        Instruction: image_sample_d
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_d_cl:
-        ImplicitAccess: false
-        Instruction: image_sample_d_cl
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_d_cl_g16:
-        ImplicitAccess: false
-        Instruction: image_sample_d_cl_g16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_d_cl_o:
-        ImplicitAccess: false
-        Instruction: image_sample_d_cl_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_d_cl_o_g16:
-        ImplicitAccess: false
-        Instruction: image_sample_d_cl_o_g16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_d_g16:
-        ImplicitAccess: false
-        Instruction: image_sample_d_g16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_d_o:
-        ImplicitAccess: false
-        Instruction: image_sample_d_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_d_o_g16:
-        ImplicitAccess: false
-        Instruction: image_sample_d_o_g16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_l:
-        ImplicitAccess: false
-        Instruction: image_sample_l
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_l_o:
-        ImplicitAccess: false
-        Instruction: image_sample_l_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_lz:
-        ImplicitAccess: false
-        Instruction: image_sample_lz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_lz_o:
-        ImplicitAccess: false
-        Instruction: image_sample_lz_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_sample_o:
-        ImplicitAccess: false
-        Instruction: image_sample_o
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_store:
-        ImplicitAccess: false
-        Instruction: image_store
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_store_mip:
-        ImplicitAccess: false
-        Instruction: image_store_mip
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_store_mip_pck:
-        ImplicitAccess: false
-        Instruction: image_store_mip_pck
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      image_store_pck:
-        ImplicitAccess: false
-        Instruction: image_store_pck
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      lds_direct_load:
-        ImplicitAccess: false
-        Instruction: lds_direct_load
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      lds_param_load:
-        ImplicitAccess: false
-        Instruction: lds_param_load
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -8328,33 +7177,9 @@ Architectures:
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
-      s_wait_bvhcnt:
-        ImplicitAccess: false
-        Instruction: s_wait_bvhcnt
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       s_wait_dscnt:
         ImplicitAccess: false
         Instruction: s_wait_dscnt
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      s_wait_event:
-        ImplicitAccess: false
-        Instruction: s_wait_event
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      s_wait_expcnt:
-        ImplicitAccess: false
-        Instruction: s_wait_expcnt
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -8387,14 +7212,6 @@ Architectures:
       s_wait_loadcnt_dscnt:
         ImplicitAccess: false
         Instruction: s_wait_loadcnt_dscnt
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      s_wait_samplecnt:
-        ImplicitAccess: false
-        Instruction: s_wait_samplecnt
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -8918,198 +7735,6 @@ Architectures:
         WaitCount: 0
         WaitQueues:
         - StoreQueue
-      tbuffer_load_d16_format_x:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_d16_format_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_d16_format_xy:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_d16_format_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_d16_format_xyz:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_d16_format_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_d16_format_xyzw:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_d16_format_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_format_d16_x:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_format_d16_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_format_d16_xy:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_format_d16_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_format_d16_xyz:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_format_d16_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_format_d16_xyzw:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_format_d16_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_format_x:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_format_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_format_xy:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_format_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_format_xyz:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_format_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_load_format_xyzw:
-        ImplicitAccess: false
-        Instruction: tbuffer_load_format_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_d16_format_x:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_d16_format_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_d16_format_xy:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_d16_format_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_d16_format_xyz:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_d16_format_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_d16_format_xyzw:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_d16_format_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_format_d16_x:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_format_d16_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_format_d16_xy:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_format_d16_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_format_d16_xyz:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_format_d16_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_format_d16_xyzw:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_format_d16_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_format_x:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_format_x
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_format_xy:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_format_xy
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_format_xyz:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_format_xyz
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      tbuffer_store_format_xyzw:
-        ImplicitAccess: false
-        Instruction: tbuffer_store_format_xyzw
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       tensor_load_to_lds:
         ImplicitAccess: false
         Instruction: tensor_load_to_lds
@@ -11326,54 +9951,6 @@ Architectures:
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
-      v_cvt_scale_pk32_bf16_bf6:
-        ImplicitAccess: false
-        Instruction: v_cvt_scale_pk32_bf16_bf6
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scale_pk32_bf16_fp6:
-        ImplicitAccess: false
-        Instruction: v_cvt_scale_pk32_bf16_fp6
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scale_pk32_f16_bf6:
-        ImplicitAccess: false
-        Instruction: v_cvt_scale_pk32_f16_bf6
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scale_pk32_f16_fp6:
-        ImplicitAccess: false
-        Instruction: v_cvt_scale_pk32_f16_fp6
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scale_pk32_f32_bf6:
-        ImplicitAccess: false
-        Instruction: v_cvt_scale_pk32_f32_bf6
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scale_pk32_f32_fp6:
-        ImplicitAccess: false
-        Instruction: v_cvt_scale_pk32_f32_fp6
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       v_cvt_scale_pk8_bf16_bf8:
         ImplicitAccess: false
         Instruction: v_cvt_scale_pk8_bf16_bf8
@@ -11494,54 +10071,6 @@ Architectures:
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
-      v_cvt_scalef32_pk32_bf6_bf16:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_pk32_bf6_bf16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_pk32_bf6_f16:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_pk32_bf6_f16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_pk32_bf6_f32:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_pk32_bf6_f32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_pk32_fp6_bf16:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_pk32_fp6_bf16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_pk32_fp6_f16:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_pk32_fp6_f16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_pk32_fp6_f32:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_pk32_fp6_f32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       v_cvt_scalef32_pk8_bf8_bf16:
         ImplicitAccess: false
         Instruction: v_cvt_scalef32_pk8_bf8_bf16
@@ -11657,54 +10186,6 @@ Architectures:
       v_cvt_scalef32_sr_pk16_fp6_f32:
         ImplicitAccess: false
         Instruction: v_cvt_scalef32_sr_pk16_fp6_f32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_sr_pk32_bf6_bf16:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_sr_pk32_bf6_bf16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_sr_pk32_bf6_f16:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_sr_pk32_bf6_f16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_sr_pk32_bf6_f32:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_sr_pk32_bf6_f32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_sr_pk32_fp6_bf16:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_sr_pk32_fp6_bf16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_sr_pk32_fp6_f16:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_sr_pk32_fp6_f16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_cvt_scalef32_sr_pk32_fp6_f32:
-        ImplicitAccess: false
-        Instruction: v_cvt_scalef32_sr_pk32_fp6_f32
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -12481,62 +10962,6 @@ Architectures:
       v_frexp_mant_f64:
         ImplicitAccess: false
         Instruction: v_frexp_mant_f64
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_interp_p10_f16_f32:
-        ImplicitAccess: false
-        Instruction: v_interp_p10_f16_f32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_interp_p10_f32:
-        ImplicitAccess: false
-        Instruction: v_interp_p10_f32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_interp_p10_rtz_f16_f32:
-        ImplicitAccess: false
-        Instruction: v_interp_p10_rtz_f16_f32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_interp_p2_f16_f32:
-        ImplicitAccess: false
-        Instruction: v_interp_p2_f16_f32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_interp_p2_f32:
-        ImplicitAccess: false
-        Instruction: v_interp_p2_f32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_interp_p2_new_f32:
-        ImplicitAccess: false
-        Instruction: v_interp_p2_new_f32
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_interp_p2_rtz_f16_f32:
-        ImplicitAccess: false
-        Instruction: v_interp_p2_rtz_f16_f32
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -14574,14 +12999,6 @@ Architectures:
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
-      v_swmmac_bf16_16x16x32_bf16:
-        ImplicitAccess: false
-        Instruction: v_swmmac_bf16_16x16x32_bf16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       v_swmmac_bf16_16x16x64_bf16:
         ImplicitAccess: false
         Instruction: v_swmmac_bf16_16x16x64_bf16
@@ -14630,14 +13047,6 @@ Architectures:
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
-      v_swmmac_f16_16x16x32_f16:
-        ImplicitAccess: false
-        Instruction: v_swmmac_f16_16x16x32_f16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       v_swmmac_f16_16x16x64_f16:
         ImplicitAccess: false
         Instruction: v_swmmac_f16_16x16x64_f16
@@ -14678,54 +13087,6 @@ Architectures:
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
-      v_swmmac_f32_16x16x32_bf16:
-        ImplicitAccess: false
-        Instruction: v_swmmac_f32_16x16x32_bf16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_swmmac_f32_16x16x32_bf8_bf8:
-        ImplicitAccess: false
-        Instruction: v_swmmac_f32_16x16x32_bf8_bf8
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_swmmac_f32_16x16x32_bf8_fp8:
-        ImplicitAccess: false
-        Instruction: v_swmmac_f32_16x16x32_bf8_fp8
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_swmmac_f32_16x16x32_f16:
-        ImplicitAccess: false
-        Instruction: v_swmmac_f32_16x16x32_f16
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_swmmac_f32_16x16x32_fp8_bf8:
-        ImplicitAccess: false
-        Instruction: v_swmmac_f32_16x16x32_fp8_bf8
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_swmmac_f32_16x16x32_fp8_fp8:
-        ImplicitAccess: false
-        Instruction: v_swmmac_f32_16x16x32_fp8_fp8
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       v_swmmac_f32_16x16x64_bf16:
         ImplicitAccess: false
         Instruction: v_swmmac_f32_16x16x64_bf16
@@ -14745,38 +13106,6 @@ Architectures:
       v_swmmac_i32_16x16x128_iu8:
         ImplicitAccess: false
         Instruction: v_swmmac_i32_16x16x128_iu8
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_swmmac_i32_16x16x256_iu4:
-        ImplicitAccess: false
-        Instruction: v_swmmac_i32_16x16x256_iu4
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_swmmac_i32_16x16x32_iu4:
-        ImplicitAccess: false
-        Instruction: v_swmmac_i32_16x16x32_iu4
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_swmmac_i32_16x16x32_iu8:
-        ImplicitAccess: false
-        Instruction: v_swmmac_i32_16x16x32_iu8
-        IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_swmmac_i32_16x16x64_iu4:
-        ImplicitAccess: false
-        Instruction: v_swmmac_i32_16x16x64_iu4
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
@@ -14838,14 +13167,6 @@ Architectures:
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
-      v_wmma_bf16_16x16x16_bf16:
-        ImplicitAccess: false
-        Instruction: v_wmma_bf16_16x16x16_bf16
-        IsBranch: false
-        Latency: -1
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
       v_wmma_bf16_16x16x32_bf16:
         ImplicitAccess: false
         Instruction: v_wmma_bf16_16x16x32_bf16
@@ -14862,11 +13183,35 @@ Architectures:
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
-      v_wmma_f16_16x16x16_f16:
+      v_wmma_f16_16x16x128_bf8_bf8:
         ImplicitAccess: false
-        Instruction: v_wmma_f16_16x16x16_f16
+        Instruction: v_wmma_f16_16x16x128_bf8_bf8
         IsBranch: false
-        Latency: -1
+        Latency: 0
+        MaxLiteral: 0
+        WaitCount: -1
+        WaitQueues: []
+      v_wmma_f16_16x16x128_bf8_fp8:
+        ImplicitAccess: false
+        Instruction: v_wmma_f16_16x16x128_bf8_fp8
+        IsBranch: false
+        Latency: 0
+        MaxLiteral: 0
+        WaitCount: -1
+        WaitQueues: []
+      v_wmma_f16_16x16x128_fp8_bf8:
+        ImplicitAccess: false
+        Instruction: v_wmma_f16_16x16x128_fp8_bf8
+        IsBranch: false
+        Latency: 0
+        MaxLiteral: 0
+        WaitCount: -1
+        WaitQueues: []
+      v_wmma_f16_16x16x128_fp8_fp8:
+        ImplicitAccess: false
+        Instruction: v_wmma_f16_16x16x128_fp8_fp8
+        IsBranch: false
+        Latency: 0
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
@@ -14910,6 +13255,22 @@ Architectures:
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
+      v_wmma_f32_16x16x128_bf8_bf8:
+        ImplicitAccess: false
+        Instruction: v_wmma_f32_16x16x128_bf8_bf8
+        IsBranch: false
+        Latency: 0
+        MaxLiteral: 0
+        WaitCount: -1
+        WaitQueues: []
+      v_wmma_f32_16x16x128_bf8_fp8:
+        ImplicitAccess: false
+        Instruction: v_wmma_f32_16x16x128_bf8_fp8
+        IsBranch: false
+        Latency: 0
+        MaxLiteral: 0
+        WaitCount: -1
+        WaitQueues: []
       v_wmma_f32_16x16x128_f8f6f4:
         ImplicitAccess: false
         Instruction: v_wmma_f32_16x16x128_f8f6f4
@@ -14918,51 +13279,19 @@ Architectures:
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
-      v_wmma_f32_16x16x16_bf16:
+      v_wmma_f32_16x16x128_fp8_bf8:
         ImplicitAccess: false
-        Instruction: v_wmma_f32_16x16x16_bf16
+        Instruction: v_wmma_f32_16x16x128_fp8_bf8
         IsBranch: false
-        Latency: -1
+        Latency: 0
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
-      v_wmma_f32_16x16x16_bf8_bf8:
+      v_wmma_f32_16x16x128_fp8_fp8:
         ImplicitAccess: false
-        Instruction: v_wmma_f32_16x16x16_bf8_bf8
+        Instruction: v_wmma_f32_16x16x128_fp8_fp8
         IsBranch: false
-        Latency: -1
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_wmma_f32_16x16x16_bf8_fp8:
-        ImplicitAccess: false
-        Instruction: v_wmma_f32_16x16x16_bf8_fp8
-        IsBranch: false
-        Latency: -1
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_wmma_f32_16x16x16_f16:
-        ImplicitAccess: false
-        Instruction: v_wmma_f32_16x16x16_f16
-        IsBranch: false
-        Latency: -1
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_wmma_f32_16x16x16_fp8_bf8:
-        ImplicitAccess: false
-        Instruction: v_wmma_f32_16x16x16_fp8_bf8
-        IsBranch: false
-        Latency: -1
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_wmma_f32_16x16x16_fp8_fp8:
-        ImplicitAccess: false
-        Instruction: v_wmma_f32_16x16x16_fp8_fp8
-        IsBranch: false
-        Latency: -1
+        Latency: 0
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
@@ -15022,51 +13351,11 @@ Architectures:
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
-      v_wmma_f64_16x16x4_f64:
+      v_wmma_f32_32x16x128_f4:
         ImplicitAccess: false
-        Instruction: v_wmma_f64_16x16x4_f64
+        Instruction: v_wmma_f32_32x16x128_f4
         IsBranch: false
-        Latency: 32
-        MaxLiteral: 0
-        WaitCount: 0
-        WaitQueues: []
-      v_wmma_f64_16x16x8_f64:
-        ImplicitAccess: false
-        Instruction: v_wmma_f64_16x16x8_f64
-        IsBranch: false
-        Latency: 32
-        MaxLiteral: 0
-        WaitCount: 0
-        WaitQueues: []
-      v_wmma_i32_16x16x128_iu4:
-        ImplicitAccess: false
-        Instruction: v_wmma_i32_16x16x128_iu4
-        IsBranch: false
-        Latency: 16
-        MaxLiteral: 0
-        WaitCount: 0
-        WaitQueues: []
-      v_wmma_i32_16x16x16_iu4:
-        ImplicitAccess: false
-        Instruction: v_wmma_i32_16x16x16_iu4
-        IsBranch: false
-        Latency: -1
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_wmma_i32_16x16x16_iu8:
-        ImplicitAccess: false
-        Instruction: v_wmma_i32_16x16x16_iu8
-        IsBranch: false
-        Latency: -1
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
-      v_wmma_i32_16x16x32_iu4:
-        ImplicitAccess: false
-        Instruction: v_wmma_i32_16x16x32_iu4
-        IsBranch: false
-        Latency: -1
+        Latency: 0
         MaxLiteral: 0
         WaitCount: -1
         WaitQueues: []
@@ -15086,6 +13375,14 @@ Architectures:
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
+      v_wmma_scale16_f32_32x16x128_f4:
+        ImplicitAccess: false
+        Instruction: v_wmma_scale16_f32_32x16x128_f4
+        IsBranch: false
+        Latency: 0
+        MaxLiteral: 0
+        WaitCount: -1
+        WaitQueues: []
       v_wmma_scale_f32_16x16x128_f8f6f4:
         ImplicitAccess: false
         Instruction: v_wmma_scale_f32_16x16x128_f8f6f4
@@ -15093,6 +13390,14 @@ Architectures:
         Latency: 16
         MaxLiteral: 0
         WaitCount: 0
+        WaitQueues: []
+      v_wmma_scale_f32_32x16x128_f4:
+        ImplicitAccess: false
+        Instruction: v_wmma_scale_f32_32x16x128_f4
+        IsBranch: false
+        Latency: 0
+        MaxLiteral: 0
+        WaitCount: -1
         WaitQueues: []
       v_writelane_b32:
         ImplicitAccess: false

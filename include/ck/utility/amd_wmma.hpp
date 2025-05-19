@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2018-2023, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2018-2025, Advanced Micro Devices, Inc. All rights reserved.
 
 #ifndef CK_AMD_WMMA_HPP
 #define CK_AMD_WMMA_HPP
@@ -15,7 +15,7 @@ namespace ck {
 #endif
 
 #if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__)
-#define __gfx12__
+#define __gfx120__
 #endif
 
 /********************************WAVE32 MODE***********************************************/
@@ -104,7 +104,7 @@ struct intrin_wmma_bf16_16x16x16_bf16_w32<16, 16, Opsel>
         // opsel usage
         // false: D0.[0:15] = result
         // true : D0.[16:31]= result
-#if defined(__gfx11__) || defined(__gfx12__)
+#if defined(__gfx11__) || defined(__gfx120__)
         reg_c.template AsType<bhalf16_t>()(Number<0>{}) =
             __builtin_amdgcn_wmma_bf16_16x16x16_bf16_w32(
                 reg_a, reg_b, reg_c.template AsType<bhalf16_t>()[Number<0>{}], Opsel);
@@ -263,12 +263,8 @@ struct intrin_wmma_i32_16x16x16_iu8_w64<16, 16, neg_a, neg_b, clamp>
     }
 };
 
-// gfx120x
+// gfx12
 /********************************WAVE32 MODE***********************************************/
-
-#if defined(__gfx1200__) || defined(__gfx1201__)
-#define __gfx120__
-#endif
 
 // src: fp16, dst: fp32
 template <index_t MPerWave, index_t NPerWave>
@@ -337,6 +333,102 @@ struct intrin_wmma_i32_16x16x16_iu8_w32_gfx12<16, 16, neg_a, neg_b, clamp>
                 bit_cast<int32x2_t>(reg_b),
                 reg_c.template AsType<int32x8_t>()[Number<0>{}],
                 clamp);
+#else
+        ignore = reg_a;
+        ignore = reg_b;
+        ignore = reg_c;
+#endif
+    }
+};
+
+// src: f8, f8, dst: fp32
+template <index_t MPerWave, index_t NPerWave>
+struct intrin_wmma_f32_16x16x16_f8f8_w32_gfx12;
+
+template <>
+struct intrin_wmma_f32_16x16x16_f8f8_w32_gfx12<16, 16>
+{
+    template <class FloatC>
+    __device__ static void Run(const f8x8_t& reg_a, const f8x8_t& reg_b, FloatC& reg_c)
+    {
+#if defined(__gfx120__)
+        reg_c.template AsType<float8_t>()(Number<0>{}) =
+            __builtin_amdgcn_wmma_f32_16x16x16_fp8_fp8_w32_gfx12(
+                bit_cast<int32x2_t>(reg_a),
+                bit_cast<int32x2_t>(reg_b),
+                reg_c.template AsType<float8_t>()[Number<0>{}]);
+#else
+        ignore = reg_a;
+        ignore = reg_b;
+        ignore = reg_c;
+#endif
+    }
+};
+
+// src: f8, bf8, dst: fp32
+template <index_t MPerWave, index_t NPerWave>
+struct intrin_wmma_f32_16x16x16_f8bf8_w32_gfx12;
+
+template <>
+struct intrin_wmma_f32_16x16x16_f8bf8_w32_gfx12<16, 16>
+{
+    template <class FloatC>
+    __device__ static void Run(const f8x8_t& reg_a, const bf8x8_t& reg_b, FloatC& reg_c)
+    {
+#if defined(__gfx120__)
+        reg_c.template AsType<float8_t>()(Number<0>{}) =
+            __builtin_amdgcn_wmma_f32_16x16x16_fp8_bf8_w32_gfx12(
+                bit_cast<int32x2_t>(reg_a),
+                bit_cast<int32x2_t>(reg_b),
+                reg_c.template AsType<float8_t>()[Number<0>{}]);
+#else
+        ignore = reg_a;
+        ignore = reg_b;
+        ignore = reg_c;
+#endif
+    }
+};
+
+// src: bf8, f8, dst: fp32
+template <index_t MPerWave, index_t NPerWave>
+struct intrin_wmma_f32_16x16x16_bf8f8_w32_gfx12;
+
+template <>
+struct intrin_wmma_f32_16x16x16_bf8f8_w32_gfx12<16, 16>
+{
+    template <class FloatC>
+    __device__ static void Run(const bf8x8_t& reg_a, const f8x8_t& reg_b, FloatC& reg_c)
+    {
+#if defined(__gfx120__)
+        reg_c.template AsType<float8_t>()(Number<0>{}) =
+            __builtin_amdgcn_wmma_f32_16x16x16_bf8_fp8_w32_gfx12(
+                bit_cast<int32x2_t>(reg_a),
+                bit_cast<int32x2_t>(reg_b),
+                reg_c.template AsType<float8_t>()[Number<0>{}]);
+#else
+        ignore = reg_a;
+        ignore = reg_b;
+        ignore = reg_c;
+#endif
+    }
+};
+
+// src: bf8, bf8, dst: fp32
+template <index_t MPerWave, index_t NPerWave>
+struct intrin_wmma_f32_16x16x16_bf8bf8_w32_gfx12;
+
+template <>
+struct intrin_wmma_f32_16x16x16_bf8bf8_w32_gfx12<16, 16>
+{
+    template <class FloatC>
+    __device__ static void Run(const bf8x8_t& reg_a, const bf8x8_t& reg_b, FloatC& reg_c)
+    {
+#if defined(__gfx120__)
+        reg_c.template AsType<float8_t>()(Number<0>{}) =
+            __builtin_amdgcn_wmma_f32_16x16x16_bf8_bf8_w32_gfx12(
+                bit_cast<int32x2_t>(reg_a),
+                bit_cast<int32x2_t>(reg_b),
+                reg_c.template AsType<float8_t>()[Number<0>{}]);
 #else
         ignore = reg_a;
         ignore = reg_b;

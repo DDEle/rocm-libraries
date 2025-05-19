@@ -36,6 +36,7 @@ set(REGRESSION_TESTS
     test_batchnorm_bwd_rank_4
     test_grouped_convnd_bwd_data_xdl
     test_conv_tensor_rearrange
+    test_gemm_mx
 )
 
 function(add_test_executable TEST_NAME)
@@ -254,6 +255,7 @@ add_subdirectory(reduce)
 add_subdirectory(convnd_fwd)
 add_subdirectory(convnd_bwd_data)
 add_subdirectory(grouped_convnd_fwd)
+add_subdirectory(grouped_convnd_fwd_bias_relu)
 add_subdirectory(grouped_convnd_bwd_weight)
 add_subdirectory(block_to_ctile_map)
 add_subdirectory(softmax)
@@ -279,6 +281,7 @@ if(SUPPORTED_GPU_TARGETS MATCHES "gfx942" OR SUPPORTED_GPU_TARGETS MATCHES "gfx9
 endif()
 if(SUPPORTED_GPU_TARGETS MATCHES "gfx950") 
     add_subdirectory(mx_mfma_op)
+    add_subdirectory(gemm_mx)
 endif()
 add_subdirectory(position_embedding)
 add_subdirectory(scatter_gather)

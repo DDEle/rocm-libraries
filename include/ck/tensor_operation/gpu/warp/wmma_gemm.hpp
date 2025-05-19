@@ -1077,3 +1077,4 @@ struct WmmaGemm
 };
 
 } // namespace ck
+

@@ -80,7 +80,7 @@ __device__ half2_t llvm_amdgcn_raw_buffer_atomic_add_fp16x2(
     int32x4_t rsrc,
     index_t voffset,
     index_t soffset,
-    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.atomic.fadd.v2f16i.v4i32");
+    index_t glc_slc) __asm("llvm.amdgcn.raw.buffer.atomic.fadd.v2f16.v4i32");
 
 // buffer atomic-add i32
 __device__ int32_t llvm_amdgcn_raw_buffer_atomic_add_i32(

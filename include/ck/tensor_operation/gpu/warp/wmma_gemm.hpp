@@ -846,9 +846,12 @@ struct WmmaSelector
         static_assert(selected_wmma.m_per_wmma == 16, "WRONG! WMMA_M must equal to 16");
 
         static_assert(selected_wmma.m_per_wmma == 16, "WRONG! WMMA_M must equal to 16");
-
+#if defined(__gfx125__)
+        // on gfx125x k_per_wmma could be 32 or 64
+        // static_assert(selected_wmma.k_per_wmma == 32, "WRONG! WMMA_M must equal to 32");
+#else
         static_assert(selected_wmma.k_per_wmma == 16, "WRONG! WMMA_M must equal to 16");
-
+#endif
         static_assert(selected_wmma.wave_size * selected_wmma.num_acc_vgprs_per_wave *
                               selected_wmma.acc_data_size * selected_wmma.acc_pack_number ==
                           selected_wmma.m_per_wmma * selected_wmma.n_per_wmma * 4,

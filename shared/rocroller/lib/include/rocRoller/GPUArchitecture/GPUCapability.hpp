@@ -93,6 +93,8 @@ namespace rocRoller
             HasWMMA_f32_16x16x4_f32,
 
             HasWMMA_f8f6f4,
+            HasWMMA_scale_f8f6f4,
+            HasWMMA_scale16_f8f6f4,
 
             HasAccumOffset,
             HasGlobalOffset,
@@ -145,6 +147,7 @@ namespace rocRoller
             PackedWorkitemIDs,
 
             HasBlockScaling32,
+            HasBlockScaling16,
             DefaultScaleBlockSize,
             HasE8M0Scale,
 

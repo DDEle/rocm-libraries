@@ -141,6 +141,17 @@ namespace GPUArchitectureGenerator
              {{"v_wmma_f32_16x16x128_f8f6f4 v[0:7], v[30:37], v[38:49], v[0:7] "
                "matrix_a_fmt:MATRIX_FMT_FP4 matrix_b_fmt:MATRIX_FMT_FP6"},
               ""}},
+            {rocRoller::GPUCapability::HasWMMA_scale_f8f6f4,
+             {{"v_wmma_scale_f32_16x16x128_f8f6f4 v[0:7], v[30:37], v[38:49], v[0:7], v8, v9 "
+               "matrix_a_fmt:MATRIX_FMT_FP4 matrix_b_fmt:MATRIX_FMT_FP6 "
+               "matrix_a_scale_fmt:MATRIX_SCALE_FMT_E8 matrix_b_scale_fmt:MATRIX_SCALE_FMT_E8"},
+              ""}},
+            {rocRoller::GPUCapability::HasWMMA_scale16_f8f6f4,
+             {{"v_wmma_scale16_f32_16x16x128_f8f6f4 v[0:7], v[30:37], v[38:49], v[0:7], v[8:9], "
+               "v[10:11] "
+               "matrix_a_fmt:MATRIX_FMT_FP4 matrix_b_fmt:MATRIX_FMT_FP6 "
+               "matrix_a_scale_fmt:MATRIX_SCALE_FMT_E8 matrix_b_scale_fmt:MATRIX_SCALE_FMT_E8"},
+              ""}},
 
             {rocRoller::GPUCapability::HasAccumOffset,
              {{".amdhsa_kernel hello_world\n  .amdhsa_next_free_vgpr .amdgcn.next_free_vgpr\n  "
@@ -294,6 +305,7 @@ namespace GPUArchitectureGenerator
                                                  {.xnack = true}},
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950,
                                                  {.sramecc = true}},
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
             }},
            {rocRoller::GPUCapability::HasE8M0Scale,
             {
@@ -310,6 +322,11 @@ namespace GPUArchitectureGenerator
                                                  {.xnack = true}},
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950,
                                                  {.sramecc = true}},
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+            }},
+           {rocRoller::GPUCapability::HasBlockScaling16,
+            {
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
             }}};
 
     inline std::vector<rocRoller::GPUArchitectureTarget> gfx908ISAs()

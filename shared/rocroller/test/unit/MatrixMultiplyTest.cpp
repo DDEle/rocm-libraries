@@ -1824,7 +1824,6 @@ namespace MatrixMultiplyTest
                                // std::pair<std::string, std::string>("T", "T")
                                ::testing::Values(std::pair<std::string, std::string>("T", "N")))));
 
-
     INSTANTIATE_TEST_SUITE_P(MatrixMultiplyTest,
                              MatrixMultiplyTestGPUF8,
                              ::testing::Combine(mfmaSupportedISAValues(),

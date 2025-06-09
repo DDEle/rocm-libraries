@@ -121,7 +121,8 @@ namespace GEMMDriverTest
             if(gemm.scaleAMode != Operations::ScaleMode::None
                || gemm.scaleBMode != Operations::ScaleMode::None)
             {
-                REQUIRE_ARCH_CAP(GPUCapability::HasMFMA_scale_f8f6f4);
+                REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasMFMA_scale_f8f6f4,
+                                        GPUCapability::HasWMMA_scale_f8f6f4);
                 const auto  scaleType = gemm.scaleAMode != Operations::ScaleMode::None
                                             ? gemm.scaleTypeA
                                             : gemm.scaleTypeB;
@@ -3937,6 +3938,26 @@ namespace GEMMDriverTest
         gemm.workgroupSizeX                = 2 * gemm.wavefrontSize;
         gemm.workgroupSizeY                = 2;
         std::tie(gemm.transA, gemm.transB) = transOp;
+
+        basicGEMMMixed(typeA, typeB, gemm);
+    }
+
+    TEST_P(MixedGEMMTestF8F6F4WMMAGPU, GPU_SingleScaledMixedBasicGEMMF8F6F4)
+    {
+        REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasWMMA_scale_f8f6f4);
+        auto [typeA, typeB, waveK, transOp] = std::get<1>(GetParam());
+        AssertFatal(waveK == 128, "Invalid waveK value.", ShowValue(waveK));
+
+        auto gemm = setup_GEMMF8F6F4(16, 16, waveK);
+
+        std::tie(gemm.transA, gemm.transB) = transOp;
+
+        gemm.wavefrontSize
+            = m_context->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
+        gemm.workgroupSizeX = 2 * gemm.wavefrontSize;
+        gemm.workgroupSizeY = 2;
+        gemm.scaleAMode     = Operations::ScaleMode::SingleScale;
+        gemm.scaleBMode     = Operations::ScaleMode::SingleScale;
 
         basicGEMMMixed(typeA, typeB, gemm);
     }

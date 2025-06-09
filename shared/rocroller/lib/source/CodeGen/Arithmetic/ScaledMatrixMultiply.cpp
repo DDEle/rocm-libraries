@@ -177,6 +177,76 @@ namespace rocRoller
 
                 co_yield inst;
             }
+            else if(arch.HasCapability(GPUCapability::HasWMMA_scale_f8f6f4))
+            {
+                AssertFatal(miSizes.m == 16 && miSizes.n == 16 && miSizes.k == 128,
+                            "Invalid wavetile {}x{}x{} for scaled WMMA instruction for {}.",
+                            miSizes.m,
+                            miSizes.n,
+                            miSizes.k,
+                            arch.target().toString());
+
+                std::string mi;
+
+                if(maybeScaleBlockSize)
+                {
+                    auto scaleBlockSize = maybeScaleBlockSize.value();
+                    AssertFatal(arch.isSupportedScaleBlockSize(scaleBlockSize),
+                                fmt::format("Scale block size {} not supported on {}",
+                                            scaleBlockSize,
+                                            arch.target().toString()));
+
+                    if(scaleBlockSize == 32)
+                    {
+                        mi = concatenate("v_wmma_scale_f32_",
+                                         miSizes.m,
+                                         "x",
+                                         miSizes.n,
+                                         "x",
+                                         miSizes.k,
+                                         "_f8f6f4");
+                    }
+                    else if(scaleBlockSize == 16)
+                    {
+                        AssertFatal(arch.HasCapability(GPUCapability::HasWMMA_scale16_f8f6f4));
+                        mi = concatenate("v_wmma_scale16_f32_",
+                                         miSizes.m,
+                                         "x",
+                                         miSizes.n,
+                                         "x",
+                                         miSizes.k,
+                                         "_f8f6f4");
+                    }
+                    else
+                    {
+                        Throw<FatalError>(fmt::format(
+                            "Scaled Matrix Multiplication with block size {} is unimplemented {}",
+                            scaleBlockSize,
+                            arch.target().toString()));
+                    }
+                }
+                else
+                {
+                    mi = concatenate(
+                        "v_wmma_scale_f32_", miSizes.m, "x", miSizes.n, "x", miSizes.k, "_f8f6f4");
+                }
+
+                auto scaleAType = scaleA->variableType().dataType;
+                auto scaleBType = scaleB->variableType().dataType;
+
+                auto aFmt      = "matrix_a_fmt:" + Arithmetic::getModifier(typeA);
+                auto bFmt      = "matrix_b_fmt:" + Arithmetic::getModifier(typeB);
+                auto aScaleFmt = "matrix_a_scale_fmt:MATRIX_SCALE_FMT_E8";
+                auto bScaleFmt = "matrix_b_scale_fmt:MATRIX_SCALE_FMT_E8";
+
+                Instruction inst(mi,
+                                 {dest},
+                                 {matA, matB, matC, scaleA, scaleB},
+                                 {aFmt, bFmt, aScaleFmt, bScaleFmt},
+                                 "");
+
+                co_yield inst;
+            }
             else
             {
                 Throw<FatalError>("Scaled Matrix Multiplication is not supported for",

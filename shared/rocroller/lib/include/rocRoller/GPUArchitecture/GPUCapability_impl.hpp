@@ -109,6 +109,8 @@ namespace rocRoller
             {"HasWMMA_f32_16x16x4_f32", Value::HasWMMA_f32_16x16x4_f32},
 
             {"HasWMMA_f8f6f4", Value::HasWMMA_f8f6f4},
+            {"HasWMMA_scale_f8f6f4", Value::HasWMMA_scale_f8f6f4},
+            {"HasWMMA_scale16_f8f6f4", Value::HasWMMA_scale16_f8f6f4},
 
             {"HasAccumOffset", Value::HasAccumOffset},
             {"HasGlobalOffset", Value::HasGlobalOffset},
@@ -163,6 +165,7 @@ namespace rocRoller
             {"DefaultWavefrontSize", Value::DefaultWavefrontSize},
 
             {"HasBlockScaling32", Value::HasBlockScaling32},
+            {"HasBlockScaling16", Value::HasBlockScaling16},
             {"DefaultScaleBlockSize", Value::DefaultScaleBlockSize},
             {"HasE8M0Scale", Value::HasE8M0Scale},
 

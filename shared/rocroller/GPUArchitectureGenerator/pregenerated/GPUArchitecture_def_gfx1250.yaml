@@ -2,8 +2,12 @@ Architectures:
   gfx1250:
     Capabilities:
       CMPXWritesSGPR: 0
+      DefaultRemapXCCValue: 8
+      DefaultScaleBlockSize: 32
       DefaultWavefrontSize: 32
       HasAddLshl: 0
+      HasBlockScaling16: 0
+      HasBlockScaling32: 0
       HasBufferFormatSpecInSOffsetField: 0
       HasBufferOutOfBoundsCheckOption: 0
       HasCodeObjectV4: 0
@@ -26,8 +30,11 @@ Architectures:
       HasWMMA_f32_16x16x4_f32: 0
       HasWMMA_f32_16x16x64_f8: 0
       HasWMMA_f8f6f4: 0
+      HasWMMA_scale16_f8f6f4: 0
+      HasWMMA_scale_f8f6f4: 0
       HasWave32: 0
       HasWave64: 0
+      HasXCC: 0
       MaxExpcnt: 7
       MaxLdsSize: 65536
       MaxLgkmcnt: 31

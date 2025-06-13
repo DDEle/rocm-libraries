@@ -3871,6 +3871,9 @@ namespace GEMMDriverTest
         case 16:
             REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f16_16x16x16_f16);
             break;
+        case 32:
+            REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f16_16x16x32_f16);
+            break;
         default:
             Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
         }
@@ -4137,6 +4140,19 @@ namespace GEMMDriverTest
             ::testing::Combine(
                 ::testing::Values(std::make_pair(rocRoller::DataType::Half, /*waveK*/ 16),
                                   std::make_pair(rocRoller::DataType::BFloat16, /*waveK*/ 16)),
+                ::testing::Values(std::pair<std::string, std::string>("N", "N"),
+                                  std::pair<std::string, std::string>("N", "T"),
+                                  std::pair<std::string, std::string>("T", "N"),
+                                  std::pair<std::string, std::string>("T", "T")))));
+
+    INSTANTIATE_TEST_SUITE_P(
+        GEMMTestWMMA1250,
+        GEMMTestWMMAF16AccumGPU,
+        ::testing::Combine(
+            currentGPUISA(),
+            ::testing::Combine(
+                ::testing::Values(std::make_pair(rocRoller::DataType::Half, /*waveK*/ 32),
+                                  std::make_pair(rocRoller::DataType::BFloat16, /*waveK*/ 32)),
                 ::testing::Values(std::pair<std::string, std::string>("N", "N"),
                                   std::pair<std::string, std::string>("N", "T"),
                                   std::pair<std::string, std::string>("T", "N"),

@@ -937,6 +937,10 @@ namespace MatrixMultiplyTest
             {
                 REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f16_16x16x16_f16);
             }
+            else if(waveK == 32)
+            {
+                REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f16_16x16x32_f16);
+            }
             else
             {
                 Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
@@ -948,6 +952,10 @@ namespace MatrixMultiplyTest
             if(waveK == 16)
             {
                 REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_bf16_16x16x16_bf16);
+            }
+            else if(waveK == 32)
+            {
+                REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_bf16_16x16x32_bf16);
             }
             else
             {
@@ -1015,6 +1023,10 @@ namespace MatrixMultiplyTest
             {
                 REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f16_16x16x16_f16);
             }
+            else if(waveK == 32)
+            {
+                REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f16_16x16x32_f16);
+            }
             else
             {
                 Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
@@ -1026,6 +1038,10 @@ namespace MatrixMultiplyTest
             if(waveK == 16)
             {
                 REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_bf16_16x16x16_bf16);
+            }
+            else if(waveK == 32)
+            {
+                REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_bf16_16x16x32_bf16);
             }
             else
             {
@@ -1157,9 +1173,15 @@ namespace MatrixMultiplyTest
     TEST_P(MatrixMultiplyABCWMMATestGPU, GPU_MatrixMultiplyABCF16AccWMMAFP16)
     {
         const auto waveK = std::get<1>(GetParam());
+        REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_F16_ACC);
+
         if(waveK == 16)
         {
             REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f16_16x16x16_f16);
+        }
+        else if(waveK == 32)
+        {
+            REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f16_16x16x32_f16);
         }
         else
         {
@@ -1176,9 +1198,15 @@ namespace MatrixMultiplyTest
     TEST_P(MatrixMultiplyABCWMMATestGPU, GPU_MatrixMultiplyABCF16AccWMMABFloat16)
     {
         const auto waveK = std::get<1>(GetParam());
+        REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_F16_ACC);
+
         if(waveK == 16)
         {
             REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_bf16_16x16x16_bf16);
+        }
+        else if(waveK == 32)
+        {
+            REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_bf16_16x16x32_bf16);
         }
         else
         {
@@ -1790,6 +1818,19 @@ namespace MatrixMultiplyTest
 
     INSTANTIATE_TEST_SUITE_P(
         MatrixMultiply1250,
+        MatrixMultiplyF16AccWMMATestGPU,
+        ::testing::Combine(
+            ::testing::Values(GPUArchitectureTarget{GPUArchitectureGFX::GFX1250}),
+            ::testing::Combine(
+                ::testing::Values(std::make_pair(rocRoller::DataType::Half, /*waveK*/ 32),
+                                  std::make_pair(rocRoller::DataType::BFloat16, /*waveK*/ 32)),
+                ::testing::Values(std::pair<std::string, std::string>("N", "N"),
+                                  std::pair<std::string, std::string>("N", "T"),
+                                  std::pair<std::string, std::string>("T", "N"),
+                                  std::pair<std::string, std::string>("T", "T")))));
+
+    INSTANTIATE_TEST_SUITE_P(
+        MatrixMultiply1250,
         MatrixMultiplyMixedWMMATestGPU,
         ::testing::Combine(
             ::testing::Values(GPUArchitectureTarget{GPUArchitectureGFX::GFX1250}),
@@ -1823,6 +1864,19 @@ namespace MatrixMultiplyTest
                                // std::pair<std::string, std::string>("N", "T"),
                                // std::pair<std::string, std::string>("T", "T")
                                ::testing::Values(std::pair<std::string, std::string>("T", "N")))));
+
+    INSTANTIATE_TEST_SUITE_P(
+        MatrixMultiplyABCWMMA120X,
+        MatrixMultiplyABCWMMATestGPU,
+        ::testing::Combine(::testing::Values(GPUArchitectureTarget{GPUArchitectureGFX::GFX1200},
+                                             GPUArchitectureTarget{GPUArchitectureGFX::GFX1200}),
+                           ::testing::Values(/*waveK*/ 16)));
+
+    INSTANTIATE_TEST_SUITE_P(MatrixMultiplyABCWMMA1250,
+                             MatrixMultiplyABCWMMATestGPU,
+                             ::testing::Combine(::testing::Values(GPUArchitectureTarget{
+                                                    GPUArchitectureGFX::GFX1250}),
+                                                ::testing::Values(/*waveK*/ 32)));
 
     INSTANTIATE_TEST_SUITE_P(MatrixMultiplyTest,
                              MatrixMultiplyTestGPUF8,

@@ -186,6 +186,8 @@ namespace rocRoller
             HasXCC,
             DefaultRemapXCCValue,
 
+            PartiallyActiveWaveSize,
+
             Count,
         };
 

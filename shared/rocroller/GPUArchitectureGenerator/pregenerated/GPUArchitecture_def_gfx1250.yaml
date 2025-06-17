@@ -43,6 +43,7 @@ Architectures:
       MaxLgkmcnt: 31
       MaxVmcnt: 63
       PackedWorkitemIDs: 0
+      PartiallyActiveWaveSize: 16
       SupportedISA: 0
       SupportedSource: 0
       WorkgroupIdxViaTTMP: 0

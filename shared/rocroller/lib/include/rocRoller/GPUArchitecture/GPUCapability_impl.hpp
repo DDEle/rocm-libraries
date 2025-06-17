@@ -201,5 +201,7 @@ namespace rocRoller
 
             {"HasXCC", Value::HasXCC},
             {"DefaultRemapXCCValue", Value::DefaultRemapXCCValue},
+
+            {"PartiallyActiveWaveSize", Value::PartiallyActiveWaveSize},
     };
 }

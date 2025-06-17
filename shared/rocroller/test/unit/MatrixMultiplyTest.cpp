@@ -165,7 +165,8 @@ namespace MatrixMultiplyTest
 
             if(scaleA || scaleB)
             {
-                REQUIRE_ARCH_CAP(GPUCapability::HasMFMA_scale_f8f6f4);
+                REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasMFMA_scale_f8f6f4,
+                                        GPUCapability::HasWMMA_scale_f8f6f4);
                 const auto& arch = m_context->targetArchitecture();
                 AssertFatal(!scaleA || arch.isSupportedScaleType(scaleTypeA),
                             fmt::format("Scale A set but target {} does not support scale type {}.",
@@ -858,6 +859,16 @@ namespace MatrixMultiplyTest
     {
     };
 
+    // Params are: A type, B type, waveK, scaleBlockSize, (transA, transB)
+    class MatrixMultiplyMixedWMMAF8F6F4ScaledTestGPU
+        : public BaseMatrixMultiplyContextFixture<std::tuple<rocRoller::DataType,
+                                                             rocRoller::DataType,
+                                                             int,
+                                                             uint,
+                                                             std::pair<std::string, std::string>>>
+    {
+    };
+
     // Params: waveK
     class MatrixMultiplyABCWMMATestGPU : public BaseMatrixMultiplyContextFixture<int>
     {
@@ -1118,6 +1129,41 @@ namespace MatrixMultiplyTest
         const auto        numWMMAs = 2; // F8, F6, and F4 mac_k = 2 * wave_k
         const std::string wmmaMnemonic{fmt::format("v_wmma_f32_16x16x{}_f8f6f4", waveK)};
         std::string       generatedCode = m_context->instructions()->toString();
+        EXPECT_EQ(countSubstring(generatedCode, wmmaMnemonic), numWMMAs);
+    }
+
+    TEST_P(MatrixMultiplyMixedWMMAF8F6F4ScaledTestGPU, GPU_ScaledMatrixMultiplyMacroTileF8F6F4)
+    {
+        REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_scale_f8f6f4);
+
+        const auto [typeA, typeB, waveK, scaleBlockSize, transOp] = std::get<1>(GetParam());
+        const auto [transA, transB]                               = transOp;
+
+        const ScaleParams scaleParams = {.scaleTypeA     = DataType::E8M0,
+                                         .scaleTypeB     = DataType::E8M0,
+                                         .scaleBlockSize = scaleBlockSize};
+
+        matrixMultiplyMacroTileMixed(
+            typeA, typeB, 16, 16, waveK, 1, true, transA, transB, scaleParams);
+
+        const auto  numWMMAs = 2; // F8, F6, and F4 mac_k = 2 * wave_k
+        std::string wmmaMnemonic;
+        if(scaleBlockSize == 32)
+        {
+            REQUIRE_ARCH_CAP(GPUCapability::HasBlockScaling32);
+            wmmaMnemonic = fmt::format("v_wmma_scale_f32_16x16x{}_f8f6f4", waveK);
+        }
+        else if(scaleBlockSize == 16)
+        {
+            REQUIRE_ARCH_CAP(GPUCapability::HasBlockScaling16);
+            wmmaMnemonic = fmt::format("v_wmma_scale16_f32_16x16x{}_f8f6f4", waveK);
+        }
+        else
+        {
+            Throw<FatalError>(
+                fmt::format("Unsupported scaleBlockSize: {}. (Allowed 16, 32)", scaleBlockSize));
+        }
+        std::string generatedCode = m_context->instructions()->toString();
         EXPECT_EQ(countSubstring(generatedCode, wmmaMnemonic), numWMMAs);
     }
 
@@ -1859,6 +1905,29 @@ namespace MatrixMultiplyTest
                                                  rocRoller::DataType::BF6,
                                                  rocRoller::DataType::FP4),
                                ::testing::Values(/*waveK*/ 128),
+                               // TODO: add non-TN cases
+                               // std::pair<std::string, std::string>("N", "N"),
+                               // std::pair<std::string, std::string>("N", "T"),
+                               // std::pair<std::string, std::string>("T", "T")
+                               ::testing::Values(std::pair<std::string, std::string>("T", "N")))));
+
+    INSTANTIATE_TEST_SUITE_P(
+        MatrixMultiply1250,
+        MatrixMultiplyMixedWMMAF8F6F4ScaledTestGPU,
+        ::testing::Combine(
+            ::testing::Values(GPUArchitectureTarget{GPUArchitectureGFX::GFX1250}),
+            ::testing::Combine(::testing::Values(rocRoller::DataType::FP8,
+                                                 rocRoller::DataType::BF8,
+                                                 rocRoller::DataType::FP6,
+                                                 rocRoller::DataType::BF6,
+                                                 rocRoller::DataType::FP4),
+                               ::testing::Values(rocRoller::DataType::FP8,
+                                                 rocRoller::DataType::BF8,
+                                                 rocRoller::DataType::FP6,
+                                                 rocRoller::DataType::BF6,
+                                                 rocRoller::DataType::FP4),
+                               ::testing::Values(/*waveK*/ 128),
+                               ::testing::Values(/*scaleBlockSize*/ 16, 32),
                                // TODO: add non-TN cases
                                // std::pair<std::string, std::string>("N", "N"),
                                // std::pair<std::string, std::string>("N", "T"),

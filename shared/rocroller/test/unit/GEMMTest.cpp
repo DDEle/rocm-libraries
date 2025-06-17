@@ -968,6 +968,19 @@ namespace GEMMDriverTest
     {
     };
 
+    // Params are: A type, B type, scaleTypeA, scaleTypeB, K tile size, (scaleAMode, scaleBMode, scaleBlockSize), (transA, transB)
+    class ScaledMixedGEMMTestF8F6F4WMMAGPU
+        : public BaseGEMMContextFixture<std::tuple<
+              rocRoller::DataType,
+              rocRoller::DataType,
+              rocRoller::DataType,
+              rocRoller::DataType,
+              int,
+              std::tuple<rocRoller::Operations::ScaleMode, rocRoller::Operations::ScaleMode, int>,
+              std::pair<std::string, std::string>>>
+    {
+    };
+
     class GEMMTestLargeMacroTileGPU : public BaseGEMMContextFixture<>
     {
     };
@@ -3945,10 +3958,12 @@ namespace GEMMDriverTest
         basicGEMMMixed(typeA, typeB, gemm);
     }
 
-    TEST_P(MixedGEMMTestF8F6F4WMMAGPU, GPU_SingleScaledMixedBasicGEMMF8F6F4)
+    TEST_P(ScaledMixedGEMMTestF8F6F4WMMAGPU, GPU_ScaledMixedBasicGEMMF8F6F4)
     {
         REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasWMMA_scale_f8f6f4);
-        auto [typeA, typeB, waveK, transOp] = std::get<1>(GetParam());
+        auto [typeA, typeB, scaleTypeA, scaleTypeB, waveK, scaleModesAndSize, transOp]
+            = std::get<1>(GetParam());
+
         AssertFatal(waveK == 128, "Invalid waveK value.", ShowValue(waveK));
 
         auto gemm = setup_GEMMF8F6F4(16, 16, waveK);
@@ -3959,8 +3974,10 @@ namespace GEMMDriverTest
             = m_context->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
         gemm.workgroupSizeX = 2 * gemm.wavefrontSize;
         gemm.workgroupSizeY = 2;
-        gemm.scaleAMode     = Operations::ScaleMode::SingleScale;
-        gemm.scaleBMode     = Operations::ScaleMode::SingleScale;
+        gemm.scaleTypeA     = scaleTypeA;
+        gemm.scaleTypeB     = scaleTypeB;
+
+        std::tie(gemm.scaleAMode, gemm.scaleBMode, gemm.scaleBlockSize) = scaleModesAndSize;
 
         basicGEMMMixed(typeA, typeB, gemm);
     }
@@ -4206,4 +4223,42 @@ namespace GEMMDriverTest
                                // std::pair<std::string, std::string>("N", "T"),
                                // std::pair<std::string, std::string>("T", "T"),
                                ::testing::Values(std::pair<std::string, std::string>("T", "N")))));
+
+    INSTANTIATE_TEST_SUITE_P(
+        ScaledMixedGEMMTestWMMA1250,
+        ScaledMixedGEMMTestF8F6F4WMMAGPU,
+        ::testing::Combine(
+            currentGPUISA(),
+            ::testing::Combine(
+                ::testing::Values(rocRoller::DataType::FP8,
+                                  rocRoller::DataType::BF8,
+                                  rocRoller::DataType::FP6,
+                                  rocRoller::DataType::BF6,
+                                  rocRoller::DataType::FP4),
+                ::testing::Values(rocRoller::DataType::FP8,
+                                  rocRoller::DataType::BF8,
+                                  rocRoller::DataType::FP6,
+                                  rocRoller::DataType::BF6,
+                                  rocRoller::DataType::FP4),
+                ::testing::Values(rocRoller::DataType::E8M0),
+                ::testing::Values(rocRoller::DataType::E8M0),
+                ::testing::Values(/*waveK*/ 128),
+                ::testing::Values(
+                    std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
+                        Operations::ScaleMode::Separate, Operations::ScaleMode::Separate, 32),
+                    std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
+                        Operations::ScaleMode::Separate, Operations::ScaleMode::Separate, 16),
+                    std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
+                        Operations::ScaleMode::Separate, Operations::ScaleMode::SingleScale, 32),
+                    std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
+                        Operations::ScaleMode::SingleScale, Operations::ScaleMode::Separate, 32),
+                    std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
+                        Operations::ScaleMode::SingleScale,
+                        Operations::ScaleMode::SingleScale,
+                        32)),
+                // TODO: add non-TN cases
+                // std::pair<std::string, std::string>("N", "N"),
+                // std::pair<std::string, std::string>("N", "T"),
+                // std::pair<std::string, std::string>("T", "T"),
+                ::testing::Values(std::pair<std::string, std::string>("T", "N")))));
 }

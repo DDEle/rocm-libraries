@@ -3,8 +3,8 @@
 
 #include <cassert>
 #include <cstdlib>
-#include <unordered_set>
 #include <ctime>
+#include <unordered_set>
 
 #include "ck_tile/core.hpp"
 

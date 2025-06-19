@@ -126,12 +126,12 @@ else()
     if (BUILD_ADDRESS_SANITIZER)
       #Set the AMDGPU_TARGETS for ASAN build
       rocm_check_target_ids(DEFAULT_AMDGPU_TARGETS
-          TARGETS "gfx942:xnack+;gfx950:xnack+;"
+          TARGETS "gfx942:xnack+;gfx950:xnack+;gfx1250:xnack+"
       )
     else()
       #Set the AMDGPU_TARGETS with backward compatiblity
       rocm_check_target_ids(DEFAULT_AMDGPU_TARGETS
-          TARGETS "gfx942;gfx950;"
+          TARGETS "gfx942;gfx950;gfx1250;"
       )
     endif()
 

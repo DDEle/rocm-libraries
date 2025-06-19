@@ -73,7 +73,7 @@
     defined(__gfx1250__) || defined(__gfx1251__)
 #define __gfx12__
 #endif
-#if defined(__gfx1200__) || defined(__gfx1201__)
+#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__)
 #define __gfx120__
 #endif
 #if defined(__gfx1250__) || defined(__gfx1251__)

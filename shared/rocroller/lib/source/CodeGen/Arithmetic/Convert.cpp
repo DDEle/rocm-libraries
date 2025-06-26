@@ -80,6 +80,9 @@ namespace rocRoller
             ConvertCase(BF6x16);
             ConvertCase(FP4x8);
             ConvertCase(Double);
+        case DataType::E8M0x4:
+            co_yield generatePackedScales(dest, arg);
+            break;
 
         default:
             Throw<FatalError>("Generate - Unsupported datatype conversion: ",
@@ -380,6 +383,38 @@ namespace rocRoller
         break;
         default:
             Throw<FatalError>("Unsupported datatype for convert to bf8: ", ShowValue(dataType));
+        }
+    }
+
+    Generator<Instruction> ConvertGenerator::generatePackedScales(Register::ValuePtr dest,
+                                                                  Register::ValuePtr arg)
+    {
+        AssertFatal(arg != nullptr);
+
+        auto dataType = getArithDataType(arg);
+
+        AssertFatal(isScaleType(dataType),
+                    "Only scale types are allowed to be packed via this convert op",
+                    ShowValue(dataType));
+
+        switch(dataType)
+        {
+        case DataType::E8M0:
+        {
+            const auto packedDataType = DataTypeInfo::Get(dataType).packedVariableType()->dataType;
+            AssertFatal(
+                arg->valueCount() == 4,
+                fmt::format("Conversion to {} requires four elements", toString(packedDataType)),
+                ShowValue(arg->valueCount()));
+            std::vector<Register::ValuePtr> values{
+                arg->element({0}), arg->element({1}), arg->element({2}), arg->element({3})};
+            co_yield m_context->copier()->pack(
+                dest, values, fmt::format("Pack into {}", toString(packedDataType)));
+        }
+        break;
+        default:
+            Throw<FatalError>("Unsupported datatype for convert to a packed ScaleType: ",
+                              ShowValue(dataType));
         }
     }
 

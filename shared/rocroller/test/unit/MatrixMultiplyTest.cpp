@@ -913,15 +913,15 @@ namespace MatrixMultiplyTest
         switch(typeAB)
         {
         case DataType::Half:
-            matrixMultiplyMacroTile<Half, Half, float>(16, 16, waveK, 1, false, transA, transB);
+            matrixMultiplyMacroTile<Half, Half, float>(16, 16, waveK, 1, true, transA, transB);
             break;
         case DataType::BFloat16:
             matrixMultiplyMacroTile<BFloat16, BFloat16, float>(
-                16, 16, waveK, 1, false, transA, transB);
+                16, 16, waveK, 1, true, transA, transB);
             typeStr = "bf16";
             break;
         case DataType::Float:
-            matrixMultiplyMacroTile<float, float, float>(16, 16, waveK, 1, false, transA, transB);
+            matrixMultiplyMacroTile<float, float, float>(16, 16, waveK, 1, true, transA, transB);
             typeStr = "f32";
             break;
         default:
@@ -956,8 +956,7 @@ namespace MatrixMultiplyTest
             {
                 Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
             }
-            matrixMultiplyMacroTile<Half, Half, Half, Half>(
-                16, 16, waveK, 1, false, transA, transB);
+            matrixMultiplyMacroTile<Half, Half, Half, Half>(16, 16, waveK, 1, true, transA, transB);
             break;
         case DataType::BFloat16:
             if(waveK == 16)
@@ -973,7 +972,7 @@ namespace MatrixMultiplyTest
                 Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
             }
             matrixMultiplyMacroTile<BFloat16, BFloat16, BFloat16, BFloat16>(
-                16, 16, waveK, 1, false, transA, transB);
+                16, 16, waveK, 1, true, transA, transB);
             typeStr = "bf16";
             break;
         default:
@@ -998,16 +997,16 @@ namespace MatrixMultiplyTest
         {
         case DataType::Half:
             matrixMultiplyAB<Half, Half, float>(
-                16, 16, waveK, 1, false, transA == "T", transB == "T");
+                16, 16, waveK, 1, true, transA == "T", transB == "T");
             break;
         case DataType::BFloat16:
             matrixMultiplyAB<BFloat16, BFloat16, float>(
-                16, 16, waveK, 1, false, transA == "T", transB == "T");
+                16, 16, waveK, 1, true, transA == "T", transB == "T");
             typeStr = "bf16";
             break;
         case DataType::Float:
             matrixMultiplyAB<float, float, float>(
-                16, 16, waveK, 1, false, transA == "T", transB == "T");
+                16, 16, waveK, 1, true, transA == "T", transB == "T");
             typeStr = "f32";
             break;
         default:
@@ -1043,7 +1042,7 @@ namespace MatrixMultiplyTest
                 Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
             }
             matrixMultiplyAB<Half, Half, Half, Half>(
-                16, 16, waveK, 1, false, transA == "T", transB == "T");
+                16, 16, waveK, 1, true, transA == "T", transB == "T");
             break;
         case DataType::BFloat16:
             if(waveK == 16)
@@ -1059,7 +1058,7 @@ namespace MatrixMultiplyTest
                 Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
             }
             matrixMultiplyAB<BFloat16, BFloat16, BFloat16, BFloat16>(
-                16, 16, waveK, 1, false, transA == "T", transB == "T");
+                16, 16, waveK, 1, true, transA == "T", transB == "T");
             typeStr = "bf16";
             break;
         default:
@@ -1905,11 +1904,10 @@ namespace MatrixMultiplyTest
                                                  rocRoller::DataType::BF6,
                                                  rocRoller::DataType::FP4),
                                ::testing::Values(/*waveK*/ 128),
-                               // TODO: add non-TN cases
-                               // std::pair<std::string, std::string>("N", "N"),
-                               // std::pair<std::string, std::string>("N", "T"),
-                               // std::pair<std::string, std::string>("T", "T")
-                               ::testing::Values(std::pair<std::string, std::string>("T", "N")))));
+                               ::testing::Values(std::pair<std::string, std::string>("N", "N"),
+                                                 std::pair<std::string, std::string>("N", "T"),
+                                                 std::pair<std::string, std::string>("T", "N"),
+                                                 std::pair<std::string, std::string>("T", "T")))));
 
     INSTANTIATE_TEST_SUITE_P(
         MatrixMultiply1250,
@@ -1928,11 +1926,11 @@ namespace MatrixMultiplyTest
                                                  rocRoller::DataType::FP4),
                                ::testing::Values(/*waveK*/ 128),
                                ::testing::Values(/*scaleBlockSize*/ 16, 32),
-                               // TODO: add non-TN cases
-                               // std::pair<std::string, std::string>("N", "N"),
-                               // std::pair<std::string, std::string>("N", "T"),
-                               // std::pair<std::string, std::string>("T", "T")
-                               ::testing::Values(std::pair<std::string, std::string>("T", "N")))));
+                               // mxDataGenerator does not work when fast-moving dim is not multiple of scale-block size.
+                               ::testing::Values(/*std::pair<std::string, std::string>("N", "N"),
+                                                 std::pair<std::string, std::string>("N", "T"),*/
+                                                 std::pair<std::string, std::string>("T", "N")/*,
+                                                 std::pair<std::string, std::string>("T", "T")*/))));
 
     INSTANTIATE_TEST_SUITE_P(
         MatrixMultiplyABCWMMA120X,

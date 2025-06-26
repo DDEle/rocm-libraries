@@ -12,6 +12,11 @@ Architectures:
       HasBufferOutOfBoundsCheckOption: 0
       HasCodeObjectV4: 0
       HasCodeObjectV5: 0
+      HasE8M0Scale: 0
+      HasDSReadTransposeB16: 0
+      HasDSReadTransposeB4: 0
+      HasDSReadTransposeB6: 0
+      HasDSReadTransposeB8: 0
       HasExplicitNC: 0
       HasExplicitScalarCO: 0
       HasExplicitScalarCOCI: 0
@@ -47,6 +52,10 @@ Architectures:
       SupportedISA: 0
       SupportedSource: 0
       WorkgroupIdxViaTTMP: 0
+      ds_load_tr16_b128: 0
+      ds_load_tr4_b64: 0
+      ds_load_tr6_b96: 0
+      ds_load_tr8_b64: 0
       s_barrier_signal: 0
       v_add3_u32: 0
       v_fma_f16: 0
@@ -1470,34 +1479,38 @@ Architectures:
         ImplicitAccess: false
         Instruction: ds_load_tr16_b128
         IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
+        Latency: 8
+        MaxLiteral: 65535
+        WaitCount: 1
+        WaitQueues:
+        - DSQueue
       ds_load_tr4_b64:
         ImplicitAccess: false
         Instruction: ds_load_tr4_b64
         IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
+        Latency: 4
+        MaxLiteral: 65535
+        WaitCount: 1
+        WaitQueues:
+        - DSQueue
       ds_load_tr6_b96:
         ImplicitAccess: false
         Instruction: ds_load_tr6_b96
         IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
+        Latency: 8
+        MaxLiteral: 65535
+        WaitCount: 1
+        WaitQueues:
+        - DSQueue
       ds_load_tr8_b64:
         ImplicitAccess: false
         Instruction: ds_load_tr8_b64
         IsBranch: false
-        Latency: 0
-        MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
+        Latency: 4
+        MaxLiteral: 65535
+        WaitCount: 1
+        WaitQueues:
+        - DSQueue
       ds_load_tr_b128:
         ImplicitAccess: false
         Instruction: ds_load_tr_b128

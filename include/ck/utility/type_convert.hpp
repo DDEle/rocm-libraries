@@ -244,7 +244,7 @@ inline __host__ __device__ f8_fnuz_t f8_convert_sr<f8_fnuz_t, float>(float x)
 #ifndef CK_CODE_GEN_RTC
     uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<uintptr_t>(&x), x);
 #else
-    uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x);
+    uint32_t rng = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x);
 #endif // #ifndef CK_CODE_GEN_RTC
 #endif // #if defined(__gfx950__)
 #if defined(__gfx94__)
@@ -312,7 +312,7 @@ inline __host__ __device__ bf8_fnuz_t f8_convert_sr<bf8_fnuz_t, float>(float x)
 #ifndef CK_CODE_GEN_RTC
     uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<uintptr_t>(&x), x);
 #else
-    uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x);
+    uint32_t rng = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x);
 #endif // #ifndef CK_CODE_GEN_RTC
 #endif // #if defined(__gfx950__)
 #if defined(__gfx94__)
@@ -1488,7 +1488,7 @@ inline __host__ __device__ f4_t f4_convert_sr(float x, float scale = 1.0f)
 #ifndef CK_CODE_GEN_RTC
     uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<uintptr_t>(&x), x);
 #else  // #ifndef CK_CODE_GEN_RTC
-    uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x);
+    uint32_t rng = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x);
 #endif // #ifndef CK_CODE_GEN_RTC
 #endif // #if defined(__gfx1250__)
     return utils::sat_convert_to_type_sr<f4_t>(x / scale, rng);
@@ -1529,7 +1529,7 @@ inline __host__ __device__ f4x2_t f4_convert_sr(float2_t x, float scale = 1.0f)
 #ifndef CK_CODE_GEN_RTC
     uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<uintptr_t>(&x), x[0]);
 #else  // #ifndef CK_CODE_GEN_RTC
-    uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x[0]);
+    uint32_t rng = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x[0]);
 #endif // #ifndef CK_CODE_GEN_RTC
 #endif // #if defined(__gfx1250__)
     union
@@ -1586,7 +1586,7 @@ inline __host__ __device__ f4x32_t f4_convert_sr(float32_t x, float scale = 1.0f
 #ifndef CK_CODE_GEN_RTC
     uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<uintptr_t>(&x), x[0]);
 #else  // #ifndef CK_CODE_GEN_RTC
-    uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x[0]);
+    uint32_t rng = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x[0]);
 #endif // #ifndef CK_CODE_GEN_RTC
 #endif // #if defined(__gfx1250__)
     union
@@ -1849,7 +1849,7 @@ inline __host__ __device__ f6_t f6_convert_sr(float x, float scale = 1.0f)
 #ifndef CK_CODE_GEN_RTC
     uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<uintptr_t>(&x), x);
 #else  // #ifndef CK_CODE_GEN_RTC
-    uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x);
+    uint32_t rng = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x);
 #endif // #ifndef CK_CODE_GEN_RTC
 #endif // #if defined(__gfx1250__)
     return utils::sat_convert_to_type_sr<f6_t>(x / scale, rng);
@@ -2137,7 +2137,7 @@ inline __host__ __device__ bf6_t bf6_convert_sr(float x, float scale = 1.0f)
 #ifndef CK_CODE_GEN_RTC
     uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<uintptr_t>(&x), x);
 #else  // #ifndef CK_CODE_GEN_RTC
-    uint32_t rng       = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x);
+    uint32_t rng = prand_generator<float, seed>(reinterpret_cast<size_t>(&x), x);
 #endif // #ifndef CK_CODE_GEN_RTC
 #endif // #if defined(__gfx1250__)
     return utils::sat_convert_to_type_sr<bf6_t>(x / scale, rng);

@@ -67,18 +67,18 @@ __global__ void
                                                   c_element_op,
                                                   block_2_ctile_map);
 #else
-    ignore = p_a_grid;
-    ignore = p_b_grid;
-    ignore = p_scale_grid;
-    ignore = p_c_grid;
-    ignore = a_grid_desc;
-    ignore = b_grid_desc;
-    ignore = scale_grid_desc;
-    ignore = c_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore = a_element_op;
-    ignore = b_element_op;
-    ignore = c_element_op;
-    ignore = block_2_ctile_map;
+    ignore                      = p_a_grid;
+    ignore                      = p_b_grid;
+    ignore                      = p_scale_grid;
+    ignore                      = p_c_grid;
+    ignore                      = a_grid_desc;
+    ignore                      = b_grid_desc;
+    ignore                      = scale_grid_desc;
+    ignore                      = c_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore                      = a_element_op;
+    ignore                      = b_element_op;
+    ignore                      = c_element_op;
+    ignore                      = block_2_ctile_map;
 #endif // end of if (defined(__gfx11__))
 }
 
@@ -147,7 +147,11 @@ struct GridwiseFpAintBGemm_Wmma
 
     static constexpr auto MWaves = MPerBlock / (MRepeat * MPerWmma);
     static constexpr auto NWaves = NPerBlock / (NRepeat * NPerWmma);
-    static constexpr auto WmmaK  = K1 == 16 ? 32 : 16;
+#ifdef __gfx125__
+    static constexpr auto WmmaK = 32;
+#else
+    static constexpr auto WmmaK = K1 == 16 ? 32 : 16;
+#endif
 
     using ThisThreadBlock = ThisThreadBlock<BlockSize>;
 

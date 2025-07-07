@@ -69,10 +69,16 @@
     defined(__gfx1152__) || defined(__gfx11_generic__)
 #define __gfx11__
 #endif
-#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__)
+#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__) || \
+    defined(__gfx1250__) || defined(__gfx1251__)
 #define __gfx12__
 #endif
-
+#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__)
+#define __gfx120__
+#endif
+#if defined(__gfx1250__) || defined(__gfx1251__)
+#define __gfx125__
+#endif
 // buffer resource
 #ifndef __HIP_DEVICE_COMPILE__ // for host code
 #define CK_BUFFER_RESOURCE_3RD_DWORD -1
@@ -80,8 +86,10 @@
 #define CK_BUFFER_RESOURCE_3RD_DWORD 0x00020000
 #elif defined(__gfx103__)
 #define CK_BUFFER_RESOURCE_3RD_DWORD 0x31014000
-#elif defined(__gfx11__) || defined(__gfx12__)
+#elif defined(__gfx11__) || defined(__gfx120__)
 #define CK_BUFFER_RESOURCE_3RD_DWORD 0x31004000
+#elif defined(__gfx125__)
+#define CK_BUFFER_RESOURCE_3RD_DWORD 0x1004000
 #endif
 
 // FMA instruction
@@ -92,7 +100,7 @@
 #define CK_USE_AMD_V_FMAC_F32
 #define CK_USE_AMD_V_DOT2_F32_F16
 #define CK_USE_AMD_V_DOT4_I32_I8
-#elif defined(__gfx11__) || defined(__gfx12__)
+#elif defined(__gfx11__) || defined(__gfx120__)
 #define CK_USE_AMD_V_FMAC_F32
 #define CK_USE_AMD_V_DOT2_F32_F16
 #define CK_USE_AMD_V_DOT4_I32_I8_GFX11
@@ -145,8 +153,11 @@
 
 // V_DOT inline instructions, less efficient since they require adding
 // `s_nop`s to avoid hazard
+#ifdef __gfx125__
+#define CK_USE_AMD_V_DOT_INLINE_ASM 1
+#else
 #define CK_USE_AMD_V_DOT_INLINE_ASM 0
-
+#endif
 // inner product using V_DOT with DPP8 modifiers
 #define CK_USE_AMD_V_DOT_DPP8_INLINE_ASM 1
 

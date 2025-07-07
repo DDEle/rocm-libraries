@@ -19,8 +19,15 @@
     defined(__gfx1152__) || defined(__gfx11_generic__)
 #define __gfx11__
 #endif
-#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__)
+#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__) || \
+    defined(__gfx1250__) || defined(__gfx1251__)
 #define __gfx12__
+#endif
+#if defined(__gfx1200__) || defined(__gfx1201__)
+#define __gfx120__
+#endif
+#if defined(__gfx1250__) || defined(__gfx1251__)
+#define __gfx125__
 #endif
 
 #include "hip/hip_version.h"
@@ -253,7 +260,7 @@
 #endif
 
 #ifndef CK_TILE_USE_BUFFER_ADDRESSING_BUILTIN
-#if __clang_major__ == 20
+#if __clang_major__ >= 20
 #define CK_TILE_USE_BUFFER_ADDRESSING_BUILTIN 1
 #else
 #define CK_TILE_USE_BUFFER_ADDRESSING_BUILTIN 0

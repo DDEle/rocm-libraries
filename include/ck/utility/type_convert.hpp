@@ -237,8 +237,8 @@ inline __host__ __device__ f8_fnuz_t f8_convert_sr<f8_fnuz_t, float>(float x)
 {
 #if defined(__gfx950__) || defined(__gfx1250__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
 #else
     constexpr int seed = 1254739;
 #ifndef CK_CODE_GEN_RTC
@@ -305,8 +305,8 @@ inline __host__ __device__ bf8_fnuz_t f8_convert_sr<bf8_fnuz_t, float>(float x)
 {
 #if defined(__gfx950__) || defined(__gfx1250__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
 #else
     constexpr int seed = 1254739;
 #ifndef CK_CODE_GEN_RTC
@@ -1461,8 +1461,8 @@ inline __host__ __device__ f4_t f4_convert_sr(float x, float scale = 1.0f)
 {
 #if defined(__gfx950__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
     union
     {
         uint32_t bitwise;
@@ -1481,8 +1481,8 @@ inline __host__ __device__ f4_t f4_convert_sr(float x, float scale = 1.0f)
 // keep slow gfx1250 conversions for now
 #if defined(__gfx1250__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
 #else // #if defined(__gfx1250__)
     constexpr int seed = 1254739;
 #ifndef CK_CODE_GEN_RTC
@@ -1500,8 +1500,8 @@ inline __host__ __device__ f4x2_t f4_convert_sr(float2_t x, float scale = 1.0f)
 {
 #if defined(__gfx950__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
     union
     {
         uint32_t bitwise;
@@ -1522,8 +1522,8 @@ inline __host__ __device__ f4x2_t f4_convert_sr(float2_t x, float scale = 1.0f)
 // keep slow gfx1250 conversions for now
 #if defined(__gfx1250__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
 #else // #if defined(__gfx1250__)
     constexpr int seed = 1254739;
 #ifndef CK_CODE_GEN_RTC
@@ -1549,8 +1549,8 @@ inline __host__ __device__ f4x32_t f4_convert_sr(float32_t x, float scale = 1.0f
 {
 #if defined(__gfx950__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
     union
     {
         __uint128_t bitwise;
@@ -1579,8 +1579,8 @@ inline __host__ __device__ f4x32_t f4_convert_sr(float32_t x, float scale = 1.0f
 // keep slow gfx1250 conversions for now
 #if defined(__gfx1250__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
 #else // #if defined(__gfx1250__)
     constexpr int seed = 1254739;
 #ifndef CK_CODE_GEN_RTC
@@ -1821,8 +1821,8 @@ inline __host__ __device__ f6_t f6_convert_sr(float x, float scale = 1.0f)
 {
 #if defined(__gfx950__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
     union
     {
         float32_t float_vector;
@@ -1842,8 +1842,8 @@ inline __host__ __device__ f6_t f6_convert_sr(float x, float scale = 1.0f)
 // keep slow gfx1250 conversions for now
 #if defined(__gfx1250__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
 #else // #if defined(__gfx1250__)
     constexpr int seed = 1254739;
 #ifndef CK_CODE_GEN_RTC
@@ -1870,15 +1870,15 @@ inline __host__ __device__ f6x32_t f6_convert_sr(float32_t x, float scale = 1.0f
 {
 #if defined(__gfx950__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
     return __builtin_amdgcn_cvt_scalef32_sr_pk32_fp6_f32(x, rng, scale);
 #else // #if defined(__gfx950__)
 // keep slow gfx1250 conversions for now
 #if defined(__gfx1250__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
 #else // #if defined(__gfx1250__)
     constexpr int seed = 1254739;
     union
@@ -2109,8 +2109,8 @@ inline __host__ __device__ bf6_t bf6_convert_sr(float x, float scale = 1.0f)
 {
 #if defined(__gfx950__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
     union
     {
         float32_t float_vector;
@@ -2130,8 +2130,8 @@ inline __host__ __device__ bf6_t bf6_convert_sr(float x, float scale = 1.0f)
 // keep slow gfx1250 conversions for now
 #if defined(__gfx1250__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
 #else // #if defined(__gfx1250__)
     constexpr int seed = 1254739;
 #ifndef CK_CODE_GEN_RTC
@@ -2160,15 +2160,15 @@ inline __host__ __device__ bf6x32_t bf6_convert_sr(float32_t x, float scale = 1.
 {
 #if defined(__gfx950__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
     return __builtin_amdgcn_cvt_scalef32_sr_pk32_bf6_f32(x, rng, scale);
 #else // #if defined(__gfx950__)
 // keep slow gfx1250 conversions for now
 #if defined(__gfx1250__)
     // use HW clock for stochastic input multiply by incremented thread id
-    uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-                                             (get_thread_global_1d_id() + 1));
+    uint32_t rng =
+        __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
 #else // #if defined(__gfx1250__)
     constexpr int seed = 1254739;
     union

@@ -198,7 +198,7 @@ __host__ __device__ static inline fp8_storage_t cvt_float_to_fp8_scaled(const fl
     if constexpr(stochastic_rounding)
     {
         // use HW clock for stochastic input multiply by incremented thread id
-        rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
+        rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
                                         (get_thread_global_1d_id() + 1));
     }
     return cast_to_f8_from_f32_scaled<interp, stochastic_rounding>(f, rng, scale);
@@ -223,7 +223,7 @@ __host__ __device__ static inline fp8x2_storage_t cvt_float_to_fp8_scaled(const 
     if constexpr(stochastic_rounding)
     {
         // use HW clock for stochastic input multiply by incremented thread id
-        rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
+        rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
                                         (get_thread_global_1d_id() + 1));
     }
     return cast_to_f8_from_f32_scaled<interp, stochastic_rounding>(f, rng, scale);
@@ -254,7 +254,7 @@ __host__ __device__ static inline fp8_storage_t cvt_float_to_fp8_scaled(const fl
     {
 #if defined(__gfx1250__)
         // use HW clock for stochastic input multiply by incremented thread id
-        rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
+        rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
                                         (get_thread_global_1d_id() + 1));
 #else  // #if defined(__gfx1250__)
         constexpr int seed = 1254739;
@@ -301,7 +301,7 @@ __host__ __device__ static inline fp8x2_storage_t cvt_float_to_fp8_scaled(const 
     {
 #if defined(__gfx1250__)
         // use HW clock for stochastic input multiply by incremented thread id
-        rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
+        rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
                                         (get_thread_global_1d_id() + 1));
 #else  // #if defined(__gfx1250__)
         constexpr int seed = 1254739;

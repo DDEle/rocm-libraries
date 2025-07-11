@@ -1399,7 +1399,7 @@ __host__ __device__ static inline fp8_storage_t cvt_float_to_fp8(const float f)
     {
 #if defined(__gfx950__) || defined(__gfx1250__)
         // use HW clock for stochastic input multiply by incremented thread id
-        rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
+        rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
                                         (get_thread_global_1d_id() + 1));
 #else
         constexpr int seed = 1254739;
@@ -1425,9 +1425,8 @@ __host__ static inline fp8_storage_t cvt_float_to_fp8(const float f)
     {
 #if defined(__gfx950__) || defined(__gfx1250__)
         // use HW clock for stochastic input multiply by incremented thread id
-        // rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-        //                                 (get_thread_global_1d_id() + 1));
-        rng = __builtin_amdgcn_prng_b32(get_thread_global_1d_id() + 1);
+        rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
+                                        (get_thread_global_1d_id() + 1));
 #else
         constexpr int seed = 1254739;
 #ifndef CK_CODE_GEN_RTC
@@ -1503,7 +1502,7 @@ __device__ static inline fp8x2_storage_t cvt_float_to_fp8(const float2_t f)
     {
 #if defined(__gfx950__) || defined(__gfx1250__)
         // use HW clock for stochastic input multiply by incremented thread id
-        rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
+        rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
                                         (get_thread_global_1d_id() + 1));
 #else
         constexpr int seed = 1254739;
@@ -1554,7 +1553,7 @@ __host__ static inline fp8_storage_t cvt_half_t_to_fp8(const _Float16 x)
         {
 #if defined(__gfx950__) || defined(__gfx1250__)
             // use HW clock for stochastic input multiply by incremented thread id
-            rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
+            rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
                                             (get_thread_global_1d_id() + 1));
 #else
             constexpr int seed = 1254739;
@@ -1602,9 +1601,8 @@ __host__ static inline fp8x2_storage_t cvt_half_t_to_fp8(const half2_t x)
         {
 #if defined(__gfx950__) || defined(__gfx1250__)
             // use HW clock for stochastic input multiply by incremented thread id
-            // rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
-            //                                 (get_thread_global_1d_id() + 1));
-            rng = __builtin_amdgcn_prng_b32(get_thread_global_1d_id() + 1);
+            rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
+                                            (get_thread_global_1d_id() + 1));
 #else
             constexpr int seed = 1254739;
 #ifndef CK_CODE_GEN_RTC
@@ -1651,7 +1649,7 @@ __host__ static inline fp8_storage_t cvt_bhalf_t_to_fp8(const ushort x)
         {
 #if defined(__gfx950__) || defined(__gfx1250__)
             // use HW clock for stochastic input multiply by incremented thread id
-            rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
+            rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
                                             (get_thread_global_1d_id() + 1));
 #else
             constexpr int seed = 1254739;
@@ -1705,7 +1703,7 @@ __host__ static inline fp8x2_storage_t cvt_bhalf_t_to_fp8(const ushortx2_t x)
         {
 #if defined(__gfx950__) || defined(__gfx1250__)
             // use HW clock for stochastic input multiply by incremented thread id
-            rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
+            rng = __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() *
                                             (get_thread_global_1d_id() + 1));
 #else
             constexpr int seed = 1254739;

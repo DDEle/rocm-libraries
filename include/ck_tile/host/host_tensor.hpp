@@ -378,7 +378,7 @@ struct HostTensor
     ~HostTensor() = default;
 
     HostTensor& operator=(const HostTensor&) = default;
-    HostTensor& operator=(HostTensor&&) = default;
+    HostTensor& operator=(HostTensor&&)      = default;
 
     template <typename FromT>
     explicit HostTensor(const HostTensor<FromT>& other) : HostTensor(other.template CopyAsType<T>())
@@ -722,6 +722,8 @@ struct HostTensor
                     file << type_convert<float>(itm) << std::endl;
                 else if(dtype == "int")
                     file << type_convert<int>(itm) << std::endl;
+                else if(dtype == "int8_t")
+                    file << static_cast<int>(type_convert<ck_tile::int8_t>(itm)) << std::endl;
                 else
                     // TODO: we didn't implement operator<< for all custom
                     // data types, here fall back to float in case compile error

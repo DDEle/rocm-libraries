@@ -225,17 +225,14 @@ def cmake_build(Map conf=[:]){
     def build_envs = "CTEST_PARALLEL_LEVEL=4 " + conf.get("build_env","")
     def prefixpath = conf.get("prefixpath","/opt/rocm")
     def setup_args = conf.get("setup_args","")
-
+    // make sure all unit tests always run on develop branch
+    def runAllUnitTests = (env.BRANCH_NAME == "develop") ? true : params.RUN_ALL_UNIT_TESTS
+    
     if (prefixpath != "/usr/local"){
         setup_args = setup_args + " -DCMAKE_PREFIX_PATH=${prefixpath} "
     }
 
     def build_type_debug = (conf.get("build_type",'release') == 'debug')
-
-    // use special compiler for gfx950
-    if ( check_arch() == 7){
-        compiler = "/llvm-project/build/bin/clang++"
-    }
 
     //cmake_env can overwrite default CXX variables.
     def cmake_envs = "CXX=${compiler} CXXFLAGS='-Werror' " + conf.get("cmake_ex_env","")
@@ -343,8 +340,19 @@ def cmake_build(Map conf=[:]){
     def build_cmd
     def execute_cmd = conf.get("execute_cmd", "")
     if(!setup_args.contains("NO_CK_BUILD")){
-        setup_cmd = conf.get("setup_cmd", """${cmake_envs} cmake -G Ninja ${setup_args} -DCMAKE_CXX_FLAGS=" -O3 -ftime-trace "  .. """)
-        build_cmd = conf.get("build_cmd", "${build_envs} ninja -j${nt} ${config_targets}")
+        def cmake_flags = params.NINJA_FTIME_TRACE ? "-O3 -ftime-trace" : "-O3"
+        if (params.NINJA_BUILD_TRACE) {
+            echo "running ninja build trace"
+        }
+        setup_cmd = conf.get(
+            "setup_cmd",
+            """${cmake_envs} cmake -G Ninja ${setup_args} -DCMAKE_CXX_FLAGS=" ${cmake_flags} " .. """
+        )
+        build_cmd = conf.get(
+            "build_cmd",
+            "${build_envs} ninja -j${nt} ${config_targets}"
+        )
+        
         cmd = conf.get("cmd", """
             ${setup_cmd}
             ${build_cmd}
@@ -365,14 +373,18 @@ def cmake_build(Map conf=[:]){
         //run tests except when NO_CK_BUILD or BUILD_LEGACY_OS are set
         if(!setup_args.contains("NO_CK_BUILD") && !params.BUILD_LEGACY_OS){
             if ((setup_args.contains("gfx9") && params.NINJA_BUILD_TRACE) || params.BUILD_INSTANCES_ONLY){
-                sh "/ninjatracing/ninjatracing .ninja_log > ck_build_trace.json"
-                sh "/ClangBuildAnalyzer/build/ClangBuildAnalyzer  --all . clang_build.log"
-                sh "/ClangBuildAnalyzer/build/ClangBuildAnalyzer  --analyze clang_build.log > clang_build_analysis.log"
+                if (params.NINJA_FTIME_TRACE) {
+                    echo "running ninja ftime trace"
+                    sh "/ClangBuildAnalyzer/build/ClangBuildAnalyzer  --all . clang_build.log"
+                    sh "/ClangBuildAnalyzer/build/ClangBuildAnalyzer  --analyze clang_build.log > clang_build_analysis.log"
+                    archiveArtifacts "clang_build_analysis.log"
+                }
+                sh "python3 ../script/ninja_json_converter.py .ninja_log --legacy-format --output ck_build_trace.json"
                 archiveArtifacts "ck_build_trace.json"
-                archiveArtifacts "clang_build_analysis.log"
+
                 // do not run unit tests when building instances only
                 if(!params.BUILD_INSTANCES_ONLY){
-                    if (!params.RUN_ALL_UNIT_TESTS){
+                    if (!runAllUnitTests){
                         sh "../script/launch_tests.sh"
                     }
                     else{
@@ -391,7 +403,7 @@ def cmake_build(Map conf=[:]){
             else{
                 // run unit tests unless building library for all targets
                 if (!params.BUILD_INSTANCES_ONLY){
-                    if (!params.RUN_ALL_UNIT_TESTS){
+                    if (!runAllUnitTests){
                         sh "../script/launch_tests.sh"
                     }
                     else{
@@ -583,7 +595,7 @@ def Build_CK(Map conf=[:]){
                         if (params.RUN_FULL_QA && arch == 2 ){
                             // build deb packages
                             echo "Build packages"
-                            sh 'make -j package'
+                            sh 'ninja package'
                             archiveArtifacts artifacts: 'composablekernel*.deb'
                             sh 'mv composablekernel-ckprofiler_*.deb composablekernel-ckprofiler_1.1.0_amd64.deb'
                             sh 'mv composablekernel-dev_*.deb composablekernel-dev_1.1.0_amd64.deb'
@@ -886,9 +898,25 @@ pipeline {
             defaultValue: false,
             description: "Build CK and run tests on gfx908 (default: OFF)")
         booleanParam(
+            name: "BUILD_GFX90A",
+            defaultValue: true,
+            description: "Build CK and run tests on gfx90a (default: ON)")
+        booleanParam(
+            name: "BUILD_GFX942",
+            defaultValue: false,
+            description: "Build CK and run tests on gfx942 (default: OFF)")
+        booleanParam(
             name: "BUILD_GFX950",
             defaultValue: false,
             description: "Build CK and run tests on gfx950 (default: OFF)")
+        booleanParam(
+            name: "BUILD_GFX10",
+            defaultValue: true,
+            description: "Build CK and run tests on gfx10 (default: ON)")
+        booleanParam(
+            name: "BUILD_GFX11",
+            defaultValue: true,
+            description: "Build CK and run tests on gfx11 (default: ON)")
         booleanParam(
             name: "BUILD_GFX12",
             defaultValue: true,
@@ -897,6 +925,10 @@ pipeline {
             name: "NINJA_BUILD_TRACE",
             defaultValue: false,
             description: "Generate a ninja build trace (default: OFF)")
+        booleanParam(
+            name: "NINJA_FTIME_TRACE",
+            defaultValue: false,
+            description: "Generate a detailed time trace (default: OFF)")
         booleanParam(
             name: "BUILD_LEGACY_OS",
             defaultValue: false,
@@ -951,7 +983,7 @@ pipeline {
                                 -o -iname \'*.cpp.in\' \
                                 -o -iname \'*.cl\' \
                                 | grep -v 'build/' \
-                                | xargs -n 1 -P 1 -I{} -t sh -c \'clang-format-12 -style=file {} | diff - {}\' && \
+                                | xargs -n 1 -P 1 -I{} -t sh -c \'clang-format-18 -style=file {} | diff - {}\' && \
                                 /cppcheck/build/bin/cppcheck ../* -v -j \$(nproc) -I ../include -I ../profiler/include -I ../library/include \
                                 -D CK_ENABLE_FP64 -D CK_ENABLE_FP32 -D CK_ENABLE_FP16 -D CK_ENABLE_FP8 -D CK_ENABLE_BF16 -D CK_ENABLE_BF8 -D CK_ENABLE_INT8 \
                                 -D __gfx908__ -D __gfx90a__ -D __gfx942__ -D __gfx1030__ -D __gfx1100__ -D __gfx1101__ -D __gfx1102__ \
@@ -980,7 +1012,7 @@ pipeline {
                                 -o -iname \'*.cpp.in\' \
                                 -o -iname \'*.cl\' \
                                 | grep -v 'build/' \
-                                | xargs -n 1 -P 1 -I{} -t sh -c \'clang-format-12 -style=file {} | diff - {}\'"
+                                | xargs -n 1 -P 1 -I{} -t sh -c \'clang-format-18 -style=file {} | diff - {}\'"
                     }
                     steps{
                         buildHipClangJobAndReboot(setup_args:setup_args, setup_cmd: "", build_cmd: "", execute_cmd: execute_cmd, no_reboot:true)
@@ -1185,9 +1217,25 @@ pipeline {
                                             -D CMAKE_CXX_COMPILER="${build_compiler()}" \
                                             -D CMAKE_BUILD_TYPE=Release \
                                             -D GPU_TARGETS="gfx90a" \
+                                            -D GEMM_DATATYPE="fp8;fp16" \
+                                            -D GEMM_LAYOUT="rcr;rrr;crr;ccr" \
                                             -DCMAKE_CXX_FLAGS=" -O3 " .. && \
-                                           ninja -j64 benchmark_gemm && \
-                                           ./bin/benchmark_gemm """
+                                           ninja -j64 benchmark_gemm_fp8_rcr && \
+                                           ./bin/benchmark_gemm_fp8_rcr && \
+                                           ninja -j64 benchmark_gemm_fp16_rcr && \
+                                           ./bin/benchmark_gemm_fp16_rcr && \
+                                           ninja -j64 benchmark_gemm_fp8_crr && \
+                                           ./bin/benchmark_gemm_fp8_crr && \
+                                           ninja -j64 benchmark_gemm_fp16_crr && \
+                                           ./bin/benchmark_gemm_fp16_crr && \
+                                           ninja -j64 benchmark_gemm_fp8_ccr && \
+                                           ./bin/benchmark_gemm_fp8_ccr && \
+                                           ninja -j64 benchmark_gemm_fp16_ccr && \
+                                           ./bin/benchmark_gemm_fp16_ccr && \
+                                           ninja -j64 benchmark_gemm_fp8_rrr && \
+                                           ./bin/benchmark_gemm_fp8_rrr && \
+                                           ninja -j64 benchmark_gemm_fp16_rrr && \
+                                           ./bin/benchmark_gemm_fp16_rrr """
                     }
                     steps{
                         buildHipClangJobAndReboot(setup_args:setup_args, no_reboot:true, build_type: 'Release', execute_cmd: execute_args)
@@ -1207,9 +1255,25 @@ pipeline {
                                             -D CMAKE_CXX_COMPILER="${build_compiler()}" \
                                             -D CMAKE_BUILD_TYPE=Release \
                                             -D GPU_TARGETS="gfx942" \
+                                            -D GEMM_DATATYPE="fp8;fp16" \
+                                            -D GEMM_LAYOUT="rcr;rrr;crr;ccr" \
                                             -DCMAKE_CXX_FLAGS=" -O3 " .. && \
-                                           ninja -j128 benchmark_gemm && \
-                                           ./bin/benchmark_gemm """
+                                           ninja -j64 benchmark_gemm_fp8_rcr && \
+                                           ./bin/benchmark_gemm_fp8_rcr && \
+                                           ninja -j64 benchmark_gemm_fp16_rcr && \
+                                           ./bin/benchmark_gemm_fp16_rcr && \
+                                           ninja -j64 benchmark_gemm_fp8_crr && \
+                                           ./bin/benchmark_gemm_fp8_crr && \
+                                           ninja -j64 benchmark_gemm_fp16_crr && \
+                                           ./bin/benchmark_gemm_fp16_crr && \
+                                           ninja -j64 benchmark_gemm_fp8_ccr && \
+                                           ./bin/benchmark_gemm_fp8_ccr && \
+                                           ninja -j64 benchmark_gemm_fp16_ccr && \
+                                           ./bin/benchmark_gemm_fp16_ccr && \
+                                           ninja -j64 benchmark_gemm_fp8_rrr && \
+                                           ./bin/benchmark_gemm_fp8_rrr && \
+                                           ninja -j64 benchmark_gemm_fp16_rrr && \
+                                           ./bin/benchmark_gemm_fp16_rrr """
                     }
                     steps{
                         buildHipClangJobAndReboot(setup_args:setup_args, no_reboot:true, build_type: 'Release', execute_cmd: execute_args)
@@ -1265,7 +1329,7 @@ pipeline {
                 {
                     when {
                         beforeAgent true
-                        expression { params.RUN_FULL_QA.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
+                        expression { (params.BUILD_GFX942.toBoolean() || params.RUN_FULL_QA.toBoolean()) && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
                     }
                     agent{ label rocmnode("gfx942") }
                     environment{
@@ -1298,12 +1362,12 @@ pipeline {
                         execute_args = """ cd ../client_example && rm -rf build && mkdir build && cd build && \
                                            cmake -DCMAKE_PREFIX_PATH="${env.WORKSPACE}/install;/opt/rocm" \
                                            -DGPU_TARGETS="gfx950" \
-                                           -DCMAKE_CXX_COMPILER=/llvm-project/build/bin/clang++ \
+                                           -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ \
                                            -DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang \
                                            -DCMAKE_CXX_FLAGS=" -O3 " .. && make -j """
                     }
                     steps{
-                        Build_CK_and_Reboot(setup_args: setup_args, docker_name: "rocm/composable_kernel-private:ck_ub22.04_rocm7.0", config_targets: "install", no_reboot:true, build_type: 'Release', execute_cmd: execute_args, prefixpath: '/usr/local')
+                        Build_CK_and_Reboot(setup_args: setup_args, docker_name: "${env.CK_DOCKERHUB_PRIVATE}:ck_ub24.04_rocm7.0", config_targets: "install", no_reboot:true, build_type: 'Release', execute_cmd: execute_args, prefixpath: '/usr/local')
                         cleanWs()
                     }
                 }
@@ -1332,7 +1396,7 @@ pipeline {
                 {
                     when {
                         beforeAgent true
-                        expression { !params.RUN_FULL_QA.toBoolean() && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
+                        expression { params.BUILD_GFX90A.toBoolean() && !params.RUN_FULL_QA.toBoolean() && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
                     }
                     agent{ label rocmnode("gfx90a") }
                     environment{
@@ -1356,14 +1420,20 @@ pipeline {
                         expression { params.BUILD_INSTANCES_ONLY.toBoolean() && !params.RUN_FULL_QA.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
                     }
                     agent{ label rocmnode("gfx942") }
-                    environment{
-                        execute_args = """ cmake -G Ninja -D CMAKE_PREFIX_PATH=/opt/rocm \
-                                           -D CMAKE_CXX_COMPILER="${build_compiler()}" \
-                                           -D CMAKE_BUILD_TYPE=Release \
-                                           -D CMAKE_CXX_FLAGS=" -O3 -ftime-trace" .. && ninja -j64 """
-                    }
                     steps{
-                        buildHipClangJobAndReboot(setup_cmd: "",  build_cmd: "", no_reboot:true, build_type: 'Release', execute_cmd: execute_args)
+                        script {
+                            def execute_args = params.NINJA_FTIME_TRACE ? 
+                                """ cmake -G Ninja -D CMAKE_PREFIX_PATH=/opt/rocm \
+                                    -D CMAKE_CXX_COMPILER="${build_compiler()}" \
+                                    -D CMAKE_BUILD_TYPE=Release \
+                                    -D CMAKE_CXX_FLAGS=" -O3 -ftime-trace" .. && ninja -j64 """ :
+                                """ cmake -G Ninja -D CMAKE_PREFIX_PATH=/opt/rocm \
+                                    -D CMAKE_CXX_COMPILER="${build_compiler()}" \
+                                    -D CMAKE_BUILD_TYPE=Release \
+                                    -D CMAKE_CXX_FLAGS=" -O3 " .. && ninja -j64 """
+                            
+                            buildHipClangJobAndReboot(setup_cmd: "",  build_cmd: "", no_reboot:true, build_type: 'Release', execute_cmd: execute_args)
+                        }
                         cleanWs()
                     }
                 }
@@ -1371,7 +1441,7 @@ pipeline {
                 {
                     when {
                         beforeAgent true
-                        expression { !params.RUN_FULL_QA.toBoolean() && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
+                        expression { params.BUILD_GFX10.toBoolean() && !params.RUN_FULL_QA.toBoolean() && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
                     }
                     agent{ label rocmnode("gfx1030") }
                     environment{
@@ -1392,7 +1462,7 @@ pipeline {
                 {
                     when {
                         beforeAgent true
-                        expression { !params.RUN_FULL_QA.toBoolean() && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
+                        expression { params.BUILD_GFX11.toBoolean() && !params.RUN_FULL_QA.toBoolean() && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
                     }
                     agent{ label rocmnode("gfx1101") }
                     environment{

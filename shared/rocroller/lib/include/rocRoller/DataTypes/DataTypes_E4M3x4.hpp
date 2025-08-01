@@ -2,7 +2,7 @@
  *
  * MIT License
  *
- * Copyright 2024-2025 AMD ROCm(TM) Software
+ * Copyright 2019-2025 AMD ROCm(TM) Software
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -26,64 +26,43 @@
 
 #pragma once
 
-#include <memory>
-#include <span>
-#include <variant>
-
-#include <rocRoller/DataTypes/DataTypes.hpp>
+#include <cstdint>
 
 namespace rocRoller
 {
-    class CommandArgument;
-    using CommandArgumentPtr = std::shared_ptr<CommandArgument>;
-
-    using CommandArgumentValue = std::variant<
-        // int16_t,
-        int32_t,
-        int64_t,
-        // uint16_t,
-        uint32_t,
-        uint64_t,
-        float,
-        double,
-        Half,
-        BFloat16,
-        FP8,
-        BF8,
-        FP6,
-        BF6,
-        FP4,
-        bool,
-        // int16_t*,
-        int32_t*,
-        int64_t*,
-        // uint16_t*,
-        uint8_t*,
-        uint32_t*,
-        uint64_t*,
-        float*,
-        double*,
-        Half*,
-        BFloat16*,
-        FP8*,
-        BF8*,
-        FP6*,
-        BF6*,
-        FP4*,
-        E8M0,
-        E8M0*,
-        E5M3,
-        E5M3*,
-        E4M3,
-        E4M3*>;
-
-    template <typename T>
-    concept CCommandArgumentValue = requires(T& val)
+    struct E4M3x4
     {
-        {CommandArgumentValue(val)};
+        E4M3x4()
+            : a(0)
+            , b(0)
+            , c(0)
+            , d(0)
+        {
+        }
+
+        E4M3x4(uint8_t xa, uint8_t xb, uint8_t xc, uint8_t xd)
+            : a(xa)
+            , b(xb)
+            , c(xc)
+            , d(xd)
+        {
+        }
+
+        explicit E4M3x4(uint32_t v)
+            : a(v & 0xff)
+            , b((v >> 8) & 0xff)
+            , c((v >> 16) & 0xff)
+            , d((v >> 24) & 0xff)
+        {
+        }
+
+        uint8_t a, b, c, d;
+
+        inline bool operator==(E4M3x4 const& rhs) const
+        {
+            return a == rhs.a && b == rhs.b && c == rhs.c && d == rhs.d;
+        }
     };
 
-    static_assert(!CCommandArgumentValue<bool*>);
-
-    using RuntimeArguments = std::span<uint8_t const>;
-}
+    static_assert(sizeof(E4M3x4) == 4, "E4M3x4 must be 4 bytes.");
+} // namespace rocRoller

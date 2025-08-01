@@ -234,10 +234,19 @@ namespace rocRoller
                 auto scaleAType = scaleA->variableType().dataType;
                 auto scaleBType = scaleB->variableType().dataType;
 
-                auto aFmt      = "matrix_a_fmt:" + Arithmetic::getModifier(typeA);
-                auto bFmt      = "matrix_b_fmt:" + Arithmetic::getModifier(typeB);
-                auto aScaleFmt = "matrix_a_scale_fmt:MATRIX_SCALE_FMT_E8";
-                auto bScaleFmt = "matrix_b_scale_fmt:MATRIX_SCALE_FMT_E8";
+                AssertFatal(
+                    isValidDataTypeScaleTypeCombination(typeA, typeB, scaleAType, scaleBType),
+                    ShowValue(typeA),
+                    ShowValue(typeB),
+                    ShowValue(scaleAType),
+                    ShowValue(scaleBType));
+
+                auto aFmt = "matrix_a_fmt:" + Arithmetic::getModifier(typeA);
+                auto bFmt = "matrix_b_fmt:" + Arithmetic::getModifier(typeB);
+                auto aScaleFmt
+                    = "matrix_a_scale_fmt:" + Arithmetic::getScaleTypeModifier(scaleAType);
+                auto bScaleFmt
+                    = "matrix_b_scale_fmt:" + Arithmetic::getScaleTypeModifier(scaleBType);
 
                 Instruction inst(mi,
                                  {dest},

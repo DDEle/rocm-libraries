@@ -122,7 +122,12 @@ namespace MatrixMultiplyTest
     public:
         CommandKernelPtr commandKernel;
 
-        template <typename TA, typename TB, typename TD, typename ACC = float>
+        template <typename TA,
+                  typename TB,
+                  typename TD,
+                  typename ACC = float,
+                  DataType STA = DataType::None,
+                  DataType STB = DataType::None>
         void matrixMultiplyMacroTile(int               wave_m,
                                      int               wave_n,
                                      int               wave_k,
@@ -374,12 +379,12 @@ namespace MatrixMultiplyTest
                 auto       blockScalingA = (scaleA) ? scaleBlockSize : 1;
                 auto       blockScalingB = (scaleB) ? scaleBlockSize : 1;
                 const auto dgenA
-                    = getDataGenerator<TA>(descA, -rangeA, rangeA, seed, blockScalingA);
+                    = getDataGenerator<TA, STA>(descA, -rangeA, rangeA, seed, blockScalingA);
                 const auto dgenB
-                    = getDataGenerator<TB>(descB, -rangeB, rangeB, seed, blockScalingB);
+                    = getDataGenerator<TB, STB>(descB, -rangeB, rangeB, seed, blockScalingB);
 
-                auto A = getRandomVector<TA>(dgenA, scaleA);
-                auto B = getRandomVector<TB>(dgenB, scaleB);
+                auto A = getRandomVector<TA, STA>(dgenA, scaleA);
+                auto B = getRandomVector<TB, STB>(dgenB, scaleB);
 
                 std::vector<uint8_t> hostScaleA, hostScaleB;
 
@@ -477,6 +482,58 @@ namespace MatrixMultiplyTest
             }
         }
 
+        template <typename TA, typename TB, DataType STA>
+        void matrixMultiplyMacroTileMixed(int               m,
+                                          int               n,
+                                          int               k,
+                                          int               b,
+                                          bool              useLDSB     = true,
+                                          std::string       transA      = "N",
+                                          std::string       transB      = "N",
+                                          const ScaleParams scaleParams = {})
+        {
+            if(isE8M0(scaleParams.scaleTypeB))
+                matrixMultiplyMacroTile<TA, TB, float, float, STA, DataType::E8M0>(
+                    m, n, k, b, useLDSB, transA, transB, scaleParams);
+            else if(isE5M3(scaleParams.scaleTypeB))
+                matrixMultiplyMacroTile<TA, TB, float, float, STA, DataType::E5M3>(
+                    m, n, k, b, useLDSB, transA, transB, scaleParams);
+            else if(isE4M3(scaleParams.scaleTypeB))
+                matrixMultiplyMacroTile<TA, TB, float, float, STA, DataType::E4M3>(
+                    m, n, k, b, useLDSB, transA, transB, scaleParams);
+            else if(scaleParams.scaleTypeB == DataType::None)
+                matrixMultiplyMacroTile<TA, TB, float, float, STA, DataType::None>(
+                    m, n, k, b, useLDSB, transA, transB, scaleParams);
+            else
+                Throw<FatalError>("Invalid type.");
+        }
+
+        template <typename TA, typename TB>
+        void matrixMultiplyMacroTileMixed(int               m,
+                                          int               n,
+                                          int               k,
+                                          int               b,
+                                          bool              useLDSB     = true,
+                                          std::string       transA      = "N",
+                                          std::string       transB      = "N",
+                                          const ScaleParams scaleParams = {})
+        {
+            if(isE8M0(scaleParams.scaleTypeA))
+                matrixMultiplyMacroTileMixed<TA, TB, DataType::E8M0>(
+                    m, n, k, b, useLDSB, transA, transB, scaleParams);
+            else if(isE5M3(scaleParams.scaleTypeA))
+                matrixMultiplyMacroTileMixed<TA, TB, DataType::E5M3>(
+                    m, n, k, b, useLDSB, transA, transB, scaleParams);
+            else if(isE4M3(scaleParams.scaleTypeA))
+                matrixMultiplyMacroTileMixed<TA, TB, DataType::E4M3>(
+                    m, n, k, b, useLDSB, transA, transB, scaleParams);
+            else if(scaleParams.scaleTypeA == DataType::None)
+                matrixMultiplyMacroTileMixed<TA, TB, DataType::None>(
+                    m, n, k, b, useLDSB, transA, transB, scaleParams);
+            else
+                Throw<FatalError>("Invalid type.");
+        }
+
         template <typename TA>
         void matrixMultiplyMacroTileMixed(rocRoller::DataType typeB,
                                           int                 m,
@@ -489,19 +546,19 @@ namespace MatrixMultiplyTest
                                           const ScaleParams   scaleParams = {})
         {
             if(typeB == rocRoller::DataType::FP8)
-                matrixMultiplyMacroTile<TA, FP8, float>(
+                matrixMultiplyMacroTileMixed<TA, FP8>(
                     m, n, k, b, useLDSB, transA, transB, scaleParams);
             else if(typeB == rocRoller::DataType::BF8)
-                matrixMultiplyMacroTile<TA, BF8, float>(
+                matrixMultiplyMacroTileMixed<TA, BF8>(
                     m, n, k, b, useLDSB, transA, transB, scaleParams);
             else if(typeB == rocRoller::DataType::FP6)
-                matrixMultiplyMacroTile<TA, FP6, float>(
+                matrixMultiplyMacroTileMixed<TA, FP6>(
                     m, n, k, b, useLDSB, transA, transB, scaleParams);
             else if(typeB == rocRoller::DataType::BF6)
-                matrixMultiplyMacroTile<TA, BF6, float>(
+                matrixMultiplyMacroTileMixed<TA, BF6>(
                     m, n, k, b, useLDSB, transA, transB, scaleParams);
             else if(typeB == rocRoller::DataType::FP4)
-                matrixMultiplyMacroTile<TA, FP4, float>(
+                matrixMultiplyMacroTileMixed<TA, FP4>(
                     m, n, k, b, useLDSB, transA, transB, scaleParams);
             else
                 Throw<FatalError>("Invalid type.");
@@ -859,9 +916,11 @@ namespace MatrixMultiplyTest
     {
     };
 
-    // Params are: A type, B type, waveK, scaleBlockSize, (transA, transB)
+    // Params are: A type, B type, A scale type, B scale type, waveK, scaleBlockSize, (transA, transB)
     class MatrixMultiplyMixedWMMAF8F6F4ScaledTestGPU
         : public BaseMatrixMultiplyContextFixture<std::tuple<rocRoller::DataType,
+                                                             rocRoller::DataType,
+                                                             rocRoller::DataType,
                                                              rocRoller::DataType,
                                                              int,
                                                              uint,
@@ -1135,12 +1194,11 @@ namespace MatrixMultiplyTest
     {
         REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_scale_f8f6f4);
 
-        const auto [typeA, typeB, waveK, scaleBlockSize, transOp] = std::get<1>(GetParam());
-        const auto [transA, transB]                               = transOp;
-
-        const ScaleParams scaleParams = {.scaleTypeA     = DataType::E8M0,
-                                         .scaleTypeB     = DataType::E8M0,
-                                         .scaleBlockSize = scaleBlockSize};
+        const auto [typeA, typeB, scaleTypeA, scaleTypeB, waveK, scaleBlockSize, transOp]
+            = std::get<1>(GetParam());
+        const auto [transA, transB]   = transOp;
+        const ScaleParams scaleParams = {
+            .scaleTypeA = scaleTypeA, .scaleTypeB = scaleTypeB, .scaleBlockSize = scaleBlockSize};
 
         matrixMultiplyMacroTileMixed(
             typeA, typeB, 16, 16, waveK, 1, true, transA, transB, scaleParams);
@@ -1909,10 +1967,35 @@ namespace MatrixMultiplyTest
                                                  std::pair<std::string, std::string>("T", "N"),
                                                  std::pair<std::string, std::string>("T", "T")))));
 
+    static ::testing::internal::ParamGenerator<
+        MatrixMultiplyMixedWMMAF8F6F4ScaledTestGPU::ParamType>
+        filterValidDataTypeScaleTypeParams(
+            ::testing::internal::ParamGenerator<
+                MatrixMultiplyMixedWMMAF8F6F4ScaledTestGPU::ParamType>&& inputParamGenerator)
+    {
+        std::vector<MatrixMultiplyMixedWMMAF8F6F4ScaledTestGPU::ParamType> filtered;
+        for(auto const& inputParam : inputParamGenerator)
+        {
+            auto params = std::get<1>(inputParam);
+
+            auto typeA      = std::get<0>(params);
+            auto typeB      = std::get<1>(params);
+            auto scaleTypeA = std::get<2>(params);
+            auto scaleTypeB = std::get<3>(params);
+
+            if(isValidDataTypeScaleTypeCombination(typeA, typeB, scaleTypeA, scaleTypeB))
+            {
+                filtered.push_back(inputParam);
+            }
+        }
+
+        return ::testing::ValuesIn(filtered);
+    }
+
     INSTANTIATE_TEST_SUITE_P(
         MatrixMultiply1250,
         MatrixMultiplyMixedWMMAF8F6F4ScaledTestGPU,
-        ::testing::Combine(
+        filterValidDataTypeScaleTypeParams(::testing::Combine(
             ::testing::Values(GPUArchitectureTarget{GPUArchitectureGFX::GFX1250}),
             ::testing::Combine(::testing::Values(rocRoller::DataType::FP8,
                                                  rocRoller::DataType::BF8,
@@ -1924,19 +2007,25 @@ namespace MatrixMultiplyTest
                                                  rocRoller::DataType::FP6,
                                                  rocRoller::DataType::BF6,
                                                  rocRoller::DataType::FP4),
+                               ::testing::Values(rocRoller::DataType::E8M0,
+                                                 rocRoller::DataType::E5M3,
+                                                 rocRoller::DataType::E4M3),
+                               ::testing::Values(rocRoller::DataType::E8M0,
+                                                 rocRoller::DataType::E5M3,
+                                                 rocRoller::DataType::E4M3),
                                ::testing::Values(/*waveK*/ 128),
                                ::testing::Values(/*scaleBlockSize*/ 16, 32),
                                // mxDataGenerator does not work when fast-moving dim is not multiple of scale-block size.
                                ::testing::Values(/*std::pair<std::string, std::string>("N", "N"),
                                                  std::pair<std::string, std::string>("N", "T"),*/
                                                  std::pair<std::string, std::string>("T", "N")/*,
-                                                 std::pair<std::string, std::string>("T", "T")*/))));
+                                                 std::pair<std::string, std::string>("T", "T")*/)))));
 
     INSTANTIATE_TEST_SUITE_P(
         MatrixMultiplyABCWMMA120X,
         MatrixMultiplyABCWMMATestGPU,
         ::testing::Combine(::testing::Values(GPUArchitectureTarget{GPUArchitectureGFX::GFX1200},
-                                             GPUArchitectureTarget{GPUArchitectureGFX::GFX1200}),
+                                             GPUArchitectureTarget{GPUArchitectureGFX::GFX1201}),
                            ::testing::Values(/*waveK*/ 16)));
 
     INSTANTIATE_TEST_SUITE_P(MatrixMultiplyABCWMMA1250,

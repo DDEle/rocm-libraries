@@ -191,8 +191,12 @@ namespace rocRoller::Client::GEMMClient
                       descC,
                       hostScaleA,
                       hostScaleB,
-                      problemParams.types.scaleA == Operations::ScaleMode::Separate,
-                      problemParams.types.scaleB == Operations::ScaleMode::Separate,
+                      problemParams.types.scaleA == Operations::ScaleMode::Separate
+                          ? problemParams.types.scaleTypeA
+                          : DataType::None,
+                      problemParams.types.scaleB == Operations::ScaleMode::Separate
+                          ? problemParams.types.scaleTypeB
+                          : DataType::None,
                       -1.f,
                       1.f,
                       static_cast<uint>(scaleBlockSize));

@@ -334,6 +334,14 @@ namespace GPUArchitectureGenerator
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950,
                                                  {.sramecc = true}},
             }},
+           {rocRoller::GPUCapability::HasE5M3Scale,
+            {
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+            }},
+           {rocRoller::GPUCapability::HasE4M3Scale,
+            {
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+            }},
            {rocRoller::GPUCapability::HasXCC,
             {
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950},

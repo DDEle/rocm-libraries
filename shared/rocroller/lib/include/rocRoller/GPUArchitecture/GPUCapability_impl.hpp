@@ -170,6 +170,8 @@ namespace rocRoller
             {"HasBlockScaling16", Value::HasBlockScaling16},
             {"DefaultScaleBlockSize", Value::DefaultScaleBlockSize},
             {"HasE8M0Scale", Value::HasE8M0Scale},
+            {"HasE5M3Scale", Value::HasE5M3Scale},
+            {"HasE4M3Scale", Value::HasE4M3Scale},
 
             {"UnalignedVGPRs", Value::UnalignedVGPRs},
             {"UnalignedSGPRs", Value::UnalignedSGPRs},

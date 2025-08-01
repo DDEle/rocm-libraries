@@ -81,6 +81,8 @@ namespace rocRoller
             ConvertCase(FP4x8);
             ConvertCase(Double);
         case DataType::E8M0x4:
+        case DataType::E5M3x4:
+        case DataType::E4M3x4:
             co_yield generatePackedScales(dest, arg);
             break;
 
@@ -400,6 +402,8 @@ namespace rocRoller
         switch(dataType)
         {
         case DataType::E8M0:
+        case DataType::E5M3:
+        case DataType::E4M3:
         {
             const auto packedDataType = DataTypeInfo::Get(dataType).packedVariableType()->dataType;
             AssertFatal(

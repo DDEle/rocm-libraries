@@ -278,8 +278,10 @@ namespace GEMMDriverTest
                           descC,
                           hostScaleA,
                           hostScaleB,
-                          gemm.scaleAMode == Operations::ScaleMode::Separate,
-                          gemm.scaleBMode == Operations::ScaleMode::Separate,
+                          gemm.scaleAMode == Operations::ScaleMode::Separate ? gemm.scaleTypeA
+                                                                             : DataType::None,
+                          gemm.scaleBMode == Operations::ScaleMode::Separate ? gemm.scaleTypeB
+                                                                             : DataType::None,
                           -1.f,
                           1.f,
                           static_cast<uint>(scaleBlockSize));
@@ -4223,10 +4225,34 @@ namespace GEMMDriverTest
                                                  std::pair<std::string, std::string>("T", "N"),
                                                  std::pair<std::string, std::string>("T", "T")))));
 
+    static ::testing::internal::ParamGenerator<ScaledMixedGEMMTestF8F6F4WMMAGPU::ParamType>
+        filterValidDataTypeScaleTypeParams(
+            ::testing::internal::ParamGenerator<ScaledMixedGEMMTestF8F6F4WMMAGPU::ParamType>&&
+                inputParamGenerator)
+    {
+        std::vector<ScaledMixedGEMMTestF8F6F4WMMAGPU::ParamType> filtered;
+        for(auto const& inputParam : inputParamGenerator)
+        {
+            auto params = std::get<1>(inputParam);
+
+            auto typeA      = std::get<0>(params);
+            auto typeB      = std::get<1>(params);
+            auto scaleTypeA = std::get<2>(params);
+            auto scaleTypeB = std::get<3>(params);
+
+            if(isValidDataTypeScaleTypeCombination(typeA, typeB, scaleTypeA, scaleTypeB))
+            {
+                filtered.push_back(inputParam);
+            }
+        }
+
+        return ::testing::ValuesIn(filtered);
+    }
+
     INSTANTIATE_TEST_SUITE_P(
         ScaledMixedGEMMTestWMMA1250,
         ScaledMixedGEMMTestF8F6F4WMMAGPU,
-        ::testing::Combine(
+        filterValidDataTypeScaleTypeParams(::testing::Combine(
             currentGPUISA(),
             ::testing::Combine(
                 ::testing::Values(rocRoller::DataType::FP8,
@@ -4239,24 +4265,36 @@ namespace GEMMDriverTest
                                   rocRoller::DataType::FP6,
                                   rocRoller::DataType::BF6,
                                   rocRoller::DataType::FP4),
-                ::testing::Values(rocRoller::DataType::E8M0),
-                ::testing::Values(rocRoller::DataType::E8M0),
+                ::testing::Values(rocRoller::DataType::E8M0,
+                                  rocRoller::DataType::E5M3,
+                                  rocRoller::DataType::E4M3),
+                ::testing::Values(rocRoller::DataType::E8M0,
+                                  rocRoller::DataType::E5M3,
+                                  rocRoller::DataType::E4M3),
                 ::testing::Values(/*waveK*/ 128),
-                ::testing::Values(
-                    std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
-                        Operations::ScaleMode::Separate, Operations::ScaleMode::Separate, 32),
-                    std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
-                        Operations::ScaleMode::Separate, Operations::ScaleMode::Separate, 16),
-                    std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
-                        Operations::ScaleMode::Separate, Operations::ScaleMode::SingleScale, 32),
-                    std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
-                        Operations::ScaleMode::SingleScale, Operations::ScaleMode::Separate, 32),
-                    std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
-                        Operations::ScaleMode::SingleScale,
-                        Operations::ScaleMode::SingleScale,
-                        32)),
+                ::testing::Values(/*scaleAMode, scaleBMode, scaleBlockSize*/
+                                  std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
+                                      Operations::ScaleMode::Separate,
+                                      Operations::ScaleMode::Separate,
+                                      32),
+                                  std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
+                                      Operations::ScaleMode::Separate,
+                                      Operations::ScaleMode::Separate,
+                                      16),
+                                  std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
+                                      Operations::ScaleMode::Separate,
+                                      Operations::ScaleMode::SingleScale,
+                                      32),
+                                  std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
+                                      Operations::ScaleMode::SingleScale,
+                                      Operations::ScaleMode::Separate,
+                                      32),
+                                  std::tuple<Operations::ScaleMode, Operations::ScaleMode, int>(
+                                      Operations::ScaleMode::SingleScale,
+                                      Operations::ScaleMode::SingleScale,
+                                      32)),
                 ::testing::Values(std::pair<std::string, std::string>("N", "N"),
                                   std::pair<std::string, std::string>("N", "T"),
                                   std::pair<std::string, std::string>("T", "N"),
-                                  std::pair<std::string, std::string>("T", "T")))));
+                                  std::pair<std::string, std::string>("T", "T"))))));
 }

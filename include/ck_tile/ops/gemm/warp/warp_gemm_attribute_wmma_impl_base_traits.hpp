@@ -3,12 +3,12 @@
 
 #pragma once
 namespace ck_tile {
-template <typename Arch, typename ADType, typename BDType, typename CDType>
+template <typename Arch, typename ADType, typename BDType, typename CDType, index_t K>
 struct WmmaTraitsBase;
 
 // GFX11 specialization
-template <typename ADType, typename BDType, typename CDType>
-struct WmmaTraitsBase<gfx11_t, ADType, BDType, CDType>
+template <typename ADType, typename BDType, typename CDType, index_t K>
+struct WmmaTraitsBase<gfx11_t, ADType, BDType, CDType, K>
 {
     using ADataType = ADType;
     using BDataType = BDType;
@@ -20,7 +20,7 @@ struct WmmaTraitsBase<gfx11_t, ADType, BDType, CDType>
 
     static constexpr index_t kM = 16;
     static constexpr index_t kN = 16;
-    static constexpr index_t kK = 16;
+    static constexpr index_t kK = K;
 
     static constexpr index_t kAMBlock = 1;
     static constexpr index_t kBNBlock = 1;
@@ -30,7 +30,7 @@ struct WmmaTraitsBase<gfx11_t, ADType, BDType, CDType>
     static constexpr index_t kBNLane      = 16;
     static constexpr index_t kABK0PerLane = 1;
     static constexpr index_t kABKLane     = 1;
-    static constexpr index_t kABK1PerLane = 16;
+    static constexpr index_t kABK1PerLane = K / (kABK0PerLane * kABKLane);
 
     static constexpr index_t kCMLane     = 2;
     static constexpr index_t kCNLane     = 16;
@@ -49,20 +49,22 @@ struct WmmaTraitsBase<gfx11_t, ADType, BDType, CDType>
 };
 
 // GFX12 specialization
-template <typename ADType, typename BDType, typename CDType>
-struct WmmaTraitsBase<gfx12_t, ADType, BDType, CDType>
+template <typename ADType, typename BDType, typename CDType, index_t K>
+struct WmmaTraitsBase<gfx12_t, ADType, BDType, CDType, K>
 {
     using ADataType = ADType;
     using BDataType = BDType;
     using CDataType = CDType;
 
-    using AVecType = ext_vector_t<ADataType, 8>;
-    using BVecType = ext_vector_t<BDataType, 8>;
-    using CVecType = ext_vector_t<CDataType, 8>;
+    static constexpr index_t kAInputSize = K / sizeof(ADataType);
+    static constexpr index_t kBInputSize = K / sizeof(BDataType);
+    using AVecType                       = ext_vector_t<ADataType, kAInputSize>;
+    using BVecType                       = ext_vector_t<BDataType, kBInputSize>;
+    using CVecType                       = ext_vector_t<CDataType, 8>;
 
     static constexpr index_t kM = 16;
     static constexpr index_t kN = 16;
-    static constexpr index_t kK = 16;
+    static constexpr index_t kK = K;
 
     static constexpr index_t kAMBlock = 1;
     static constexpr index_t kBNBlock = 1;
@@ -72,7 +74,7 @@ struct WmmaTraitsBase<gfx12_t, ADType, BDType, CDType>
     static constexpr index_t kBNLane      = 16;
     static constexpr index_t kABK0PerLane = 1;
     static constexpr index_t kABKLane     = 2;
-    static constexpr index_t kABK1PerLane = 8;
+    static constexpr index_t kABK1PerLane = K / (kABK0PerLane * kABKLane);
 
     static constexpr index_t kCMLane     = 2;
     static constexpr index_t kCNLane     = 16;

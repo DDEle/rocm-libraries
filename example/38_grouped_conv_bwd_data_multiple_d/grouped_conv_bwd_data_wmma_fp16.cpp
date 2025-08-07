@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2023, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2025, Advanced Micro Devices, Inc. All rights reserved.
 
 #include "ck/tensor_operation/gpu/device/impl/device_grouped_conv_bwd_data_multiple_d_wmma_cshuffle.hpp"
 #include "common.hpp"
@@ -34,7 +34,7 @@ using DeviceConvInstance = ck::tensor_operation::device::DeviceGroupedConvBwdDat
 
 int main(int argc, char* argv[])
 {
-    bool is_supported = ck::is_gfx11_supported();
+    bool is_supported = ck::is_gfx11_supported() || ck::is_gfx125_supported();
     if(!is_supported)
     {
         std::cout << "WARNING: wmma example not supported on the platform " << ck::get_device_name()

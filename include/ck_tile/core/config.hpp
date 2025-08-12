@@ -219,7 +219,9 @@
 #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x00020000
 #elif defined(__gfx103__) // for GPU code
 #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x31014000
-#elif defined(__gfx11__) || defined(__gfx12__) // for GPU code
+#elif defined(__gfx125__)
+#define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x1004000
+#elif defined(__gfx11__) || defined(__gfx12__)
 #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x31004000
 #endif
 

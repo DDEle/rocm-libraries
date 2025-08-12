@@ -56,12 +56,6 @@ struct WmmaTraitsBase<gfx12_t, ADType, BDType, CDType, K>
     using BDataType = BDType;
     using CDataType = CDType;
 
-    static constexpr index_t kAInputSize = K / sizeof(ADataType);
-    static constexpr index_t kBInputSize = K / sizeof(BDataType);
-    using AVecType                       = ext_vector_t<ADataType, kAInputSize>;
-    using BVecType                       = ext_vector_t<BDataType, kBInputSize>;
-    using CVecType                       = ext_vector_t<CDataType, 8>;
-
     static constexpr index_t kM = 16;
     static constexpr index_t kN = 16;
     static constexpr index_t kK = K;
@@ -90,5 +84,11 @@ struct WmmaTraitsBase<gfx12_t, ADType, BDType, CDType, K>
     using kCPs2RHssMinor = sequence<1, 0>;
     using kCYs2RHsMajor  = sequence<1, 1>;
     using kCYs2RHsMinor  = sequence<0, 2>;
+
+    static constexpr index_t kABInputSize = kK / kABKLane;
+    static constexpr index_t kCOutputSize = kM / kCMLane;
+    using AVecType                        = ext_vector_t<ADataType, kABInputSize>;
+    using BVecType                        = ext_vector_t<BDataType, kABInputSize>;
+    using CVecType                        = ext_vector_t<CDataType, kCOutputSize>;
 };
 } // namespace ck_tile

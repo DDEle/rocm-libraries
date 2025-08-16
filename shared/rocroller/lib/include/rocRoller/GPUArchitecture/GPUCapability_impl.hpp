@@ -210,5 +210,7 @@ namespace rocRoller
             {"DefaultRemapXCCValue", Value::DefaultRemapXCCValue},
 
             {"PartiallyActiveWaveSize", Value::PartiallyActiveWaveSize},
+
+            {"HasVGPRIndexing", Value::HasVGPRIndexing},
     };
 }

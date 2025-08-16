@@ -3984,6 +3984,29 @@ namespace GEMMDriverTest
         basicGEMMMixed(typeA, typeB, gemm);
     }
 
+    TEST_P(ScaledMixedGEMMTestF8F6F4WMMAGPU, GPU_ScaledMixedBasicGEMMF8F6F4Flat)
+    {
+        REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasWMMA_scale_f8f6f4);
+        auto [typeA, typeB, scaleTypeA, scaleTypeB, waveK, scaleModesAndSize, transOp]
+            = std::get<1>(GetParam());
+        AssertFatal(waveK == 128, "Invalid waveK value.", ShowValue(waveK));
+
+        auto gemm = setup_GEMMF8F6F4(16, 16, waveK);
+
+        std::tie(gemm.transA, gemm.transB) = transOp;
+
+        gemm.wavefrontSize
+            = m_context->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
+        gemm.workgroupSizeX = gemm.wavefrontSize;
+        gemm.workgroupSizeY = 1;
+        gemm.scaleTypeA     = scaleTypeA;
+        gemm.scaleTypeB     = scaleTypeB;
+
+        std::tie(gemm.scaleAMode, gemm.scaleBMode, gemm.scaleBlockSize) = scaleModesAndSize;
+
+        basicGEMMMixed(typeA, typeB, gemm);
+    }
+
     TEST_P(GEMMTestLargeMacroTileGPU, DISABLED_GPU_BasicGEMM)
     {
         // NOTE: This test takes hours to finish

@@ -160,6 +160,7 @@ target_sources(rocroller
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/InstructionValues/LabelAllocator_impl.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/InstructionValues/Register.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/InstructionValues/RegisterAllocator.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/InstructionValues/RegisterAllocator_detail.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/InstructionValues/RegisterAllocator_fwd.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/InstructionValues/RegisterAllocator_impl.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/InstructionValues/Register_fwd.hpp"
@@ -322,6 +323,8 @@ target_sources(rocroller
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/Scheduling/Observers/ObserverCreation.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/Scheduling/Observers/RegisterLivenessObserver.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/Scheduling/Observers/SupportedInstructionObserver.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/Scheduling/Observers/VGPRIndexingObserver.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/Scheduling/Observers/VGPRIndexingObserver_detail.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/Scheduling/Observers/WaitcntObserver.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/rocRoller/Scheduling/Observers/WaitcntObserver_impl.hpp"
 

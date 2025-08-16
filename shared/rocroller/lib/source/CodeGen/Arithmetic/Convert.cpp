@@ -399,6 +399,12 @@ namespace rocRoller
                     "Only scale types are allowed to be packed via this convert op",
                     ShowValue(dataType));
 
+        if(m_context->targetArchitecture().HasCapability(GPUCapability::HasVGPRIndexing)
+           and dest->allocationState() == Register::AllocationState::Unallocated)
+        {
+            dest->setForceReservedRegion();
+        }
+
         switch(dataType)
         {
         case DataType::E8M0:

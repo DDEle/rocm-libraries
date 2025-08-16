@@ -30,6 +30,7 @@
 #include <rocRoller/Scheduling/Observers/FileWritingObserver.hpp>
 #include <rocRoller/Scheduling/Observers/RegisterLivenessObserver.hpp>
 #include <rocRoller/Scheduling/Observers/SupportedInstructionObserver.hpp>
+#include <rocRoller/Scheduling/Observers/VGPRIndexingObserver.hpp>
 
 #include <rocRoller/Scheduling/Observers/FunctionalUnit/MEMObserver.hpp>
 #include <rocRoller/Scheduling/Observers/FunctionalUnit/MFMAObserver.hpp>
@@ -111,7 +112,8 @@ namespace rocRoller
                 // Other Observers
                 FileWritingObserver,
                 RegisterLivenessObserver,
-                SupportedInstructionObserver>
+                SupportedInstructionObserver,
+                VGPRIndexingObserver>
                 potentialObservers;
 
             return createMetaObserver(ctx, potentialObservers);

@@ -33,6 +33,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <memory>
+#include <regex>
 #include <sstream>
 
 #ifdef ROCROLLER_USE_HIP
@@ -584,5 +585,44 @@ namespace rocRoller
                         &patterns[i % 4],
                         1);
         }
+    }
+
+    inline std::string FixupInstructionStringsForVGPRIndexing(GPUArchitecture const& arch,
+                                                              std::string            instr)
+    {
+        if(not arch.HasCapability(GPUCapability::HasVGPRIndexing))
+            return instr;
+        auto reservedRegionSize = Register::RegisterAllocatorDetail::ReservedRegionSize();
+
+        std::string rv;
+        // match v[#:#] or v#
+        std::regex re{R"(v(?:\[(\d+):(\d+)\]|(\d+)))"};
+        auto       begin   = ::std::sregex_iterator(instr.begin(), instr.end(), re);
+        size_t     lastPos = 0;
+
+        for(auto it = begin; it != std::sregex_iterator(); it++)
+        {
+            auto match = (*it);
+            rv.append(instr, lastPos, it->position() - lastPos);
+            if(match[1].matched or match[2].matched)
+            {
+                AssertFatal(match[1].matched and match[2].matched,
+                            ShowValue(match[1].matched),
+                            ShowValue(match[2].matched));
+                // matched v[#:#]
+                int start = std::stoi(match[1]) + reservedRegionSize;
+                int end   = std::stoi(match[2]) + reservedRegionSize;
+                rv += fmt::format("v[{}:{}]", start, end);
+            }
+            else
+            {
+                // matched v#
+                rv += fmt::format("v{}", std::stoi(match[3]) + reservedRegionSize);
+            }
+            lastPos = it->position() + it->length();
+        }
+        rv.append(instr, lastPos, std::string::npos);
+
+        return rv;
     }
 }

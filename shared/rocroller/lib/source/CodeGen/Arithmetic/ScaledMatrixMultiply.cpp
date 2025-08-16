@@ -56,6 +56,14 @@ namespace rocRoller
             AssertFatal(scaleA != nullptr);
             AssertFatal(scaleB != nullptr);
 
+            // Special case for VGPR indexing:
+            //     v_wmma_ld_scale ignores the MODE register therefore
+            //     the scale data must be allocated sub v256.
+            AssertFatal(scaleA->getRegisterIds().begin()->regIndex < 256,
+                        ShowValue(scaleA->getRegisterIds().begin()->regIndex));
+            AssertFatal(scaleB->getRegisterIds().begin()->regIndex < 256,
+                        ShowValue(scaleB->getRegisterIds().begin()->regIndex));
+
             auto const lanesPerWavefront = m_context->targetArchitecture().GetCapability(
                 GPUCapability::DefaultWavefrontSize);
             AssertFatal(miSizes.m > 0 && miSizes.n > 0 && miSizes.k > 0 && lanesPerWavefront > 0,

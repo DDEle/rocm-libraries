@@ -378,7 +378,7 @@ struct HostTensor
     ~HostTensor() = default;
 
     HostTensor& operator=(const HostTensor&) = default;
-    HostTensor& operator=(HostTensor&&) = default;
+    HostTensor& operator=(HostTensor&&)      = default;
 
     template <typename FromT>
     explicit HostTensor(const HostTensor<FromT>& other) : HostTensor(other.template CopyAsType<T>())
@@ -409,7 +409,13 @@ struct HostTensor
     }
 
     // void SetZero() { ck_tile::ranges::fill<T>(mData, 0); }
-    void SetZero() { std::fill(mData.begin(), mData.end(), 0); }
+    void SetZero()
+    {
+        if constexpr(std::is_same_v<T, e8m0_t>)
+            std::fill(mData.begin(), mData.end(), e8m0_t{1.f});
+        else
+            std::fill(mData.begin(), mData.end(), 0);
+    }
 
     template <typename F>
     void ForEach_impl(F&& f, std::vector<size_t>& idx, size_t rank)
@@ -722,6 +728,8 @@ struct HostTensor
                     file << type_convert<float>(itm) << std::endl;
                 else if(dtype == "int")
                     file << type_convert<int>(itm) << std::endl;
+                else if(dtype == "int8_t")
+                    file << static_cast<int>(type_convert<ck_tile::int8_t>(itm)) << std::endl;
                 else
                     // TODO: we didn't implement operator<< for all custom
                     // data types, here fall back to float in case compile error

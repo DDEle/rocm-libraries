@@ -198,6 +198,16 @@
 #endif
 #endif
 
+// use llvm builtin bf16 data type after ROCm 6.5
+#ifndef CK_TILE_USE_LLVM_BUILTIN_BF16
+#if(HIP_VERSION_MAJOR == 6 && HIP_VERSION_MINOR == 5 && HIP_VERSION_PATCH >= 50421) || \
+    (HIP_VERSION_MAJOR >= 7)
+#define CK_TILE_USE_LLVM_BUILTIN_BF16 1
+#else
+#define CK_TILE_USE_LLVM_BUILTIN_BF16 0
+#endif
+#endif
+
 #ifndef CK_TILE_DEBUG_LOG
 #define CK_TILE_DEBUG_LOG 0
 #endif
@@ -269,4 +279,10 @@
 
 #ifndef CK_TILE_WA_ISSUE_2028
 #define CK_TILE_WA_ISSUE_2028 0
+#endif
+
+// Y pointed to R, we don't see a valuable use case.
+// Will enforce encoding to check Y not pointed to R if set to zero
+#ifndef CK_TILE_ENC_SUPPORT_Y_TO_R
+#define CK_TILE_ENC_SUPPORT_Y_TO_R 0
 #endif

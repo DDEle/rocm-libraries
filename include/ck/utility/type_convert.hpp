@@ -1870,7 +1870,8 @@ inline __host__ __device__ f6x32_t f6_convert_sr(float32_t x, float scale = 1.0f
     uint32_t rng =
         __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
     return __builtin_amdgcn_cvt_scalef32_sr_pk32_fp6_f32(x, rng, scale);
-#elif defined(__gfx1250__)
+#else
+#if defined(__gfx1250__)
     uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
                                              (get_thread_global_1d_id() + 1));
     return f6x32_t{__builtin_amdgcn_cvt_scalef32_sr_pk32_fp6_f32(x, rng, scale)};
@@ -1887,7 +1888,8 @@ inline __host__ __device__ f6x32_t f6_convert_sr(float32_t x, float scale = 1.0f
 #else  // #ifndef CK_CODE_GEN_RTC
     uint32_t rng =
         prand_generator<float, seed>(reinterpret_cast<size_t>(&x), float_values.float_array[0]);
-#endif
+#endif // #ifndef CK_CODE_GEN_RTC
+#endif // #if defined(__gfx1250__)
 
     union
     {
@@ -2221,7 +2223,8 @@ inline __host__ __device__ bf6x32_t bf6_convert_sr(float32_t x, float scale = 1.
     uint32_t rng =
         __builtin_amdgcn_prng_b32(__builtin_readcyclecounter() * (get_thread_global_1d_id() + 1));
     return __builtin_amdgcn_cvt_scalef32_sr_pk32_bf6_f32(x, rng, scale);
-#elif defined(__gfx1250__)
+#else
+#if defined(__gfx1250__)
     uint32_t rng = __builtin_amdgcn_prng_b32(__builtin_amdgcn_s_memrealtime() *
                                              (get_thread_global_1d_id() + 1));
     return bf6x32_t{__builtin_amdgcn_cvt_scalef32_sr_pk32_bf6_f32(x, rng, scale)};

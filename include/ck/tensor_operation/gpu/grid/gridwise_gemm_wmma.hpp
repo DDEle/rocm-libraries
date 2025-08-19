@@ -60,16 +60,16 @@ __launch_bounds__(CK_MAX_THREAD_PER_BLOCK, CK_MIN_BLOCK_PER_CU)
                                                   c_element_op,
                                                   block_2_ctile_map);
 #else
-    ignore                      = p_a_grid;
-    ignore                      = p_b_grid;
-    ignore                      = p_c_grid;
-    ignore                      = a_grid_desc;
-    ignore                      = b_grid_desc;
-    ignore                      = c_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore                      = a_element_op;
-    ignore                      = b_element_op;
-    ignore                      = c_element_op;
-    ignore                      = block_2_ctile_map;
+    ignore = p_a_grid;
+    ignore = p_b_grid;
+    ignore = p_c_grid;
+    ignore = a_grid_desc;
+    ignore = b_grid_desc;
+    ignore = c_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore = a_element_op;
+    ignore = b_element_op;
+    ignore = c_element_op;
+    ignore = block_2_ctile_map;
 #endif // end of if (defined(__gfx11__))
 }
 

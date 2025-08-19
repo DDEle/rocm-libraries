@@ -93,20 +93,20 @@ __launch_bounds__(CK_MAX_THREAD_PER_BLOCK, CK_MIN_BLOCK_PER_CU)
                                                 cde_element_op,
                                                 block_2_ctile_map);
 #else
-    ignore                      = p_a_grid;
-    ignore                      = p_b_grid;
-    ignore                      = p_ds_grid;
-    ignore                      = p_e_grid;
-    ignore                      = batch_count;
-    ignore                      = a_grid_desc;
-    ignore                      = b_grid_desc;
-    ignore                      = ds_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore                      = e_grid_desc_mblock_mperblock_nblock_nperblock_;
-    ignore                      = a_element_op;
-    ignore                      = b_element_op;
-    ignore                      = cde_element_op;
-    ignore                      = compute_ptr_offset_of_batch;
-    ignore                      = block_2_ctile_map;
+    ignore = p_a_grid;
+    ignore = p_b_grid;
+    ignore = p_ds_grid;
+    ignore = p_e_grid;
+    ignore = batch_count;
+    ignore = a_grid_desc;
+    ignore = b_grid_desc;
+    ignore = ds_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore = e_grid_desc_mblock_mperblock_nblock_nperblock_;
+    ignore = a_element_op;
+    ignore = b_element_op;
+    ignore = cde_element_op;
+    ignore = compute_ptr_offset_of_batch;
+    ignore = block_2_ctile_map;
 #endif
 }
 
@@ -186,20 +186,20 @@ __launch_bounds__(CK_MAX_THREAD_PER_BLOCK, CK_MIN_BLOCK_PER_CU)
                                                 cde_element_op,
                                                 block_2_etile_map);
 #else
-    ignore                      = p_a_grid;
-    ignore                      = p_b_grid;
-    ignore                      = p_ds_grid;
-    ignore                      = p_e_grid;
-    ignore                      = batch_count;
-    ignore                      = a_element_op;
-    ignore                      = b_element_op;
-    ignore                      = cde_element_op;
-    ignore                      = a_grid_desc;
-    ignore                      = b_grid_desc;
-    ignore                      = ds_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore                      = e_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore                      = block_2_etile_map;
-    ignore                      = compute_ptr_offset_of_batch;
+    ignore = p_a_grid;
+    ignore = p_b_grid;
+    ignore = p_ds_grid;
+    ignore = p_e_grid;
+    ignore = batch_count;
+    ignore = a_element_op;
+    ignore = b_element_op;
+    ignore = cde_element_op;
+    ignore = a_grid_desc;
+    ignore = b_grid_desc;
+    ignore = ds_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore = e_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore = block_2_etile_map;
+    ignore = compute_ptr_offset_of_batch;
 #endif
 }
 
@@ -253,18 +253,18 @@ __launch_bounds__(CK_MAX_THREAD_PER_BLOCK, CK_MIN_BLOCK_PER_CU)
                                                 cde_element_op,
                                                 block_2_ctile_map);
 #else
-    ignore                      = p_a_grid;
-    ignore                      = p_b_grid;
-    ignore                      = p_ds_grid;
-    ignore                      = p_e_grid;
-    ignore                      = a_grid_desc;
-    ignore                      = b_grid_desc;
-    ignore                      = ds_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore                      = e_grid_desc_mblock_mperblock_nblock_nperblock;
-    ignore                      = a_element_op;
-    ignore                      = b_element_op;
-    ignore                      = cde_element_op;
-    ignore                      = block_2_ctile_map;
+    ignore = p_a_grid;
+    ignore = p_b_grid;
+    ignore = p_ds_grid;
+    ignore = p_e_grid;
+    ignore = a_grid_desc;
+    ignore = b_grid_desc;
+    ignore = ds_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore = e_grid_desc_mblock_mperblock_nblock_nperblock;
+    ignore = a_element_op;
+    ignore = b_element_op;
+    ignore = cde_element_op;
+    ignore = block_2_ctile_map;
 #endif // end of if (defined(__gfx11__ ))
 }
 

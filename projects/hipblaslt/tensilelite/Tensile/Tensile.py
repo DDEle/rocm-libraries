@@ -203,7 +203,6 @@ def addCommonArguments(argParser):
     argParser.add_argument("--prebuilt-client", default=os.path.abspath(os.path.join('build_tmp', 'tensilelite', 'client', 'tensilelite-client')),
         type=os.path.abspath, help="Specify the full path to a pre-built tensilelite-client executable")
     argParser.add_argument("--rocm-agent-enumerator", default=None, action="store", dest="rocm_agent_enumerator")
-
     argParser.add_argument("--global-parameters", nargs="+", type=splitExtraParameters, default=[])
 
 

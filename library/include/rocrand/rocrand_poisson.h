@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2017-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -45,6 +45,8 @@
 
 #include "rocrand/rocrand_normal.h"
 #include "rocrand/rocrand_uniform.h"
+
+#include <hip/hip_runtime.h>
 
 namespace rocrand_device {
 namespace detail {
@@ -225,8 +227,8 @@ __forceinline__ __device__ __host__ Result_Type poisson_distribution_inv(State& 
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using Philox generator in \p state. State is incremented by a variable amount.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
@@ -245,13 +247,13 @@ __forceinline__ __device__ __host__ unsigned int rocrand_poisson(rocrand_state_p
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using Philox generator in \p state. State is incremented by a variable amount.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Four Poisson-distributed <tt>unsigned int</tt> values as \p uint4
  */
-__forceinline__ __device__ __host__ uint4 rocrand_poisson4(rocrand_state_philox4x32_10* state,
-                                                           double                       lambda)
+__forceinline__ __device__ __host__
+uint4 rocrand_poisson4(rocrand_state_philox4x32_10* state, double lambda)
 {
     return uint4{
         rocrand_device::detail::poisson_distribution<rocrand_state_philox4x32_10*, unsigned int>(
@@ -275,8 +277,8 @@ __forceinline__ __device__ __host__ uint4 rocrand_poisson4(rocrand_state_philox4
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using MRG31k3p generator in \p state. State is incremented by a variable amount.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
@@ -296,8 +298,8 @@ __forceinline__ __device__ __host__ unsigned int rocrand_poisson(rocrand_state_m
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using MRG32k3a generator in \p state. State is incremented by a variable amount.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
@@ -317,8 +319,8 @@ __forceinline__ __device__ __host__ unsigned int rocrand_poisson(rocrand_state_m
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using XORWOW generator in \p state. State is incremented by a variable amount.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
@@ -338,13 +340,13 @@ __forceinline__ __device__ __host__ unsigned int rocrand_poisson(rocrand_state_x
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using MTGP32 generator in \p state. State is incremented by one position.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned int rocrand_poisson(rocrand_state_mtgp32* state,
-                                                                 double                lambda)
+__forceinline__ __device__ __host__
+unsigned int rocrand_poisson(rocrand_state_mtgp32* state, double lambda)
 {
     return rocrand_device::detail::poisson_distribution_inv<rocrand_state_mtgp32*, unsigned int>(
         state,
@@ -357,13 +359,13 @@ __forceinline__ __device__ __host__ unsigned int rocrand_poisson(rocrand_state_m
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using SOBOL32 generator in \p state. State is incremented by one position.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned int rocrand_poisson(rocrand_state_sobol32* state,
-                                                                 double                 lambda)
+__forceinline__ __device__ __host__
+unsigned int rocrand_poisson(rocrand_state_sobol32* state, double lambda)
 {
     return rocrand_device::detail::poisson_distribution_inv<rocrand_state_sobol32*, unsigned int>(
         state,
@@ -376,52 +378,53 @@ __forceinline__ __device__ __host__ unsigned int rocrand_poisson(rocrand_state_s
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using SCRAMBLED_SOBOL32 generator in \p state. State is incremented by one position.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned int
-    rocrand_poisson(rocrand_state_scrambled_sobol32* state, double lambda)
+__forceinline__ __device__ __host__
+unsigned int rocrand_poisson(rocrand_state_scrambled_sobol32* state, double lambda)
 {
     return rocrand_device::detail::poisson_distribution_inv<rocrand_state_scrambled_sobol32*,
                                                             unsigned int>(state, lambda);
 }
 
 /**
- * \brief Returns a Poisson-distributed <tt>unsigned long long int</tt> using SOBOL64 generator.
+ * \brief Returns a Poisson-distributed <tt>unsigned int</tt> using SOBOL64 generator.
  *
- * Generates and returns Poisson-distributed distributed random <tt>unsigned long long int</tt>
+ * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using SOBOL64 generator in \p state. State is incremented by one position.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
- * \return Poisson-distributed <tt>unsigned long long int</tt>
+ * \return Poisson-distributed <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned long long int
-    rocrand_poisson(rocrand_state_sobol64* state, double lambda)
+__forceinline__ __device__ __host__
+unsigned int rocrand_poisson(rocrand_state_sobol64* state, double lambda)
 {
-    return rocrand_device::detail::poisson_distribution_inv<rocrand_state_sobol64*,
-                                                            unsigned long long int>(state, lambda);
+    return rocrand_device::detail::poisson_distribution_inv<rocrand_state_sobol64*, unsigned int>(
+        state,
+        lambda);
 }
 
 /**
- * \brief Returns a Poisson-distributed <tt>unsigned long long int</tt> using SCRAMBLED_SOBOL64 generator.
+ * \brief Returns a Poisson-distributed <tt>unsigned int</tt> using SCRAMBLED_SOBOL64 generator.
  *
- * Generates and returns Poisson-distributed distributed random <tt>unsigned long long int</tt>
+ * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using SCRAMBLED_SOBOL64 generator in \p state. State is incremented by one position.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
- * \return Poisson-distributed <tt>unsigned long long int</tt>
+ * \return Poisson-distributed <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned long long int
-    rocrand_poisson(rocrand_state_scrambled_sobol64* state, double lambda)
+__forceinline__ __device__ __host__
+unsigned int rocrand_poisson(rocrand_state_scrambled_sobol64* state, double lambda)
 {
     return rocrand_device::detail::poisson_distribution_inv<rocrand_state_scrambled_sobol64*,
-                                                            unsigned long long int>(state, lambda);
+                                                            unsigned int>(state, lambda);
 }
 
 /**
@@ -430,13 +433,13 @@ __forceinline__ __device__ __host__ unsigned long long int
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using LFSR113 generator in \p state. State is incremented by one position.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned int rocrand_poisson(rocrand_state_lfsr113* state,
-                                                                 double                 lambda)
+__forceinline__ __device__ __host__
+unsigned int rocrand_poisson(rocrand_state_lfsr113* state, double lambda)
 {
     return rocrand_device::detail::poisson_distribution_inv<rocrand_state_lfsr113*, unsigned int>(
         state,
@@ -449,13 +452,13 @@ __forceinline__ __device__ __host__ unsigned int rocrand_poisson(rocrand_state_l
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using ThreeFry generator in \p state. State is incremented by one position.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned int
-    rocrand_poisson(rocrand_state_threefry2x32_20* state, double lambda)
+__forceinline__ __device__ __host__
+unsigned int rocrand_poisson(rocrand_state_threefry2x32_20* state, double lambda)
 {
     return rocrand_device::detail::poisson_distribution_inv(state, lambda);
 }
@@ -466,13 +469,13 @@ __forceinline__ __device__ __host__ unsigned int
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using ThreeFry generator in \p state. State is incremented by one position.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned int
-    rocrand_poisson(rocrand_state_threefry2x64_20* state, double lambda)
+__forceinline__ __device__ __host__
+unsigned int rocrand_poisson(rocrand_state_threefry2x64_20* state, double lambda)
 {
     return rocrand_device::detail::poisson_distribution_inv(state, lambda);
 }
@@ -483,13 +486,13 @@ __forceinline__ __device__ __host__ unsigned int
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using ThreeFry generator in \p state. State is incremented by one position.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned int
-    rocrand_poisson(rocrand_state_threefry4x32_20* state, double lambda)
+__forceinline__ __device__ __host__
+unsigned int rocrand_poisson(rocrand_state_threefry4x32_20* state, double lambda)
 {
     return rocrand_device::detail::poisson_distribution_inv(state, lambda);
 }
@@ -500,13 +503,13 @@ __forceinline__ __device__ __host__ unsigned int
  * Generates and returns Poisson-distributed distributed random <tt>unsigned int</tt>
  * values using ThreeFry generator in \p state. State is incremented by one position.
  *
- * \param state - Pointer to a state to use
- * \param lambda - Lambda parameter of the Poisson distribution
+ * \param state Pointer to a state to use
+ * \param lambda Lambda parameter of the Poisson distribution
  *
  * \return Poisson-distributed <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned int
-    rocrand_poisson(rocrand_state_threefry4x64_20* state, double lambda)
+__forceinline__ __device__ __host__
+unsigned int rocrand_poisson(rocrand_state_threefry4x64_20* state, double lambda)
 {
     return rocrand_device::detail::poisson_distribution_inv(state, lambda);
 }

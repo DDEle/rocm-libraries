@@ -1,4 +1,4 @@
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -96,12 +96,13 @@ template<unsigned int OutputPerThread,
          class Distribution,
          int block_size>
 __global__
-    __launch_bounds__(block_size) void generate_sobol_kernel(T*                 data,
-                                                             const size_t       n,
-                                                             const Constant*    direction_vectors,
-                                                             const Constant*    scramble_constants,
-                                                             const unsigned int offset,
-                                                             Distribution       distribution)
+    __launch_bounds__(block_size)
+void generate_sobol_kernel(T*                 data,
+                           const size_t       n,
+                           const Constant*    direction_vectors,
+                           const Constant*    scramble_constants,
+                           const unsigned int offset,
+                           Distribution       distribution)
 #else
 template<unsigned int OutputPerThread,
          bool         Scrambled,
@@ -110,7 +111,8 @@ template<unsigned int OutputPerThread,
          class T,
          class Distribution,
          int block_size>
-__global__ __launch_bounds__(block_size) void generate_sobol_kernel(
+__global__ __launch_bounds__(block_size)
+void generate_sobol_kernel(
     T*, const size_t, const Constant*, const Constant*, const unsigned int, Distribution)
 {}
 
@@ -158,7 +160,7 @@ void generate_sobol_host(dim3               block_idx,
             // On AMD GPUs we must use a constexpr size shared array for performance.
             // But this code won't compile with NVCC, because we are in a __host__ __device__
             // function.
-            __shared__ Constant shared_vectors[vector_size];
+        __shared__ Constant shared_vectors[vector_size];
 #else
             // NVCC won't accept extern __shared__ Constant shared_bytes[];
             // Thereby we must resort to aliasing.
@@ -207,7 +209,7 @@ void generate_sobol_host(dim3               block_idx,
     {
         const uintptr_t uintptr   = reinterpret_cast<uintptr_t>(data);
         const size_t misalignment = (output_per_thread - uintptr / sizeof(T)) % output_per_thread;
-        const unsigned int head_size    = cpp_utils::min(n, misalignment);
+        const unsigned int head_size = cpp_utils::min(n, misalignment);
         const unsigned int tail_size = (n - head_size) % output_per_thread;
         const size_t       vec_n     = (n - head_size) / output_per_thread;
 
@@ -355,6 +357,8 @@ private:
 
     static const constant_type* get_direction_vectors_ptr()
     {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         if constexpr(Is64)
         {
             if constexpr(Scrambled)
@@ -377,6 +381,7 @@ private:
                 return rocrand_h_sobol32_direction_vectors;
             }
         }
+#pragma clang diagnostic pop
     }
 
     // Device
@@ -415,6 +420,8 @@ private:
 
     static const constant_type* get_scramble_constants_ptr()
     {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         if constexpr(Is64)
         {
             return h_scrambled_sobol64_constants;
@@ -423,6 +430,7 @@ private:
         {
             return h_scrambled_sobol32_constants;
         }
+#pragma clang diagnostic pop
     }
 
     // Not scrambled
@@ -444,6 +452,7 @@ private:
         {
             return status;
         }
+
         const hipError_t error = hipMemcpy(*scramble_constants,
                                            get_scramble_constants_ptr(),
                                            sizeof(constant_type) * SCRAMBLED_SOBOL_DIM,
@@ -473,15 +482,32 @@ private:
     template<bool IsDevice = system_type::is_device(), bool IsScrambled = Scrambled>
     std::enable_if_t<IsDevice && !IsScrambled> deallocate()
     {
-        system_type::free(m_direction_vectors);
+        hipError_t error = hipFree(m_direction_vectors);
+        if(error != hipErrorInvalidValue)
+        {
+            // hipErrorInvalidValue is thrown when hipFree tries to call an already
+            // deallocated section of memory. This may occur when 'hipDeviceReset()' is
+            // used before the current class' deconstructor is called.
+            return;
+        }
+        ROCRAND_HIP_FATAL_ASSERT(error);
     }
 
     // Device, scrambled
     template<bool IsDevice = system_type::is_device(), bool IsScrambled = Scrambled>
     std::enable_if_t<IsDevice && IsScrambled> deallocate()
     {
-        system_type::free(m_direction_vectors);
-        system_type::free(m_scramble_constants);
+        hipError_t m_dir_error   = hipFree(m_direction_vectors);
+        hipError_t m_scram_error = hipFree(m_scramble_constants);
+        if((m_dir_error != hipErrorInvalidValue) && (m_scram_error != hipErrorInvalidValue))
+        {
+            // hipErrorInvalidValue is thrown when hipFree tries to call an already
+            // deallocated section of memory. This may occur when 'hipDeviceReset()' is
+            // used before the current class' deconstructor is called.
+            return;
+        }
+        ROCRAND_HIP_FATAL_ASSERT(m_dir_error);
+        ROCRAND_HIP_FATAL_ASSERT(m_scram_error);
     }
 };
 
@@ -493,7 +519,7 @@ public:
     using system_type                         = System;
     using base_type                           = generator_impl_base;
     using engine_type       = sobol_device_engine_t<Is64, Scrambled, system_type::is_device()>;
-    using constant_type = std::conditional_t<Is64, unsigned long long int, unsigned int>;
+    using constant_type     = std::conditional_t<Is64, unsigned long long int, unsigned int>;
     using constant_accessor = sobol_constant_accessor<system_type, Is64, Scrambled>;
     using poisson_distribution_manager_t
         = poisson_distribution_manager<DISCRETE_METHOD_CDF, system_type>;
@@ -506,6 +532,7 @@ public:
                              hipStream_t        stream = 0)
         : base_type(order, offset, stream)
     {
+
         rocrand_status status = get_constants().get_direction_vectors(&m_direction_vectors);
         if(status != ROCRAND_STATUS_SUCCESS)
         {

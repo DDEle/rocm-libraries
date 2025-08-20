@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2017-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -26,8 +26,6 @@
  *  @{
  */
 
-#include <math.h>
-
 #include "rocrand/rocrand_lfsr113.h"
 #include "rocrand/rocrand_mrg31k3p.h"
 #include "rocrand/rocrand_mrg32k3a.h"
@@ -45,6 +43,10 @@
 
 #include "rocrand/rocrand_normal.h"
 
+#include <hip/hip_runtime.h>
+
+#include <math.h>
+
 /**
  * \brief Returns a log-normally distributed \p float value.
  *
@@ -54,9 +56,9 @@
  * values, transforms them to log-normally distributed values, returns first of them, and saves
  * the second to be returned on the next call.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
@@ -88,15 +90,14 @@ __forceinline__ __device__ __host__ float
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_philox4x32_10* state,
-                                                               float                        mean,
-                                                               float                        stddev)
+__forceinline__ __device__ __host__
+float2 rocrand_log_normal2(rocrand_state_philox4x32_10* state, float mean, float stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -116,15 +117,14 @@ __forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_phi
  * The function uses the Box-Muller transform method to generate four normally distributed
  * values, transforms them to log-normally distributed values, and returns them.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Four log-normally distributed \p float value as \p float4
  */
-__forceinline__ __device__ __host__ float4 rocrand_log_normal4(rocrand_state_philox4x32_10* state,
-                                                               float                        mean,
-                                                               float                        stddev)
+__forceinline__ __device__ __host__
+float4 rocrand_log_normal4(rocrand_state_philox4x32_10* state, float mean, float stddev)
 {
     float4 r = rocrand_device::detail::normal_distribution4(rocrand4(state));
     return float4 {
@@ -144,9 +144,9 @@ __forceinline__ __device__ __host__ float4 rocrand_log_normal4(rocrand_state_phi
  * \p double values, transforms them to log-normally distributed \p double values, returns
  * first of them, and saves the second to be returned on the next call.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
@@ -174,14 +174,14 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_log_normal_double2(rocrand_state_philox4x32_10* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double2 rocrand_log_normal_double2(rocrand_state_philox4x32_10* state, double mean, double stddev)
 {
     double2 r = rocrand_device::detail::normal_distribution_double2(rocrand4(state));
     return double2 {
@@ -198,14 +198,14 @@ __forceinline__ __device__ __host__ double2
  * The function uses the Box-Muller transform method to generate four normally distributed
  * values, transforms them to log-normally distributed values, and returns them.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Four log-normally distributed \p double values as \p double4
  */
-__forceinline__ __device__ __host__ double4
-    rocrand_log_normal_double4(rocrand_state_philox4x32_10* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double4 rocrand_log_normal_double4(rocrand_state_philox4x32_10* state, double mean, double stddev)
 {
     double2 r1, r2;
     r1 = rocrand_log_normal_double2(state, mean, stddev);
@@ -224,9 +224,9 @@ __forceinline__ __device__ __host__ double4
  * values, transforms them to log-normally distributed values, returns first of them,
  * and saves the second to be returned on the next call.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
@@ -259,15 +259,14 @@ __forceinline__ __device__ __host__ float
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_mrg31k3p* state,
-                                                               float                   mean,
-                                                               float                   stddev)
+__forceinline__ __device__ __host__
+float2 rocrand_log_normal2(rocrand_state_mrg31k3p* state, float mean, float stddev)
 {
     auto state1 = state->next();
     auto state2 = state->next();
@@ -286,9 +285,9 @@ __forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_mrg
  * \p double values, transforms them to log-normally distributed \p double values, returns
  * first of them, and saves the second to be returned on the next call.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
@@ -322,14 +321,14 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_log_normal_double2(rocrand_state_mrg31k3p* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double2 rocrand_log_normal_double2(rocrand_state_mrg31k3p* state, double mean, double stddev)
 {
     auto state1 = state->next();
     auto state2 = state->next();
@@ -349,9 +348,9 @@ __forceinline__ __device__ __host__ double2
  * values, transforms them to log-normally distributed values, returns first of them,
  * and saves the second to be returned on the next call.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
@@ -384,15 +383,14 @@ __forceinline__ __device__ __host__ float
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_mrg32k3a* state,
-                                                               float                   mean,
-                                                               float                   stddev)
+__forceinline__ __device__ __host__
+float2 rocrand_log_normal2(rocrand_state_mrg32k3a* state, float mean, float stddev)
 {
     auto state1 = state->next();
     auto state2 = state->next();
@@ -414,9 +412,9 @@ __forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_mrg
  * \p double values, transforms them to log-normally distributed \p double values, returns
  * first of them, and saves the second to be returned on the next call.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
@@ -450,14 +448,14 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_log_normal_double2(rocrand_state_mrg32k3a* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double2 rocrand_log_normal_double2(rocrand_state_mrg32k3a* state, double mean, double stddev)
 {
     auto state1 = state->next();
     auto state2 = state->next();
@@ -480,9 +478,9 @@ __forceinline__ __device__ __host__ double2
  * values, transforms them to log-normally distributed values, returns first of them,
  * and saves the second to be returned on the next call.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
@@ -514,15 +512,14 @@ __forceinline__ __device__ __host__ float
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_xorwow* state,
-                                                               float                 mean,
-                                                               float                 stddev)
+__forceinline__ __device__ __host__
+float2 rocrand_log_normal2(rocrand_state_xorwow* state, float mean, float stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -543,9 +540,9 @@ __forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_xor
  * \p double values, transforms them to log-normally distributed \p double values, returns
  * first of them, and saves the second to be returned on the next call.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
@@ -581,15 +578,14 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ __host__ double2 rocrand_log_normal_double2(rocrand_state_xorwow* state,
-                                                                       double                mean,
-                                                                       double                stddev)
+__forceinline__ __device__ __host__
+double2 rocrand_log_normal_double2(rocrand_state_xorwow* state, double mean, double stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -611,14 +607,14 @@ __forceinline__ __device__ __host__ double2 rocrand_log_normal_double2(rocrand_s
  * Generates and returns a log-normally distributed \p float value using MTGP32
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
-__forceinline__ __device__ float
-    rocrand_log_normal(rocrand_state_mtgp32* state, float mean, float stddev)
+__forceinline__ __device__
+float rocrand_log_normal(rocrand_state_mtgp32* state, float mean, float stddev)
 {
     float r = rocrand_device::detail::normal_distribution(rocrand(state));
     return expf(mean + (stddev * r));
@@ -632,15 +628,14 @@ __forceinline__ __device__ float
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ float2 rocrand_log_normal2(rocrand_state_mtgp32* state,
-                                                      float                 mean,
-                                                      float                 stddev)
+__forceinline__ __device__
+float2 rocrand_log_normal2(rocrand_state_mtgp32* state, float mean, float stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -655,14 +650,14 @@ __forceinline__ __device__ float2 rocrand_log_normal2(rocrand_state_mtgp32* stat
  * Generates and returns a log-normally distributed \p double value using MTGP32
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
-__forceinline__ __device__ double
-    rocrand_log_normal_double(rocrand_state_mtgp32* state, double mean, double stddev)
+__forceinline__ __device__
+double rocrand_log_normal_double(rocrand_state_mtgp32* state, double mean, double stddev)
 {
     double r = rocrand_device::detail::normal_distribution_double(rocrand(state));
     return exp(mean + (stddev * r));
@@ -676,15 +671,14 @@ __forceinline__ __device__ double
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ double2 rocrand_log_normal_double2(rocrand_state_mtgp32* state,
-                                                              double                mean,
-                                                              double                stddev)
+__forceinline__ __device__
+double2 rocrand_log_normal_double2(rocrand_state_mtgp32* state, double mean, double stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -702,14 +696,14 @@ __forceinline__ __device__ double2 rocrand_log_normal_double2(rocrand_state_mtgp
  * Generates and returns a log-normally distributed \p float value using SOBOL32
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float
-    rocrand_log_normal(rocrand_state_sobol32* state, float mean, float stddev)
+__forceinline__ __device__ __host__
+float rocrand_log_normal(rocrand_state_sobol32* state, float mean, float stddev)
 {
     float r = rocrand_device::detail::normal_distribution(rocrand(state));
     return expf(mean + (stddev * r));
@@ -721,14 +715,14 @@ __forceinline__ __device__ __host__ float
  * Generates and returns a log-normally distributed \p double value using SOBOL32
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_log_normal_double(rocrand_state_sobol32* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double rocrand_log_normal_double(rocrand_state_sobol32* state, double mean, double stddev)
 {
     double r = rocrand_device::detail::normal_distribution_double(rocrand(state));
     return exp(mean + (stddev * r));
@@ -740,14 +734,14 @@ __forceinline__ __device__ __host__ double
  * Generates and returns a log-normally distributed \p float value using SCRAMBLED_SOBOL32
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float
-    rocrand_log_normal(rocrand_state_scrambled_sobol32* state, float mean, float stddev)
+__forceinline__ __device__ __host__
+float rocrand_log_normal(rocrand_state_scrambled_sobol32* state, float mean, float stddev)
 {
     float r = rocrand_device::detail::normal_distribution(rocrand(state));
     return expf(mean + (stddev * r));
@@ -759,14 +753,14 @@ __forceinline__ __device__ __host__ float
  * Generates and returns a log-normally distributed \p double value using SCRAMBLED_SOBOL32
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_log_normal_double(rocrand_state_scrambled_sobol32* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double rocrand_log_normal_double(rocrand_state_scrambled_sobol32* state, double mean, double stddev)
 {
     double r = rocrand_device::detail::normal_distribution_double(rocrand(state));
     return exp(mean + (stddev * r));
@@ -778,14 +772,14 @@ __forceinline__ __device__ __host__ double
  * Generates and returns a log-normally distributed \p float value using SOBOL64
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float
-    rocrand_log_normal(rocrand_state_sobol64* state, float mean, float stddev)
+__forceinline__ __device__ __host__
+float rocrand_log_normal(rocrand_state_sobol64* state, float mean, float stddev)
 {
     float r = rocrand_device::detail::normal_distribution(rocrand(state));
     return expf(mean + (stddev * r));
@@ -797,14 +791,14 @@ __forceinline__ __device__ __host__ float
  * Generates and returns a log-normally distributed \p double value using SOBOL64
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_log_normal_double(rocrand_state_sobol64* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double rocrand_log_normal_double(rocrand_state_sobol64* state, double mean, double stddev)
 {
     double r = rocrand_device::detail::normal_distribution_double(rocrand(state));
     return exp(mean + (stddev * r));
@@ -816,14 +810,14 @@ __forceinline__ __device__ __host__ double
  * Generates and returns a log-normally distributed \p float value using SCRAMBLED_SOBOL64
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float
-    rocrand_log_normal(rocrand_state_scrambled_sobol64* state, float mean, float stddev)
+__forceinline__ __device__ __host__
+float rocrand_log_normal(rocrand_state_scrambled_sobol64* state, float mean, float stddev)
 {
     float r = rocrand_device::detail::normal_distribution(rocrand(state));
     return expf(mean + (stddev * r));
@@ -835,14 +829,14 @@ __forceinline__ __device__ __host__ float
  * Generates and returns a log-normally distributed \p double value using SCRAMBLED_SOBOL64
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_log_normal_double(rocrand_state_scrambled_sobol64* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double rocrand_log_normal_double(rocrand_state_scrambled_sobol64* state, double mean, double stddev)
 {
     double r = rocrand_device::detail::normal_distribution_double(rocrand(state));
     return exp(mean + (stddev * r));
@@ -854,14 +848,14 @@ __forceinline__ __device__ __host__ double
  * Generates and returns a log-normally distributed \p float value using LFSR113
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float
-    rocrand_log_normal(rocrand_state_lfsr113* state, float mean, float stddev)
+__forceinline__ __device__ __host__
+float rocrand_log_normal(rocrand_state_lfsr113* state, float mean, float stddev)
 {
     float r = rocrand_device::detail::normal_distribution(rocrand(state));
     return expf(mean + (stddev * r));
@@ -875,15 +869,14 @@ __forceinline__ __device__ __host__ float
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_lfsr113* state,
-                                                               float                  mean,
-                                                               float                  stddev)
+__forceinline__ __device__ __host__
+float2 rocrand_log_normal2(rocrand_state_lfsr113* state, float mean, float stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -898,14 +891,14 @@ __forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_lfs
  * Generates and returns a log-normally distributed \p double value using LFSR113
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_log_normal_double(rocrand_state_lfsr113* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double rocrand_log_normal_double(rocrand_state_lfsr113* state, double mean, double stddev)
 {
     double r = rocrand_device::detail::normal_distribution_double(rocrand(state));
     return exp(mean + (stddev * r));
@@ -919,15 +912,14 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ __host__ double2 rocrand_log_normal_double2(rocrand_state_lfsr113* state,
-                                                                       double                 mean,
-                                                                       double stddev)
+__forceinline__ __device__ __host__
+double2 rocrand_log_normal_double2(rocrand_state_lfsr113* state, double mean, double stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -945,14 +937,14 @@ __forceinline__ __device__ __host__ double2 rocrand_log_normal_double2(rocrand_s
  * Generates and returns a log-normally distributed \p float value using Threefry
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float
-    rocrand_log_normal(rocrand_state_threefry2x32_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+float rocrand_log_normal(rocrand_state_threefry2x32_20* state, double mean, double stddev)
 {
     float r = rocrand_device::detail::normal_distribution(rocrand(state));
     return expf(mean + (stddev * r));
@@ -966,15 +958,14 @@ __forceinline__ __device__ __host__ float
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_threefry2x32_20* state,
-                                                               float                          mean,
-                                                               float stddev)
+__forceinline__ __device__ __host__
+float2 rocrand_log_normal2(rocrand_state_threefry2x32_20* state, float mean, float stddev)
 {
     float2 r = rocrand_device::detail::normal_distribution2(rocrand2(state));
     return float2{expf(mean + (stddev * r.x)), expf(mean + (stddev * r.y))};
@@ -986,14 +977,14 @@ __forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_thr
  * Generates and returns a log-normally distributed \p double value using Threefry
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_log_normal_double(rocrand_state_threefry2x32_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double rocrand_log_normal_double(rocrand_state_threefry2x32_20* state, double mean, double stddev)
 {
     double r = rocrand_device::detail::normal_distribution_double(rocrand(state));
     return exp(mean + (stddev * r));
@@ -1007,14 +998,14 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_log_normal_double2(rocrand_state_threefry2x32_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double2 rocrand_log_normal_double2(rocrand_state_threefry2x32_20* state, double mean, double stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -1032,14 +1023,14 @@ __forceinline__ __device__ __host__ double2
  * Generates and returns a log-normally distributed \p float value using Threefry
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float
-    rocrand_log_normal(rocrand_state_threefry2x64_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+float rocrand_log_normal(rocrand_state_threefry2x64_20* state, double mean, double stddev)
 {
     float r = rocrand_device::detail::normal_distribution(rocrand(state));
     return expf(mean + (stddev * r));
@@ -1053,15 +1044,14 @@ __forceinline__ __device__ __host__ float
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_threefry2x64_20* state,
-                                                               float                          mean,
-                                                               float stddev)
+__forceinline__ __device__ __host__
+float2 rocrand_log_normal2(rocrand_state_threefry2x64_20* state, float mean, float stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -1076,14 +1066,14 @@ __forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_thr
  * Generates and returns a log-normally distributed \p double value using Threefry
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_log_normal_double(rocrand_state_threefry2x64_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double rocrand_log_normal_double(rocrand_state_threefry2x64_20* state, double mean, double stddev)
 {
     double r = rocrand_device::detail::normal_distribution_double(rocrand(state));
     return exp(mean + (stddev * r));
@@ -1097,14 +1087,14 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_log_normal_double2(rocrand_state_threefry2x64_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double2 rocrand_log_normal_double2(rocrand_state_threefry2x64_20* state, double mean, double stddev)
 {
     double2 r = rocrand_device::detail::normal_distribution_double2(rocrand2(state));
     return double2{exp(mean + (stddev * r.x)), exp(mean + (stddev * r.y))};
@@ -1116,14 +1106,14 @@ __forceinline__ __device__ __host__ double2
  * Generates and returns a log-normally distributed \p float value using Threefry
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float
-    rocrand_log_normal(rocrand_state_threefry4x32_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+float rocrand_log_normal(rocrand_state_threefry4x32_20* state, double mean, double stddev)
 {
     float r = rocrand_device::detail::normal_distribution(rocrand(state));
     return expf(mean + (stddev * r));
@@ -1137,15 +1127,14 @@ __forceinline__ __device__ __host__ float
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_threefry4x32_20* state,
-                                                               float                          mean,
-                                                               float stddev)
+__forceinline__ __device__ __host__
+float2 rocrand_log_normal2(rocrand_state_threefry4x32_20* state, float mean, float stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -1160,14 +1149,14 @@ __forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_thr
  * Generates and returns a log-normally distributed \p double value using Threefry
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_log_normal_double(rocrand_state_threefry4x32_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double rocrand_log_normal_double(rocrand_state_threefry4x32_20* state, double mean, double stddev)
 {
     double r = rocrand_device::detail::normal_distribution_double(rocrand(state));
     return exp(mean + (stddev * r));
@@ -1181,14 +1170,14 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_log_normal_double2(rocrand_state_threefry4x32_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double2 rocrand_log_normal_double2(rocrand_state_threefry4x32_20* state, double mean, double stddev)
 {
     double2 r = rocrand_device::detail::normal_distribution_double2(rocrand4(state));
     return double2{exp(mean + (stddev * r.x)), exp(mean + (stddev * r.y))};
@@ -1200,14 +1189,14 @@ __forceinline__ __device__ __host__ double2
  * Generates and returns a log-normally distributed \p float value using Threefry
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float
-    rocrand_log_normal(rocrand_state_threefry4x64_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+float rocrand_log_normal(rocrand_state_threefry4x64_20* state, double mean, double stddev)
 {
     float r = rocrand_device::detail::normal_distribution(rocrand(state));
     return expf(mean + (stddev * r));
@@ -1221,15 +1210,14 @@ __forceinline__ __device__ __host__ float
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_threefry4x64_20* state,
-                                                               float                          mean,
-                                                               float stddev)
+__forceinline__ __device__ __host__
+float2 rocrand_log_normal2(rocrand_state_threefry4x64_20* state, float mean, float stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -1244,14 +1232,14 @@ __forceinline__ __device__ __host__ float2 rocrand_log_normal2(rocrand_state_thr
  * Generates and returns a log-normally distributed \p double value using Threefry
  * generator in \p state, and increments position of the generator by one.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Log-normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_log_normal_double(rocrand_state_threefry4x64_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double rocrand_log_normal_double(rocrand_state_threefry4x64_20* state, double mean, double stddev)
 {
     double r = rocrand_device::detail::normal_distribution_double(rocrand(state));
     return exp(mean + (stddev * r));
@@ -1265,14 +1253,14 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, transforms them to log-normally distributed values, and returns both.
  *
- * \param state  - Pointer to a state to use
- * \param mean   - Mean of the related log-normal distribution
- * \param stddev - Standard deviation of the related log-normal distribution
+ * \param state  Pointer to a state to use
+ * \param mean   Mean of the related log-normal distribution
+ * \param stddev Standard deviation of the related log-normal distribution
  *
  * \return Two log-normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_log_normal_double2(rocrand_state_threefry4x64_20* state, double mean, double stddev)
+__forceinline__ __device__ __host__
+double2 rocrand_log_normal_double2(rocrand_state_threefry4x64_20* state, double mean, double stddev)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);

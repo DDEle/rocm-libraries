@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2017-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -26,8 +26,6 @@
  *  @{
  */
 
-#include <math.h>
-
 #include "rocrand/rocrand_lfsr113.h"
 #include "rocrand/rocrand_mrg31k3p.h"
 #include "rocrand/rocrand_mrg32k3a.h"
@@ -44,6 +42,10 @@
 #include "rocrand/rocrand_xorwow.h"
 
 #include "rocrand/rocrand_uniform.h"
+
+#include <hip/hip_runtime.h>
+
+#include <math.h>
 
 namespace rocrand_device {
 namespace detail {
@@ -356,7 +358,7 @@ __forceinline__ __device__ __host__ __half2 mrg_normal_distribution_half2(unsign
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, returns first of them, and saves the second to be returned on the next call.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
@@ -389,11 +391,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_philox4x3
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_philox4x32_10* state)
+__forceinline__ __device__ __host__
+float2 rocrand_normal2(rocrand_state_philox4x32_10* state)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -411,11 +414,12 @@ __forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_philox4
  * The function uses the Box-Muller transform method to generate four normally
  * distributed values, and returns them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Four normally distributed \p float value as \p float4
  */
-__forceinline__ __device__ __host__ float4 rocrand_normal4(rocrand_state_philox4x32_10* state)
+__forceinline__ __device__ __host__
+float4 rocrand_normal4(rocrand_state_philox4x32_10* state)
 {
     return rocrand_device::detail::normal_distribution4(rocrand4(state));
 }
@@ -430,7 +434,7 @@ __forceinline__ __device__ __host__ float4 rocrand_normal4(rocrand_state_philox4
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, returns first of them, and saves the second to be returned on the next call.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
@@ -459,12 +463,12 @@ __forceinline__ __device__ __host__ double rocrand_normal_double(rocrand_state_p
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p double values as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_normal_double2(rocrand_state_philox4x32_10* state)
+__forceinline__ __device__ __host__
+double2 rocrand_normal_double2(rocrand_state_philox4x32_10* state)
 {
     return rocrand_device::detail::normal_distribution_double2(rocrand4(state));
 }
@@ -479,12 +483,12 @@ __forceinline__ __device__ __host__ double2
  * The function uses the Box-Muller transform method to generate four normally
  * distributed values, and returns them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Four normally distributed \p double values as \p double4
  */
-__forceinline__ __device__ __host__ double4
-    rocrand_normal_double4(rocrand_state_philox4x32_10* state)
+__forceinline__ __device__ __host__
+double4 rocrand_normal_double4(rocrand_state_philox4x32_10* state)
 {
     double2 r1, r2;
     r1 = rocrand_device::detail::normal_distribution_double2(rocrand4(state));
@@ -504,7 +508,7 @@ __forceinline__ __device__ __host__ double4
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, returns first of them, and saves the second to be returned on the next call.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
@@ -538,11 +542,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_mrg31k3p*
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_mrg31k3p* state)
+__forceinline__ __device__ __host__
+float2 rocrand_normal2(rocrand_state_mrg31k3p* state)
 {
     auto state1 = state->next();
     auto state2 = state->next();
@@ -560,7 +565,7 @@ __forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_mrg31k3
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, returns first of them, and saves the second to be returned on the next call.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
@@ -595,11 +600,12 @@ __forceinline__ __device__ __host__ double rocrand_normal_double(rocrand_state_m
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p double value as \p double2
  */
-__forceinline__ __device__ __host__ double2 rocrand_normal_double2(rocrand_state_mrg31k3p* state)
+__forceinline__ __device__ __host__
+double2 rocrand_normal_double2(rocrand_state_mrg31k3p* state)
 {
     auto state1 = state->next();
     auto state2 = state->next();
@@ -618,7 +624,7 @@ __forceinline__ __device__ __host__ double2 rocrand_normal_double2(rocrand_state
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, returns first of them, and saves the second to be returned on the next call.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
@@ -652,11 +658,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_mrg32k3a*
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_mrg32k3a* state)
+__forceinline__ __device__ __host__
+float2 rocrand_normal2(rocrand_state_mrg32k3a* state)
 {
     auto state1 = state->next();
     auto state2 = state->next();
@@ -674,7 +681,7 @@ __forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_mrg32k3
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, returns first of them, and saves the second to be returned on the next call.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
@@ -709,11 +716,12 @@ __forceinline__ __device__ __host__ double rocrand_normal_double(rocrand_state_m
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p double value as \p double2
  */
-__forceinline__ __device__ __host__ double2 rocrand_normal_double2(rocrand_state_mrg32k3a* state)
+__forceinline__ __device__ __host__
+double2 rocrand_normal_double2(rocrand_state_mrg32k3a* state)
 {
     auto state1 = state->next();
     auto state2 = state->next();
@@ -732,7 +740,7 @@ __forceinline__ __device__ __host__ double2 rocrand_normal_double2(rocrand_state
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, returns first of them, and saves the second to be returned on the next call.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
@@ -763,11 +771,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_xorwow* s
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p float values as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_xorwow* state)
+__forceinline__ __device__ __host__
+float2 rocrand_normal2(rocrand_state_xorwow* state)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -784,7 +793,7 @@ __forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_xorwow*
  * The function uses the Box-Muller transform method to generate two normally distributed
  * values, returns first of them, and saves the second to be returned on the next call.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
@@ -821,11 +830,12 @@ __forceinline__ __device__ __host__ double rocrand_normal_double(rocrand_state_x
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p double value as \p double2
  */
-__forceinline__ __device__ __host__ double2 rocrand_normal_double2(rocrand_state_xorwow* state)
+__forceinline__ __device__ __host__
+double2 rocrand_normal_double2(rocrand_state_xorwow* state)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -845,11 +855,12 @@ __forceinline__ __device__ __host__ double2 rocrand_normal_double2(rocrand_state
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
-__forceinline__ __device__ float rocrand_normal(rocrand_state_mtgp32* state)
+__forceinline__ __device__
+float rocrand_normal(rocrand_state_mtgp32* state)
 {
     return rocrand_device::detail::normal_distribution(rocrand(state));
 }
@@ -864,11 +875,12 @@ __forceinline__ __device__ float rocrand_normal(rocrand_state_mtgp32* state)
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p float values as \p float2
  */
-__forceinline__ __device__ float2 rocrand_normal2(rocrand_state_mtgp32* state)
+__forceinline__ __device__
+float2 rocrand_normal2(rocrand_state_mtgp32* state)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -883,11 +895,12 @@ __forceinline__ __device__ float2 rocrand_normal2(rocrand_state_mtgp32* state)
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
-__forceinline__ __device__ double rocrand_normal_double(rocrand_state_mtgp32* state)
+__forceinline__ __device__
+double rocrand_normal_double(rocrand_state_mtgp32* state)
 {
     return rocrand_device::detail::normal_distribution_double(rocrand(state));
 }
@@ -902,11 +915,12 @@ __forceinline__ __device__ double rocrand_normal_double(rocrand_state_mtgp32* st
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p double value as \p double2
  */
-__forceinline__ __device__ double2 rocrand_normal_double2(rocrand_state_mtgp32* state)
+__forceinline__ __device__
+double2 rocrand_normal_double2(rocrand_state_mtgp32* state)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -925,11 +939,12 @@ __forceinline__ __device__ double2 rocrand_normal_double2(rocrand_state_mtgp32* 
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_sobol32* state)
+__forceinline__ __device__ __host__
+float rocrand_normal(rocrand_state_sobol32* state)
 {
     return rocrand_device::detail::normal_distribution(rocrand(state));
 }
@@ -942,11 +957,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_sobol32* 
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double rocrand_normal_double(rocrand_state_sobol32* state)
+__forceinline__ __device__ __host__
+double rocrand_normal_double(rocrand_state_sobol32* state)
 {
     return rocrand_device::detail::normal_distribution_double(rocrand(state));
 }
@@ -959,11 +975,12 @@ __forceinline__ __device__ __host__ double rocrand_normal_double(rocrand_state_s
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_scrambled_sobol32* state)
+__forceinline__ __device__ __host__
+float rocrand_normal(rocrand_state_scrambled_sobol32* state)
 {
     return rocrand_device::detail::normal_distribution(rocrand(state));
 }
@@ -976,12 +993,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_scrambled
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_normal_double(rocrand_state_scrambled_sobol32* state)
+__forceinline__ __device__ __host__
+double rocrand_normal_double(rocrand_state_scrambled_sobol32* state)
 {
     return rocrand_device::detail::normal_distribution_double(rocrand(state));
 }
@@ -994,11 +1011,12 @@ __forceinline__ __device__ __host__ double
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_sobol64* state)
+__forceinline__ __device__ __host__
+float rocrand_normal(rocrand_state_sobol64* state)
 {
     return rocrand_device::detail::normal_distribution(rocrand(state));
 }
@@ -1011,11 +1029,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_sobol64* 
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double rocrand_normal_double(rocrand_state_sobol64* state)
+__forceinline__ __device__ __host__
+double rocrand_normal_double(rocrand_state_sobol64* state)
 {
     return rocrand_device::detail::normal_distribution_double(rocrand(state));
 }
@@ -1028,11 +1047,12 @@ __forceinline__ __device__ __host__ double rocrand_normal_double(rocrand_state_s
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_scrambled_sobol64* state)
+__forceinline__ __device__ __host__
+float rocrand_normal(rocrand_state_scrambled_sobol64* state)
 {
     return rocrand_device::detail::normal_distribution(rocrand(state));
 }
@@ -1045,12 +1065,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_scrambled
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_normal_double(rocrand_state_scrambled_sobol64* state)
+__forceinline__ __device__ __host__
+double rocrand_normal_double(rocrand_state_scrambled_sobol64* state)
 {
     return rocrand_device::detail::normal_distribution_double(rocrand(state));
 }
@@ -1063,11 +1083,12 @@ __forceinline__ __device__ __host__ double
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_lfsr113* state)
+__forceinline__ __device__ __host__
+float rocrand_normal(rocrand_state_lfsr113* state)
 {
     return rocrand_device::detail::normal_distribution(rocrand(state));
 }
@@ -1082,11 +1103,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_lfsr113* 
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_lfsr113* state)
+__forceinline__ __device__ __host__
+float2 rocrand_normal2(rocrand_state_lfsr113* state)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -1102,11 +1124,12 @@ __forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_lfsr113
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double rocrand_normal_double(rocrand_state_lfsr113* state)
+__forceinline__ __device__ __host__
+double rocrand_normal_double(rocrand_state_lfsr113* state)
 {
     return rocrand_device::detail::normal_distribution_double(rocrand(state));
 }
@@ -1121,11 +1144,12 @@ __forceinline__ __device__ __host__ double rocrand_normal_double(rocrand_state_l
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p double value as \p double2
  */
-__forceinline__ __device__ __host__ double2 rocrand_normal_double2(rocrand_state_lfsr113* state)
+__forceinline__ __device__ __host__
+double2 rocrand_normal_double2(rocrand_state_lfsr113* state)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -1144,11 +1168,12 @@ __forceinline__ __device__ __host__ double2 rocrand_normal_double2(rocrand_state
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_threefry2x32_20* state)
+__forceinline__ __device__ __host__
+float rocrand_normal(rocrand_state_threefry2x32_20* state)
 {
     return rocrand_device::detail::normal_distribution(rocrand(state));
 }
@@ -1163,11 +1188,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_threefry2
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_threefry2x32_20* state)
+__forceinline__ __device__ __host__
+float2 rocrand_normal2(rocrand_state_threefry2x32_20* state)
 {
     return rocrand_device::detail::normal_distribution2(rocrand2(state));
 }
@@ -1180,12 +1206,12 @@ __forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_threefr
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_normal_double(rocrand_state_threefry2x32_20* state)
+__forceinline__ __device__ __host__
+double rocrand_normal_double(rocrand_state_threefry2x32_20* state)
 {
     return rocrand_device::detail::normal_distribution_double(rocrand(state));
 }
@@ -1200,12 +1226,12 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p double value as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_normal_double2(rocrand_state_threefry2x32_20* state)
+__forceinline__ __device__ __host__
+double2 rocrand_normal_double2(rocrand_state_threefry2x32_20* state)
 {
     auto state1 = rocrand2(state);
     auto state2 = rocrand2(state);
@@ -1222,11 +1248,12 @@ __forceinline__ __device__ __host__ double2
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_threefry2x64_20* state)
+__forceinline__ __device__ __host__
+float rocrand_normal(rocrand_state_threefry2x64_20* state)
 {
     return rocrand_device::detail::normal_distribution(rocrand(state));
 }
@@ -1241,11 +1268,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_threefry2
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_threefry2x64_20* state)
+__forceinline__ __device__ __host__
+float2 rocrand_normal2(rocrand_state_threefry2x64_20* state)
 {
     return rocrand_device::detail::normal_distribution2(rocrand(state));
 }
@@ -1258,12 +1286,12 @@ __forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_threefr
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_normal_double(rocrand_state_threefry2x64_20* state)
+__forceinline__ __device__ __host__
+double rocrand_normal_double(rocrand_state_threefry2x64_20* state)
 {
     return rocrand_device::detail::normal_distribution_double(rocrand(state));
 }
@@ -1278,12 +1306,12 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p double value as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_normal_double2(rocrand_state_threefry2x64_20* state)
+__forceinline__ __device__ __host__
+double2 rocrand_normal_double2(rocrand_state_threefry2x64_20* state)
 {
     return rocrand_device::detail::normal_distribution_double2(rocrand2(state));
 }
@@ -1296,11 +1324,12 @@ __forceinline__ __device__ __host__ double2
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_threefry4x32_20* state)
+__forceinline__ __device__ __host__
+float rocrand_normal(rocrand_state_threefry4x32_20* state)
 {
     return rocrand_device::detail::normal_distribution(rocrand(state));
 }
@@ -1315,11 +1344,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_threefry4
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_threefry4x32_20* state)
+__forceinline__ __device__ __host__
+float2 rocrand_normal2(rocrand_state_threefry4x32_20* state)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -1335,12 +1365,12 @@ __forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_threefr
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_normal_double(rocrand_state_threefry4x32_20* state)
+__forceinline__ __device__ __host__
+double rocrand_normal_double(rocrand_state_threefry4x32_20* state)
 {
     return rocrand_device::detail::normal_distribution_double(rocrand(state));
 }
@@ -1355,12 +1385,12 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p double value as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_normal_double2(rocrand_state_threefry4x32_20* state)
+__forceinline__ __device__ __host__
+double2 rocrand_normal_double2(rocrand_state_threefry4x32_20* state)
 {
     return rocrand_device::detail::normal_distribution_double2(rocrand4(state));
 }
@@ -1373,11 +1403,12 @@ __forceinline__ __device__ __host__ double2
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p float value
  */
-__forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_threefry4x64_20* state)
+__forceinline__ __device__ __host__
+float rocrand_normal(rocrand_state_threefry4x64_20* state)
 {
     return rocrand_device::detail::normal_distribution(rocrand(state));
 }
@@ -1392,11 +1423,12 @@ __forceinline__ __device__ __host__ float rocrand_normal(rocrand_state_threefry4
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p float value as \p float2
  */
-__forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_threefry4x64_20* state)
+__forceinline__ __device__ __host__
+float2 rocrand_normal2(rocrand_state_threefry4x64_20* state)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);
@@ -1412,12 +1444,12 @@ __forceinline__ __device__ __host__ float2 rocrand_normal2(rocrand_state_threefr
  * Used normal distribution has mean value equal to 0.0f, and standard deviation
  * equal to 1.0f.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Normally distributed \p double value
  */
-__forceinline__ __device__ __host__ double
-    rocrand_normal_double(rocrand_state_threefry4x64_20* state)
+__forceinline__ __device__ __host__
+double rocrand_normal_double(rocrand_state_threefry4x64_20* state)
 {
     return rocrand_device::detail::normal_distribution_double(rocrand(state));
 }
@@ -1432,12 +1464,12 @@ __forceinline__ __device__ __host__ double
  * The function uses the Box-Muller transform method to generate two normally
  * distributed values, and returns both of them.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Two normally distributed \p double value as \p double2
  */
-__forceinline__ __device__ __host__ double2
-    rocrand_normal_double2(rocrand_state_threefry4x64_20* state)
+__forceinline__ __device__ __host__
+double2 rocrand_normal_double2(rocrand_state_threefry4x64_20* state)
 {
     auto state1 = rocrand(state);
     auto state2 = rocrand(state);

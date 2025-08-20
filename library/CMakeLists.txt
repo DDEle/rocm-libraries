@@ -1,6 +1,6 @@
 # MIT License
 #
-# Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (c) 2022-2025 Advanced Micro Devices, Inc. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -43,36 +43,12 @@ set(rocRAND_HIP_SRCS
     "src/rocrand_mt19937_precomputed.cpp"
     "src/rocrand.cpp")
 
-# When enabled, it defines ROCRAND_ENABLE_INLINE_ASM in rocrand_version.h, which
-# turns on inline asm in rocRAND (for both compiled library and device functions).
-option(ENABLE_INLINE_ASM "Enable inline asm optimisations in rocRAND" ON)
-if(ENABLE_INLINE_ASM)
-    set(
-        rocrand_ENABLE_INLINE_ASM
-        "\n// Enables inline asm optimisations\n"
-        "#if !defined(ROCRAND_ENABLE_INLINE_ASM) && !defined(ROCRAND_DISABLE_INLINE_ASM)\n"
-        "    #define ROCRAND_ENABLE_INLINE_ASM\n"
-        "#endif"
-    )
-    string(REPLACE ";" "" rocrand_ENABLE_INLINE_ASM "${rocrand_ENABLE_INLINE_ASM}")
-endif()
-
 # Configure a header file to pass the rocRAND version
 configure_file(
     "${PROJECT_SOURCE_DIR}/library/include/rocrand/rocrand_version.h.in"
     "${PROJECT_BINARY_DIR}/library/include/rocrand/rocrand_version.h"
     @ONLY
 )
-
-if(BUILD_FILE_REORG_BACKWARD_COMPATIBILITY AND NOT WIN32)
-    rocm_wrap_header_file(
-        rocrand_version.h
-        GUARDS SYMLINK WRAPPER
-        WRAPPER_LOCATIONS include rocrand/include
-        OUTPUT_LOCATIONS library/include library/rocrand/include
-        HEADER_LOCATION include/rocrand
-    )
-endif()
 
 add_library(rocrand ${rocRAND_HIP_SRCS})
 add_library(roc::rocrand ALIAS rocrand)
@@ -110,6 +86,13 @@ endif()
 # This will be removed with upcoming packaging changes.
 target_include_directories(rocrand INTERFACE $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/include/rocrand>)
 
+target_include_directories(
+    rocrand
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/library/include"
+        "${PROJECT_BINARY_DIR}/library/include"
+)
+
 # Build library
 if(HIP_COMPILER STREQUAL "nvcc")
     set_source_files_properties(${rocRAND_HIP_SRCS}
@@ -126,15 +109,15 @@ endif()
 rocm_set_soversion(rocrand ${rocrand_SOVERSION})
 set_target_properties(rocrand
     PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/library"
+        RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/library"
         DEBUG_POSTFIX "-d"
 )
 
 rocm_install(
     TARGETS rocrand
     INCLUDE
-        "${CMAKE_SOURCE_DIR}/library/include"
-        "${CMAKE_BINARY_DIR}/library/include"
+        "${PROJECT_SOURCE_DIR}/library/include"
+        "${PROJECT_BINARY_DIR}/library/include"
 )
 
 set(FORTRAN_SRCS_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/rocrand/src/fortran")
@@ -160,13 +143,6 @@ else()
         NAMESPACE roc::
         DEPENDS PACKAGE hip
         INCLUDE "${CMAKE_CURRENT_BINARY_DIR}/rocrand-fortran-config.cmake"
-    )
-endif()
-
-if(BUILD_FILE_REORG_BACKWARD_COMPATIBILITY AND NOT WIN32)
-    rocm_install(
-        DIRECTORY "${PROJECT_BINARY_DIR}/library/rocrand"
-        DESTINATION "."
     )
 endif()
 

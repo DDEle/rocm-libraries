@@ -1,12 +1,15 @@
 # rocRAND
 
+> [!NOTE]
+> The published rocRAND documentation is available [here](https://rocm.docs.amd.com/projects/rocRAND/en/latest/) in an organized, easy-to-read format, with search and a table of contents. The documentation source files reside in the `docs` folder of this repository. As with all ROCm projects, the documentation is open source. For more information on contributing to the documentation, see [Contribute to ROCm documentation](https://rocm.docs.amd.com/en/latest/contribute/contributing.html).
+
 The rocRAND project provides functions that generate pseudorandom and quasirandom numbers.
 The rocRAND library is implemented in the [HIP](https://github.com/ROCm/HIP)
 programming language and optimized for AMD's latest discrete GPUs. It is designed to run on top
 of AMD's [ROCm](https://rocm.docs.amd.com) runtime, but it also works on CUDA-enabled GPUs.
 
 Prior to ROCm version 5.0, this project included the
-[hipRAND](https://github.com/ROCm/hipRAND.git) wrapper. As of version 5.0, it was
+[hipRAND](https://github.com/ROCm/rocm-libraries/tree/develop/projects/hiprand) wrapper. As of version 5.0, it was
 split into a separate library. As of version 6.0, hipRAND can no longer be built from rocRAND.
 
 ## Supported random number generators
@@ -23,28 +26,6 @@ split into a separate library. As of version 6.0, hipRAND can no longer be built
 * Sobol64
 * Scrambled Sobol64
 * ThreeFry
-
-## Documentation
-
-> [!NOTE]
-> The published rocRAND documentation is available at [rocRAND](https://rocm.docs.amd.com/projects/rocRAND/en/latest/) in an organized, easy-to-read format, with search and a table of contents. The documentation source files reside in the rocRAND/docs folder of this repository. As with all ROCm projects, the documentation is open source. For more information, see [Contribute to ROCm documentation](https://rocm.docs.amd.com/en/latest/contribute/contributing.html).
-
-To build documentation locally, use the following code:
-
-```sh
-# Go to the docs directory
-cd docs
-
-# Install Python dependencies
-python3 -m pip install -r sphinx/requirements.txt
-
-# Build the documentation
-python3 -m sphinx -T -E -b html -d _build/doctrees -D language=en . _build/html
-
-# E.g. serve the HTML docs locally
-cd _build/html
-python3 -m http.server
-```
 
 ## Requirements
 
@@ -83,11 +64,18 @@ dependencies, rather than using the system-installed libraries.
 
 ## Build and install
 
+> [!NOTE]
+> The following clone command downloads all components in the [rocm-libraries](https://github.com/ROCm/rocm-libraries) GitHub repository.
+This is recommended for working with multiple library components, but can take a very long time to
+download. For a shorter download process that only clones the rocRAND library, see the
+[rocRAND installation documentation](https://rocm.docs.amd.com/projects/rocRAND/en/latest/install/installing.html)
+for ROCm 7.0 or later.
+
 ```shell
-git clone https://github.com/ROCm/rocRAND.git
+git clone https://github.com/ROCm/rocm-libraries.git
 
 # Go to rocRAND directory, create and go to build directory
-cd rocRAND; mkdir build; cd build
+cd rocm-libraries/projects/rocrand; mkdir build; cd build
 
 # Configure rocRAND, setup options for your system
 # Build options: BUILD_TEST (off by default), BUILD_BENCHMARK (off by default), BUILD_SHARED_LIBS (on by default)
@@ -125,8 +113,8 @@ We've added initial support for HIP on Windows, which you can install using the 
 script:
 
 ```shell
-git clone https://github.com/ROCm/rocRAND.git
-cd rocRAND
+git clone https://github.com/ROCm/rocm-libraries.git
+cd rocm-libraries/projects/rocrand
 
 # the -i option will install rocPRIM to C:\hipSDK by default
 python rmake.py -i
@@ -140,15 +128,11 @@ compilers) may cause a build failure; if you encounter errors with the existing 
 other dependencies, you can pass the `DEPENDENCIES_FORCE_DOWNLOAD` flag to CMake, which can
 help to solve the problem.
 
-To disable inline assembly optimizations in rocRAND (for both the host library and
-the device functions provided in `rocrand_kernel.h`), set the CMake option `ENABLE_INLINE_ASM`
-to `OFF`.
-
 ## Running unit tests
 
 ```shell
 # Go to rocRAND build directory
-cd rocRAND; cd build
+cd rocm-libraries/projects/rocrand; cd build
 
 # To run all tests
 ctest
@@ -161,7 +145,7 @@ ctest
 
 ```shell
 # Go to rocRAND build directory
-cd rocRAND; cd build
+cd rocm-libraries/projects/rocrand; cd build
 
 # To run benchmark for the host generate functions:
 # The benchmarks are registered with Google Benchmark as `device_generate<engine,distribution>`, where
@@ -225,10 +209,62 @@ been migrated to the new framework.
 * [Fortran wrappers](./library/src/fortran/).
 * [Python wrappers](./python/): [rocRAND](./python/rocrand).
 
+## Building the documentation locally
+
+### Requirements
+
+#### Doxygen
+
+The build system uses Doxygen [version 1.9.4](https://github.com/doxygen/doxygen/releases/tag/Release_1_9_4). You can try using a newer version, but that might cause issues.
+
+After you have downloaded Doxygen version 1.9.4:
+
+```shell
+# Add doxygen to your PATH
+echo 'export PATH=<doxygen 1.9.4 path>/bin:$PATH' >> ~/.bashrc
+
+# Apply the updated .bashrc
+source ~/.bashrc
+
+# Confirm that you are using version 1.9.4
+doxygen --version
+```
+
+#### Python
+
+The build system uses Python version 3.10. You can try using a newer version, but that might cause issues.
+
+You can install Python 3.10 alongside your other Python versions using [pyenv](https://github.com/pyenv/pyenv?tab=readme-ov-file#installation):
+
+```shell
+# Install Python 3.10
+pyenv install 3.10
+
+# Create a Python 3.10 virtual environment
+pyenv virtualenv 3.10 venv_rocrand
+
+# Activate the virtual environment
+pyenv activate venv_rocrand
+```
+
+### Building
+
+After cloning this repository, and `cd`ing into it:
+
+```shell
+# Install Python dependencies
+python3 -m pip install -r docs/sphinx/requirements.txt
+
+# Build the documentation
+python3 -m sphinx -T -E -b html -d docs/_build/doctrees -D language=en docs docs/_build/html
+```
+
+You can then open `docs/_build/html/index.html` in your browser to view the documentation.
+
 ## Support
 
 Bugs and feature requests can be reported through the
-[issue tracker](https://github.com/ROCm/rocRAND/issues).
+[issue tracker](https://github.com/ROCm/rocm-libraries/issues).
 
 ## Contributions and license
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2022-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2022-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -53,8 +53,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef ROCRAND_THREEFRY4_IMPL_H_
 #define ROCRAND_THREEFRY4_IMPL_H_
 
+#include "rocrand/rocrand_common.h"
 #include "rocrand/rocrand_threefry_common.h"
-#include <rocrand/rocrand_common.h>
+
+#include <hip/hip_runtime.h>
 
 #ifndef THREEFRY4x32_DEFAULT_ROUNDS
     #define THREEFRY4x32_DEFAULT_ROUNDS 20
@@ -151,7 +153,7 @@ public:
     __forceinline__ __device__ __host__ value next()
     {
 #if defined(__HIP_PLATFORM_AMD__)
-        value ret = m_state.result.data[m_state.substate];
+        value ret = ROCRAND_HIPVEC_ACCESS(m_state.result)[m_state.substate];
 #else
         value ret = (&m_state.result.x)[m_state.substate];
 #endif

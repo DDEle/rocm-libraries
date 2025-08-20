@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2017-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -55,12 +55,14 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "rocrand/rocrand_common.h"
 
+#include <hip/hip_runtime.h>
+
 // Constants from Random123
 // See https://www.deshawresearch.com/resources_random123.html
 #define ROCRAND_PHILOX_M4x32_0 0xD2511F53U
 #define ROCRAND_PHILOX_M4x32_1 0xCD9E8D57U
-#define ROCRAND_PHILOX_W32_0   0x9E3779B9U
-#define ROCRAND_PHILOX_W32_1   0xBB67AE85U
+#define ROCRAND_PHILOX_W32_0 0x9E3779B9U
+#define ROCRAND_PHILOX_W32_1 0xBB67AE85U
 
 /** \rocrand_internal \addtogroup rocranddevice
  *
@@ -73,18 +75,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define ROCRAND_PHILOX4x32_DEFAULT_SEED 0xdeadbeefdeadbeefULL
 /** @} */ // end of group rocranddevice
 
-namespace rocrand_device {
-namespace detail {
-
-__forceinline__ __device__ __host__ unsigned int
-    mulhilo32(unsigned int x, unsigned int y, unsigned int& z)
+namespace rocrand_device
 {
-    unsigned long long xy = mad_u64_u32(x, y, 0);
-    z = static_cast<unsigned int>(xy >> 32);
-    return static_cast<unsigned int>(xy);
-}
-
-} // end detail namespace
 
 class philox4x32_10_engine
 {
@@ -180,10 +172,11 @@ public:
     __forceinline__ __device__ __host__ unsigned int next()
     {
     #if defined(__HIP_PLATFORM_AMD__)
-        unsigned int ret = m_state.result.data[m_state.substate];
+        unsigned int ret = ROCRAND_HIPVEC_ACCESS(m_state.result)[m_state.substate];
     #else
         unsigned int ret = (&m_state.result.x)[m_state.substate];
     #endif
+
         m_state.substate++;
         if(m_state.substate == 4)
         {
@@ -295,16 +288,13 @@ private:
     __forceinline__ __device__ __host__ static uint4 single_round(uint4 counter, uint2 key)
     {
         // Source: Random123
-        unsigned int hi0;
-        unsigned int hi1;
-        unsigned int lo0 = detail::mulhilo32(ROCRAND_PHILOX_M4x32_0, counter.x, hi0);
-        unsigned int lo1 = detail::mulhilo32(ROCRAND_PHILOX_M4x32_1, counter.z, hi1);
-        return uint4 {
-            hi1 ^ counter.y ^ key.x,
-            lo1,
-            hi0 ^ counter.w ^ key.y,
-            lo0
-        };
+        unsigned long long mul0 = detail::mul_u64_u32(ROCRAND_PHILOX_M4x32_0, counter.x);
+        unsigned int       hi0  = static_cast<unsigned int>(mul0 >> 32);
+        unsigned int       lo0  = static_cast<unsigned int>(mul0);
+        unsigned long long mul1 = detail::mul_u64_u32(ROCRAND_PHILOX_M4x32_1, counter.z);
+        unsigned int       hi1  = static_cast<unsigned int>(mul1 >> 32);
+        unsigned int       lo1  = static_cast<unsigned int>(mul1);
+        return uint4{hi1 ^ counter.y ^ key.x, lo1, hi0 ^ counter.w ^ key.y, lo0};
     }
 
     __forceinline__ __device__ __host__ static uint2 bumpkey(uint2 key)
@@ -341,15 +331,16 @@ typedef rocrand_device::philox4x32_10_engine rocrand_state_philox4x32_10;
  * Initializes the Philox generator \p state with the given
  * \p seed, \p subsequence, and \p offset.
  *
- * \param seed - Value to use as a seed
- * \param subsequence - Subsequence to start at
- * \param offset - Absolute offset into subsequence
- * \param state - Pointer to state to initialize
+ * \param seed Value to use as a seed
+ * \param subsequence Subsequence to start at
+ * \param offset Absolute offset into subsequence
+ * \param state Pointer to state to initialize
  */
-__forceinline__ __device__ __host__ void rocrand_init(const unsigned long long     seed,
-                                                      const unsigned long long     subsequence,
-                                                      const unsigned long long     offset,
-                                                      rocrand_state_philox4x32_10* state)
+__forceinline__ __device__ __host__
+void rocrand_init(const unsigned long long     seed,
+                  const unsigned long long     subsequence,
+                  const unsigned long long     offset,
+                  rocrand_state_philox4x32_10* state)
 {
     *state = rocrand_state_philox4x32_10(seed, subsequence, offset);
 }
@@ -362,11 +353,12 @@ __forceinline__ __device__ __host__ void rocrand_init(const unsigned long long  
  * value from [0; 2^32 - 1] range using Philox generator in \p state.
  * State is incremented by one position.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Pseudorandom value (32-bit) as an <tt>unsigned int</tt>
  */
-__forceinline__ __device__ __host__ unsigned int rocrand(rocrand_state_philox4x32_10* state)
+__forceinline__ __device__ __host__
+unsigned int rocrand(rocrand_state_philox4x32_10* state)
 {
     return state->next();
 }
@@ -379,11 +371,12 @@ __forceinline__ __device__ __host__ unsigned int rocrand(rocrand_state_philox4x3
  * values from [0; 2^32 - 1] range using Philox generator in \p state.
  * State is incremented by four positions.
  *
- * \param state - Pointer to a state to use
+ * \param state Pointer to a state to use
  *
  * \return Four pseudorandom values (32-bit) as an <tt>uint4</tt>
  */
-__forceinline__ __device__ __host__ uint4 rocrand4(rocrand_state_philox4x32_10* state)
+__forceinline__ __device__ __host__
+uint4 rocrand4(rocrand_state_philox4x32_10* state)
 {
     return state->next4();
 }
@@ -393,11 +386,11 @@ __forceinline__ __device__ __host__ uint4 rocrand4(rocrand_state_philox4x32_10* 
  *
  * Updates the Philox generator state in \p state to skip ahead by \p offset elements.
  *
- * \param offset - Number of elements to skip
- * \param state - Pointer to state to update
+ * \param offset Number of elements to skip
+ * \param state Pointer to state to update
  */
-__forceinline__ __device__ __host__ void skipahead(unsigned long long           offset,
-                                                   rocrand_state_philox4x32_10* state)
+__forceinline__ __device__ __host__
+void skipahead(unsigned long long offset, rocrand_state_philox4x32_10* state)
 {
     return state->discard(offset);
 }
@@ -408,11 +401,11 @@ __forceinline__ __device__ __host__ void skipahead(unsigned long long           
  * Updates the Philox generator state in \p state to skip ahead by \p subsequence subsequences.
  * Each subsequence is 4 * 2^64 numbers long.
  *
- * \param subsequence - Number of subsequences to skip
- * \param state - Pointer to state to update
+ * \param subsequence Number of subsequences to skip
+ * \param state Pointer to state to update
  */
-__forceinline__ __device__ __host__ void skipahead_subsequence(unsigned long long subsequence,
-                                                               rocrand_state_philox4x32_10* state)
+__forceinline__ __device__ __host__
+void skipahead_subsequence(unsigned long long subsequence, rocrand_state_philox4x32_10* state)
 {
     return state->discard_subsequence(subsequence);
 }
@@ -423,15 +416,15 @@ __forceinline__ __device__ __host__ void skipahead_subsequence(unsigned long lon
  * Updates the Philox generator state in \p state skipping \p sequence sequences ahead.
  * For Philox each sequence is 4 * 2^64 numbers long (equal to the size of a subsequence).
  *
- * \param sequence - Number of sequences to skip
- * \param state - Pointer to state to update
+ * \param sequence Number of sequences to skip
+ * \param state Pointer to state to update
  */
-__forceinline__ __device__ __host__ void skipahead_sequence(unsigned long long           sequence,
-                                                            rocrand_state_philox4x32_10* state)
+__forceinline__ __device__ __host__
+void skipahead_sequence(unsigned long long sequence, rocrand_state_philox4x32_10* state)
 {
     return state->discard_subsequence(sequence);
 }
 
-#endif // ROCRAND_PHILOX4X32_10_H_
-
 /** @} */ // end of group rocranddevice
+
+#endif // ROCRAND_PHILOX4X32_10_H_

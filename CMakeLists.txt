@@ -124,11 +124,12 @@ if(GPU_TARGETS STREQUAL "all")
   if(BUILD_ADDRESS_SANITIZER)
     # ASAN builds require xnack
     rocm_check_target_ids(DEFAULT_AMDGPU_TARGETS
-      TARGETS "gfx908:xnack+;gfx90a:xnack+;gfx942:xnack+"
+      TARGETS "gfx908:xnack+;gfx90a:xnack+;gfx942:xnack+;gfx950:xnack+"
     )
   else()
     rocm_check_target_ids(DEFAULT_AMDGPU_TARGETS
-      TARGETS "gfx803;gfx900:xnack-;gfx906:xnack-;gfx908:xnack-;gfx90a:xnack-;gfx90a:xnack+;gfx940;gfx941;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1151;gfx1200;gfx1201;gfx1250"
+      TARGETS "gfx803;gfx900:xnack-;gfx906:xnack-;gfx908:xnack-;gfx90a:xnack-;gfx90a:xnack+;gfx942;gfx950;gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201;gfx1151"
+
     )
   endif()
 
@@ -142,7 +143,9 @@ include(cmake/VerifyCompiler.cmake)
 option(DISABLE_WERROR "Disable building with Werror" ON)
 
 # Build CXX flags
-set(CMAKE_CXX_STANDARD 11)
+if (NOT DEFINED CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 17)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 if(DISABLE_WERROR)
@@ -152,6 +155,12 @@ else()
 endif()
 if(CODE_COVERAGE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-instr-generate -fcoverage-mapping")
+endif()
+
+if (CMAKE_CXX_STANDARD EQUAL 14)
+  message(WARNING "C++14 will be deprecated in the next major release")
+elseif(NOT CMAKE_CXX_STANDARD EQUAL 17)
+  message(FATAL_ERROR "Only C++14 and C++17 are supported")
 endif()
 
 # HIP on Windows: xhip is required with clang++ to get __half defined
@@ -169,21 +178,8 @@ if(BUILD_ADDRESS_SANITIZER AND BUILD_SHARED_LIBS)
   add_link_options(-fuse-ld=lld)
 endif()
 
-# FOR HANDLING ENABLE/DISABLE OPTIONAL BACKWARD COMPATIBILITY for FILE/FOLDER REORG
-option(BUILD_FILE_REORG_BACKWARD_COMPATIBILITY "Build with file/folder reorg with backward compatibility enabled" OFF)
-if(BUILD_FILE_REORG_BACKWARD_COMPATIBILITY AND NOT WIN32)
-  rocm_wrap_header_dir(
-    "${PROJECT_SOURCE_DIR}/library/include/rocrand"
-    HEADER_LOCATION include/rocrand
-    GUARDS SYMLINK WRAPPER
-    WRAPPER_LOCATIONS include rocrand/include
-    OUTPUT_LOCATIONS library/include library/rocrand/include
-    PATTERNS *.h *.hpp
-  )
-endif()
-
 # Set version variables
-rocm_setup_version( VERSION "3.3.0" )
+rocm_setup_version( VERSION "4.0.0" )
 set ( rocrand_VERSION ${rocRAND_VERSION} )
 # Old-style version number used within the library's API. rocrand_get_version should be modified.
 math(EXPR rocrand_VERSION_NUMBER "${rocRAND_VERSION_MAJOR} * 100000 + ${rocRAND_VERSION_MINOR} * 100 + ${rocRAND_VERSION_PATCH}")
@@ -243,7 +239,7 @@ set(ROCRAND_CONFIG_DIR "\${CPACK_PACKAGING_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDI
 
 rocm_create_package(
     NAME ${package_name}
-    DESCRIPTION "Radeon Open Compute RAND library"
+    DESCRIPTION "rocRAND is a ROCm random number generation library"
     MAINTAINER "rocRAND Maintainer <hiprand-maintainer@amd.com>"
     LDCONFIG
     # LDCONFIG_DIR ${ROCRAND_CONFIG_DIR}

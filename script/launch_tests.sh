@@ -16,6 +16,18 @@ if [ -z "$BUILD_NINJA_FILE" ]; then
     exit 1
 fi
 
+# Get the list of files from git diff
+file_path = "diff.txt"
+
+try:
+    with open(file_path, 'r', encoding='utf-8') as file:
+content = file.read()
+        print(content)
+except FileNotFoundError:
+    print(f"Error: The file '{file_path}' was not found.")
+except Exception as e:
+    print(f"An error occurred: {e}")
+
 python3 "$SCRIPT_DIR/dependency-parser/main.py" parse "$BUILD_NINJA_FILE" --workspace-root "$PACKAGE_HOME"
 
 # Get the directory containing build.ninja

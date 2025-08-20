@@ -41,13 +41,12 @@ endif()
 # hipRAND project
 #
 project(hipRAND CXX)
-set(hipRAND_VERSION "2.11.0")
+set(hipRAND_VERSION "3.0.0")
 
 # Build options
 option(BUILD_ADDRESS_SANITIZER "Build with address sanitizer enabled" OFF)
 option(BUILD_BENCHMARK "Build benchmarks" OFF)
 option(BUILD_CODE_COVERAGE "Build with code coverage enabled" OFF)
-option(BUILD_FILE_REORG_BACKWARD_COMPATIBILITY "Build with file/folder reorg with backward compatibility enabled" OFF)
 option(BUILD_FORTRAN_WRAPPER "Build Fortran wrapper" OFF)
 option(BUILD_TEST "Build tests (requires googletest)" OFF)
 option(DEPENDENCIES_FORCE_DOWNLOAD "Do not use system installed dependencies, always download and build them" OFF)
@@ -107,7 +106,7 @@ if (NOT BUILD_WITH_LIB STREQUAL "CUDA")
 
   if(GPU_TARGETS STREQUAL "all")
     rocm_check_target_ids(DEFAULT_AMDGPU_TARGETS
-      TARGETS "gfx803;gfx900:xnack-;gfx906:xnack-;gfx908:xnack-;gfx90a:xnack-;gfx90a:xnack+;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1151;gfx1200;gfx1201;gfx1250"
+      TARGETS "gfx803;gfx900:xnack-;gfx906:xnack-;gfx908:xnack-;gfx90a:xnack-;gfx90a:xnack+;gfx942;gfx950;gfx1030;gfx1100;gfx1101;gfx1102;gfx1151;gfx1200;gfx1201;gfx1250"
     )
     set(GPU_TARGETS "${DEFAULT_AMDGPU_TARGETS}" CACHE STRING "GPU architectures to compile for" FORCE)
   endif()
@@ -128,13 +127,21 @@ endif()
 include(cmake/Dependencies.cmake)
 
 # Build CXX flags
-set(CMAKE_CXX_STANDARD 11)
+if (NOT DEFINED CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 17)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 if(DISABLE_WERROR)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
 else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
+endif()
+
+if (CMAKE_CXX_STANDARD EQUAL 14)
+  message(WARNING "C++14 will be deprecated in the next major release")
+elseif(NOT CMAKE_CXX_STANDARD EQUAL 17)
+  message(FATAL_ERROR "Only C++14 and C++17 are supported")
 endif()
 
 # HIP on Windows: xhip is required with clang++ to get __half defined
@@ -215,7 +222,7 @@ endif()
 
 rocm_create_package(
         NAME ${package_name}
-        DESCRIPTION "Radeon Open Compute RAND library"
+        DESCRIPTION "A GPU-based random number generation library, written in HIP"
         MAINTAINER "hipRAND Maintainer <hiprand-maintainer@amd.com>"
         LDCONFIG
         LDCONFIG_DIR ${HIPRAND_CONFIG_DIR}

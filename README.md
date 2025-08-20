@@ -1,34 +1,15 @@
 # hipRAND
 
+> [!NOTE]
+> The published hipRAND documentation is available [here](https://rocm.docs.amd.com/projects/hipRAND/en/latest/) in an organized, easy-to-read format, with search and a table of contents. The documentation source files reside in the `docs` folder of this repository. As with all ROCm projects, the documentation is open source. For more information on contributing to the documentation, see [Contribute to ROCm documentation](https://rocm.docs.amd.com/en/latest/contribute/contributing.html).
+
 hipRAND is a RAND marshalling library with multiple supported backends. It sits between your
 application and the backend RAND library, where it marshals inputs to the backend and results to the
 application. hipRAND exports an interface that doesn't require the client to change, regardless of the
 chosen backend.
 
-hipRAND supports [rocRAND](https://github.com/ROCm/rocRAND) and
+hipRAND supports [rocRAND](https://github.com/ROCm/rocm-libraries/tree/develop/projects/rocrand) and
 [NVIDIA CUDA cuRAND](https://developer.nvidia.com/curand).
-
-> [!NOTE]
-> The published hipRAND documentation is available at [hipRAND](https://rocm.docs.amd.com/projects/hipRAND/en/latest/index.html) in an organized, easy-to-read format, with search and a table of contents. The documentation source files reside in the hipRAND/docs folder of this repository. As with all ROCm projects, the documentation is open source. For more information, see [Contribute to ROCm documentation](https://rocm.docs.amd.com/en/latest/contribute/contributing.html).
-
-## Documentation
-
-To build our documentation, use the following commands:
-
-```bash
-# Go to hipRAND docs directory
-cd hipRAND; cd docs
-
-# Install Python dependencies
-python3 -m pip install -r sphinx/requirements.txt
-
-# Build the documentation
-python3 -m sphinx -T -E -b html -d _build/doctrees -D language=en . _build/html
-
-# E.g. serve the HTML docs locally
-cd _build/html
-python3 -m http.server
-```
 
 ## Requirements
 
@@ -56,7 +37,7 @@ supported platforms):
 
 * Bash helper build script:
 
-  The helper script `install` is located in the root repository. Note that this method doesn't take many
+  The helper script `install` is located in the root of the `projects/hiprand` folder. Note that this method doesn't take many
   options and hard-codes a configuration that you can specify by invoking CMake directly.
 
   A few commands in the script need sudo access, so it may prompt you for a password.
@@ -67,15 +48,9 @@ supported platforms):
 
 * Manual build:
 
-  If you use a distribution other than Ubuntu, or want more control over the build process, the
-  [hipRAND build wiki](https://github.com/ROCm/hipRAND/wiki/Build) has helpful
-  information on how to configure CMake and build manually.
+  For information on cloning and building the hipRAND library, see the
+  [hipRAND installation documentation](https://rocm.docs.amd.com/projects/hipRAND/en/latest/install/installation.html) for version 7.0 or later. It has helpful information on how to configure CMake and build manually.
 
-### Supported functions
-
-You can find a list of
-[exported functions](https://github.com/ROCm/hipRAND/wiki/Exported-functions) on
-the wiki.
 
 ## Interface examples
 
@@ -106,3 +81,55 @@ hiprand_log_normal_double(
   double stddev
 )
 ```
+
+## Building the documentation locally
+
+### Requirements
+
+#### Doxygen
+
+The build system uses Doxygen [version 1.9.4](https://github.com/doxygen/doxygen/releases/tag/Release_1_9_4). You can try using a newer version, but that might cause issues.
+
+After you have downloaded Doxygen version 1.9.4:
+
+```shell
+# Add doxygen to your PATH
+echo 'export PATH=<doxygen 1.9.4 path>/bin:$PATH' >> ~/.bashrc
+
+# Apply the updated .bashrc
+source ~/.bashrc
+
+# Confirm that you are using version 1.9.4
+doxygen --version
+```
+
+#### Python
+
+The build system uses Python version 3.10. You can try using a newer version, but that might cause issues.
+
+You can install Python 3.10 alongside your other Python versions using [pyenv](https://github.com/pyenv/pyenv?tab=readme-ov-file#installation):
+
+```shell
+# Install Python 3.10
+pyenv install 3.10
+
+# Create a Python 3.10 virtual environment
+pyenv virtualenv 3.10 venv_hiprand
+
+# Activate the virtual environment
+pyenv activate venv_hiprand
+```
+
+### Building
+
+After cloning this repository and navigating into its directory:
+
+```shell
+# Install Python dependencies
+python3 -m pip install -r docs/sphinx/requirements.txt
+
+# Build the documentation
+python3 -m sphinx -T -E -b html -d docs/_build/doctrees -D language=en docs docs/_build/html
+```
+
+You can then open `docs/_build/html/index.html` in your browser to view the documentation.

@@ -60,13 +60,10 @@ __device__ uint32_t pseudo_random_device(size_t idx)
     auto s = idx * 1664525 + 1013904223;
     // Run a few extra iterations to make the generators diverge
     // in case the seeds are still poor (consecutive ints)
-    for(int i = 0; i < 3; i++)
-    {
-        // Marsaglia, G. (2003). "Xorshift RNGs". Journal of Statistical Software. 8 (14). doi:10.18637/jss.v008.i14
-        s ^= s << 13;
-        s ^= s >> 17;
-        s ^= s << 5;
-    }
+    // Marsaglia, G. (2003). "Xorshift RNGs". Journal of Statistical Software. 8 (14). doi:10.18637/jss.v008.i14
+    s ^= (s << 13) ^ ( s >> 17) ^ (s << 5);
+    s ^= (s << 13) ^ ( s >> 17) ^ (s << 5);
+    s ^= (s << 13) ^ ( s >> 17) ^ (s << 5);
     return s;
 }
 

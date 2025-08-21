@@ -371,6 +371,9 @@ def cmake_build(Map conf=[:]){
 
     echo cmd
 
+    sh "git fetch origin"
+    sh "git diff --name-only origin HEAD > diff.txt"
+
     dir("build"){
         //build CK
         sh cmd

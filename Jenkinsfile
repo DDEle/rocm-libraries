@@ -391,7 +391,7 @@ def cmake_build(Map conf=[:]){
                     if (!runAllUnitTests){
                         withCredentials([gitUsernamePassword(credentialsId: "${ck_git_creds}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel')]) {
                             sh "git fetch origin develop"
-                            sh "git diff --name-only origin/develop HEAD > diff.txt"
+                            sh "git diff --name-only FETCH_HEAD HEAD > diff.txt"
                             sh "../script/launch_tests.sh"
                         }
                     }
@@ -415,7 +415,7 @@ def cmake_build(Map conf=[:]){
                     if (!runAllUnitTests){
                         withCredentials([gitUsernamePassword(credentialsId: "${ck_git_creds}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel')]) {
                             sh "git fetch origin develop"
-                            sh "git diff --name-only origin/develop HEAD > diff.txt"
+                            sh "git diff --name-only FETCH_HEAD HEAD > diff.txt"
                             sh "../script/launch_tests.sh"
                         }
                     }

@@ -389,7 +389,11 @@ def cmake_build(Map conf=[:]){
                 // do not run unit tests when building instances only
                 if(!params.BUILD_INSTANCES_ONLY){
                     if (!runAllUnitTests){
-                        sh "../script/launch_tests.sh"
+                        withCredentials([gitUsernamePassword(credentialsId: "${ck_git_creds}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel')]) {
+                            //sh "git fetch origin develop"
+                            //sh "git diff --name-only FETCH_HEAD HEAD > diff.txt"
+                            sh "../script/launch_tests.sh"
+                        }
                     }
                     else{
                         sh "ninja check"
@@ -409,7 +413,11 @@ def cmake_build(Map conf=[:]){
                 // run unit tests unless building library for all targets
                 if (!params.BUILD_INSTANCES_ONLY){
                     if (!runAllUnitTests){
-                        sh "../script/launch_tests.sh"
+                        withCredentials([gitUsernamePassword(credentialsId: "${ck_git_creds}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel')]) {
+                            //sh "git fetch origin develop"
+                            //sh "git diff --name-only FETCH_HEAD HEAD > diff.txt"
+                            sh "../script/launch_tests.sh"
+                        }
                     }
                     else{
                         sh "ninja check"
@@ -475,7 +483,7 @@ def buildHipClangJob(Map conf=[:]){
         def retimage
         (retimage, image) = getDockerImage(conf)
 
-        gitStatusWrapper(credentialsId: "${env.ck_git_creds}", gitHubContext: "Jenkins - ${variant}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel') {
+        gitStatusWrapper(credentialsId: "${ck_git_creds}", gitHubContext: "Jenkins - ${variant}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel') {
             withDockerContainer(image: image, args: dockerOpts + ' -v=/var/jenkins/:/var/jenkins') {
                 timeout(time: 20, unit: 'HOURS')
                 {
@@ -537,7 +545,7 @@ def Build_CK(Map conf=[:]){
         def image
         def retimage
 
-        gitStatusWrapper(credentialsId: "${env.ck_git_creds}", gitHubContext: "Jenkins - ${variant}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel') {
+        gitStatusWrapper(credentialsId: "${ck_git_creds}", gitHubContext: "Jenkins - ${variant}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel') {
             try {
                 (retimage, image) = getDockerImage(conf)
                 withDockerContainer(image: image, args: dockerOpts) {
@@ -698,7 +706,7 @@ def process_results(Map conf=[:]){
     def variant = env.STAGE_NAME
     def retimage
 
-    gitStatusWrapper(credentialsId: "${env.ck_git_creds}", gitHubContext: "Jenkins - ${variant}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel') {
+    gitStatusWrapper(credentialsId: "${ck_git_creds}", gitHubContext: "Jenkins - ${variant}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel') {
         try
         {
             echo "Pulling image: ${image}"
@@ -771,7 +779,7 @@ def run_aiter_tests(Map conf=[:]){
     dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
     echo "Docker flags: ${dockerOpts}"
 
-    gitStatusWrapper(credentialsId: "${env.ck_git_creds}", gitHubContext: "Jenkins - ${variant}", account: 'ROCm', repo: 'composable_kernel') {
+    gitStatusWrapper(credentialsId: "${ck_git_creds}", gitHubContext: "Jenkins - ${variant}", account: 'ROCm', repo: 'composable_kernel') {
         try
         {
             echo "Pulling image: ${image}"

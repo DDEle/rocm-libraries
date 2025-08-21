@@ -389,7 +389,8 @@ def cmake_build(Map conf=[:]){
                 // do not run unit tests when building instances only
                 if(!params.BUILD_INSTANCES_ONLY){
                     if (!runAllUnitTests){
-                        sh "git diff --name-only origin HEAD > diff.txt"
+                        sh "git fetch origin develop"
+                        sh "git diff --name-only origin/develop HEAD > diff.txt"
                         sh "../script/launch_tests.sh"
                     }
                     else{
@@ -410,7 +411,8 @@ def cmake_build(Map conf=[:]){
                 // run unit tests unless building library for all targets
                 if (!params.BUILD_INSTANCES_ONLY){
                     if (!runAllUnitTests){
-                        sh "git diff --name-only origin HEAD > diff.txt"
+                        sh "git fetch origin develop"
+                        sh "git diff --name-only origin/develop HEAD > diff.txt"
                         sh "../script/launch_tests.sh"
                     }
                     else{

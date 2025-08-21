@@ -371,7 +371,7 @@ def cmake_build(Map conf=[:]){
 
     echo cmd
 
-    gitStatusWrapper(credentialsId: "${ck_git_creds}", gitHubContext: "Jenkins - ${variant}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel') {
+    withCredentials([gitUsernamePassword(credentialsId: "${ck_git_creds}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel')]) {
         sh "git fetch origin"
         sh "git diff --name-only origin HEAD > diff.txt"
     }

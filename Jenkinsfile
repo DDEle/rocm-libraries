@@ -389,7 +389,11 @@ def cmake_build(Map conf=[:]){
                 // do not run unit tests when building instances only
                 if(!params.BUILD_INSTANCES_ONLY){
                     if (!runAllUnitTests){
-                        sh "../script/launch_tests.sh"
+                        withCredentials([gitUsernamePassword(credentialsId: "${ck_git_creds}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel')]) {
+                            //sh "git fetch origin develop"
+                            //sh "git diff --name-only FETCH_HEAD HEAD > diff.txt"
+                            sh "../script/launch_tests.sh"
+                        }
                     }
                     else{
                         sh "ninja check"
@@ -409,7 +413,11 @@ def cmake_build(Map conf=[:]){
                 // run unit tests unless building library for all targets
                 if (!params.BUILD_INSTANCES_ONLY){
                     if (!runAllUnitTests){
-                        sh "../script/launch_tests.sh"
+                        withCredentials([gitUsernamePassword(credentialsId: "${ck_git_creds}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel')]) {
+                            //sh "git fetch origin develop"
+                            //sh "git diff --name-only FETCH_HEAD HEAD > diff.txt"
+                            sh "../script/launch_tests.sh"
+                        }
                     }
                     else{
                         sh "ninja check"

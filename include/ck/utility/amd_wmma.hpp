@@ -565,5 +565,101 @@ struct intrin_wmma_i32_16x16x64_iu8<16, 16, neg_a, neg_b>
     }
 };
 
+template <index_t MPerWave, index_t NPerWave>
+struct intrin_wmma_f32_16x16x64_f8f8_w32;
+template <>
+struct intrin_wmma_f32_16x16x64_f8f8_w32<16, 16>
+{
+    template <class FloatC>
+    __device__ static void Run(const f8x32_t& reg_a, const f8x32_t& reg_b, FloatC& reg_c)
+    {
+#if defined(__gfx125__)
+        reg_c.template AsType<float8_t>()(Number<0>{}) = __builtin_amdgcn_wmma_f32_16x16x64_fp8_fp8(
+            bit_cast<int32x8_t>(reg_a),
+            bit_cast<int32x8_t>(reg_b),
+            0,
+            reg_c.template AsType<float8_t>()[Number<0>{}],
+            false,
+            false);
+#else
+        ignore = reg_a;
+        ignore = reg_b;
+        ignore = reg_c;
+#endif
+    }
+};
+
+template <index_t MPerWave, index_t NPerWave>
+struct intrin_wmma_f32_16x16x64_f8bf8_w32;
+template <>
+struct intrin_wmma_f32_16x16x64_f8bf8_w32<16, 16>
+{
+    template <class FloatC>
+    __device__ static void Run(const f8x32_t& reg_a, const bf8x32_t& reg_b, FloatC& reg_c)
+    {
+#if defined(__gfx125__)
+        reg_c.template AsType<float8_t>()(Number<0>{}) = __builtin_amdgcn_wmma_f32_16x16x64_fp8_bf8(
+            bit_cast<int32x8_t>(reg_a),
+            bit_cast<int32x8_t>(reg_b),
+            0,
+            reg_c.template AsType<float8_t>()[Number<0>{}],
+            false,
+            false);
+#else
+        ignore = reg_a;
+        ignore = reg_b;
+        ignore = reg_c;
+#endif
+    }
+};
+
+template <index_t MPerWave, index_t NPerWave>
+struct intrin_wmma_f32_16x16x64_bf8f8_w32;
+template <>
+struct intrin_wmma_f32_16x16x64_bf8f8_w32<16, 16>
+{
+    template <class FloatC>
+    __device__ static void Run(const bf8x32_t& reg_a, const f8x32_t& reg_b, FloatC& reg_c)
+    {
+#if defined(__gfx125__)
+        reg_c.template AsType<float8_t>()(Number<0>{}) = __builtin_amdgcn_wmma_f32_16x16x64_bf8_fp8(
+            bit_cast<int32x8_t>(reg_a),
+            bit_cast<int32x8_t>(reg_b),
+            0,
+            reg_c.template AsType<float8_t>()[Number<0>{}],
+            false,
+            false);
+#else
+        ignore = reg_a;
+        ignore = reg_b;
+        ignore = reg_c;
+#endif
+    }
+};
+
+template <index_t MPerWave, index_t NPerWave>
+struct intrin_wmma_f32_16x16x64_bf8bf8_w32;
+template <>
+struct intrin_wmma_f32_16x16x64_bf8bf8_w32<16, 16>
+{
+    template <class FloatC>
+    __device__ static void Run(const bf8x32_t& reg_a, const bf8x32_t& reg_b, FloatC& reg_c)
+    {
+#if defined(__gfx125__)
+        reg_c.template AsType<float8_t>()(Number<0>{}) = __builtin_amdgcn_wmma_f32_16x16x64_bf8_bf8(
+            bit_cast<int32x8_t>(reg_a),
+            bit_cast<int32x8_t>(reg_b),
+            0,
+            reg_c.template AsType<float8_t>()[Number<0>{}],
+            false,
+            false);
+#else
+        ignore = reg_a;
+        ignore = reg_b;
+        ignore = reg_c;
+#endif
+    }
+};
+
 } // namespace ck
 #endif

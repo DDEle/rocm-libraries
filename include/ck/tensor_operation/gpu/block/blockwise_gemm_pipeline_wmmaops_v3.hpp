@@ -145,8 +145,21 @@ struct BlockwiseGemmWmmaops_pipeline_v3<BlockGemmPipelineScheduler::Intrawave,
 
     __host__ __device__ static constexpr TailNumber BlockLoopTailNum(index_t num_loop)
     {
-        ignore = num_loop;
-        return TailNumber::Full;
+        if(BlockHasHotloop(num_loop))
+        {
+            return TailNumber::Full;
+        }
+        else
+        {
+            if(num_loop == 1)
+            {
+                return TailNumber::Odd;
+            }
+            else
+            {
+                return TailNumber::Even;
+            }
+        }
     }
 
     __device__ static constexpr auto HotLoopScheduler()
@@ -309,6 +322,46 @@ struct BlockwiseGemmWmmaops_pipeline_v3<BlockGemmPipelineScheduler::Intrawave,
         });
     }
 
+    template <typename AThreadBuffer, typename BThreadBuffer, typename CThreadBuffer>
+    __device__ inline void LocalCompute(AThreadBuffer& a_thread_buf,
+                                        BThreadBuffer& b_thread_buf,
+                                        CThreadBuffer& c_thread_buf) const
+    {
+        static_for<0, KRepeat, 1>{}([&](auto k0) {
+            static_for<0, MRepeat, 1>{}([&](auto m0) {
+                static_for<0, NRepeat, 1>{}([&](auto n0) {
+                    vector_type<ComputeTypeA, KPack / A_KRow> a_thread_vec;
+                    vector_type<ComputeTypeB, KPack / B_KRow> b_thread_vec;
+
+                    static_for<0, KPack / A_KRow, 1>{}([&](auto ik) {
+                        a_thread_vec.template AsType<ComputeTypeA>()(ik) =
+                            a_thread_buf[Number<a_thread_desc_.CalculateOffset(make_tuple(
+                                Number<ik / A_K1>{}, m0, k0, I0, I0, Number<ik % A_K1>{}))>{}];
+                    });
+                    static_for<0, KPack / B_KRow, 1>{}([&](auto ik) {
+                        b_thread_vec.template AsType<ComputeTypeB>()(ik) =
+                            b_thread_buf[Number<b_thread_desc_.CalculateOffset(make_tuple(
+                                Number<ik / B_K1>{}, n0, k0, I0, I0, Number<ik % B_K1>{}))>{}];
+                    });
+
+                    using wmma_input_type_a =
+                        typename vector_type<ComputeTypeA, WmmaK / A_KRow>::type;
+                    using wmma_input_type_b =
+                        typename vector_type<ComputeTypeB, WmmaK / B_KRow>::type;
+
+                    constexpr index_t c_offset =
+                        c_thread_desc_.CalculateOffset(make_tuple(m0, n0, I0));
+
+                    __builtin_amdgcn_sched_barrier(0);
+                    wmma_gemm.Run(a_thread_vec.template AsType<wmma_input_type_a>(),
+                                  b_thread_vec.template AsType<wmma_input_type_b>(),
+                                  c_thread_buf.GetVectorTypeReference(Number<c_offset>{}));
+                    __builtin_amdgcn_sched_barrier(0);
+                });
+            });
+        });
+    }
+
     template <bool HasMainLoop,
               TailNumber TailNum,
               typename AGridDesc,
@@ -362,12 +415,15 @@ struct BlockwiseGemmWmmaops_pipeline_v3<BlockGemmPipelineScheduler::Intrawave,
         a_blockwise_copy.RunWrite(a_block_desc, a_block_buf);
         b_blockwise_copy.RunWrite(b_block_desc, b_block_buf);
 
-        // Global prefetch 2
-        a_blockwise_copy.RunRead(a_grid_desc, a_grid_buf);
-        b_blockwise_copy.RunRead(b_grid_desc, b_grid_buf);
+        // Global prefetch 2, perform when at least 2 loops exist.
+        if constexpr(TailNum == TailNumber::Even || TailNum == TailNumber::Full)
+        {
+            a_blockwise_copy.RunRead(a_grid_desc, a_grid_buf);
+            b_blockwise_copy.RunRead(b_grid_desc, b_grid_buf);
 
-        a_blockwise_copy.MoveSrcSliceWindow(a_grid_desc, a_block_copy_step);
-        b_blockwise_copy.MoveSrcSliceWindow(b_grid_desc, b_block_copy_step);
+            a_blockwise_copy.MoveSrcSliceWindow(a_grid_desc, a_block_copy_step);
+            b_blockwise_copy.MoveSrcSliceWindow(b_grid_desc, b_block_copy_step);
+        }
 
         // Initialize C
         c_thread_buf.Clear();
@@ -398,47 +454,7 @@ struct BlockwiseGemmWmmaops_pipeline_v3<BlockGemmPipelineScheduler::Intrawave,
 
                 b_scale_struct.template GlobalLoad<0>((i + 2) % num_loop_per_scale == 0);
 
-                static_for<0, KRepeat, 1>{}([&](auto k0) {
-                    static_for<0, MRepeat, 1>{}([&](auto m0) {
-                        static_for<0, NRepeat, 1>{}([&](auto n0) {
-                            vector_type<ComputeTypeA, KPack / A_KRow> a_thread_vec;
-                            vector_type<ComputeTypeB, KPack / B_KRow> b_thread_vec;
-
-                            static_for<0, KPack / A_KRow, 1>{}([&](auto ik) {
-                                a_thread_vec.template AsType<ComputeTypeA>()(ik) =
-                                    a_thread_buf[Number<a_thread_desc_.CalculateOffset(
-                                        make_tuple(Number<ik / A_K1>{},
-                                                   m0,
-                                                   k0,
-                                                   I0,
-                                                   I0,
-                                                   Number<ik % A_K1>{}))>{}];
-                            });
-                            static_for<0, KPack / B_KRow, 1>{}([&](auto ik) {
-                                b_thread_vec.template AsType<ComputeTypeB>()(ik) =
-                                    b_thread_buf[Number<b_thread_desc_.CalculateOffset(
-                                        make_tuple(Number<ik / B_K1>{},
-                                                   n0,
-                                                   k0,
-                                                   I0,
-                                                   I0,
-                                                   Number<ik % B_K1>{}))>{}];
-                            });
-
-                            using wmma_input_type_a =
-                                typename vector_type<ComputeTypeA, WmmaK / A_KRow>::type;
-                            using wmma_input_type_b =
-                                typename vector_type<ComputeTypeB, WmmaK / B_KRow>::type;
-
-                            constexpr index_t c_offset =
-                                c_thread_desc_.CalculateOffset(make_tuple(m0, n0, I0));
-
-                            wmma_gemm.Run(a_thread_vec.template AsType<wmma_input_type_a>(),
-                                          b_thread_vec.template AsType<wmma_input_type_b>(),
-                                          c_thread_buf.GetVectorTypeReference(Number<c_offset>{}));
-                        });
-                    });
-                });
+                LocalCompute(a_thread_buf, b_thread_buf, c_thread_buf);
 
                 block_sync_lds();
 
@@ -448,42 +464,34 @@ struct BlockwiseGemmWmmaops_pipeline_v3<BlockGemmPipelineScheduler::Intrawave,
                 __builtin_amdgcn_sched_barrier(0);
 
                 i += 1;
-            } while(i < (num_loop - 1));
+            } while(i < (num_loop - 2));
         }
+        // Pre-tail, perform when at least 2 loops exist.
+        if constexpr(TailNum == TailNumber::Even || TailNum == TailNumber::Full)
+        {
+            block_sync_lds();
+
+            a_blockwise_copy.RunWrite(a_block_desc, a_block_buf);
+            b_blockwise_copy.RunWrite(b_block_desc, b_block_buf);
+
+            // No RunRead or MoveSrcSliceWindow here, already finished them all!
+            b_scale_struct.template GlobalLoad<0>(num_loop % num_loop_per_scale == 0);
+
+            LocalCompute(a_thread_buf, b_thread_buf, c_thread_buf);
+
+            block_sync_lds();
+
+            LocalLoad(a_block_buf, a_thread_buf, b_block_buf, b_thread_buf, b_scale_struct);
+
+            HotLoopScheduler();
+            __builtin_amdgcn_sched_barrier(0);
+        }
+
         // tail
         if constexpr(TailNum == TailNumber::Full)
         {
-            static_for<0, KRepeat, 1>{}([&](auto k0) {
-                static_for<0, MRepeat, 1>{}([&](auto m0) {
-                    static_for<0, NRepeat, 1>{}([&](auto n0) {
-                        vector_type<ComputeTypeA, KPack / A_KRow> a_thread_vec;
-                        vector_type<ComputeTypeB, KPack / B_KRow> b_thread_vec;
+            LocalCompute(a_thread_buf, b_thread_buf, c_thread_buf);
 
-                        static_for<0, KPack / A_KRow, 1>{}([&](auto ik) {
-                            a_thread_vec.template AsType<ComputeTypeA>()(ik) =
-                                a_thread_buf[Number<a_thread_desc_.CalculateOffset(make_tuple(
-                                    Number<ik / A_K1>{}, m0, k0, I0, I0, Number<ik % A_K1>{}))>{}];
-                        });
-                        static_for<0, KPack / B_KRow, 1>{}([&](auto ik) {
-                            b_thread_vec.template AsType<ComputeTypeB>()(ik) =
-                                b_thread_buf[Number<b_thread_desc_.CalculateOffset(make_tuple(
-                                    Number<ik / B_K1>{}, n0, k0, I0, I0, Number<ik % B_K1>{}))>{}];
-                        });
-
-                        using wmma_input_type_a =
-                            typename vector_type<ComputeTypeA, WmmaK / A_KRow>::type;
-                        using wmma_input_type_b =
-                            typename vector_type<ComputeTypeB, WmmaK / B_KRow>::type;
-
-                        constexpr index_t c_offset =
-                            c_thread_desc_.CalculateOffset(make_tuple(m0, n0, I0));
-
-                        wmma_gemm.Run(a_thread_vec.template AsType<wmma_input_type_a>(),
-                                      b_thread_vec.template AsType<wmma_input_type_b>(),
-                                      c_thread_buf.GetVectorTypeReference(Number<c_offset>{}));
-                    });
-                });
-            });
             // Let's leak last WMMA block to epilogue region, cover the potential lds-shuffle
             // latency
             // __builtin_amdgcn_sched_barrier(0);

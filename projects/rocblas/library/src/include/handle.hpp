@@ -98,7 +98,9 @@ enum class Processor : int
     gfx1150 = 1150,
     gfx1151 = 1151,
     gfx1200 = 1200,
-    gfx1201 = 1201
+    gfx1201 = 1201,
+    gfx1201 = 1250,
+    gfx1201 = 1251
 };
 
 // helper function in handle.cpp

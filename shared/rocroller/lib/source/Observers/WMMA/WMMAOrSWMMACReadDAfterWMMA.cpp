@@ -65,8 +65,8 @@ namespace rocRoller
                 return opCode.ends_with("_f16") || opCode.ends_with("_bf16")
                        || opCode.ends_with("_fp8_fp8") || opCode.ends_with("_fp8_bf8")
                        || opCode.ends_with("_bf8_fp8") || opCode.ends_with("_bf8_bf8")
-                       || opCode.ends_with("_f8f6f4") || opCode.ends_with("_ui8")
-                       || opCode.ends_with("_ui4");
+                       || opCode.ends_with("_f8f6f4") || opCode.ends_with("_iu8")
+                       || opCode.ends_with("_iu4");
             }
             return false;
         };

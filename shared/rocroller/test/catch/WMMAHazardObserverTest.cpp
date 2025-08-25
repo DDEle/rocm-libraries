@@ -262,18 +262,30 @@ namespace WMMAObserverTests
         SECTION("Expect 1 + coexecSlots V_NOP(s) if second WMMA's A is first WMMA's D and A"
                 "*IS* F8")
         {
-            const auto v0 = t.createRegisters(Register::Type::Vector, DataType::Float, 3, 8, FC);
-            const auto vA = t.createRegisters(Register::Type::Vector, DataType::FP8x4, 2, 16, FC);
-            const auto vB = t.createRegisters(Register::Type::Vector, DataType::FP4x8, 2, 16, FC);
+            const auto wmmaInst = GENERATE(
+                as<std::string>{}, "v_wmma_f32_16x16x128_f8f6f4", "v_wmma_i32_16x16x64_iu8");
+
+            const auto [v0_dt, vA_dt, vB_dt]
+                = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
+                      ? std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8)
+                      : std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32);
+
+            auto [vA_count, vB_count] = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
+                                            ? std::make_pair(16, 16)
+                                            : std::make_pair(8, 8);
+
+            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, 8, FC);
+            const auto vA = t.createRegisters(Register::Type::Vector, vA_dt, 2, vA_count, FC);
+            const auto vB = t.createRegisters(Register::Type::Vector, vB_dt, 2, vB_count, FC);
             // coexecSlots = 8, if first WMMA is:
             //  - v_wmma*_iu8; or
             //  - v_wmma*_iu4; or
             //  - v_wmma*f8f6f4 && A or B is F8
             const auto               expectedVNops = 1 + (coexecutionEnabled ? 8 : 0);
-            std::vector<Instruction> insts         = {
-                Instruction("v_wmma_f32_16x16x128_f8f6f4", {v0[0]}, {vA[0], vB[0], v0[1]}, {}, ""),
-                Instruction("v_wmma_f32_16x16x128_f8f6f4", {v0[2]}, {vA[1], vB[1], v0[0]}, {}, ""),
-                Instruction("s_endpgm", {}, {}, {}, "")};
+            std::vector<Instruction> insts
+                = {Instruction(wmmaInst, {v0[0]}, {vA[0], vB[0], v0[1]}, {}, ""),
+                   Instruction(wmmaInst, {v0[2]}, {vA[1], vB[1], v0[0]}, {}, ""),
+                   Instruction("s_endpgm", {}, {}, {}, "")};
 
             t.peekAndSchedule(insts[0]);
             t.peekAndSchedule(insts[1], expectedVNops);
@@ -309,22 +321,34 @@ namespace WMMAObserverTests
 
         SECTION("Expect 0 + coexecSlots V_NOP(s) if VALU reads D after WMMA and A *IS* F8")
         {
-            const auto v0 = t.createRegisters(Register::Type::Vector, DataType::Float, 3, 8, FC);
-            const auto vA = t.createRegisters(Register::Type::Vector, DataType::FP8x4, 2, 16, FC);
-            const auto vB = t.createRegisters(Register::Type::Vector, DataType::FP4x8, 2, 16, FC);
+            const auto wmmaInst = GENERATE(
+                as<std::string>{}, "v_wmma_f32_16x16x128_f8f6f4", "v_wmma_i32_16x16x64_iu8");
+
+            const auto [v0_dt, vA_dt, vB_dt]
+                = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
+                      ? std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8)
+                      : std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32);
+
+            auto [vA_count, vB_count] = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
+                                            ? std::make_pair(16, 16)
+                                            : std::make_pair(8, 8);
+
+            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, 8, FC);
+            const auto vA = t.createRegisters(Register::Type::Vector, vA_dt, 1, vA_count, FC);
+            const auto vB = t.createRegisters(Register::Type::Vector, vB_dt, 1, vB_count, FC);
             // coexecSlots = 8, if first WMMA is:
             //  - v_wmma*_iu8; or
             //  - v_wmma*_iu4; or
             //  - v_wmma*f8f6f4 && A or B is F8
             const auto               expectedVNops = 0 + (coexecutionEnabled ? 8 : 0);
-            std::vector<Instruction> insts         = {
-                Instruction("v_wmma_f32_16x16x128_f8f6f4", {v0[0]}, {vA[0], vB[0], v0[1]}, {}, ""),
-                Instruction("v_add_f16",
-                            {v0[2]->subset({0})},
-                            {v0[0]->subset({1}), v0[2]->subset({1})},
-                            {},
-                            ""),
-                Instruction("s_endpgm", {}, {}, {}, "")};
+            std::vector<Instruction> insts
+                = {Instruction(wmmaInst, {v0[0]}, {vA[0], vB[0], v0[1]}, {}, ""),
+                   Instruction("v_add_f16",
+                               {v0[2]->subset({0})},
+                               {v0[0]->subset({1}), v0[2]->subset({1})},
+                               {},
+                               ""),
+                   Instruction("s_endpgm", {}, {}, {}, "")};
 
             t.peekAndSchedule(insts[0]);
             t.peekAndSchedule(insts[1], expectedVNops);
@@ -372,22 +396,34 @@ namespace WMMAObserverTests
 
         SECTION("Expect 0 + coexecSlots V_NOP(s) if VALU writes A after WMMA and A *IS* F8")
         {
-            const auto v0 = t.createRegisters(Register::Type::Vector, DataType::Float, 3, 8, FC);
-            const auto vA = t.createRegisters(Register::Type::Vector, DataType::FP8x4, 2, 16, FC);
-            const auto vB = t.createRegisters(Register::Type::Vector, DataType::FP4x8, 2, 16, FC);
+            const auto wmmaInst = GENERATE(
+                as<std::string>{}, "v_wmma_f32_16x16x128_f8f6f4", "v_wmma_i32_16x16x64_iu8");
+
+            const auto [v0_dt, vA_dt, vB_dt]
+                = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
+                      ? std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8)
+                      : std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32);
+
+            auto [vA_count, vB_count] = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
+                                            ? std::make_pair(16, 16)
+                                            : std::make_pair(8, 8);
+
+            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, 8, FC);
+            const auto vA = t.createRegisters(Register::Type::Vector, vA_dt, 1, vA_count, FC);
+            const auto vB = t.createRegisters(Register::Type::Vector, vB_dt, 1, vB_count, FC);
             // coexecSlots = 8, if first WMMA is:
             //  - v_wmma*_iu8; or
             //  - v_wmma*_iu4; or
             //  - v_wmma*f8f6f4 && A or B is F8
             const auto               expectedVNops = 0 + (coexecutionEnabled ? 8 : 0);
-            std::vector<Instruction> insts         = {
-                Instruction("v_wmma_f32_16x16x128_f8f6f4", {v0[0]}, {vA[0], vB[0], v0[1]}, {}, ""),
-                Instruction("v_add_f16",
-                            {vA[0]->subset({1})},
-                            {v0[2]->subset({1}), v0[2]->subset({1})},
-                            {},
-                            ""),
-                Instruction("s_endpgm", {}, {}, {}, "")};
+            std::vector<Instruction> insts
+                = {Instruction(wmmaInst, {v0[0]}, {vA[0], vB[0], v0[1]}, {}, ""),
+                   Instruction("v_add_f16",
+                               {vA[0]->subset({1})},
+                               {v0[2]->subset({1}), v0[2]->subset({1})},
+                               {},
+                               ""),
+                   Instruction("s_endpgm", {}, {}, {}, "")};
 
             t.peekAndSchedule(insts[0]);
             t.peekAndSchedule(insts[1], expectedVNops);
@@ -423,22 +459,34 @@ namespace WMMAObserverTests
 
         SECTION("Expect 0 + coexecSlots V_NOP(s) if VALU writes D after WMMA and A *IS* F8")
         {
-            const auto v0 = t.createRegisters(Register::Type::Vector, DataType::Float, 3, 8, FC);
-            const auto vA = t.createRegisters(Register::Type::Vector, DataType::FP8x4, 2, 16, FC);
-            const auto vB = t.createRegisters(Register::Type::Vector, DataType::FP4x8, 2, 16, FC);
+            const auto wmmaInst = GENERATE(
+                as<std::string>{}, "v_wmma_f32_16x16x128_f8f6f4", "v_wmma_i32_16x16x64_iu8");
+
+            const auto [v0_dt, vA_dt, vB_dt]
+                = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
+                      ? std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8)
+                      : std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32);
+
+            auto [vA_count, vB_count] = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
+                                            ? std::make_pair(16, 16)
+                                            : std::make_pair(8, 8);
+
+            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, 8, FC);
+            const auto vA = t.createRegisters(Register::Type::Vector, vA_dt, 1, vA_count, FC);
+            const auto vB = t.createRegisters(Register::Type::Vector, vB_dt, 1, vB_count, FC);
             // coexecSlots = 8, if first WMMA is:
             //  - v_wmma*_iu8; or
             //  - v_wmma*_iu4; or
             //  - v_wmma*f8f6f4 && A or B is F8
             const auto               expectedVNops = 0 + (coexecutionEnabled ? 8 : 0);
-            std::vector<Instruction> insts         = {
-                Instruction("v_wmma_f32_16x16x128_f8f6f4", {v0[0]}, {vA[0], vB[0], v0[1]}, {}, ""),
-                Instruction("v_add_f16",
-                            {v0[0]->subset({0})},
-                            {v0[2]->subset({1}), v0[2]->subset({1})},
-                            {},
-                            ""),
-                Instruction("s_endpgm", {}, {}, {}, "")};
+            std::vector<Instruction> insts
+                = {Instruction(wmmaInst, {v0[0]}, {vA[0], vB[0], v0[1]}, {}, ""),
+                   Instruction("v_add_f16",
+                               {v0[0]->subset({0})},
+                               {v0[2]->subset({1}), v0[2]->subset({1})},
+                               {},
+                               ""),
+                   Instruction("s_endpgm", {}, {}, {}, "")};
 
             t.peekAndSchedule(insts[0]);
             t.peekAndSchedule(insts[1], expectedVNops);

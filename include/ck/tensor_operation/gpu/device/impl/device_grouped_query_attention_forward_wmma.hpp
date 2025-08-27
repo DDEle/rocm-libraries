@@ -290,7 +290,11 @@ struct DeviceGroupedQueryAttentionForward_Wmma
     static constexpr auto I5 = Number<5>{};
     static constexpr auto I6 = Number<6>{};
 
+#ifdef __gfx125__
     static constexpr auto WmmaK = 32;
+#else
+    static constexpr auto WmmaK = 16;
+#endif
 
     static constexpr auto MWaves = MPerBlock / (MRepeat * MPerWmma);
     static constexpr auto LWaves = LPerBlock / (LRepeat * LPerWmma);

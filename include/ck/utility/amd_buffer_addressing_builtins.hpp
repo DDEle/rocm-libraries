@@ -885,4 +885,224 @@ __device__ void amd_direct_load_global_to_lds(const T* global_base_ptr,
 }
 #endif
 
+template <typename T,
+          index_t NumBytesPerThread,
+          AmdBufferCoherenceEnum coherence = AmdBufferCoherenceEnum::DefaultCoherence>
+__device__ void amd_async_copy_to_lds_impl_raw(__attribute__((address_space(1))) const T* src_ptr,
+                                               __attribute__((address_space(3))) T* dst_ptr)
+{
+    if constexpr(NumBytesPerThread == 1)
+    {
+        __attribute__((address_space(1))) char* cv_ptr =
+            const_cast<__attribute__((address_space(1))) char*>(
+                reinterpret_cast<const __attribute__((address_space(1))) char*>(src_ptr));
+        __attribute__((address_space(3))) char* lds_ptr =
+            reinterpret_cast<__attribute__((address_space(3))) char*>(dst_ptr);
+        __builtin_amdgcn_global_load_async_to_lds_b8(
+            cv_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
+        return;
+    }
+
+    if constexpr(NumBytesPerThread == 4)
+    {
+        __attribute__((address_space(1))) int* cv_ptr =
+            const_cast<__attribute__((address_space(1))) int*>(
+                reinterpret_cast<const __attribute__((address_space(1))) int*>(src_ptr));
+        __attribute__((address_space(3))) int* lds_ptr =
+            reinterpret_cast<__attribute__((address_space(3))) int*>(dst_ptr);
+        __builtin_amdgcn_global_load_async_to_lds_b32(
+            cv_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
+        return;
+    }
+
+    if constexpr(NumBytesPerThread == 8)
+    {
+        __attribute__((address_space(1))) int32x2_t* cv_ptr =
+            const_cast<__attribute__((address_space(1))) int32x2_t*>(
+                reinterpret_cast<const __attribute__((address_space(1))) int32x2_t*>(src_ptr));
+        __attribute__((address_space(3))) int32x2_t* lds_ptr =
+            reinterpret_cast<__attribute__((address_space(3))) int32x2_t*>(dst_ptr);
+        __builtin_amdgcn_global_load_async_to_lds_b64(
+            cv_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
+        return;
+    }
+
+    if constexpr(NumBytesPerThread == 16)
+    {
+        __attribute__((address_space(1))) int32x4_t* cv_ptr =
+            const_cast<__attribute__((address_space(1))) int32x4_t*>(
+                reinterpret_cast<const __attribute__((address_space(1))) int32x4_t*>(src_ptr));
+        __attribute__((address_space(3))) int32x4_t* lds_ptr =
+            reinterpret_cast<__attribute__((address_space(3))) int32x4_t*>(dst_ptr);
+        __builtin_amdgcn_global_load_async_to_lds_b128(
+            cv_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
+        return;
+    }
+}
+
+template <typename T,
+          index_t NumBytesPerThread,
+          AmdBufferCoherenceEnum coherence = AmdBufferCoherenceEnum::DefaultCoherence>
+__device__ void amd_async_store_to_global_impl_raw(__attribute__((address_space(3)))
+                                                   const T* src_ptr,
+                                                   __attribute__((address_space(1))) T* dst_ptr)
+{
+    if constexpr(NumBytesPerThread == 1)
+    {
+        __attribute__((address_space(3))) char* lds_ptr =
+            const_cast<__attribute__((address_space(3))) char*>(
+                reinterpret_cast<const __attribute__((address_space(3))) char*>(src_ptr));
+        __attribute__((address_space(1))) char* global_ptr =
+            reinterpret_cast<__attribute__((address_space(1))) char*>(dst_ptr);
+        __builtin_amdgcn_global_store_async_from_lds_b8(
+            global_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
+        return;
+    }
+
+    if constexpr(NumBytesPerThread == 4)
+    {
+        __attribute__((address_space(3))) int* lds_ptr =
+            const_cast<__attribute__((address_space(3))) int*>(
+                reinterpret_cast<const __attribute__((address_space(3))) int*>(src_ptr));
+        __attribute__((address_space(1))) int* global_ptr =
+            reinterpret_cast<__attribute__((address_space(1))) int*>(dst_ptr);
+        __builtin_amdgcn_global_store_async_from_lds_b32(
+            global_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
+        return;
+    }
+
+    if constexpr(NumBytesPerThread == 8)
+    {
+        __attribute__((address_space(3))) int32x2_t* lds_ptr =
+            const_cast<__attribute__((address_space(3))) int32x2_t*>(
+                reinterpret_cast<const __attribute__((address_space(3))) int32x2_t*>(src_ptr));
+        __attribute__((address_space(1))) int32x2_t* global_ptr =
+            reinterpret_cast<__attribute__((address_space(1))) int32x2_t*>(dst_ptr);
+        __builtin_amdgcn_global_store_async_from_lds_b64(
+            global_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
+        return;
+    }
+
+    if constexpr(NumBytesPerThread == 16)
+    {
+        __attribute__((address_space(3))) int32x4_t* lds_ptr =
+            const_cast<__attribute__((address_space(3))) int32x4_t*>(
+                reinterpret_cast<const __attribute__((address_space(3))) int32x4_t*>(src_ptr));
+        __attribute__((address_space(1))) int32x4_t* global_ptr =
+            reinterpret_cast<__attribute__((address_space(1))) int32x4_t*>(dst_ptr);
+        __builtin_amdgcn_global_store_async_from_lds_b128(
+            global_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
+        return;
+    }
+}
+
+template <typename T,
+          index_t N,
+          AmdBufferCoherenceEnum coherence = AmdBufferCoherenceEnum::DefaultCoherence>
+__device__ void amd_async_copy_to_lds_impl(__attribute__((address_space(1))) const T* src_ptr,
+                                           __attribute__((address_space(3))) T* dst_ptr)
+{
+#if defined(__gfx125__)
+    // currently only support to b8, b32, b64, b128 when one async copy
+    static_assert((is_same<T, double>::value && (N == 1 || N == 2)) ||
+                      (is_same<T, float>::value && (N == 1 || N == 2 || N == 4)) ||
+                      (is_same<T, int32_t>::value && (N == 1 || N == 2 || N == 4)) ||
+                      (is_same<T, half_t>::value && (N == 2 || N == 4 || N == 8)) ||
+                      (is_same<T, bhalf_t>::value && (N == 2 || N == 4 || N == 8)) ||
+                      (is_same<T, f8_t>::value && (N == 1 || N == 4 || N == 8 || N == 16)) ||
+                      (is_same<T, bf8_t>::value && (N == 1 || N == 4 || N == 8 || N == 16)) ||
+                      (is_same<T, int8_t>::value && (N == 1 || N == 4 || N == 8 || N == 16)) ||
+                      (is_same<T, uint8_t>::value && (N == 1 || N == 4 || N == 8 || N == 16)),
+                  "wrong! not yet supported");
+
+    amd_async_copy_to_lds_impl_raw<T, sizeof(T) * N, coherence>(src_ptr, dst_ptr);
+#else
+    ignore = src_ptr;
+    ignore = dst_ptr;
+#endif
+    return;
+}
+
+template <typename T,
+          index_t N,
+          AmdBufferCoherenceEnum coherence = AmdBufferCoherenceEnum::DefaultCoherence>
+__device__ void amd_async_store_to_global_impl(__attribute__((address_space(3))) const T* src_ptr,
+                                               __attribute__((address_space(1))) T* dst_ptr)
+{
+#if defined(__gfx125__)
+    // copy 8, 32, 64, or 128 bit per thread
+    static_assert((is_same<T, double>::value && (N == 1 || N == 2)) ||
+                      (is_same<T, float>::value && (N == 1 || N == 2 || N == 4)) ||
+                      (is_same<T, int32_t>::value && (N == 1 || N == 2 || N == 4)) ||
+                      (is_same<T, half_t>::value && (N == 2 || N == 4 || N == 8)) ||
+                      (is_same<T, bhalf_t>::value && (N == 2 || N == 4 || N == 8)) ||
+                      (is_same<T, f8_t>::value && (N == 1 || N == 4 || N == 8 || N == 16)) ||
+                      (is_same<T, bf8_t>::value && (N == 1 || N == 4 || N == 8 || N == 16)) ||
+                      (is_same<T, int8_t>::value && (N == 1 || N == 4 || N == 8 || N == 16)) ||
+                      (is_same<T, uint8_t>::value && (N == 1 || N == 4 || N == 8 || N == 16)),
+                  "wrong! not implemented");
+
+    amd_async_store_to_global_impl_raw<T, sizeof(T) * N, coherence>(src_ptr, dst_ptr);
+#else
+    ignore = src_ptr;
+    ignore = dst_ptr;
+#endif
+
+    return;
+}
+
+template <typename T,
+          index_t NumElemsPerThread,
+          AmdBufferCoherenceEnum coherence = AmdBufferCoherenceEnum::DefaultCoherence>
+__device__ void amd_async_load_global_to_lds(const T* global_base_ptr,
+                                             const index_t global_offset,
+                                             T* lds_base_ptr,
+                                             const index_t lds_offset,
+                                             const bool is_src_valid,
+                                             const bool is_dst_valid)
+{
+    if(is_src_valid && is_dst_valid)
+    {
+        __attribute__((address_space(1))) const T* global_ptr =
+            reinterpret_cast<__attribute__((address_space(1))) T*>(
+                reinterpret_cast<uintptr_t>(global_base_ptr + global_offset));
+        __attribute__((address_space(3))) T* lds_ptr =
+            reinterpret_cast<__attribute__((address_space(3))) T*>(
+                reinterpret_cast<uintptr_t>(lds_base_ptr + lds_offset));
+        amd_async_copy_to_lds_impl<T, NumElemsPerThread, coherence>(global_ptr, lds_ptr);
+    }
+    else if(is_dst_valid)
+    {
+        using DstVecType    = typename vector_type_maker<T, NumElemsPerThread>::type;
+        DstVecType* lds_ptr = reinterpret_cast<DstVecType*>(lds_base_ptr + lds_offset);
+        *lds_ptr            = {};
+    }
+    else
+    {
+        return; // do nothing
+    }
+}
+
+template <typename T,
+          index_t NumElemsPerThread,
+          AmdBufferCoherenceEnum coherence = AmdBufferCoherenceEnum::DefaultCoherence>
+__device__ void amd_async_store_lds_to_global(const T* lds_base_ptr,
+                                              const index_t lds_offset,
+                                              T* global_base_ptr,
+                                              const index_t global_offset,
+                                              const bool is_src_valid,
+                                              const bool is_dst_valid)
+{
+    if(is_src_valid && is_dst_valid)
+    {
+        __attribute__((address_space(3))) const T* lds_ptr =
+            reinterpret_cast<__attribute__((address_space(3))) T*>(
+                reinterpret_cast<uintptr_t>(lds_base_ptr + lds_offset));
+        __attribute__((address_space(1))) T* global_ptr =
+            reinterpret_cast<__attribute__((address_space(1))) T*>(
+                reinterpret_cast<uintptr_t>(global_base_ptr + global_offset));
+        amd_async_store_to_global_impl<T, NumElemsPerThread, coherence>(lds_ptr, global_ptr);
+    }
+}
+
 } // namespace ck

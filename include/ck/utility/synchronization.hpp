@@ -47,6 +47,19 @@ __device__ void block_sync_lds_direct_load()
 #endif
 }
 
+__device__ void block_sync_lds_async_load()
+{
+#if defined(__gfx125__)
+    asm volatile("\
+    s_wait_asynccnt 0x0 \n \
+    s_barrier_signal -1 \n \
+    s_barrier_wait -1 \
+    " ::);
+#else
+    block_sync_lds();
+#endif
+}
+
 __device__ void s_nop()
 {
 #if 1

@@ -214,6 +214,27 @@ struct DynamicBuffer
                                                             element_space_size_ / PackedSize);
     }
 
+    template <typename DstBuffer, index_t NumElemsPerThread>
+    __host__ __device__ void AsyncCopyToLds(DstBuffer& dst_buf,
+                                            IndexType src_offset,
+                                            IndexType dst_offset,
+                                            bool is_valid_element) const
+    {
+        // Copy data from global to LDS memory using direct loads.
+        static_assert(GetAddressSpace() == AddressSpaceEnum::Global,
+                      "Source data must come from a global memory buffer.");
+        static_assert(DstBuffer::GetAddressSpace() == AddressSpaceEnum::Lds,
+                      "Destination data must be stored in an LDS memory buffer.");
+
+        amd_async_load_global_to_lds<T, NumElemsPerThread, coherence>(p_data_,
+                                                                      src_offset,
+                                                                      dst_buf.p_data_,
+                                                                      dst_offset,
+                                                                      is_valid_element,
+                                                                      element_space_size_ /
+                                                                          PackedSize);
+    }
+
     template <typename X,
               typename enable_if<is_same<typename scalar_type<remove_cvref_t<X>>::type,
                                          typename scalar_type<remove_cvref_t<T>>::type>::value ||

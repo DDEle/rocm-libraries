@@ -9,11 +9,12 @@
 auto create_args(int argc, char* argv[])
 {
     ck_tile::ArgParser arg_parser;
-    arg_parser.insert("m", "1024", "m dimension")
+    arg_parser.insert("op", "square", "unary operations: square|tanh|fastgelu")
+        .insert("m", "1024", "m dimension")
         .insert("n", "1024", "n dimension")
         .insert("stride", "-1", "stride per row, if -1 then equal to n")
         .insert("v", "1", "cpu validation or not")
-        .insert("prec", "fp16", "precision")
+        .insert("prec", "fp16", "precision: fp32|fp16")
         .insert("warmup", "10", "cold iter")
         .insert("repeat", "50", "hot iter");
 
@@ -21,7 +22,7 @@ auto create_args(int argc, char* argv[])
     return std::make_tuple(result, arg_parser);
 }
 
-template <typename DataType>
+template <typename DataType, typename XElementwiseOperation>
 bool run(const ck_tile::ArgParser& arg_parser)
 {
     ck_tile::index_t M      = arg_parser.get_int("m");
@@ -36,9 +37,8 @@ bool run(const ck_tile::ArgParser& arg_parser)
 
     assert(stride >= N);
 
-    using XDataType             = DataType;
-    using YDataType             = DataType;
-    using XElementwiseOperation = ck_tile::element_wise::UnarySquare;
+    using XDataType = DataType;
+    using YDataType = DataType;
 
     // 1. Initialize the input data on the host
     ck_tile::HostTensor<XDataType> x_host_a({M, N}, {stride, 1});
@@ -91,6 +91,8 @@ bool run(const ck_tile::ArgParser& arg_parser)
     auto input_tensors = ck_tile::make_tuple(static_cast<XDataType*>(x_buf_a.GetDeviceBuffer()));
     auto input_size    = ck_tile::make_tuple(M, N);
 
+    auto divisor = ck_tile::is_wave32() ? 2 : 1; // for correct computation on warp 32
+
     // Check if the kernel configuration is supported
     if(!Kernel::IsSupportedArgument(input_size))
     {
@@ -103,7 +105,7 @@ bool run(const ck_tile::ArgParser& arg_parser)
         ck_tile::stream_config{nullptr, true, 0, warmup, repeat},
         ck_tile::make_kernel<kBlockPerCu>(Kernel{},
                                           kGridSize,
-                                          kBlockSize,
+                                          kBlockSize / divisor,
                                           0,
                                           input_size,
                                           ck_tile::make_tuple(N, 1), // Input Stride
@@ -119,7 +121,11 @@ bool run(const ck_tile::ArgParser& arg_parser)
     {
         y_buf.FromDevice(y_validation.data());
 
-        auto op = [](const auto& v0) { return v0 * v0; };
+        auto op = [](const XDataType& v0) {
+            YDataType ret;
+            XElementwiseOperation{}(ret, v0);
+            return ret;
+        };
 
         ck_tile::reference_unary_elementwise<XDataType, YDataType, YDataType>(x_host_a, y_host, op);
 
@@ -137,9 +143,24 @@ int main(int argc, char* argv[])
         return -1;
 
     const std::string data_type = arg_parser.get_str("prec");
+    const std::string op        = arg_parser.get_str("op");
     if(data_type == "fp16")
     {
-        return run<ck_tile::half_t>(arg_parser) ? 0 : -2;
+        if(op == "square")
+            return run<ck_tile::half_t, ck_tile::element_wise::UnarySquare>(arg_parser) ? 0 : -2;
+        if(op == "tanh")
+            return run<ck_tile::half_t, ck_tile::element_wise::TanH>(arg_parser) ? 0 : -2;
+        if(op == "fastgelu")
+            return run<ck_tile::half_t, ck_tile::element_wise::FastGelu>(arg_parser) ? 0 : -2;
+    }
+    if(data_type == "fp32")
+    {
+        if(op == "square")
+            return run<float, ck_tile::element_wise::UnarySquare>(arg_parser) ? 0 : -2;
+        if(op == "tanh")
+            return run<float, ck_tile::element_wise::TanH>(arg_parser) ? 0 : -2;
+        if(op == "fastgelu")
+            return run<float, ck_tile::element_wise::FastGelu>(arg_parser) ? 0 : -2;
     }
 
     return -3;

@@ -68,7 +68,7 @@ static constexpr auto TensorSpecB0 = ck::tensor_operation::device::TensorSpecial
 static constexpr auto TensorSpecB1 = ck::tensor_operation::device::TensorSpecialization::Default;
 static constexpr auto TensorSpecC  = ck::tensor_operation::device::TensorSpecialization::Default;
 
-//gfx125 KPerBlock size
+// gfx125 KPerBlock size
 #ifdef USE_GFX125_CONFIG
 #define KPerBlock_val0 96
 #define KPerBlock_val1 160

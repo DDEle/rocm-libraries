@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2018-2024, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2018-2025, Advanced Micro Devices, Inc. All rights reserved.
 
 #include <iostream>
 #include <cstdlib>
@@ -49,10 +49,27 @@ void host_elementwise1D(HostTensorC& C, const HostTensorA& A, int M, Functor fun
     }
 }
 
-int main()
+int main(int argc, char* argv[])
 {
-    bool do_verification = true;
-    bool time_kernel     = false;
+    bool do_verification;
+    bool time_kernel;
+
+    if(argc == 1)
+    {
+        do_verification = true;
+        time_kernel     = false;
+    }
+    else if(argc == 3)
+    {
+        do_verification = std::stoi(argv[1]);
+        time_kernel     = static_cast<bool>(std::stoi(argv[2]));
+    }
+    else
+    {
+        printf("arg1: verification (0=no, 1=yes)\n");
+        printf("arg2: time kernel (0=no, 1=yes)\n");
+        exit(0);
+    }
 
     ck::index_t M = 1024;
 

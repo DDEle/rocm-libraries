@@ -562,7 +562,7 @@ struct FastGelu
     template <>
     CK_TILE_DEVICE void operator()<float, float>(float& y, const float& x) const
     {
-#if defined(__gfx1250__)
+#if defined(__gfx125__)
         const float c1 = 0.035677f;
         const float c2 = 0.797885f;
         const float u  = x * (c1 * x * x + c2);
@@ -594,7 +594,7 @@ struct FastGelu
     CK_TILE_DEVICE void operator()<ck_tile::fp16_t, ck_tile::fp16_t>(ck_tile::fp16_t& y,
                                                                      const ck_tile::fp16_t& x) const
     {
-#if defined(__gfx1250__)
+#if defined(__gfx125__)
         const ck_tile::fp16_t c1 = type_convert<ck_tile::fp16_t>(0.035677f);
         const ck_tile::fp16_t c2 = type_convert<ck_tile::fp16_t>(0.797885f);
         const ck_tile::fp16_t u  = x * (c1 * x * x + c2);
@@ -623,7 +623,7 @@ struct FastGelu
     template <>
     CK_TILE_DEVICE void operator()<ck_tile::fp16_t, float>(ck_tile::fp16_t& y, const float& x) const
     {
-#if defined(__gfx1250__)
+#if defined(__gfx125__)
         const float c1 = 0.035677f;
         const float c2 = 0.797885f;
         const float u  = x * (c1 * x * x + c2);
@@ -651,7 +651,7 @@ struct FastGelu
     template <>
     CK_TILE_DEVICE void operator()<ck_tile::bf16_t, float>(ck_tile::bf16_t& y, const float& x) const
     {
-#if defined(__gfx1250__)
+#if defined(__gfx125__)
         const float c1 = 0.035677f;
         const float c2 = 0.797885f;
         const float u  = x * (c1 * x * x + c2);
@@ -670,7 +670,7 @@ struct FastGelu
     CK_TILE_DEVICE void operator()<ck_tile::bf16_t, ck_tile::bf16_t>(ck_tile::bf16_t& y,
                                                                      const ck_tile::bf16_t& x) const
     {
-#if defined(__gfx1250__)
+#if defined(__gfx125__)
         const ck_tile::bf16_t c1 = type_convert<ck_tile::bf16_t>(0.035677f);
         const ck_tile::bf16_t c2 = type_convert<ck_tile::bf16_t>(0.797885f);
         const ck_tile::bf16_t u  = x * (c1 * x * x + c2);

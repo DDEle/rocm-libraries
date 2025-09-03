@@ -78,8 +78,8 @@ bool run(const ck_tile::ArgParser& arg_parser)
     for(auto d : shape)
         total_elements *= d;
 
-    constexpr ck_tile::index_t kBlockSize =
-        ck_tile::get_warp_size() * BlockWarps::at(ck_tile::number<0>{});
+    ck_tile::index_t kBlockSize =
+        (ck_tile::is_wave32() ? 32 : 64) * BlockWarps::at(ck_tile::number<0>{});
     constexpr ck_tile::index_t kBlockPerCu = 1;
 
     constexpr ck_tile::index_t elements_per_block = BlockTile::at(ck_tile::number<0>{});
@@ -90,8 +90,6 @@ bool run(const ck_tile::ArgParser& arg_parser)
 
     auto input_tensors = ck_tile::make_tuple(static_cast<XDataType*>(x_buf_a.GetDeviceBuffer()));
     auto input_size    = ck_tile::make_tuple(M, N);
-
-    auto divisor = ck_tile::is_wave32() ? 2 : 1; // for correct computation on warp 32
 
     // Check if the kernel configuration is supported
     if(!Kernel::IsSupportedArgument(input_size))
@@ -105,7 +103,7 @@ bool run(const ck_tile::ArgParser& arg_parser)
         ck_tile::stream_config{nullptr, true, 0, warmup, repeat},
         ck_tile::make_kernel<kBlockPerCu>(Kernel{},
                                           kGridSize,
-                                          kBlockSize / divisor,
+                                          kBlockSize,
                                           0,
                                           input_size,
                                           ck_tile::make_tuple(N, 1), // Input Stride

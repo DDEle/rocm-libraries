@@ -484,7 +484,7 @@ CK_TILE_HOST_DEVICE constexpr auto make_tile_distribution(StaticTileDistribution
 #endif
 
 // this returns a static tile_distribution
-template <typename StaticTileDistributionEncoding_, bool IsWarpLevelParallelOnly = false>
+template <typename StaticTileDistributionEncoding_, bool IsWarpLevelParallelOnly_ = false>
 CK_TILE_HOST_DEVICE constexpr auto
 make_static_tile_distribution(StaticTileDistributionEncoding_,
                               bool_constant<IsWarpLevelParallelOnly> = {})

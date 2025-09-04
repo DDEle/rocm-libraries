@@ -68,7 +68,7 @@ template <typename PsYs2XsAdaptor_,
           typename StaticTileDistributionEncoding_,
           typename TileDistributionDetail_, // FIXME: this is for hold ad-hoc but useful info,
                                             // should be more elegnat
-          bool IsWarpLevelParallelOnly = false>
+          bool IsWarpLevelParallelOnly_ = false>
 struct tile_distribution
 {
     using PsYs2XsAdaptor = remove_cvref_t<PsYs2XsAdaptor_>;

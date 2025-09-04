@@ -10,6 +10,7 @@
 #else
 #include "ck_tile/core/arch/amd_buffer_addressing.hpp"
 #endif
+#include "ck_tile/core/arch/amd_tdm_descriptor.hpp"
 #include "ck_tile/core/arch/generic_memory_space_atomic.hpp"
 #include "ck_tile/core/container/array.hpp"
 #include "ck_tile/core/numeric/integer.hpp"
@@ -203,6 +204,22 @@ struct buffer_view<address_space_enum::generic,
             *c_style_pointer_cast<X*>(&p_data_[i + linear_offset]) = x;
 #endif
         }
+    }
+
+    template <typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
+    CK_TILE_DEVICE void tdm_get(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
+                                index_t linear_offset,
+                                const DimTuple_& tensor_dims,
+                                const DimTuple_& global_strides,
+                                number<num_tensor_dims> = {})
+    {
+        static_assert(false, "Error: tdm load not supported in generic memory space.");
+        ignore = smem;
+        ignore = linear_offset;
+        ignore = tensor_dims;
+        ignore = global_strides;
+        ignore = num_tensor_dims;
+        return;
     }
 
     // FIXME: remove
@@ -730,6 +747,78 @@ struct buffer_view<address_space_enum::global,
         }
     }
 
+    template <typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
+    CK_TILE_DEVICE void tdm_get(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
+                                index_t linear_offset,
+                                const DimTuple_& tensor_dims,
+                                const DimTuple_& global_strides,
+                                number<num_tensor_dims> = {})
+    {
+        TDMConfig tdm_config; // default initialize all fields to zero/false
+
+        // Convert tensor dimensions to uint32_t array
+        array<uint32_t, num_tensor_dims> tensor_dims_uint32;
+        static_for<0, num_tensor_dims, 1>{}(
+            [&](auto i) { tensor_dims_uint32(i) = static_cast<uint32_t>(tensor_dims[i]); });
+
+        // Convert global strides to uint64_t array
+        array<uint64_t, num_tensor_dims> global_strides_uint64;
+        static_for<0, num_tensor_dims, 1>{}(
+            [&](auto i) { global_strides_uint64(i) = static_cast<uint64_t>(global_strides[i]); });
+
+        // Convert box dimensions to uint16_t array
+        constexpr auto box_dim = BoxDim_{};
+        constexpr auto box_dim_uint16 =
+            generate_array([&](auto i) { return static_cast<uint16_t>(box_dim.at(i)); },
+                           number<num_tensor_dims>{});
+
+        auto TDMDescriptor =
+            createTDMDescriptor<remove_cvref_t<T>, num_tensor_dims>(p_data_ + linear_offset,
+                                                                    smem,
+                                                                    tensor_dims_uint32.data,
+                                                                    global_strides_uint64.data,
+                                                                    box_dim_uint16.data,
+                                                                    tdm_config);
+
+        amd_tdm_load(TDMDescriptor);
+    }
+
+    template <typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
+    CK_TILE_DEVICE void tdm_store(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
+                                  index_t linear_offset,
+                                  const DimTuple_& tensor_dims,
+                                  const DimTuple_& global_strides,
+                                  number<num_tensor_dims> = {})
+    {
+        TDMConfig tdm_config; // default initialize all fields to zero/false
+
+        // Convert tensor dimensions to uint32_t array
+        array<uint32_t, num_tensor_dims> tensor_dims_uint32;
+        static_for<0, num_tensor_dims, 1>{}(
+            [&](auto i) { tensor_dims_uint32(i) = static_cast<uint32_t>(tensor_dims[i]); });
+
+        // Convert global strides to uint64_t array
+        array<uint64_t, num_tensor_dims> global_strides_uint64;
+        static_for<0, num_tensor_dims, 1>{}(
+            [&](auto i) { global_strides_uint64(i) = static_cast<uint64_t>(global_strides[i]); });
+
+        // Convert box dimensions to uint16_t array
+        constexpr auto box_dim = BoxDim_{};
+        constexpr auto box_dim_uint16 =
+            generate_array([&](auto i) { return static_cast<uint16_t>(box_dim.at(i)); },
+                           number<num_tensor_dims>{});
+
+        auto TDMDescriptor =
+            createTDMDescriptor<remove_cvref_t<T>, num_tensor_dims>(p_data_ + linear_offset,
+                                                                    smem,
+                                                                    tensor_dims_uint32.data,
+                                                                    global_strides_uint64.data,
+                                                                    box_dim_uint16.data,
+                                                                    tdm_config);
+
+        amd_tdm_store(TDMDescriptor);
+    }
+
     // FIXME: remove
     CK_TILE_DEVICE static constexpr bool is_static_buffer() { return false; }
 
@@ -1087,6 +1176,24 @@ struct buffer_view<address_space_enum::lds,
 #endif
             }
         }
+    }
+
+    template <typename DimTuple_, index_t num_tensor_dims>
+    CK_TILE_DEVICE void tdm_get(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
+                                index_t linear_offset,
+                                const DimTuple_& tensor_dims,
+                                const DimTuple_& global_strides,
+                                const DimTuple_& box_dim,
+                                number<num_tensor_dims> = {})
+    {
+        static_assert(false, "Error: tdm load not supported in shared memory space.");
+        ignore = smem;
+        ignore = linear_offset;
+        ignore = tensor_dims;
+        ignore = global_strides;
+        ignore = box_dim;
+        ignore = num_tensor_dims;
+        return;
     }
 
     // FIXME: remove

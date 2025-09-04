@@ -395,6 +395,108 @@ struct tile_window_with_static_distribution
         });
     }
 
+    template <typename LdsTileWindow_, typename DimTuple_, index_t i_access_unsupport_ = -1>
+    CK_TILE_DEVICE auto tdm_load_to_lds(LdsTileWindow_&& lds_tile,
+                                        const DimTuple_& tensor_dims,
+                                        const DimTuple_& global_strides,
+                                        number<i_access_unsupport_> = {}) const
+    {
+        using LdsTileWindow      = remove_cvref_t<LdsTileWindow_>;
+        using LdsDataType        = typename LdsTileWindow::DataType;
+        constexpr auto tile_dstr = typename Base::TileDstr{};
+
+        static constexpr index_t num_tensor_dims = BottomTensorView_::get_num_of_dimension();
+        // constexpr auto tile_dstr = typename Base::TileDstr{};
+
+        const auto lds_window_origin       = lds_tile.get_window_origin();
+        const auto& lds_bottom_tensor_view = lds_tile.get_bottom_tensor_view();
+        const auto& lds_tensor_descriptor  = lds_bottom_tensor_view.get_tensor_descriptor();
+        auto smem_base_ptr                 = lds_bottom_tensor_view.get_buffer_view().p_data_;
+
+        static_for<0, NumCoord, 1>{}([&](auto iCoord) {
+            auto window_adaptor_thread_coord = pre_computed_coords_[iCoord][I0]; // without origin
+            auto bottom_tensor_thread_coord  = pre_computed_coords_[iCoord][I1]; // with origin
+
+            auto lds_bottom_tensor_thread_idx =
+                lds_window_origin + window_adaptor_thread_coord.get_bottom_index();
+
+            // tdm's box dim is reversed from tile distribution
+            constexpr auto box_dim =
+                to_sequence(tile_dstr.get_ys_to_d_descriptor().get_lengths()).reverse();
+            // Use precomputed tensor descriptor
+            const auto lds_coord =
+                make_tensor_coordinate(lds_tensor_descriptor, lds_bottom_tensor_thread_idx);
+
+            // Calculate SMEM address using base pointer
+            CK_TILE_LDS_ADDR LdsDataType* smem = smem_base_ptr + lds_coord.get_offset();
+            // Assert that both window origins have the same dimensionality
+            static_assert(
+                std::is_same<std::remove_cv_t<std::remove_reference_t<decltype(lds_window_origin)>>,
+                             std::remove_cv_t<std::remove_reference_t<
+                                 decltype(this->get_window_origin())>>>::value,
+                "Window origin types mismatch - dimensions must be consistent!");
+
+            this->get_bottom_tensor_view()
+                .template get_tdm_elements<DimTuple_,
+                                           remove_cvref_t<decltype(box_dim)>,
+                                           num_tensor_dims>(smem,
+                                                            bottom_tensor_thread_coord,
+                                                            tensor_dims,
+                                                            global_strides,
+                                                            number<num_tensor_dims>{});
+        });
+    }
+
+    template <typename LdsTileWindow_, typename DimTuple_, index_t i_access_unsupport_ = -1>
+    CK_TILE_DEVICE auto tdm_store_from_lds(const LdsTileWindow_& lds_tile,
+                                           const DimTuple_& tensor_dims,
+                                           const DimTuple_& global_strides,
+                                           number<i_access_unsupport_> = {}) const
+    {
+        using LdsTileWindow      = remove_cvref_t<LdsTileWindow_>;
+        using LdsDataType        = typename LdsTileWindow::DataType;
+        constexpr auto tile_dstr = typename Base::TileDstr{};
+
+        static constexpr index_t num_tensor_dims = BottomTensorView_::get_num_of_dimension();
+
+        const auto lds_window_origin       = lds_tile.get_window_origin();
+        const auto& lds_bottom_tensor_view = lds_tile.get_bottom_tensor_view();
+        const auto& lds_tensor_descriptor  = lds_bottom_tensor_view.get_tensor_descriptor();
+        auto smem_base_ptr                 = lds_bottom_tensor_view.get_buffer_view().p_data_;
+
+        static_for<0, NumCoord, 1>{}([&](auto iCoord) {
+            auto window_adaptor_thread_coord = pre_computed_coords_[iCoord][I0]; // without origin
+            auto bottom_tensor_thread_coord  = pre_computed_coords_[iCoord][I1]; // with origin
+
+            auto lds_bottom_tensor_thread_idx =
+                lds_window_origin + window_adaptor_thread_coord.get_bottom_index();
+
+            constexpr auto box_dim =
+                to_sequence(tile_dstr.get_ys_to_d_descriptor().get_lengths()).reverse();
+            // Use precomputed tensor descriptor
+            const auto lds_coord =
+                make_tensor_coordinate(lds_tensor_descriptor, lds_bottom_tensor_thread_idx);
+
+            // Calculate SMEM address using base pointer
+            CK_TILE_LDS_ADDR LdsDataType* smem = smem_base_ptr + lds_coord.get_offset();
+            // Assert that both window origins have the same dimensionality
+            static_assert(
+                std::is_same<std::remove_cv_t<std::remove_reference_t<decltype(lds_window_origin)>>,
+                             std::remove_cv_t<std::remove_reference_t<
+                                 decltype(this->get_window_origin())>>>::value,
+                "Window origin types mismatch - dimensions must be consistent!");
+
+            this->get_bottom_tensor_view()
+                .template store_tdm_elements<DimTuple_,
+                                             remove_cvref_t<decltype(box_dim)>,
+                                             num_tensor_dims>(smem,
+                                                              bottom_tensor_thread_coord,
+                                                              tensor_dims,
+                                                              global_strides,
+                                                              number<num_tensor_dims>{});
+        });
+    }
+
     template <typename Policy, index_t i_access_unsupport_ = -1, bool oob_conditional_check = true>
     CK_TILE_DEVICE auto load_transpose() const
     {

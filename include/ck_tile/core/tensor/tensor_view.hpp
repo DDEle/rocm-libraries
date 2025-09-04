@@ -434,6 +434,29 @@ struct tensor_view
             coord.get_offset() / PackedSize, linear_offset / PackedSize, is_valid_element, x);
     }
 
+    template <typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
+    CK_TILE_DEVICE constexpr void get_tdm_elements(CK_TILE_LDS_ADDR remove_cvref_t<DataType>* smem,
+                                                   const TensorCoord& coord,
+                                                   const DimTuple_& tensor_dims,
+                                                   const DimTuple_& global_strides,
+                                                   number<num_tensor_dims> = {})
+    {
+        return buf_.template tdm_get<DimTuple_, BoxDim_, num_tensor_dims>(
+            smem, coord.get_offset(), tensor_dims, global_strides, number<num_tensor_dims>{});
+    }
+
+    template <typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
+    CK_TILE_DEVICE constexpr void
+    store_tdm_elements(CK_TILE_LDS_ADDR remove_cvref_t<DataType>* smem,
+                       const TensorCoord& coord,
+                       const DimTuple_& tensor_dims,
+                       const DimTuple_& global_strides,
+                       number<num_tensor_dims> = {})
+    {
+        return buf_.template tdm_store<DimTuple_, BoxDim_, num_tensor_dims>(
+            smem, coord.get_offset(), tensor_dims, global_strides, number<num_tensor_dims>{});
+    }
+
     // member
     buffer_view buf_;
     TensorDesc desc_;

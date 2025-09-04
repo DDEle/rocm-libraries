@@ -187,6 +187,12 @@
 #endif
 #endif
 
+#if(defined(__gfx125__))
+#define CK_TILE_ENABLE_TDM_FEATURE 1
+#else
+#define CK_TILE_ENABLE_TDM_FEATURE 0
+#endif
+
 // workaround for ROCm 6.2 and later
 #ifndef CK_TILE_WORKAROUND_ROCM_6_2_SCRATCH_MEMORY_ISSUE
 #if(HIP_VERSION_MAJOR == 6 && HIP_VERSION_MINOR == 2 && HIP_VERSION_PATCH >= 41133) ||  \

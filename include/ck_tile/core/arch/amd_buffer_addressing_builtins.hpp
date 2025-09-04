@@ -5,6 +5,7 @@
 
 #if CK_TILE_USE_BUFFER_ADDRESSING_BUILTIN
 
+#include "ck_tile/core/arch/amd_tdm_descriptor.hpp"
 #include "ck_tile/core/numeric/integer.hpp"
 #include "ck_tile/core/numeric/integral_constant.hpp"
 #include "ck_tile/core/numeric/vector_type.hpp"
@@ -2618,6 +2619,62 @@ __device__ auto amd_transpose_load_to_vgpr(const T* __restrict__ in_ptr)
     }
 }
 #endif
+
+template <typename DataType, index_t TensorRank, bool IsGatherMode = false>
+CK_TILE_DEVICE void
+amd_tdm_load(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor)
+{
+#if CK_TILE_ENABLE_TDM_FEATURE
+    static constexpr auto I0 = number<0>{};
+    static constexpr auto I1 = number<1>{};
+    static constexpr auto I2 = number<2>{};
+    static constexpr auto I3 = number<3>{};
+    if constexpr(TensorRank == 2 && !IsGatherMode)
+    {
+        auto tdm_desc_grp = descriptor.getResourceDescriptorGroup2();
+        __builtin_amdgcn_tensor_load_to_lds_d2(tdm_desc_grp.get(I0), tdm_desc_grp.get(I1), 0);
+    }
+    else
+    {
+        auto tdm_desc_grp = descriptor.getResourceDescriptorGroup4();
+        __builtin_amdgcn_tensor_load_to_lds(tdm_desc_grp.get(I0),
+                                            tdm_desc_grp.get(I1),
+                                            tdm_desc_grp.get(I2),
+                                            tdm_desc_grp.get(I3),
+                                            0);
+    }
+#else
+    ignore = descriptor;
+#endif
+}
+
+template <typename DataType, index_t TensorRank, bool IsGatherMode = false>
+CK_TILE_DEVICE void
+amd_tdm_store(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor)
+{
+#if CK_TILE_ENABLE_TDM_FEATURE
+    static constexpr auto I0 = number<0>{};
+    static constexpr auto I1 = number<1>{};
+    static constexpr auto I2 = number<2>{};
+    static constexpr auto I3 = number<3>{};
+    if constexpr(TensorRank == 2 && !IsGatherMode)
+    {
+        auto tdm_desc_grp = descriptor.getResourceDescriptorGroup2();
+        __builtin_amdgcn_tensor_store_from_lds_d2(tdm_desc_grp.get(I0), tdm_desc_grp.get(I1), 0);
+    }
+    else
+    {
+        auto tdm_desc_grp = descriptor.getResourceDescriptorGroup4();
+        __builtin_amdgcn_tensor_store_from_lds(tdm_desc_grp.get(I0),
+                                               tdm_desc_grp.get(I1),
+                                               tdm_desc_grp.get(I2),
+                                               tdm_desc_grp.get(I3),
+                                               0);
+    }
+#else
+    ignore = descriptor;
+#endif
+}
 
 } // namespace ck_tile
 

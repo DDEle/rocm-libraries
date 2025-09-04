@@ -99,7 +99,7 @@ struct tile_distribution
 
         if constexpr(NDimP == 1)
         {
-            if constexpr(IsWarpLevelParallelOnly)
+            if constexpr(IsWarpLevelParallelOnly_)
             {
                 return array<index_t, 1>{get_warp_id()};
             }
@@ -487,7 +487,7 @@ CK_TILE_HOST_DEVICE constexpr auto make_tile_distribution(StaticTileDistribution
 template <typename StaticTileDistributionEncoding_, bool IsWarpLevelParallelOnly_ = false>
 CK_TILE_HOST_DEVICE constexpr auto
 make_static_tile_distribution(StaticTileDistributionEncoding_,
-                              bool_constant<IsWarpLevelParallelOnly> = {})
+                              bool_constant<IsWarpLevelParallelOnly_> = {})
 {
     using DstrEncode = remove_cvref_t<StaticTileDistributionEncoding_>;
 
@@ -520,7 +520,7 @@ make_static_tile_distribution(StaticTileDistributionEncoding_,
         remove_cvref_t<decltype(ys_to_d_descriptor)>,
         remove_cvref_t<DstrEncode>,
         detail::tile_distribution_detail<remove_cvref_t<decltype(rh_major_minor_to_hidden_ids)>>,
-        IsWarpLevelParallelOnly>{ps_ys_to_xs_adaptor, ys_to_d_descriptor};
+        IsWarpLevelParallelOnly_>{ps_ys_to_xs_adaptor, ys_to_d_descriptor};
 }
 
 //***********************************************************************************

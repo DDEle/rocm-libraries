@@ -189,7 +189,7 @@ CK_TILE_DEVICE void s_wait_tensorcnt()
     // 3 is from shader programming guide: "Each wave has a limit of at most 3 tensor ops in flight
     // at once"
     static_assert(tensorcnt <= 3, "tensorcnt should be in range of [0, 3]");
-#if defined(__gfx125__)
+#if CK_TILE_ENABLE_TDM_FEATURE
     __builtin_amdgcn_s_wait_tensorcnt(tensorcnt);
 #endif
 }

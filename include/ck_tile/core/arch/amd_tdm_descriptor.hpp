@@ -208,6 +208,7 @@ union TDM_GROUP1
         {
         case 0: tensorDim0(value); break;
         case 1: tensorDim1(value); break;
+        default: assert(false && "invalid index for tensorDim"); break;
         }
     }
 
@@ -217,6 +218,7 @@ union TDM_GROUP1
         {
         case 0: tensorDim0Stride(value); break;
         case 1: tensorDim1Stride(value); break;
+        default: assert(false && "invalid index for tensorDimStride"); break;
         }
     }
 
@@ -227,6 +229,7 @@ union TDM_GROUP1
         case 0: tile_dim0 = value; break;
         case 1: tile_dim1 = value; break;
         case 2: tile_dim2 = value; break;
+        default: assert(false && "invalid index for tileDim"); break;
         }
     }
 };

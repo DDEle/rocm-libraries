@@ -2620,7 +2620,10 @@ __device__ auto amd_transpose_load_to_vgpr(const T* __restrict__ in_ptr)
 }
 #endif
 
-template <typename DataType, index_t TensorRank, bool IsGatherMode = false>
+template <amd_buffer_coherence_enum coherence = amd_buffer_coherence_enum::coherence_default,
+          typename DataType,
+          index_t TensorRank,
+          bool IsGatherMode = false>
 CK_TILE_DEVICE void
 amd_tdm_load(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor)
 {
@@ -2632,7 +2635,8 @@ amd_tdm_load(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor
     if constexpr(TensorRank == 2 && !IsGatherMode)
     {
         auto tdm_desc_grp = descriptor.getResourceDescriptorGroup2();
-        __builtin_amdgcn_tensor_load_to_lds_d2(tdm_desc_grp.get(I0), tdm_desc_grp.get(I1), 0);
+        __builtin_amdgcn_tensor_load_to_lds_d2(
+            tdm_desc_grp.get(I0), tdm_desc_grp.get(I1), static_cast<index_t>(coherence));
     }
     else
     {
@@ -2641,14 +2645,17 @@ amd_tdm_load(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor
                                             tdm_desc_grp.get(I1),
                                             tdm_desc_grp.get(I2),
                                             tdm_desc_grp.get(I3),
-                                            0);
+                                            static_cast<index_t>(coherence));
     }
 #else
     ignore = descriptor;
 #endif
 }
 
-template <typename DataType, index_t TensorRank, bool IsGatherMode = false>
+template <amd_buffer_coherence_enum coherence = amd_buffer_coherence_enum::coherence_default,
+          typename DataType,
+          index_t TensorRank,
+          bool IsGatherMode = false>
 CK_TILE_DEVICE void
 amd_tdm_store(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor)
 {
@@ -2660,7 +2667,8 @@ amd_tdm_store(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descripto
     if constexpr(TensorRank == 2 && !IsGatherMode)
     {
         auto tdm_desc_grp = descriptor.getResourceDescriptorGroup2();
-        __builtin_amdgcn_tensor_store_from_lds_d2(tdm_desc_grp.get(I0), tdm_desc_grp.get(I1), 0);
+        __builtin_amdgcn_tensor_store_from_lds_d2(
+            tdm_desc_grp.get(I0), tdm_desc_grp.get(I1), static_cast<index_t>(coherence));
     }
     else
     {
@@ -2669,7 +2677,7 @@ amd_tdm_store(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descripto
                                                tdm_desc_grp.get(I1),
                                                tdm_desc_grp.get(I2),
                                                tdm_desc_grp.get(I3),
-                                               0);
+                                               static_cast<index_t>(coherence));
     }
 #else
     ignore = descriptor;

@@ -2802,7 +2802,10 @@ __device__ auto amd_transpose_load_to_vgpr(const T* __restrict__ in_ptr)
 }
 #endif
 
-template <typename DataType, index_t TensorRank, bool IsGatherMode = false>
+template <amd_buffer_coherence_enum coherence = amd_buffer_coherence_enum::coherence_default,
+          typename DataType,
+          index_t TensorRank,
+          bool IsGatherMode = false>
 CK_TILE_DEVICE void
 amd_tdm_load(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor)
 {
@@ -2830,7 +2833,10 @@ amd_tdm_load(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor
 #endif
 }
 
-template <typename DataType, index_t TensorRank, bool IsGatherMode = false>
+template <amd_buffer_coherence_enum coherence = amd_buffer_coherence_enum::coherence_default,
+          typename DataType,
+          index_t TensorRank,
+          bool IsGatherMode = false>
 CK_TILE_DEVICE void
 amd_tdm_store(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor)
 {

@@ -780,7 +780,7 @@ struct buffer_view<address_space_enum::global,
                                                                     box_dim_uint16.data,
                                                                     tdm_config);
 
-        amd_tdm_load(TDMDescriptor);
+        amd_tdm_load<Coherence>(TDMDescriptor);
     }
 
     template <typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
@@ -816,7 +816,7 @@ struct buffer_view<address_space_enum::global,
                                                                     box_dim_uint16.data,
                                                                     tdm_config);
 
-        amd_tdm_store(TDMDescriptor);
+        amd_tdm_store<Coherence>(TDMDescriptor);
     }
 
     // FIXME: remove

@@ -54,7 +54,8 @@ inline std::string get_device_name()
 
 inline bool is_gfx12_supported()
 {
-    return ck::get_device_name() == "gfx1200" || ck::get_device_name() == "gfx1201";
+    return ck::get_device_name() == "gfx1200" || ck::get_device_name() == "gfx1201" ||
+           ck::get_device_name() == "gfx1250" || ck::get_device_name() == "gfx1251";
 }
 
 inline bool is_gfx11_supported()
@@ -63,6 +64,29 @@ inline bool is_gfx11_supported()
            ck::get_device_name() == "gfx1102" || ck::get_device_name() == "gfx1103" ||
            ck::get_device_name() == "gfx1150" || ck::get_device_name() == "gfx1151" ||
            ck::get_device_name() == "gfx1152";
+}
+
+inline bool is_gfx101_supported()
+{
+    return ck::get_device_name() == "gfx1010" || ck::get_device_name() == "gfx1011" ||
+           ck::get_device_name() == "gfx1012";
+}
+
+inline bool is_gfx103_supported()
+{
+    return ck::get_device_name() == "gfx1030" || ck::get_device_name() == "gfx1031" ||
+           ck::get_device_name() == "gfx1032" || ck::get_device_name() == "gfx1034" ||
+           ck::get_device_name() == "gfx1035" || ck::get_device_name() == "gfx1036";
+}
+
+inline bool is_gfx120_supported()
+{
+    return ck::get_device_name() == "gfx1200" || ck::get_device_name() == "gfx1201";
+}
+
+inline bool is_gfx125_supported()
+{
+    return ck::get_device_name() == "gfx1250" || ck::get_device_name() == "gfx1251";
 }
 
 inline bool is_xdl_supported()
@@ -88,41 +112,5 @@ inline bool is_bf16_atomic_supported()
            is_gfx12_supported();
 }
 
-inline bool is_gfx101_supported()
-{
-    return ck::get_device_name() == "gfx1010" || ck::get_device_name() == "gfx1011" ||
-           ck::get_device_name() == "gfx1012";
-}
-
-inline bool is_gfx103_supported()
-{
-    return ck::get_device_name() == "gfx1030" || ck::get_device_name() == "gfx1031" ||
-           ck::get_device_name() == "gfx1032" || ck::get_device_name() == "gfx1034" ||
-           ck::get_device_name() == "gfx1035" || ck::get_device_name() == "gfx1036";
-}
-
-inline bool is_gfx11_supported()
-{
-    return ck::get_device_name() == "gfx1100" || ck::get_device_name() == "gfx1101" ||
-           ck::get_device_name() == "gfx1102" || ck::get_device_name() == "gfx1103" ||
-           ck::get_device_name() == "gfx1150" || ck::get_device_name() == "gfx1151" ||
-           ck::get_device_name() == "gfx1152";
-}
-
-inline bool is_gfx12_supported()
-{
-    return ck::get_device_name() == "gfx1200" || ck::get_device_name() == "gfx1201" ||
-           ck::get_device_name() == "gfx1250" || ck::get_device_name() == "gfx1251";
-}
-
-inline bool is_gfx120_supported()
-{
-    return ck::get_device_name() == "gfx1200" || ck::get_device_name() == "gfx1201";
-}
-
-inline bool is_gfx125_supported()
-{
-    return ck::get_device_name() == "gfx1250" || ck::get_device_name() == "gfx1251";
-}
 } // namespace ck
 #endif

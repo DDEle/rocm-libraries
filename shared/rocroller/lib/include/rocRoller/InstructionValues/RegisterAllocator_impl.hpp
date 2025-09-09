@@ -26,8 +26,10 @@
 
 #pragma once
 
+#include <rocRoller/GPUArchitecture/GPUArchitecture.hpp>
 #include <rocRoller/InstructionValues/Register.hpp>
 #include <rocRoller/InstructionValues/RegisterAllocator.hpp>
+#include <rocRoller/InstructionValues/RegisterAllocator_detail.hpp>
 #include <rocRoller/Utilities/Error.hpp>
 
 // Used for std::iota
@@ -105,7 +107,8 @@ namespace rocRoller
 
         inline void Allocator::allocate(AllocationPtr alloc)
         {
-            auto registers = findFree(alloc->registerCount(), alloc->options());
+            auto const& arch      = alloc->m_context.lock()->targetArchitecture();
+            auto        registers = findFree(alloc->registerCount(), alloc->options(), arch);
             AssertFatal(!registers.empty(),
                         "No more ",
                         m_regType,
@@ -141,7 +144,8 @@ namespace rocRoller
 
         inline bool Allocator::canAllocate(std::shared_ptr<const Allocation> alloc) const
         {
-            auto theRegisters = findFree(alloc->registerCount(), alloc->options());
+            auto const& arch         = alloc->m_context.lock()->targetArchitecture();
+            auto        theRegisters = findFree(alloc->registerCount(), alloc->options(), arch);
             return !theRegisters.empty();
         }
 
@@ -171,23 +175,25 @@ namespace rocRoller
         }
 
         inline std::vector<int> Allocator::findFree(int                      count,
-                                                    AllocationOptions const& options) const
+                                                    AllocationOptions const& options,
+                                                    GPUArchitecture const&   arch) const
         {
             AssertFatal(count > 0, "Invalid register count for findFree", ShowValue(count));
 
             switch(m_scheme)
             {
             case AllocatorScheme::FirstFit:
-                return findFreeFirstFit(count, options);
+                return findFreeFirstFit(count, options, arch);
             case AllocatorScheme::PerfectFit:
-                return findFreePerfectFit(count, options);
+                return findFreePerfectFit(count, options, arch);
             default:
                 Throw<FatalError>("Allocator scheme not implemented.");
             }
         }
 
         inline std::vector<int> Allocator::findFreeFirstFit(int                      count,
-                                                            AllocationOptions const& options) const
+                                                            AllocationOptions const& options,
+                                                            GPUArchitecture const&   arch) const
         {
             AssertFatal(count >= 0, "Negative count");
             AssertFatal(options.alignment <= options.contiguousChunkWidth,
@@ -201,9 +207,16 @@ namespace rocRoller
 
             int idx = 0;
 
+            if(arch.HasCapability(GPUCapability::HasVGPRIndexing)
+               and regType() == Register::Type::Vector)
+            {
+                if(not options.forceReservedRegion)
+                    idx = RegisterAllocatorDetail::ReservedRegionSize();
+            }
+
             while(rv.size() < count)
             {
-                auto [start, blockSize] = findContiguousRange(idx, width, options, rv);
+                auto [start, blockSize] = findContiguousRange(idx, width, options, arch, rv);
                 idx                     = start;
 
                 if(idx >= 0)
@@ -221,9 +234,12 @@ namespace rocRoller
             return rv;
         }
 
-        inline std::vector<int>
-            Allocator::findFreePerfectFit(int count, AllocationOptions const& options) const
+        inline std::vector<int> Allocator::findFreePerfectFit(int                      count,
+                                                              AllocationOptions const& options,
+                                                              GPUArchitecture const&   arch) const
         {
+            using namespace RegisterAllocatorDetail;
+
             AssertFatal(options.alignment <= options.contiguousChunkWidth,
                         "Not yet supported",
                         ShowValue(options));
@@ -244,9 +260,26 @@ namespace rocRoller
 
             // Loop through register collection and pick out appropriate free blocks
             int candidateIdx = 0;
-            while(candidateIdx >= 0 && candidateIdx < m_registers.size())
+            int first        = 0;
+            int last         = m_registers.size();
+
+            if(arch.HasCapability(GPUCapability::HasVGPRIndexing)
+               and regType() == Register::Type::Vector)
             {
-                auto candidate = findContiguousRange(candidateIdx, width, options, rv);
+                if(options.forceReservedRegion)
+                {
+                    last = ReservedRegionSize();
+                }
+                else
+                {
+                    candidateIdx = ReservedRegionSize();
+                    first        = ReservedRegionSize();
+                }
+            }
+
+            while(candidateIdx >= first && candidateIdx < last)
+            {
+                auto candidate = findContiguousRange(candidateIdx, width, options, arch, rv);
                 candidateIdx   = candidate.first;
                 if(candidateIdx >= 0)
                 {
@@ -298,7 +331,7 @@ namespace rocRoller
                         // Check if chunk is outside of block, or if it runs up against the end of the total number of registers
                         // The equal check in `start + width >= m_registers.size()`
                         // is to avoid increasing register high-water mark by not allocating the last register
-                        if(start + width > idx + blockSize || start + width >= m_registers.size())
+                        if(start + width > idx + blockSize || start + width >= last)
                         {
                             // Should not use end of block, revert to using beginning
                             start = idx;
@@ -335,19 +368,28 @@ namespace rocRoller
             Allocator::findContiguousRange(int                      start,
                                            int                      regCount,
                                            AllocationOptions const& options,
+                                           GPUArchitecture const&   arch,
                                            std::vector<int> const&  reservedIndices) const
         {
             AssertFatal(start >= 0 && regCount >= 0, "Negative arguments");
 
             // The start should always be aligned
-            start = align(start, options);
+            start   = align(start, options);
+            int end = m_registers.size();
 
-            while(start < m_registers.size())
+            if(arch.HasCapability(GPUCapability::HasVGPRIndexing)
+               and regType() == Register::Type::Vector)
+            {
+                if(options.forceReservedRegion)
+                    end = RegisterAllocatorDetail::ReservedRegionSize();
+            }
+
+            while(start < end)
             {
                 // Number of free registers in this block
                 int blockSize = 0;
 
-                for(int i = start; i < m_registers.size(); i++)
+                for(int i = start; i < end; i++)
                 {
                     // Check if register is not free, or if it's in our reserved list
                     if(!isFree(i)

@@ -115,9 +115,15 @@ namespace rocRoller
                 break;
             }
             case Register::Type::Vector:
-                rv->m_allocators[i]
-                    = std::make_shared<Register::Allocator>(regType, kernelOpts->maxVGPRs);
+            {
+                // TODO: Should be capability check then get for each arch
+                // e.g. rv->m_targetArch.target().GetCapability(GPUCapability::MaxVGPRs)
+                auto const maxVGPRs = rv->m_targetArch.HasCapability(GPUCapability::HasVGPRIndexing)
+                                          ? 1024
+                                          : kernelOpts->maxVGPRs;
+                rv->m_allocators[i] = std::make_shared<Register::Allocator>(regType, maxVGPRs);
                 break;
+            }
             case Register::Type::Scalar:
                 rv->m_allocators[i]
                     = std::make_shared<Register::Allocator>(regType, kernelOpts->maxSGPRs);

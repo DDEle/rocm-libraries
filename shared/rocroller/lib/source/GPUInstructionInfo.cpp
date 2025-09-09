@@ -43,6 +43,11 @@ namespace rocRoller
         return opCode.starts_with("v_wmma");
     }
 
+    bool GPUInstructionInfo::isSWMMAC(std::string const& opCode)
+    {
+        return opCode.rfind("v_swmmac", 0) == 0;
+    }
+
     bool GPUInstructionInfo::isVCMPX(std::string const& opCode)
     {
         return opCode.starts_with("v_cmpx_");

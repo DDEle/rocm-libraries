@@ -221,6 +221,7 @@ namespace rocRoller
         static bool isDLOP(std::string const& inst);
         static bool isMFMA(std::string const& inst);
         static bool isWMMA(std::string const& inst);
+        static bool isSWMMAC(std::string const& inst);
         static bool isVCMPX(std::string const& inst);
         static bool isVCMP(std::string const& inst);
 

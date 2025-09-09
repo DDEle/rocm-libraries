@@ -86,6 +86,10 @@ namespace rocRoller
             {
                 return 64;
             }
+            else if(arch.HasCapability(GPUCapability::ds_load_tr16_b128))
+            {
+                return 128;
+            }
             else
             {
                 Throw<FatalError>(
@@ -93,7 +97,8 @@ namespace rocRoller
                     arch.target().toString());
             }
         case 8:
-            if(arch.HasCapability(GPUCapability::ds_read_b64_tr_b8))
+            if(arch.HasCapability(GPUCapability::ds_read_b64_tr_b8)
+               || arch.HasCapability(GPUCapability::ds_load_tr8_b64))
             {
                 return 64;
             }
@@ -104,7 +109,8 @@ namespace rocRoller
                     arch.target().toString());
             }
         case 6:
-            if(arch.HasCapability(GPUCapability::ds_read_b96_tr_b6))
+            if(arch.HasCapability(GPUCapability::ds_read_b96_tr_b6)
+               || arch.HasCapability(GPUCapability::ds_load_tr6_b96))
             {
                 return 96;
             }
@@ -115,7 +121,8 @@ namespace rocRoller
                     arch.target().toString());
             }
         case 4:
-            if(arch.HasCapability(GPUCapability::ds_read_b64_tr_b4))
+            if(arch.HasCapability(GPUCapability::ds_read_b64_tr_b4)
+               || arch.HasCapability(GPUCapability::ds_load_tr4_b64))
             {
                 return 64;
             }
@@ -153,6 +160,10 @@ namespace rocRoller
             {
                 return "ds_read_b64_tr_b16";
             }
+            else if(arch.HasCapability(GPUCapability::ds_load_tr16_b128))
+            {
+                return "ds_load_tr16_b128";
+            }
             else
             {
                 Throw<FatalError>(
@@ -163,6 +174,10 @@ namespace rocRoller
             if(arch.HasCapability(GPUCapability::ds_read_b64_tr_b8))
             {
                 return "ds_read_b64_tr_b8";
+            }
+            else if(arch.HasCapability(GPUCapability::ds_load_tr8_b64))
+            {
+                return "ds_load_tr8_b64";
             }
             else
             {
@@ -175,6 +190,10 @@ namespace rocRoller
             {
                 return "ds_read_b96_tr_b6";
             }
+            else if(arch.HasCapability(GPUCapability::ds_load_tr6_b96))
+            {
+                return "ds_load_tr6_b96";
+            }
             else
             {
                 Throw<FatalError>(
@@ -185,6 +204,10 @@ namespace rocRoller
             if(arch.HasCapability(GPUCapability::ds_read_b64_tr_b4))
             {
                 return "ds_read_b64_tr_b4";
+            }
+            else if(arch.HasCapability(GPUCapability::ds_load_tr4_b64))
+            {
+                return "ds_load_tr4_b64";
             }
             else
             {

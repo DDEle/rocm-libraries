@@ -399,9 +399,15 @@ namespace rocRoller
             auto waveY = graph.coordinates.addElement(Wavefront(1));
             auto wave  = graph.coordinates.addElement(Wavefront(-1));
 
-            uint numElements       = waveTile.elements();
-            uint activeLanesInWave = static_cast<uint>(wavefrontSize);
-            uint numGPR            = numElements / activeLanesInWave;
+            uint        numElements       = waveTile.elements();
+            uint        activeLanesInWave = static_cast<uint>(wavefrontSize);
+            const auto& arch              = context->targetArchitecture();
+            if(arch.HasCapability(GPUCapability::PartiallyActiveWaveSize) && isScaleType(dataType))
+            {
+                activeLanesInWave = arch.GetCapability(GPUCapability::PartiallyActiveWaveSize);
+            }
+
+            uint numGPR = numElements / activeLanesInWave;
 
             const MatrixMultiplySizes mi{.m = macTile.subTileSizes[0],
                                          .n = macTile.subTileSizes[1],
@@ -420,8 +426,6 @@ namespace rocRoller
             connections.push_back(DC<VGPR>(vgpr));
 
             auto bitsPerElement = DataTypeInfo::Get(dataType).elementBits;
-
-            const auto& arch = context->targetArchitecture();
 
             bool isTransposeLayout = params->transposeMemoryAccess[waveTile.layout];
 

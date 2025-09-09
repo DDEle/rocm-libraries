@@ -2786,8 +2786,20 @@ namespace KernelGraphTest
         }
         EXPECT_THAT(output(), testing::HasSubstr("s_cbranch_scc0")); //Branch for False
         EXPECT_THAT(output(), testing::HasSubstr("s_branch")); //Branch after True
-        EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v1, 1")); //True Body
-        EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v1, 0")); //False Body
+
+        if(m_context->targetArchitecture().HasCapability(GPUCapability::HasVGPRIndexing))
+        {
+            int idx = Register::RegisterAllocatorDetail::ReservedRegionSize();
+            EXPECT_THAT(output(),
+                        testing::HasSubstr(fmt::format("v_mov_b32 v{}, 1", idx))); //True Body
+            EXPECT_THAT(output(),
+                        testing::HasSubstr(fmt::format("v_mov_b32 v{}, 0", idx))); //False Body
+        }
+        else
+        {
+            EXPECT_THAT(output(), testing::HasSubstr(fmt::format("v_mov_b32 v1, 1"))); //True Body
+            EXPECT_THAT(output(), testing::HasSubstr(fmt::format("v_mov_b32 v1, 0"))); //False Body
+        }
     }
 
     TEST_F(KernelGraphTestGPU, GPU_ConditionalExecute)

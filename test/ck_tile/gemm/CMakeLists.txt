@@ -60,7 +60,7 @@ if(GPU_TARGETS MATCHES "gfx94|gfx95|gfx90a|gfx11|gfx12")
         target_compile_options(test_ck_tile_gemm_pipeline_persistent PRIVATE ${EXAMPLE_GEMM_COMPILE_OPTIONS})
     endif()
 
-    if(GPU_TARGETS MATCHES "gfx11|gfx120")
+    if(GPU_TARGETS MATCHES "gfx11|gfx12")
     # On Radeon devices, build the WMMA version instead
         add_gtest_executable(test_ck_tile_gemm_pipeline_mem_wmma test_gemm_pipeline_mem_wmma.cpp)
         add_gtest_executable(test_ck_tile_gemm_pipeline_compv3_wmma test_gemm_pipeline_compv3_wmma.cpp)

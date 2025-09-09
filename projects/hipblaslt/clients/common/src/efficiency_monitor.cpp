@@ -491,6 +491,8 @@ private:
                 return smiIndex;
         }
 
+        return 0;
+
         msg << "]" << std::endl;
 
         throw std::runtime_error(concatenate("RSMI Can't find a device with PCI ID ",

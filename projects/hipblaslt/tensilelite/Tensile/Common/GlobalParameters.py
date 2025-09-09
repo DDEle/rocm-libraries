@@ -288,6 +288,10 @@ globalParameters["AsmDebug"] = (
     False  # Set to True to keep debug information for compiled code objects
 )
 
+# if ROCmAgentEnumeratorPath is "rocm_agent_enumerator", the arch path is /opt/rocm/bin/rocm_agent_enumerator ;
+# otherwise it is /opt/rocm/llvm/bin/amdgpu-arch
+globalParameters["ROCmAgentEnumeratorPath"] = None
+
 globalParameters["UseEffLike"] = True  # Set to False to use winnerGFlops as the performance metric
 
 # Save a copy - since pytest doesn't re-run this initialization code and YAML files can override global settings - odd things can happen
@@ -568,6 +572,9 @@ def assignGlobalParameters(config, isaInfoMap: Dict[IsaVersion, IsaInfo]):
 
     if "CodeObjectVersion" in config:
         globalParameters["CodeObjectVersion"] = config["CodeObjectVersion"]
+
+    if "ROCmAgentEnumeratorPath" in config:
+        globalParameters["ROCmAgentEnumeratorPath"] = config["ROCmAgentEnumeratorPath"]
 
     if getVerbosity() >= 1:
         printCapabilitiesTable(isaInfoMap)

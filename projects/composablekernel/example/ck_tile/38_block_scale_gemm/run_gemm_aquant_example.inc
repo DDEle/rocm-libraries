@@ -1,10 +1,11 @@
+
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025, Advanced Micro Devices, Inc. All rights reserved.
 
 #pragma once
-#include <bit>
 #include <random>
 #include <stdexcept>
+#include "../00_shared/host_tensor_utils.hpp"
 
 template <typename Layout>
 static constexpr inline auto is_row_major(Layout layout_)
@@ -31,7 +32,8 @@ auto shuffle_aq(const ck_tile::HostTensor<T>& t, int block_aq_k)
     return ck_tile::reference_permute(t_view, {1, 0, 2});
 }
 
-template <typename ADataType,
+template <typename GemmConfig,
+          typename ADataType,
           typename AQDataType,
           typename BDataType,
           typename AccDataType,
@@ -40,8 +42,7 @@ template <typename ADataType,
           typename AQLayout,
           typename BLayout,
           typename CLayout,
-          uint32_t QuantGroupSize,
-          bool Preshuffle = false>
+          uint32_t QuantGroupSize>
 float invoke_gemm(ck_tile::DeviceMem& a_m_k_dev_buf,
                   ck_tile::DeviceMem& aq_m_aqk_dev_buf,
                   ck_tile::DeviceMem& b_k_n_dev_buf,
@@ -58,7 +59,7 @@ float invoke_gemm(ck_tile::DeviceMem& a_m_k_dev_buf,
                   int n_warmup,
                   int n_repeat)
 {
-    ck_tile::AQuantGemmHostArgs args;
+    ck_tile::QuantGemmHostArgs args;
     args.a_ptr     = a_m_k_dev_buf.GetDeviceBuffer();
     args.aq_ptr    = aq_m_aqk_dev_buf.GetDeviceBuffer();
     args.b_ptr     = b_k_n_dev_buf.GetDeviceBuffer();
@@ -67,13 +68,14 @@ float invoke_gemm(ck_tile::DeviceMem& a_m_k_dev_buf,
     args.M         = M;
     args.N         = N;
     args.K         = K;
-    args.QK        = AQK;
+    args.QK_A      = AQK;
     args.stride_A  = stride_A;
     args.stride_B  = stride_B;
     args.stride_C  = stride_C;
     args.stride_AQ = stride_AQ;
 
-    float ave_time = gemm_calc_aquant<ADataType,
+    float ave_time = gemm_calc_aquant<GemmConfig,
+                                      ADataType,
                                       AQDataType,
                                       BDataType,
                                       AccDataType,
@@ -82,8 +84,7 @@ float invoke_gemm(ck_tile::DeviceMem& a_m_k_dev_buf,
                                       ALayout,
                                       BLayout,
                                       CLayout,
-                                      QuantGroupSize,
-                                      Preshuffle>(
+                                      QuantGroupSize>(
         args, ck_tile::stream_config{nullptr, true, 1, n_warmup, n_repeat});
 
     std::size_t flop     = std::size_t(2) * M * N * K;
@@ -206,7 +207,7 @@ int run_gemm_example_with_layouts(int argc,
     ck_tile::DeviceMem b_k_n_dev_buf(b_k_n.get_element_space_size_in_bytes());
     ck_tile::DeviceMem c_m_n_dev_buf(c_m_n_dev_result.get_element_space_size_in_bytes());
 
-    if constexpr(GemmConfig::Preshuffle)
+    if constexpr(GemmConfig::PreshuffleQuant)
     {
         ck_tile::HostTensor<AQDataType> aq_shuffle_host =
             shuffle_aq(aq_m_aqk, GemmConfig::K_Tile / QuantGroupSize);
@@ -217,12 +218,22 @@ int run_gemm_example_with_layouts(int argc,
         aq_m_aqk_dev_buf.ToDevice(aq_m_aqk.data());
     }
 
-    a_m_k_dev_buf.ToDevice(a_m_k.data());
+    if constexpr(std::is_same_v<ADataType, ck_tile::pk_int4_t>)
+    {
+        ck_tile::HostTensor<ADataType> a_m_k_dev = a_m_k;
+        ck_tile::permute_vectors_i4x4_b(a_m_k_dev);
+        a_m_k_dev_buf.ToDevice(a_m_k_dev.data());
+    }
+    else
+    {
+        a_m_k_dev_buf.ToDevice(a_m_k.data());
+    }
     b_k_n_dev_buf.ToDevice(b_k_n.data());
     c_m_n_dev_buf.SetZero();
     c_m_n_dev_result.SetZero();
 
-    invoke_gemm<ADataType,
+    invoke_gemm<GemmConfig,
+                ADataType,
                 AQDataType,
                 BDataType,
                 AccDataType,
@@ -231,22 +242,21 @@ int run_gemm_example_with_layouts(int argc,
                 AQLayout,
                 BLayout,
                 CLayout,
-                QuantGroupSize,
-                GemmConfig::Preshuffle>(a_m_k_dev_buf,
-                                        aq_m_aqk_dev_buf,
-                                        b_k_n_dev_buf,
-                                        c_m_n_dev_buf,
-                                        M,
-                                        N,
-                                        K,
-                                        AQK,
-                                        stride_A,
-                                        stride_AQ,
-                                        stride_B,
-                                        stride_C,
-                                        kbatch,
-                                        n_warmup,
-                                        n_repeat);
+                QuantGroupSize>(a_m_k_dev_buf,
+                                aq_m_aqk_dev_buf,
+                                b_k_n_dev_buf,
+                                c_m_n_dev_buf,
+                                M,
+                                N,
+                                K,
+                                AQK,
+                                stride_A,
+                                stride_AQ,
+                                stride_B,
+                                stride_C,
+                                kbatch,
+                                n_warmup,
+                                n_repeat);
 
     c_m_n_dev_buf.FromDevice(c_m_n_dev_result.data());
     bool pass = true;

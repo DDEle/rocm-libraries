@@ -77,7 +77,7 @@ if(NOT BUILD_CUDA)
   target_compile_options(hipsparselt PRIVATE -Wno-unused-command-line-argument -Wall)
   target_compile_definitions(hipsparselt PRIVATE ROCM_USE_FLOAT16 __HIP_PLATFORM_AMD__)
 
-  if( BUILD_WITH_TENSILE )
+  if( BUILD_WITH_TENSILE AND NOT BUILD_USE_LOCAL_TENSILE)
     if( BUILD_SHARED_LIBS )
       target_link_libraries( hipsparselt PRIVATE TensileHost )
     else()
@@ -120,6 +120,9 @@ if(NOT BUILD_CUDA)
       add_dependencies(hipsparselt TensileHost)
     endif()
     target_compile_definitions(hipsparselt PRIVATE ${TENSILE_DEFINES} )
+  else()
+    target_link_libraries(hipsparselt PRIVATE tensilelite::tensilelite-host)
+    target_compile_definitions(hipsparselt PRIVATE ${TENSILE_DEFINES})
   endif()
 
 else()
@@ -206,7 +209,7 @@ if ( NOT BUILD_CUDA )
     # For ASAN Enabled Build package only library & license
     if( NOT ENABLE_ASAN_PACKAGING )
       rocm_install(
-        DIRECTORY ${CMAKE_BINARY_DIR}/Tensile/library
+        DIRECTORY ${PROJECT_BINARY_DIR}/Tensile/library
         DESTINATION ${HIPSPARSELT_TENSILE_LIBRARY_DIR}
         COMPONENT ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME}) # Use this cmake variable to be compatible with rocm-cmake 0.6 and 0.7
     endif()

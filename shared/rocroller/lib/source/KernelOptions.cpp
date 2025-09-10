@@ -173,6 +173,7 @@ namespace rocRoller
         ShowOption(scaleSkipPermlane);
         ShowString(assertOpKind);
         ShowOption(removeSetCoordinate);
+        ShowOption(coexecutionEnabled);
 
 #undef Show
 #undef ShowOption

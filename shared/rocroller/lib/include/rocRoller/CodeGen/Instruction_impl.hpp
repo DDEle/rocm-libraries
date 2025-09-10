@@ -488,6 +488,11 @@ namespace rocRoller
             }
         }
 
+        if(m_MODESetValue)
+        {
+            os << "s_set_vgpr_msb " << static_cast<uint16_t>(*m_MODESetValue) << "\n";
+        }
+
         coreInstructionString(os);
 
         if(level > LogLevel::Terse)
@@ -556,7 +561,7 @@ namespace rocRoller
                 {
                     os << ", ";
                 }
-                dst->toStream(os);
+                dst->toStream(os, true);
                 firstDstArg = false;
             }
         }
@@ -579,7 +584,7 @@ namespace rocRoller
                 {
                     os << ", ";
                 }
-                src->toStream(os);
+                src->toStream(os, true);
                 firstSrcArg = false;
             }
         }
@@ -679,6 +684,16 @@ namespace rocRoller
     inline void Instruction::setNopMin(int count)
     {
         m_nopCount = std::max(m_nopCount, count);
+    }
+
+    inline void Instruction::setModeRegister(uint8_t mode)
+    {
+        m_MODESetValue = mode;
+    }
+
+    inline std::optional<uint8_t> Instruction::getModeRegister() const
+    {
+        return m_MODESetValue;
     }
 
     inline void Instruction::allocateNow()

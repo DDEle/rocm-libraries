@@ -131,6 +131,14 @@ namespace rocRoller
             return "E8M0";
         case DataType::E8M0x4:
             return "E8M0x4";
+        case DataType::E5M3:
+            return "E5M3";
+        case DataType::E5M3x4:
+            return "E5M3x4";
+        case DataType::E4M3:
+            return "E4M3";
+        case DataType::E4M3x4:
+            return "E4M3x4";
         case DataType::None:
             return "None";
         case DataType::Count:;
@@ -210,6 +218,14 @@ namespace rocRoller
             return "E8M0";
         case DataType::E8M0x4:
             return "4xE8M0";
+        case DataType::E5M3:
+            return "E5M3";
+        case DataType::E5M3x4:
+            return "4xE5M3";
+        case DataType::E4M3:
+            return "E4M3";
+        case DataType::E4M3x4:
+            return "4xE4M3";
         case DataType::None:
             return "NA";
 
@@ -570,6 +586,12 @@ namespace rocRoller
 
         registerTypeInfo<E8M0>();
         registerTypeInfo<E8M0x4>();
+
+        registerTypeInfo<E5M3>();
+        registerTypeInfo<E5M3x4>();
+
+        registerTypeInfo<E4M3>();
+        registerTypeInfo<E4M3x4>();
     }
 
     void DataTypeInfo::Data::addInfoObject(DataTypeInfo const& info)

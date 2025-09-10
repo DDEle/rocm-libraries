@@ -316,19 +316,20 @@ namespace rocRollerTest
 
             auto bufDesc = std::make_shared<rocRoller::BufferDescriptor>(m_context);
             co_yield bufDesc->setup();
-            co_yield bufDesc->setSize(Register::Value::Literal(N));
 
             auto bufInstOpts = rocRoller::BufferInstructionOptions();
 
             auto vgprSerial = m_context->kernel()->workitemIndex()[0];
 
             co_yield bufDesc->setBasePointer(s_a);
+            co_yield bufDesc->setSize(Register::Value::Literal(N));
             for(int i = 0; i < N; ++i)
             {
                 co_yield m_context->mem()->loadBuffer(
                     v_temp->element({i}), vgprSerial, i, bufDesc, bufInstOpts, 1);
             }
             co_yield bufDesc->setBasePointer(s_result);
+            co_yield bufDesc->setSize(Register::Value::Literal(N));
             co_yield m_context->mem()->storeBuffer(v_temp, vgprSerial, 0, bufDesc, bufInstOpts, N);
         };
 

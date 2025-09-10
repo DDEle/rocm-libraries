@@ -32,11 +32,12 @@ on:
 
 jobs:
   rerun-patch:
-    runs-on: ubuntu-24.04
+    runs-on: 
+      group: "AMD-ROCm-Internal-large-runners"
     steps:
       - name: Validate maintainer permissions
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ROCM_SERVICE_ACCOUNT_PAT}}
         run: |
           echo "Actor is: ${{ github.actor }}"
           PERMISSION=$(gh api \
@@ -99,7 +100,7 @@ jobs:
 
       - name: Generate and apply patches
         env:
-          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.ROCM_SERVICE_ACCOUNT_PAT}}
         run: |
           python .github/scripts/pr_merge_sync_patches.py \
             --repo "${{ github.repository }}" \

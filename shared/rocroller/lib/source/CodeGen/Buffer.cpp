@@ -28,6 +28,7 @@
 #include <rocRoller/CodeGen/Buffer.hpp>
 #include <rocRoller/CodeGen/CopyGenerator.hpp>
 #include <rocRoller/Context.hpp>
+#include <rocRoller/Expression.hpp>
 
 namespace rocRoller
 {
@@ -186,7 +187,18 @@ namespace rocRoller
             // Bits 17:12 are for data format.
             //   5 - 8_UINT. Currently, everything is buffer-loaded in terms of bytes.
             // TODO: Add GFX12 buffer descriptor when other formats and/or features are needed.
-            return (1u << 28) | (5u << 12);
+            uint32_t outOfBoundsCheck = (1u << 28);
+            uint32_t dataFormat       = (5u << 12);
+            if(ctx->targetArchitecture().HasCapability(
+                   GPUCapability::HasBufferFormatSpecInSOffsetField))
+            {
+                // 0 - index >= NumRecords, used for raw buffers (RR default)
+                // 1 - index >= NumRecords || offset + payload > stride, used for structured buffers.
+                // 2 - NumRecords == 0, empty buffers
+                outOfBoundsCheck = 0;
+                dataFormat       = 0;
+            }
+            return outOfBoundsCheck | dataFormat;
         }
         // 0x00020000
         return (4u << 15);
@@ -209,12 +221,73 @@ namespace rocRoller
 
     Generator<Instruction> BufferDescriptor::setBasePointer(Register::ValuePtr value)
     {
-        co_yield m_context->copier()->copy(m_bufferResourceDescriptor->subset({0, 1}), value, "");
+        if(m_context->targetArchitecture().HasCapability(
+               GPUCapability::HasBufferFormatSpecInSOffsetField))
+        {
+            // s1[24:0] s0[31:0] 57-bit Base byte address.
+            auto s1s0 = m_bufferResourceDescriptor->subset({0, 1});
+            if(s1s0->allocationState() == Register::AllocationState::Unallocated)
+            {
+                // if unallocated then no higher 7 bits from size to care about.
+                s1s0->allocateNow();
+                co_yield m_context->copier()->copy(
+                    m_bufferResourceDescriptor->subset({0, 1}), value, "");
+            }
+            else
+            {
+                auto tmp = Register::Value::Placeholder(
+                    m_context, Register::Type::Scalar, DataType::UInt64, 1);
+
+                auto clearUpper7BitsMask = Register::Value::Literal((1ull << 57) - 1ull);
+                clearUpper7BitsMask->setVariableType(DataType::UInt64);
+                auto clearLower57BitsMask = Register::Value::Literal(0xFEull << 56);
+                clearLower57BitsMask->setVariableType(DataType::UInt64);
+
+                co_yield generateOp<Expression::BitwiseAnd>(tmp, value, clearUpper7BitsMask);
+                co_yield generateOp<Expression::BitwiseAnd>(s1s0, s1s0, clearLower57BitsMask);
+                co_yield generateOp<Expression::BitwiseOr>(s1s0, s1s0, tmp);
+            }
+        }
+        else
+        {
+            co_yield m_context->copier()->copy(
+                m_bufferResourceDescriptor->subset({0, 1}), value, "");
+        }
     }
 
     Generator<Instruction> BufferDescriptor::setSize(Register::ValuePtr value)
     {
-        co_yield m_context->copier()->copy(m_bufferResourceDescriptor->subset({2}), value, "");
+        AssertFatal(value->variableType().getElementSize() == 4,
+                    "Sizes with more than 32 bits are not supported yet.");
+
+        if(m_context->targetArchitecture().HasCapability(
+               GPUCapability::HasBufferFormatSpecInSOffsetField))
+        {
+            // s3[5:0] s2[31:0] s1[31:25] 45-bit numRecords
+            auto s1 = m_bufferResourceDescriptor->subset({1});
+            auto s2 = m_bufferResourceDescriptor->subset({2});
+
+            auto tmp = Register::Value::Placeholder(
+                m_context, Register::Type::Scalar, DataType::UInt32, 1);
+
+            // s1[32:25]
+            co_yield m_context->copier()->copy(tmp, value, "");
+            co_yield Expression::generate(tmp, tmp->bitfield(0, 7)->expression(), m_context);
+            co_yield generateOp<Expression::ShiftL>(tmp, tmp, Register::Value::Literal(25));
+            co_yield generateOp<Expression::BitwiseAnd>(
+                s1, s1, Register::Value::Literal(0x01FFFFFF));
+            co_yield generateOp<Expression::BitwiseOr>(s1, s1, tmp);
+
+            // s2[24:0]
+            co_yield m_context->copier()->copy(s2, value, "");
+            co_yield Expression::generate(s2, s2->bitfield(7, 25)->expression(), m_context);
+            co_yield generateOp<Expression::BitwiseAnd>(
+                s2, s2, Register::Value::Literal(0x07FFFFFF));
+        }
+        else
+        {
+            co_yield m_context->copier()->copy(m_bufferResourceDescriptor->subset({2}), value, "");
+        }
     }
 
     Generator<Instruction> BufferDescriptor::setOptions(Register::ValuePtr value)

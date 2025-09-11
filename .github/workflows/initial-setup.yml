@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
 
 env:
-  MONOREPO_URL: github.com/ROCm/rocm-libraries.git
-  MONOREPO_BRANCH: develop
+  MONOREPO_URL: github.com/AMD-ROCm-Internal/rocm-libraries.git
+  MONOREPO_BRANCH:  ${{ github.ref_name }}
 
 jobs:
   setup-monorepo:
-    runs-on: ubuntu-24.04
+    runs-on: 
+      group: "AMD-ROCm-Internal-large-runners"
     steps:
       - name: Generate a token
         id: generate-token

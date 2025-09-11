@@ -149,6 +149,10 @@ namespace rocRoller
             return getValue<bool>(args);
         case DataType::E8M0:
             return getValue<E8M0>(args);
+        case DataType::E5M3:
+            return getValue<E5M3>(args);
+        case DataType::E4M3:
+            return getValue<E4M3>(args);
         case DataType::Count:
         default:
             Throw<FatalError>("Unsupported argument type ", ShowValue(m_variableType));

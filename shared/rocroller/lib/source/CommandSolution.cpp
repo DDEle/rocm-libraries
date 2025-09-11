@@ -436,7 +436,7 @@ namespace rocRoller
         transforms.push_back(
             std::make_shared<KernelGraph::UpdateWavefrontParameters>(m_commandParameters));
         transforms.push_back(std::make_shared<KernelGraph::LoadPacked>(m_context));
-        transforms.push_back(std::make_shared<KernelGraph::AddConvert>());
+        transforms.push_back(std::make_shared<KernelGraph::AddConvert>(m_context));
 
         //
         // TODO: Turn on this transformation by default when SGPR issue gets resolved

@@ -216,7 +216,7 @@ namespace DGen
     {
         return 0b01000000;
     }
-    
+
     union cvt
     {
         float num;
@@ -1073,10 +1073,10 @@ namespace DGen
      *
      * @param value
      *      The value to convert to the bit representation
-     * 
+     *
      * @param seed
      *      The seed used for rounding
-     * 
+     *
      * @return
      *      The bit representation of the value.
      *      If the datatype is less than 8 bit
@@ -1091,10 +1091,10 @@ namespace DGen
      *
      * @param value
      *      The value to convert to the bit representation
-     * 
+     *
      * @param seed
      *      The seed used for rounding
-     * 
+     *
      * @return
      *      The bit representation of the value.
      *      If the datatype is less than 8 bit
@@ -1116,14 +1116,14 @@ namespace DGen
     T convertToType(float value);
 
     /**
-     * Performs stochastic rounding on a float32 value to 
+     * Performs stochastic rounding on a float32 value to
      * type T representation
      * DOES NOT CHECK FOR OUT OF RANGE/NAN/INF
      *      Should be done before calling this method
-     * 
+     *
      * @param value
      *      The float32 value to be converted to type T
-     * 
+     *
      * @param seed
      *      The seed used for rounding
      */

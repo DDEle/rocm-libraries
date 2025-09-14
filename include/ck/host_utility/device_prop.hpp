@@ -104,13 +104,22 @@ inline bool is_xdl_wmma_supported()
     {
         return true;
     }
-    else if(is_gfx12_supported() || is_gfx11_supported())
+    else if(is_gfx120_supported() || is_gfx11_supported())
     {
         if constexpr((MPerXDL != 16) || (NPerXDL != 16))
         {
             return false;
         }
+
         if constexpr(sizeof(ADataType) > 2 || sizeof(BDataType) > 2)
+        {
+            return false;
+        }
+        return true;
+    }
+    else if(is_gfx125_supported())
+    {
+        if constexpr((MPerXDL != 16) || (NPerXDL != 16))
         {
             return false;
         }
@@ -120,6 +129,24 @@ inline bool is_xdl_wmma_supported()
     {
         return false;
     }
+}
+
+template <typename ADataType, index_t KPerBlock, index_t KPack = 256>
+inline bool is_xdl_wmma_k_supported()
+{
+    if(is_gfx125_supported())
+    {
+        if constexpr(sizeof(ADataType) == 1)
+        {
+            return (KPerBlock % 64 == 0) && (KPack % 32 == 0);
+        }
+        else if constexpr(sizeof(ADataType) == 2)
+        {
+            return (KPerBlock % 32 == 0) && (KPack % 16 == 0);
+        }
+        return true;
+    }
+    return true;
 }
 
 inline bool is_lds_direct_load_supported()

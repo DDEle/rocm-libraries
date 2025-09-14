@@ -1072,7 +1072,6 @@ struct GridwiseGemmMultiD_xdl_cshuffle_v3
             KPerBlock / (MfmaInst::GetKPerXdlops() / MfmaInst::GetK1PerXdlops());
         if constexpr(KPerThread % KPack != 0)
         {
-            static_assert(0);
             return false;
         }
 
@@ -1095,6 +1094,10 @@ struct GridwiseGemmMultiD_xdl_cshuffle_v3
             return false;
         }
 
+        if(!ck::is_wmma_k_supported<ComputeTypeA, KPerBlock>())
+        {
+            return false;
+        }
         if constexpr(!(GemmSpec == tensor_operation::device::GemmSpecialization::MPadding ||
                        GemmSpec == tensor_operation::device::GemmSpecialization::MNPadding ||
                        GemmSpec == tensor_operation::device::GemmSpecialization::MKPadding ||

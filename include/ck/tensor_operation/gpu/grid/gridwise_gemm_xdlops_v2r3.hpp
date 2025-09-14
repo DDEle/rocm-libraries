@@ -336,7 +336,7 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
         InMemoryDataOperationEnum CGlobalMemoryDataOperation_ = InMemoryDataOperationEnum::Set>
     __device__ static bool constexpr IsValidCompilationParameter()
     {
-        return ck::tensor_operation::device::IsValidGemmCompilationParameter<
+        constexpr bool valid = tensor_operation::device::IsValidGemmCompilationParameter<
             BlockSize,
             MPerBlock,
             NPerBlock,
@@ -345,14 +345,24 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
             MXdlPerWave,
             NXdlPerWave,
             FloatC,
-            CGlobalMemoryDataOperation>();
+            CGlobalMemoryDataOperation_>();
+        if constexpr(!valid)
+        {
+            return false;
+        }
+
+        if constexpr(K1Value % MfmaSelector<FloatAB, MPerXdl, NPerXdl>::selected_mfma.k_per_blk !=
+                     0)
+        {
+            return false;
+        }
+        return true;
     }
 
     template <typename AGridDesc_K0_M_K1, typename BGridDesc_K0_N_K1, typename CGridDesc_M_N>
-    __host__ __device__ static constexpr bool
-    CheckValidity(const AGridDesc_K0_M_K1& a_grid_desc_k0_m_k1,
-                  const BGridDesc_K0_N_K1& b_grid_desc_k0_n_k1,
-                  const CGridDesc_M_N& c_grid_desc_m_n)
+    __host__ static bool CheckValidity(const AGridDesc_K0_M_K1& a_grid_desc_k0_m_k1,
+                                       const BGridDesc_K0_N_K1& b_grid_desc_k0_n_k1,
+                                       const CGridDesc_M_N& c_grid_desc_m_n)
     {
         static_assert(is_known_at_compile_time<remove_cv_t<decltype(K1)>>::value,
                       "wrong! K1 need to be known at compile-time");
@@ -360,6 +370,11 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
         static_assert((MPerBlock % (MPerXdl * MXdlPerWave) == 0) &&
                           (NPerBlock % (NXdlPerWave * NPerXdl)) == 0,
                       "Invalid tuning param!");
+
+        if(!is_xdl_wmma_k_supported<FloatAB, K0PerBlock, K1Value>())
+        {
+            return false;
+        }
 
         const auto M  = a_grid_desc_k0_m_k1.GetLength(I1);
         const auto N  = b_grid_desc_k0_n_k1.GetLength(I1);

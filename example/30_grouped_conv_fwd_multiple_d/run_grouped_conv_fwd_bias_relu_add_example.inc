@@ -105,7 +105,7 @@ using DeviceConvFwdInstance =
         256,         // BlockSize
         128,         // MPerBlock
         128,         // NPerBlock
-        32,          // KPerBlock
+        64,          // KPerBlock
         4,           // AK1
         4,           // BK1
         16,          // MPerXdl

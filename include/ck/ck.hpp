@@ -90,7 +90,7 @@
 #elif defined(__gfx11__) || defined(__gfx120__)
 #define CK_BUFFER_RESOURCE_3RD_DWORD 0x31004000
 #elif defined(__gfx125__)
-#define CK_BUFFER_RESOURCE_3RD_DWORD 0x1004000
+#define CK_BUFFER_RESOURCE_3RD_DWORD 0
 #endif
 
 // FMA instruction

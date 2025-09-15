@@ -24,10 +24,21 @@ __device__ int32x4_t make_wave_buffer_resource(T* p_wave, index_t element_space_
 {
     BufferResource<T> wave_buffer_resource;
 
+#if defined(__gfx125__)
+    // wavewise base address (57 bit)
+    wave_buffer_resource.address(Number<0>{}) = const_cast<remove_cv_t<T>*>(p_wave);
+    // wavewise range (45 bit)
+    uint64_t num_records = element_space_size * sizeof(T);
+    wave_buffer_resource.range(Number<1>{}) |= (num_records & 0x7f) << 25;
+    wave_buffer_resource.range(Number<2>{}) = (num_records >> 7);
+    // wavewise setting (26 bit)
+    wave_buffer_resource.config(Number<3>{}) = CK_BUFFER_RESOURCE_3RD_DWORD;
+#else
     // wavewise base address (64 bit)
     wave_buffer_resource.address(Number<0>{}) = const_cast<remove_cv_t<T>*>(p_wave);
     // wavewise range (32 bit)
     wave_buffer_resource.range(Number<2>{}) = element_space_size * sizeof(T);
+#endif
     // wavewise setting (32 bit)
     wave_buffer_resource.config(Number<3>{}) = CK_BUFFER_RESOURCE_3RD_DWORD;
 

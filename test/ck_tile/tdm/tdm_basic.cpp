@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include "ck_tile/core.hpp"
 #include "ck_tile/host.hpp"
+#include "ck_tile/ops/common/tensor_layout.hpp"
 #include "ck_tile/ops/tdm.hpp"
 #include "ck_tile/host/kernel_launch.hpp"
 
@@ -20,12 +21,23 @@ struct TDMTestParams
     int warmup        = 0;
     int repeat        = 1;
 
+    template <typename Layout>
     void normalize()
     {
-        if(x_stride < 0)
-            x_stride = n;
-        if(y_stride < 0)
-            y_stride = n;
+        if constexpr(std::is_same_v<Layout, tensor_layout::gemm::RowMajor>)
+        {
+            if(x_stride < 0)
+                x_stride = n;
+            if(y_stride < 0)
+                y_stride = n;
+        }
+        else
+        {
+            if(x_stride < 0)
+                x_stride = m;
+            if(y_stride < 0)
+                y_stride = m;
+        }
     }
 };
 
@@ -36,14 +48,19 @@ class TDMBasicTest : public ::testing::Test
     void SetUp() override {}
     void TearDown() override {}
 
-    template <typename DataType, typename Layout = tensor_layout::gemm::RowMajor>
+    template <typename DataType, typename Layout>
     bool run_tdm_test(const TDMTestParams& params)
     {
         using ComputeDataType = remove_cvref_t<DataType>;
         using ComputeLayout   = Layout;
 
-        HostTensor<ComputeDataType> x_host({params.m, params.n}, {params.x_stride, 1});
-        HostTensor<ComputeDataType> y_host({params.m, params.n}, {params.y_stride, 1});
+        const std::vector<index_t> dims =
+            std::is_same_v<ComputeLayout, tensor_layout::gemm::ColumnMajor>
+                ? std::vector<index_t>{params.n, params.m}
+                : std::vector<index_t>{params.m, params.n};
+
+        HostTensor<ComputeDataType> x_host({dims[0], dims[1]}, {params.x_stride, 1});
+        HostTensor<ComputeDataType> y_host({dims[0], dims[1]}, {params.y_stride, 1});
         FillUniformDistribution<ComputeDataType>{-.5f, .5f}(x_host);
 
         DeviceMem x_buf(x_host.get_element_space_size_in_bytes());
@@ -107,9 +124,24 @@ TEST_F(TDMBasicTest, FP16SanityTest)
     params.do_validation = 1;
     params.warmup        = 0;
     params.repeat        = 1;
-    params.normalize();
+    params.normalize<tensor_layout::gemm::RowMajor>();
 
-    EXPECT_TRUE(run_tdm_test<fp16_t>(params));
+    EXPECT_TRUE((run_tdm_test<fp16_t, tensor_layout::gemm::RowMajor>(params)));
+}
+
+TEST_F(TDMBasicTest, FP16RectangleTest)
+{
+    TDMTestParams params;
+    params.m             = 64;
+    params.n             = 32;
+    params.x_stride      = -1;
+    params.y_stride      = -1;
+    params.do_validation = 1;
+    params.warmup        = 0;
+    params.repeat        = 1;
+    params.normalize<tensor_layout::gemm::ColumnMajor>();
+
+    EXPECT_TRUE((run_tdm_test<fp16_t, tensor_layout::gemm::ColumnMajor>(params)));
 }
 
 TEST_F(TDMBasicTest, FP8SanityTest)
@@ -122,9 +154,9 @@ TEST_F(TDMBasicTest, FP8SanityTest)
     params.do_validation = 1;
     params.warmup        = 0;
     params.repeat        = 1;
-    params.normalize();
+    params.normalize<tensor_layout::gemm::RowMajor>();
 
-    EXPECT_TRUE(run_tdm_test<fp8_t>(params));
+    EXPECT_TRUE((run_tdm_test<fp8_t, tensor_layout::gemm::RowMajor>(params)));
 }
 
 TEST_F(TDMBasicTest, FP16LargeDimTest)
@@ -137,9 +169,9 @@ TEST_F(TDMBasicTest, FP16LargeDimTest)
     params.do_validation = 1;
     params.warmup        = 0;
     params.repeat        = 1;
-    params.normalize();
+    params.normalize<tensor_layout::gemm::RowMajor>();
 
-    EXPECT_TRUE(run_tdm_test<fp16_t>(params));
+    EXPECT_TRUE((run_tdm_test<fp16_t, tensor_layout::gemm::RowMajor>(params)));
 }
 
 } // namespace test

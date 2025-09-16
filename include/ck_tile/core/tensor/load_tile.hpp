@@ -107,18 +107,15 @@ template <typename LdsTileWindow_,
           typename WindowLengths_,
           typename TileDistribution_,
           index_t NumCoord,
-          typename DimTuple_,
           index_t i_access = -1>
 CK_TILE_DEVICE auto load_tile_tdm(LdsTileWindow_&& lds_tile,
                                   const tile_window_with_static_distribution<BottomTensorView_,
                                                                              WindowLengths_,
                                                                              TileDistribution_,
                                                                              NumCoord>& tile_window,
-                                  const DimTuple_& tensor_dims,
-                                  const DimTuple_& global_strides,
                                   number<i_access> = {})
 {
-    return tile_window.tdm_load_to_lds(lds_tile, tensor_dims, global_strides, number<i_access>{});
+    return tile_window.tdm_load_to_lds(lds_tile, number<i_access>{});
 }
 
 template <typename LdsTileWindow_,

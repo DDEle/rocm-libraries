@@ -395,10 +395,8 @@ struct tile_window_with_static_distribution
         });
     }
 
-    template <typename LdsTileWindow_, typename DimTuple_, index_t i_access_unsupport_ = -1>
+    template <typename LdsTileWindow_, index_t i_access_unsupport_ = -1>
     CK_TILE_DEVICE auto tdm_load_to_lds(LdsTileWindow_&& lds_tile,
-                                        const DimTuple_& tensor_dims,
-                                        const DimTuple_& global_strides,
                                         number<i_access_unsupport_> = {}) const
     {
         using LdsTileWindow      = remove_cvref_t<LdsTileWindow_>;
@@ -412,6 +410,13 @@ struct tile_window_with_static_distribution
         const auto& lds_bottom_tensor_view = lds_tile.get_bottom_tensor_view();
         const auto& lds_tensor_descriptor  = lds_bottom_tensor_view.get_tensor_descriptor();
         auto smem_base_ptr                 = lds_bottom_tensor_view.get_buffer_view().p_data_;
+
+        const auto& glb_tensor_descriptor = this->get_bottom_tensor_view().get_tensor_descriptor();
+
+        const auto tensor_dims =
+            tuple_reverse(glb_tensor_descriptor.get_lengths() - this->get_window_origin());
+        const auto global_strides = (container_reverse_exclusive_scan(
+            glb_tensor_descriptor.get_lengths(), multiplies{}, 1));
 
         static_for<0, NumCoord, 1>{}([&](auto iCoord) {
             auto window_adaptor_thread_coord = pre_computed_coords_[iCoord][I0]; // without origin
@@ -437,20 +442,17 @@ struct tile_window_with_static_distribution
                 "Window origin types mismatch - dimensions must be consistent!");
 
             this->get_bottom_tensor_view()
-                .template get_tdm_elements<DimTuple_,
-                                           remove_cvref_t<decltype(box_dim)>,
-                                           num_tensor_dims>(smem,
-                                                            bottom_tensor_thread_coord,
-                                                            tensor_dims,
-                                                            global_strides,
-                                                            number<num_tensor_dims>{});
+                .template get_tdm_elements<remove_cvref_t<decltype(box_dim)>, num_tensor_dims>(
+                    smem,
+                    bottom_tensor_thread_coord,
+                    tensor_dims,
+                    global_strides,
+                    number<num_tensor_dims>{});
         });
     }
 
-    template <typename LdsTileWindow_, typename DimTuple_, index_t i_access_unsupport_ = -1>
+    template <typename LdsTileWindow_, index_t i_access_unsupport_ = -1>
     CK_TILE_DEVICE auto tdm_store_from_lds(const LdsTileWindow_& lds_tile,
-                                           const DimTuple_& tensor_dims,
-                                           const DimTuple_& global_strides,
                                            number<i_access_unsupport_> = {}) const
     {
         using LdsTileWindow      = remove_cvref_t<LdsTileWindow_>;
@@ -463,6 +465,13 @@ struct tile_window_with_static_distribution
         const auto& lds_bottom_tensor_view = lds_tile.get_bottom_tensor_view();
         const auto& lds_tensor_descriptor  = lds_bottom_tensor_view.get_tensor_descriptor();
         auto smem_base_ptr                 = lds_bottom_tensor_view.get_buffer_view().p_data_;
+
+        const auto& glb_tensor_descriptor = this->get_bottom_tensor_view().get_tensor_descriptor();
+
+        const auto tensor_dims =
+            tuple_reverse(glb_tensor_descriptor.get_lengths() - this->get_window_origin());
+        const auto global_strides = (container_reverse_exclusive_scan(
+            glb_tensor_descriptor.get_lengths(), multiplies{}, 1));
 
         static_for<0, NumCoord, 1>{}([&](auto iCoord) {
             auto window_adaptor_thread_coord = pre_computed_coords_[iCoord][I0]; // without origin
@@ -487,13 +496,12 @@ struct tile_window_with_static_distribution
                 "Window origin types mismatch - dimensions must be consistent!");
 
             this->get_bottom_tensor_view()
-                .template store_tdm_elements<DimTuple_,
-                                             remove_cvref_t<decltype(box_dim)>,
-                                             num_tensor_dims>(smem,
-                                                              bottom_tensor_thread_coord,
-                                                              tensor_dims,
-                                                              global_strides,
-                                                              number<num_tensor_dims>{});
+                .template store_tdm_elements<remove_cvref_t<decltype(box_dim)>, num_tensor_dims>(
+                    smem,
+                    bottom_tensor_thread_coord,
+                    tensor_dims,
+                    global_strides,
+                    number<num_tensor_dims>{});
         });
     }
 

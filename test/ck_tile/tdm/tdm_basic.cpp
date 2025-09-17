@@ -127,13 +127,9 @@ TYPED_TEST_SUITE(TDMBasicTypedTest, TestTypes);
 TYPED_TEST(TDMBasicTypedTest, SanityTest)
 {
     TDMTestParams params;
-    params.m             = 16;
-    params.n             = 16;
-    params.x_stride      = -1;
-    params.y_stride      = -1;
-    params.do_validation = 1;
-    params.warmup        = 0;
-    params.repeat        = 1;
+    params.m = 16;
+    params.n = 16;
+
     params.template normalize<typename TestFixture::Layout>();
 
     EXPECT_TRUE(this->run_tdm_test(params));
@@ -142,13 +138,9 @@ TYPED_TEST(TDMBasicTypedTest, SanityTest)
 TYPED_TEST(TDMBasicTypedTest, RectangleTest)
 {
     TDMTestParams params;
-    params.m             = 64;
-    params.n             = 32;
-    params.x_stride      = -1;
-    params.y_stride      = -1;
-    params.do_validation = 1;
-    params.warmup        = 0;
-    params.repeat        = 1;
+    params.m = 64;
+    params.n = 32;
+
     params.template normalize<typename TestFixture::Layout>();
 
     EXPECT_TRUE(this->run_tdm_test(params));
@@ -157,13 +149,9 @@ TYPED_TEST(TDMBasicTypedTest, RectangleTest)
 TYPED_TEST(TDMBasicTypedTest, LargeDimTest)
 {
     TDMTestParams params;
-    params.m             = 256;
-    params.n             = 256;
-    params.x_stride      = -1;
-    params.y_stride      = -1;
-    params.do_validation = 1;
-    params.warmup        = 0;
-    params.repeat        = 1;
+    params.m = 256;
+    params.n = 256;
+
     params.template normalize<typename TestFixture::Layout>();
 
     EXPECT_TRUE(this->run_tdm_test(params));

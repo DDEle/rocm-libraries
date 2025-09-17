@@ -1094,7 +1094,7 @@ struct GridwiseGemmMultiD_xdl_cshuffle_v3
             return false;
         }
 
-        if(!ck::is_wmma_k_supported<ComputeTypeA, KPerBlock>())
+        if(!ck::is_xdl_wmma_k_supported<ComputeTypeA, KPerBlock>())
         {
             return false;
         }

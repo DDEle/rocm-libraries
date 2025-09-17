@@ -11,6 +11,12 @@
 namespace ck_tile {
 namespace test {
 
+using F16 = half_t;
+using F8  = fp8_t;
+
+using Row = tensor_layout::gemm::RowMajor;
+using Col = tensor_layout::gemm::ColumnMajor;
+
 struct TDMTestParams
 {
     index_t m         = 16;
@@ -41,14 +47,16 @@ struct TDMTestParams
     }
 };
 
-// Test fixture class
-class TDMBasicTest : public ::testing::Test
+using TestTypes = ::testing::
+    Types<std::tuple<F16, Row>, std::tuple<F16, Col>, std::tuple<F8, Row>, std::tuple<F8, Col>>;
+
+template <typename TypeParam>
+class TDMBasicTypedTest : public ::testing::Test
 {
     protected:
-    void SetUp() override {}
-    void TearDown() override {}
+    using DataType = std::tuple_element_t<0, TypeParam>;
+    using Layout   = std::tuple_element_t<1, TypeParam>;
 
-    template <typename DataType, typename Layout>
     bool run_tdm_test(const TDMTestParams& params)
     {
         using ComputeDataType = remove_cvref_t<DataType>;
@@ -114,7 +122,9 @@ class TDMBasicTest : public ::testing::Test
     }
 };
 
-TEST_F(TDMBasicTest, FP16SanityTest)
+TYPED_TEST_SUITE(TDMBasicTypedTest, TestTypes);
+
+TYPED_TEST(TDMBasicTypedTest, SanityTest)
 {
     TDMTestParams params;
     params.m             = 16;
@@ -124,12 +134,12 @@ TEST_F(TDMBasicTest, FP16SanityTest)
     params.do_validation = 1;
     params.warmup        = 0;
     params.repeat        = 1;
-    params.normalize<tensor_layout::gemm::RowMajor>();
+    params.template normalize<typename TestFixture::Layout>();
 
-    EXPECT_TRUE((run_tdm_test<fp16_t, tensor_layout::gemm::RowMajor>(params)));
+    EXPECT_TRUE(this->run_tdm_test(params));
 }
 
-TEST_F(TDMBasicTest, FP16RectangleTest)
+TYPED_TEST(TDMBasicTypedTest, RectangleTest)
 {
     TDMTestParams params;
     params.m             = 64;
@@ -139,27 +149,12 @@ TEST_F(TDMBasicTest, FP16RectangleTest)
     params.do_validation = 1;
     params.warmup        = 0;
     params.repeat        = 1;
-    params.normalize<tensor_layout::gemm::ColumnMajor>();
+    params.template normalize<typename TestFixture::Layout>();
 
-    EXPECT_TRUE((run_tdm_test<fp16_t, tensor_layout::gemm::ColumnMajor>(params)));
+    EXPECT_TRUE(this->run_tdm_test(params));
 }
 
-TEST_F(TDMBasicTest, FP8SanityTest)
-{
-    TDMTestParams params;
-    params.m             = 16;
-    params.n             = 16;
-    params.x_stride      = -1;
-    params.y_stride      = -1;
-    params.do_validation = 1;
-    params.warmup        = 0;
-    params.repeat        = 1;
-    params.normalize<tensor_layout::gemm::RowMajor>();
-
-    EXPECT_TRUE((run_tdm_test<fp8_t, tensor_layout::gemm::RowMajor>(params)));
-}
-
-TEST_F(TDMBasicTest, FP16LargeDimTest)
+TYPED_TEST(TDMBasicTypedTest, LargeDimTest)
 {
     TDMTestParams params;
     params.m             = 256;
@@ -169,15 +164,14 @@ TEST_F(TDMBasicTest, FP16LargeDimTest)
     params.do_validation = 1;
     params.warmup        = 0;
     params.repeat        = 1;
-    params.normalize<tensor_layout::gemm::RowMajor>();
+    params.template normalize<typename TestFixture::Layout>();
 
-    EXPECT_TRUE((run_tdm_test<fp16_t, tensor_layout::gemm::RowMajor>(params)));
+    EXPECT_TRUE(this->run_tdm_test(params));
 }
 
 } // namespace test
 } // namespace ck_tile
 
-// Main function for running tests
 int main(int argc, char** argv)
 {
     ::testing::InitGoogleTest(&argc, argv);

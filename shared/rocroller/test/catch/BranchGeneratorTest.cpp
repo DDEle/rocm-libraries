@@ -141,6 +141,10 @@ namespace BranchGeneratorTest
                 {
                     expected += std::string("\ns_wait_expcnt 0");
                 }
+                if(arch.HasCapability(GPUCapability::HasVGPRIndexing))
+                {
+                    expected += std::string("\ns_set_vgpr_msb 0");
+                }
                 expected += std::string("\n") + std::string("s_branch");
             }
 

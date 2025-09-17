@@ -323,6 +323,9 @@ namespace GPUArchitectureGenerator
             if(HasCapability(isaVersion, rocRoller::GPUCapability::HasXCC))
                 AddCapability(isaVersion, rocRoller::GPUCapability::DefaultRemapXCCValue, 8);
 
+            if(isaVersion.toString().starts_with("gfx125"))
+                AddCapability(isaVersion, rocRoller::GPUCapability::PartiallyActiveWaveSize, 16);
+
             if(isaVersion.toString().starts_with("gfx95"))
                 AddCapability(isaVersion, rocRoller::GPUCapability::MaxLdsSize, 160 * (1 << 10));
             else

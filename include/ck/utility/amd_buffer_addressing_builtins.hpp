@@ -28,6 +28,8 @@ __device__ int32x4_t make_wave_buffer_resource(T* p_wave, index_t element_space_
     // wavewise base address (57 bit)
     wave_buffer_resource.address(Number<0>{}) = const_cast<remove_cv_t<T>*>(p_wave);
     // wavewise range (45 bit)
+    // NOTE: high 6bits is in wave_buffer_resource.range[3], it is overlapped with config dword.
+    // because element_space_size only has 32bits, it is safe to assume the high 6bits are 0.
     uint64_t num_records = element_space_size * sizeof(T);
     wave_buffer_resource.range(Number<1>{}) |= (num_records & 0x7f) << 25;
     wave_buffer_resource.range(Number<2>{}) = (num_records >> 7);

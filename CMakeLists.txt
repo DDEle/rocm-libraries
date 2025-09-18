@@ -1,5 +1,5 @@
 # TEST COMMENT: This is for testing git diff functionality
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.14) 
 if(POLICY CMP0140)
   # policies CMP0140 not known to CMake until 3.25
   cmake_policy(SET CMP0140 NEW)

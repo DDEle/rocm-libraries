@@ -19,7 +19,6 @@ struct StaticTensor
     static constexpr auto desc_                  = TensorDesc{};
     static constexpr index_t ndim_               = TensorDesc::GetNumOfDimension();
     static constexpr index_t element_space_size_ = desc_.GetElementSpaceSize();
-    
 
     __host__ __device__ constexpr StaticTensor() : invalid_element_scalar_value_{0} {}
 

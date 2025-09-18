@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2018-2025, Advanced Micro Devices, Inc. All rights reserved.
 
+// TEST COMMENT: This is for testing git diff functionality
+
 #pragma once
 
 #include "ck/config.h"

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2018-2023, Advanced Micro Devices, Inc. All rights reserved.
 
+// TEST COMMENT: This is for testing git diff functionality
+
 #ifndef CK_STATIC_TENSOR_HPP
 #define CK_STATIC_TENSOR_HPP
 
@@ -17,6 +19,7 @@ struct StaticTensor
     static constexpr auto desc_                  = TensorDesc{};
     static constexpr index_t ndim_               = TensorDesc::GetNumOfDimension();
     static constexpr index_t element_space_size_ = desc_.GetElementSpaceSize();
+    
 
     __host__ __device__ constexpr StaticTensor() : invalid_element_scalar_value_{0} {}
 

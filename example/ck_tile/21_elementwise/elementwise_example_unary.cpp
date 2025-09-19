@@ -1,28 +1,33 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025, Advanced Micro Devices, Inc. All rights reserved.
 
-#include "ck_tile/core/arch/arch.hpp"
 #include "ck_tile/host.hpp"
 #include "ck_tile/ops/elementwise.hpp"
 #include "ck_tile/host/reference/reference_elementwise.hpp"
+#include "ck_tile/utility/json_dump.hpp"
+#include "elementwise_common.hpp"
 
 auto create_args(int argc, char* argv[])
 {
     ck_tile::ArgParser arg_parser;
-    arg_parser.insert("op", "square", "unary operations: square|tanh|fastgelu")
+    arg_parser.insert("op", "square", "unary operations: square|tanh|fastgelu|convert")
         .insert("m", "1024", "m dimension")
         .insert("n", "1024", "n dimension")
         .insert("stride", "-1", "stride per row, if -1 then equal to n")
         .insert("v", "1", "cpu validation or not")
         .insert("prec", "fp16", "precision: fp32|fp16")
+        .insert("x_prec", "fp16", "input precision")
+        .insert("y_prec", "fp16", "output precision")
         .insert("warmup", "10", "cold iter")
-        .insert("repeat", "50", "hot iter");
+        .insert("repeat", "50", "hot iter")
+        .insert("json", "0", "0: No Json, 1: Dump Results in Json format")
+        .insert("jsonfile", "elementwise_unary.json", "json file name to dump results");
 
     bool result = arg_parser.parse(argc, argv);
     return std::make_tuple(result, arg_parser);
 }
 
-template <typename DataType, typename XElementwiseOperation>
+template <typename XElementwiseOperation, typename XDataType, typename YDataType = XDataType>
 bool run(const ck_tile::ArgParser& arg_parser)
 {
     ck_tile::index_t M      = arg_parser.get_int("m");
@@ -30,15 +35,12 @@ bool run(const ck_tile::ArgParser& arg_parser)
     ck_tile::index_t stride = arg_parser.get_int("stride");
     if(stride < 0)
         stride = N;
-    std::string data_type = arg_parser.get_str("prec");
-    int do_validation     = arg_parser.get_int("v");
-    int warmup            = arg_parser.get_int("warmup");
-    int repeat            = arg_parser.get_int("repeat");
+
+    int do_validation = arg_parser.get_int("v");
+    int warmup        = arg_parser.get_int("warmup");
+    int repeat        = arg_parser.get_int("repeat");
 
     assert(stride >= N);
-
-    using XDataType = DataType;
-    using YDataType = DataType;
 
     // 1. Initialize the input data on the host
     ck_tile::HostTensor<XDataType> x_host_a({M, N}, {stride, 1});
@@ -78,8 +80,7 @@ bool run(const ck_tile::ArgParser& arg_parser)
     for(auto d : shape)
         total_elements *= d;
 
-    ck_tile::index_t kBlockSize =
-        (ck_tile::is_wave32() ? 32 : 64) * BlockWarps::at(ck_tile::number<0>{});
+    const ck_tile::index_t kBlockSize      = Kernel::BlockSize();
     constexpr ck_tile::index_t kBlockPerCu = 1;
 
     constexpr ck_tile::index_t elements_per_block = BlockTile::at(ck_tile::number<0>{});
@@ -119,47 +120,146 @@ bool run(const ck_tile::ArgParser& arg_parser)
     {
         y_buf.FromDevice(y_validation.data());
 
-        auto op = [](const XDataType& v0) {
-            YDataType ret;
-            XElementwiseOperation{}(ret, v0);
-            return ret;
+        auto op = [](const XDataType& v0) -> YDataType {
+            XElementwiseOperation element_op{};
+            YDataType result;
+            element_op(result, v0);
+            return result;
         };
 
         ck_tile::reference_unary_elementwise<XDataType, YDataType, YDataType>(x_host_a, y_host, op);
 
         pass = ck_tile::check_err(
-            y_validation, y_host, "Elementwise Add Error: Incorrect results!", 0.01, 0.01);
+            y_validation, y_host, "Elementwise unary op: Incorrect results!", 0.01, 0.01);
+    }
+
+    if(arg_parser.get_int("json") == 1)
+    {
+        dump_elementwise_json_results(arg_parser.get_str("jsonfile"),
+                                      arg_parser.get_str("prec"),
+                                      kGridSize,
+                                      kBlockSize,
+                                      ave_time,
+                                      0,
+                                      0,
+                                      "elementwise_unary");
     }
 
     return pass;
 }
 
+template <typename XElementwiseOperation, typename XDataType, typename YDataType>
+bool filter_then_run(const ck_tile::ArgParser& arg_parser)
+{
+    auto throw_unsupported = [&]() {
+        const auto x_prec = arg_parser.get_str("x_prec");
+        const auto y_prec = arg_parser.get_str("y_prec");
+        const auto op     = arg_parser.get_str("op");
+        throw std::runtime_error("Unsupported! x_prec: " + x_prec + ", y_prec: " + y_prec +
+                                 ", op: " + op);
+    };
+    bool pass = true;
+
+    if constexpr(std::is_same_v<XElementwiseOperation, ck_tile::element_wise::UnarySquare> &&
+                 (std::is_same_v<XDataType, ck_tile::bf16_t> ||
+                  std::is_same_v<YDataType, ck_tile::bf16_t>))
+    {
+        throw_unsupported();
+    }
+    else if constexpr(std::is_same_v<XElementwiseOperation, ck_tile::element_wise::UnaryConvert> &&
+                      (std::is_same_v<XDataType, ck_tile::bf16_t> ||
+                       std::is_same_v<YDataType, ck_tile::bf16_t>))
+    {
+        throw_unsupported();
+    }
+    else
+    {
+        pass = run<XElementwiseOperation, XDataType, YDataType>(arg_parser);
+    }
+
+    return pass;
+}
+
+auto string_to_op(const std::string& op)
+{
+    using OpVariant =
+        std::variant<ck_tile::element_wise::UnarySquare, ck_tile::element_wise::UnaryConvert>;
+
+    if(op == "square")
+        return OpVariant{ck_tile::element_wise::UnarySquare{}};
+    else if(op == "convert")
+        return OpVariant{ck_tile::element_wise::UnaryConvert{}};
+    else
+    {
+        throw std::runtime_error("Unsupported unary operation: " + op);
+    }
+};
+
 int main(int argc, char* argv[])
 {
     auto [result, arg_parser] = create_args(argc, argv);
+
+    int return_code = -1;
+
     if(!result)
-        return -1;
+        return return_code;
 
     const std::string data_type = arg_parser.get_str("prec");
-    const std::string op        = arg_parser.get_str("op");
-    if(data_type == "fp16")
+    if(data_type == "fp16" || data_type == "fp32")
     {
-        if(op == "square")
-            return run<ck_tile::half_t, ck_tile::element_wise::UnarySquare>(arg_parser) ? 0 : -2;
-        if(op == "tanh")
-            return run<ck_tile::half_t, ck_tile::element_wise::TanH>(arg_parser) ? 0 : -2;
-        if(op == "fastgelu")
-            return run<ck_tile::half_t, ck_tile::element_wise::FastGelu>(arg_parser) ? 0 : -2;
+        printf("Running fp16/fp32 path: \n");
+        const std::string op = arg_parser.get_str("op");
+        if(data_type == "fp16")
+        {
+            if(op == "square")
+                return_code =
+                    run<ck_tile::element_wise::UnarySquare, ck_tile::half_t>(arg_parser) ? 0 : -2;
+            if(op == "tanh")
+                return_code =
+                    run<ck_tile::element_wise::TanH, ck_tile::half_t>(arg_parser) ? 0 : -2;
+            if(op == "fastgelu")
+                return_code =
+                    run<ck_tile::element_wise::FastGelu, ck_tile::half_t>(arg_parser) ? 0 : -2;
+            if(op == "convert")
+                return_code =
+                    run<ck_tile::element_wise::UnaryConvert, ck_tile::half_t>(arg_parser) ? 0 : -2;
+        }
+        if(data_type == "fp32")
+        {
+            if(op == "square")
+                return_code = run<ck_tile::element_wise::UnarySquare, float>(arg_parser) ? 0 : -2;
+            if(op == "tanh")
+                return_code = run<ck_tile::element_wise::TanH, float>(arg_parser) ? 0 : -2;
+            if(op == "fastgelu")
+                return_code = run<ck_tile::element_wise::FastGelu, float>(arg_parser) ? 0 : -2;
+            if(op == "convert")
+                return_code = run<ck_tile::element_wise::UnaryConvert, float>(arg_parser) ? 0 : -2;
+        }
+        if(return_code != 0)
+        {
+            return return_code;
+        }
     }
-    if(data_type == "fp32")
+    try
     {
-        if(op == "square")
-            return run<float, ck_tile::element_wise::UnarySquare>(arg_parser) ? 0 : -2;
-        if(op == "tanh")
-            return run<float, ck_tile::element_wise::TanH>(arg_parser) ? 0 : -2;
-        if(op == "fastgelu")
-            return run<float, ck_tile::element_wise::FastGelu>(arg_parser) ? 0 : -2;
+        printf("Running mixed precision path: \n");
+        const auto x_prec_variant = string_to_datatype(arg_parser.get_str("x_prec"));
+        const auto y_prec_variant = string_to_datatype(arg_parser.get_str("y_prec"));
+        const auto op_variant     = string_to_op(arg_parser.get_str("op"));
+        return std::visit(
+            [&](auto&& op, auto&& x_dt, auto&& y_dt) -> int {
+                using XElementwiseOperation = std::decay_t<decltype(op)>;
+                using XDataType             = std::decay_t<decltype(x_dt)>;
+                using YDataType             = std::decay_t<decltype(y_dt)>;
+                return filter_then_run<XElementwiseOperation, XDataType, YDataType>(arg_parser);
+            },
+            op_variant,
+            x_prec_variant,
+            y_prec_variant);
     }
-
-    return -3;
+    catch(const std::exception& e)
+    {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return -3;
+    }
 }

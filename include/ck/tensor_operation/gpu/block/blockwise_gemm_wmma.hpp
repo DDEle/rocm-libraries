@@ -57,11 +57,6 @@ struct BlockwiseGemmWMMA
     static constexpr auto I3 = Number<3>{};
     static constexpr auto I4 = Number<4>{};
     static constexpr auto I5 = Number<5>{};
-#ifdef __gfx125__
-    static constexpr auto WmmaK = is_same<FloatA, int8_t>::value ? 64 : 32;
-#else
-    static constexpr auto WmmaK = Number<16>{};
-#endif
 
     using ThisThreadBlock = ThisThreadBlock<BlockSize>;
 
@@ -79,6 +74,8 @@ struct BlockwiseGemmWMMA
 
     static constexpr auto wmma_gemm =
         WmmaGemm<FloatA, FloatB, FloatAcc, MPerWMMA, NPerWMMA, KPack, TransposeC>{};
+
+    static constexpr auto WmmaK = Number<wmma_gemm.wmma_instr.k_per_wmma>{};
 
     static constexpr index_t MWaves = MPerBlock / (MRepeat * MPerWMMA);
     static constexpr index_t NWaves = NPerBlock / (NRepeat * NPerWMMA);

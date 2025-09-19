@@ -106,16 +106,19 @@ template <typename LdsTileWindow_,
           typename BottomTensorView_,
           typename WindowLengths_,
           typename TileDistribution_,
-          index_t NumCoord,
-          index_t i_access = -1>
-CK_TILE_DEVICE auto load_tile_tdm(LdsTileWindow_&& lds_tile,
-                                  const tile_window_with_static_distribution<BottomTensorView_,
-                                                                             WindowLengths_,
-                                                                             TileDistribution_,
-                                                                             NumCoord>& tile_window,
-                                  number<i_access> = {})
+          index_t NumCoord_,
+          typename GatherIndexView_ = null_tile_window<WindowLengths_>,
+          index_t i_access          = -1> // this i_access is used for gather mode
+CK_TILE_DEVICE auto
+load_tile_tdm(LdsTileWindow_&& lds_tile,
+              const tile_window_with_static_distribution<BottomTensorView_,
+                                                         WindowLengths_,
+                                                         TileDistribution_,
+                                                         NumCoord_>& tile_window,
+              const GatherIndexView_& gather_index_view = null_tile_window<WindowLengths_>{},
+              number<i_access>                          = {})
 {
-    return tile_window.tdm_load_to_lds(lds_tile, number<i_access>{});
+    return tile_window.tdm_load_to_lds(lds_tile, gather_index_view, number<i_access>{});
 }
 
 template <typename LdsTileWindow_,

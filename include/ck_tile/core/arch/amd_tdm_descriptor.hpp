@@ -382,13 +382,17 @@ class TDMDescriptor
                                  const uint32_t* globalDim,
                                  const uint64_t* globalStrides,
                                  const uint16_t* boxDim,
-                                 TDMConfig tdm_config)
+                                 TDMConfig tdm_config,
+                                 const void* gatherRowIndex    = nullptr,
+                                 TDMGatherIndexSize rowIdxSize = TDMGatherIndexSize::Row16bit_Index)
         : m_globalAddress(globalAddress),
           m_localAddress(localAddress),
           m_globalDim(globalDim),
           m_globalStrides(globalStrides),
           m_boxDim(boxDim),
-          m_tdmCfg(tdm_config)
+          m_tdmCfg(tdm_config),
+          m_rowIndex(gatherRowIndex),
+          m_rowIdxSize(rowIdxSize)
     {
     }
 
@@ -451,9 +455,9 @@ class TDMDescriptor
     const uint64_t* m_globalStrides = nullptr;
     const uint16_t* m_boxDim        = nullptr;
     TDMConfig m_tdmCfg;
-    TDMGatherIndexSize m_rowIdxSize;
     const void* m_rowIndex = nullptr;
-    uint32_t m_rowIndexCount{0}; // number of row indices, used in gather mode
+    TDMGatherIndexSize m_rowIdxSize;
+    uint32_t m_rowIndexCount = m_rowIdxSize == TDMGatherIndexSize::Row16bit_Index ? 16 : 8;
 
     // Helper functions for configuring TDM groups
     CK_TILE_DEVICE void configureGroup1(TDM_GROUP1& group1) const
@@ -654,16 +658,24 @@ class TDMDescriptor
 };
 
 template <typename DataType, index_t TensorRank, bool IsGatherMode = false>
-TDMDescriptor<DataType, TensorRank, IsGatherMode>
-    CK_TILE_DEVICE createTDMDescriptor(const void* globalAddress,
-                                       void* localAddress,
-                                       const uint32_t* globalDim,
-                                       const uint64_t* globalStrides,
-                                       const uint16_t* boxDim,
-                                       TDMConfig tdm_config)
+TDMDescriptor<DataType, TensorRank, IsGatherMode> CK_TILE_DEVICE
+createTDMDescriptor(const void* globalAddress,
+                    void* localAddress,
+                    const uint32_t* globalDim,
+                    const uint64_t* globalStrides,
+                    const uint16_t* boxDim,
+                    TDMConfig tdm_config,
+                    const void* gatherRowIndex    = nullptr,
+                    TDMGatherIndexSize rowIdxSize = TDMGatherIndexSize::Row16bit_Index)
 {
-    return TDMDescriptor<DataType, TensorRank, IsGatherMode>(
-        globalAddress, localAddress, globalDim, globalStrides, boxDim, tdm_config);
+    return TDMDescriptor<DataType, TensorRank, IsGatherMode>(globalAddress,
+                                                             localAddress,
+                                                             globalDim,
+                                                             globalStrides,
+                                                             boxDim,
+                                                             tdm_config,
+                                                             gatherRowIndex,
+                                                             rowIdxSize);
 }
 
 } // namespace ck_tile

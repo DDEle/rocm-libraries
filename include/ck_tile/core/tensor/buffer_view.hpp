@@ -38,6 +38,9 @@ template <address_space_enum BufferAddressSpace,
           amd_buffer_coherence_enum Coherence = amd_buffer_coherence_enum::coherence_default>
 struct buffer_view;
 
+struct null_buffer_view
+{
+};
 // Address Space: generic
 // T may be scalar or vector
 // X may be scalar or vector
@@ -204,22 +207,6 @@ struct buffer_view<address_space_enum::generic,
             *c_style_pointer_cast<X*>(&p_data_[i + linear_offset]) = x;
 #endif
         }
-    }
-
-    template <typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
-    CK_TILE_DEVICE void tdm_get(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
-                                index_t linear_offset,
-                                const DimTuple_& tensor_dims,
-                                const DimTuple_& global_strides,
-                                number<num_tensor_dims> = {})
-    {
-        static_assert(false, "Error: tdm load not supported in generic memory space.");
-        ignore = smem;
-        ignore = linear_offset;
-        ignore = tensor_dims;
-        ignore = global_strides;
-        ignore = num_tensor_dims;
-        return;
     }
 
     // FIXME: remove
@@ -747,12 +734,18 @@ struct buffer_view<address_space_enum::global,
         }
     }
 
-    template <typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
+    template <typename DimTuple_,
+              typename BoxDim_,
+              index_t num_tensor_dims,
+              typename GatherIndexView_ = null_buffer_view,
+              index_t gather_index_offset>
     CK_TILE_DEVICE void tdm_get(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
                                 index_t linear_offset,
                                 const DimTuple_& tensor_dims,
                                 const DimTuple_& global_strides,
-                                number<num_tensor_dims> = {})
+                                number<num_tensor_dims>                   = {},
+                                const GatherIndexView_& gather_index_view = null_buffer_view{},
+                                number<gather_index_offset>               = {})
     {
         TDMConfig tdm_config; // default initialize all fields to zero/false
 
@@ -772,13 +765,36 @@ struct buffer_view<address_space_enum::global,
             generate_array([&](auto i) { return static_cast<uint16_t>(box_dim.at(i)); },
                            number<num_tensor_dims>{});
 
-        auto TDMDescriptor =
-            createTDMDescriptor<remove_cvref_t<T>, num_tensor_dims>(p_data_ + linear_offset,
-                                                                    smem,
-                                                                    tensor_dims_uint32.data,
-                                                                    global_strides_uint64.data,
-                                                                    box_dim_uint16.data,
-                                                                    tdm_config);
+        auto TDMDescriptor = [&]() {
+            if constexpr(std::is_same_v<GatherIndexView_, null_buffer_view>)
+            {
+                return createTDMDescriptor<remove_cvref_t<T>, num_tensor_dims>(
+                    p_data_ + linear_offset,
+                    smem,
+                    tensor_dims_uint32.data,
+                    global_strides_uint64.data,
+                    box_dim_uint16.data,
+                    tdm_config);
+            }
+            else
+            {
+                using GatherIndexType = typename GatherIndexView_::type;
+
+                constexpr TDMGatherIndexSize tdm_index_size =
+                    std::is_same_v<GatherIndexType, int32_t> ? TDMGatherIndexSize::Row32bit_Index
+                                                             : TDMGatherIndexSize::Row16bit_Index;
+
+                return createTDMDescriptor<remove_cvref_t<T>, num_tensor_dims, true>(
+                    p_data_ + linear_offset,
+                    smem,
+                    tensor_dims_uint32.data,
+                    global_strides_uint64.data,
+                    box_dim_uint16.data,
+                    tdm_config,
+                    gather_index_view.p_data_ + gather_index_offset,
+                    tdm_index_size);
+            }
+        }();
 
         amd_tdm_load<Coherence>(TDMDescriptor);
     }
@@ -1176,24 +1192,6 @@ struct buffer_view<address_space_enum::lds,
 #endif
             }
         }
-    }
-
-    template <typename DimTuple_, index_t num_tensor_dims>
-    CK_TILE_DEVICE void tdm_get(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
-                                index_t linear_offset,
-                                const DimTuple_& tensor_dims,
-                                const DimTuple_& global_strides,
-                                const DimTuple_& box_dim,
-                                number<num_tensor_dims> = {})
-    {
-        static_assert(false, "Error: tdm load not supported in shared memory space.");
-        ignore = smem;
-        ignore = linear_offset;
-        ignore = tensor_dims;
-        ignore = global_strides;
-        ignore = box_dim;
-        ignore = num_tensor_dims;
-        return;
     }
 
     // FIXME: remove

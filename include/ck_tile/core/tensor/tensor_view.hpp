@@ -16,6 +16,14 @@
 
 namespace ck_tile {
 
+// placeholder type if we want to opt-out a tensor view parameter
+struct null_tensor_view
+{
+    CK_TILE_HOST_DEVICE constexpr auto get_buffer_view() const { return null_buffer_view{}; }
+
+    CK_TILE_HOST_DEVICE constexpr auto get_buffer_view() { return null_buffer_view{}; }
+};
+
 /*
  * tensor_view
  * abstract the underneath memory buffer(global, LDS, etc...)
@@ -434,15 +442,49 @@ struct tensor_view
             coord.get_offset() / PackedSize, linear_offset / PackedSize, is_valid_element, x);
     }
 
-    template <typename BoxDim_, index_t num_tensor_dims, typename DimTuple_>
-    CK_TILE_DEVICE constexpr void get_tdm_elements(CK_TILE_LDS_ADDR remove_cvref_t<DataType>* smem,
-                                                   const TensorCoord& coord,
-                                                   DimTuple_& tensor_dims,
-                                                   DimTuple_& global_strides,
-                                                   number<num_tensor_dims> = {})
+    template <typename BoxDim_,
+              index_t num_tensor_dims,
+              typename DimTuple_,
+              typename GatherIndexView_   = null_tensor_view,
+              index_t gather_index_offset = -1>
+    CK_TILE_DEVICE constexpr void
+    get_tdm_elements(CK_TILE_LDS_ADDR remove_cvref_t<DataType>* smem,
+                     const TensorCoord& coord,
+                     DimTuple_& tensor_dims,
+                     DimTuple_& global_strides,
+                     number<num_tensor_dims>                   = {},
+                     const GatherIndexView_& gather_index_view = null_tensor_view{},
+                     number<gather_index_offset>               = {})
     {
-        return buf_.template tdm_get<DimTuple_, BoxDim_, num_tensor_dims>(
-            smem, coord.get_offset(), tensor_dims, global_strides, number<num_tensor_dims>{});
+        if constexpr(std::is_same_v<GatherIndexView_, null_tensor_view>)
+        {
+            return buf_.template tdm_get<DimTuple_,
+                                         BoxDim_,
+                                         num_tensor_dims,
+                                         null_buffer_view,
+                                         gather_index_offset>(smem,
+                                                              coord.get_offset(),
+                                                              tensor_dims,
+                                                              global_strides,
+                                                              number<num_tensor_dims>{},
+                                                              null_buffer_view{},
+                                                              number<gather_index_offset>{});
+        }
+        else
+        {
+            auto buffer_view = gather_index_view.get_buffer_view();
+            return buf_.template tdm_get<DimTuple_,
+                                         BoxDim_,
+                                         num_tensor_dims,
+                                         decltype(buffer_view),
+                                         gather_index_offset>(smem,
+                                                              coord.get_offset(),
+                                                              tensor_dims,
+                                                              global_strides,
+                                                              number<num_tensor_dims>{},
+                                                              buffer_view,
+                                                              number<gather_index_offset>{});
+        }
     }
 
     template <typename BoxDim_, index_t num_tensor_dims, typename DimTuple_>
@@ -460,11 +502,6 @@ struct tensor_view
     // member
     buffer_view buf_;
     TensorDesc desc_;
-};
-
-// placeholder type if we want to opt-out a tile view parameter
-struct null_tensor_view
-{
 };
 
 template <address_space_enum BufferAddressSpace = address_space_enum::generic,

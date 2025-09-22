@@ -59,7 +59,6 @@ def checkoutAndFetchDevelop() {
             echo "FETCH_HEAD now points to: \$(git rev-parse FETCH_HEAD)"
             echo "Current branch: \$(git branch --show-current)"
             echo "Current commit: \$(git rev-parse HEAD)"
-            echo "Develop branch commit: \$(git rev-parse origin/develop)"
             echo "========================================="
         """
     }

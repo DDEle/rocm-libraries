@@ -189,7 +189,15 @@ CK_TILE_DEVICE void s_waitcnt_barrier()
 template <index_t lgkmcnt = 0>
 CK_TILE_DEVICE void block_sync_lds()
 {
+#if defined(__gfx12__)
+    asm volatile("\
+        s_wait_dscnt 0x0 \n \
+        s_barrier_signal -1 \n \
+        s_barrier_wait -1 \
+        " ::);
+#else
     s_waitcnt_barrier<waitcnt_arg::kMaxVmCnt, waitcnt_arg::kMaxExpCnt, lgkmcnt>();
+#endif
 }
 
 template <index_t vmcnt = 0>

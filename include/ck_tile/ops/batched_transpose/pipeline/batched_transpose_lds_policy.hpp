@@ -90,22 +90,21 @@ struct BatchedTransposeLdsPolicy : public BatchedTransposeCommonPolicy
         using DataType = typename Problem::DataType;
 
         // Calculate block-level dimensions
-        constexpr index_t kLeadIterPerWarp   = 1;
-        constexpr index_t kSecondIterPerWarp = 1;
-        constexpr index_t kLeadNumWarps      = Problem::kLeadNumWarps;
-        constexpr index_t kSecondNumWarps    = Problem::kSecondNumWarps;
+        constexpr index_t kLeadIterPerWarp = Problem::kLeadSizePerBlock / Problem::kWarpTileLeadDim;
+        constexpr index_t kSecondIterPerWarp =
+            Problem::kSecondSizePerBlock / Problem::kWarpTileSecondDim;
+        constexpr index_t kLeadNumWarps   = Problem::kLeadNumWarps;
+        constexpr index_t kSecondNumWarps = Problem::kSecondNumWarps;
 
         // Calculate repetitions of base pattern
-        constexpr index_t kLeadRepetitions     = Problem::kQuadNumPerLeadDim;
-        constexpr index_t kSecondRepetitions   = Problem::kQuadNumPerSecondDim;
-        constexpr index_t kSecondDimIterations = Problem::kIterationsInSecondDim;
-        constexpr index_t kSecondDimStrSub     = kSecondRepetitions / kSecondDimIterations;
+        constexpr index_t kLeadRepetitions   = Problem::kLeadQuadSize;
+        constexpr index_t kSecondRepetitions = Problem::kSecondQuadSize;
 
         constexpr index_t kLaneGroupSize      = 16;
         constexpr auto xdllevel_dstr_encoding = make_transposed_distr_encode<DataType,
                                                                              kLaneGroupSize,
-                                                                             kSecondDimStrSub,
-                                                                             kSecondDimIterations,
+                                                                             kSecondRepetitions,
+                                                                             1,
                                                                              kLeadRepetitions,
                                                                              1>();
 

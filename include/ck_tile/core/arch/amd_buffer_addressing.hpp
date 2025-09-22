@@ -28,20 +28,32 @@ using as3_uint32_ptr = uint32_t __attribute__((address_space(3)))*;
 
 namespace ck_tile {
 
-// 128 bit SGPRs to supply buffer resource in buffer instructions
-// https://rocm-documentation.readthedocs.io/en/latest/GCN_ISA_Manuals/testdocbook.html#vector-memory-buffer-instructions
-struct __attribute__((packed)) buffer_resource
+union buffer_resource
 {
-    const void* ptr;
-    uint32_t range;
-    uint32_t config;
+    CK_TILE_DEVICE constexpr buffer_resource() : content{} {}
+
+    // 128 bit SGPRs to supply buffer resource in buffer instructions
+    // https://rocm-documentation.readthedocs.io/en/latest/GCN_ISA_Manuals/testdocbook.html#vector-memory-buffer-instructions
+    int32x4_t content;
+    array<void*, 2> address;
+    array<uint32_t, 4> range;
+    array<uint32_t, 4> config;
 };
 
 CK_TILE_DEVICE int32x4_t make_wave_buffer_resource(const void* ptr, uint32_t size = 0xffffffff)
 {
-    buffer_resource res{ptr, size, CK_TILE_BUFFER_RESOURCE_3RD_DWORD};
-    int32x4_t r = __builtin_bit_cast(int32x4_t, res);
-    return r;
+    buffer_resource res;
+#if defined(__gfx125__)
+    res.address[0] = const_cast<void*>(ptr);
+    res.range[1] |= (size & 0x7f) << 25;
+    res.range[2] = (size >> 7) & 0xffffffff;
+#else
+    res.address[0] = const_cast<void*>(ptr);
+    res.range[2]   = size;
+#endif
+    res.config[3] = CK_TILE_BUFFER_RESOURCE_3RD_DWORD;
+
+    return res.content;
 }
 
 namespace impl {

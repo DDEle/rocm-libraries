@@ -874,7 +874,7 @@ struct buffer_view<address_space_enum::lds,
 
         if(is_valid_element)
         {
-#if defined(__gfx950__)
+#if defined(__gfx950__) || defined(__gfx125__)
             constexpr index_t t_per_x               = scalar_per_x_vector / scalar_per_t_vector;
             constexpr address_space_enum addr_space = get_address_space();
             return amd_transpose_load_to_vgpr<remove_cvref_t<T>, t_per_x, addr_space>(

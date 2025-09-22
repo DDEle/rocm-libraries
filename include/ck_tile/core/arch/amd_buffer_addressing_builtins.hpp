@@ -19,20 +19,32 @@ using as3_uint32_ptr = uint32_t __attribute__((address_space(3)))*;
 
 namespace ck_tile {
 
-// 128 bit SGPRs to supply buffer resource in buffer instructions
-// https://rocm-documentation.readthedocs.io/en/latest/GCN_ISA_Manuals/testdocbook.html#vector-memory-buffer-instructions
-struct __attribute__((packed)) buffer_resource
+union buffer_resource
 {
-    const void* ptr;
-    uint32_t range;
-    uint32_t config;
+    CK_TILE_DEVICE constexpr buffer_resource() : content{} {}
+
+    // 128 bit SGPRs to supply buffer resource in buffer instructions
+    // https://rocm-documentation.readthedocs.io/en/latest/GCN_ISA_Manuals/testdocbook.html#vector-memory-buffer-instructions
+    int32x4_t content;
+    array<void*, 2> address;
+    array<uint32_t, 4> range;
+    array<uint32_t, 4> config;
 };
 
 CK_TILE_DEVICE int32x4_t make_wave_buffer_resource(const void* ptr, uint32_t size = 0xffffffff)
 {
-    buffer_resource res{ptr, size, CK_TILE_BUFFER_RESOURCE_3RD_DWORD};
-    int32x4_t r = __builtin_bit_cast(int32x4_t, res);
-    return r;
+    buffer_resource res;
+#if defined(__gfx125__)
+    res.address[0] = const_cast<void*>(ptr);
+    res.range[1] |= (size & 0x7f) << 25;
+    res.range[2] = (size >> 7) & 0xffffffff;
+#else
+    res.address[0] = const_cast<void*>(ptr);
+    res.range[2]   = size;
+#endif
+    res.config[3] = CK_TILE_BUFFER_RESOURCE_3RD_DWORD;
+
+    return res.content;
 }
 
 namespace impl {
@@ -2618,7 +2630,6 @@ CK_TILE_DEVICE void amd_direct_load_global_to_lds(const T* global_base_ptr,
 #endif
 }
 
-#if defined(__gfx950__)
 template <typename T, index_t N, address_space_enum BufferAddressSpace>
 __device__ auto amd_transpose_load_to_vgpr(const T* __restrict__ in_ptr)
 {
@@ -2634,23 +2645,47 @@ __device__ auto amd_transpose_load_to_vgpr(const T* __restrict__ in_ptr)
 #pragma clang diagnostic pop
     if constexpr(std::is_same_v<remove_cvref_t<T>, ck_tile::half_t>)
     {
+#if defined(__gfx950__)
         typedef __attribute__((__vector_size__(4 * sizeof(__fp16)))) __fp16 llvm_fp16x4_t;
         auto lds_ptr = reinterpret_cast<__LDS_ADDR llvm_fp16x4_t*>(in_ptr_);
         return bit_cast<thread_buffer<T, N>>(__builtin_amdgcn_ds_read_tr16_b64_v4f16(lds_ptr));
+#elif defined(__gfx125__)
+        typedef __attribute__((__vector_size__(8 * sizeof(__fp16)))) __fp16 llvm_fp16x8_t;
+        auto lds_ptr = reinterpret_cast<__LDS_ADDR llvm_fp16x8_t*>(in_ptr_);
+        return bit_cast<thread_buffer<T, N>>(__builtin_amdgcn_ds_load_tr16_b128_v8f16(lds_ptr));
+#else
+        static_assert(false, "amd_transpose_load_to_vgpr is not supported for this architecture");
+#endif
     }
     else if constexpr(std::is_same_v<remove_cvref_t<T>, ck_tile::bf16_t>)
     {
+#if defined(__gfx950__)
         typedef __attribute__((__vector_size__(4 * sizeof(__bf16)))) __bf16 llvm_bf16x4_t;
         auto lds_ptr = reinterpret_cast<__LDS_ADDR llvm_bf16x4_t*>(in_ptr_);
         return bit_cast<thread_buffer<T, N>>(__builtin_amdgcn_ds_read_tr16_b64_v4bf16(lds_ptr));
+#elif defined(__gfx125__)
+        typedef __attribute__((__vector_size__(8 * sizeof(__bf16)))) __bf16 llvm_bf16x8_t;
+        auto lds_ptr = reinterpret_cast<__LDS_ADDR llvm_bf16x8_t*>(in_ptr_);
+        return bit_cast<thread_buffer<T, N>>(__builtin_amdgcn_ds_load_tr16_b128_v8bf16(lds_ptr));
+#else
+        static_assert(false, "amd_transpose_load_to_vgpr is not supported for this architecture");
+#endif
     }
     else if constexpr(std::is_same_v<remove_cvref_t<T>, ck_tile::fp8_t> ||
                       std::is_same_v<remove_cvref_t<T>, ck_tile::bf8_t> ||
                       std::is_same_v<remove_cvref_t<T>, ck_tile::int8_t>)
     {
         typedef __attribute__((__vector_size__(2 * sizeof(index_t)))) index_t llvm_i32x2_t;
-        auto lds_ptr = reinterpret_cast<__LDS_ADDR llvm_i32x2_t*>(in_ptr_);
+        auto lds_ptr =
+            reinterpret_cast<__LDS_ADDR llvm_i32x2_t*>(reinterpret_cast<uintptr_t>(in_ptr));
+#if defined(__gfx950__)
         return bit_cast<thread_buffer<T, N>>(__builtin_amdgcn_ds_read_tr8_b64_v2i32(lds_ptr));
+#elif defined(__gfx125__)
+        return bit_cast<thread_buffer<T, N>>(__builtin_amdgcn_ds_load_tr8_b64_v2i32(lds_ptr));
+#else
+        ignore = lds_ptr;
+        static_assert(false, "amd_transpose_load_to_vgpr is not supported for this architecture");
+#endif
     }
     else
     {
@@ -2658,7 +2693,6 @@ __device__ auto amd_transpose_load_to_vgpr(const T* __restrict__ in_ptr)
     }
 #undef __LDS_ADDR
 }
-#endif
 
 } // namespace ck_tile
 

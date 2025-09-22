@@ -12,7 +12,7 @@ list(APPEND EXAMPLE_GEMM_COMPILE_COMPUTE_V4_OPTIONS
     -enable-noalias-to-md-conversion=0
 )
 
-if(GPU_TARGETS MATCHES "gfx94|gfx95|gfx11|gfx120")
+if(GPU_TARGETS MATCHES "gfx94|gfx95|gfx11|gfx12")
     add_test_executable(test_ck_tile_gemm_pipeline_universal_int8 test_gemm_pipeline_universal_int8.cpp)
     target_compile_options(test_ck_tile_gemm_pipeline_universal_int8 PRIVATE ${EXAMPLE_GEMM_COMPILE_OPTIONS})
     add_test_executable(test_ck_tile_gemm_pipeline_universal_pk_int4 test_gemm_pipeline_universal_pk_int4.cpp)
@@ -21,7 +21,7 @@ else()
     message(DEBUG "Skipping ck_tile_gemm tests for current target")
 endif()
 
-if(GPU_TARGETS MATCHES "gfx94|gfx95|gfx120")
+if(GPU_TARGETS MATCHES "gfx94|gfx95|gfx12")
     add_test_executable(test_ck_tile_gemm_pipeline_universal_fp8 test_gemm_pipeline_universal_fp8.cpp)
     target_compile_options(test_ck_tile_gemm_pipeline_universal_fp8 PRIVATE ${EXAMPLE_GEMM_COMPILE_OPTIONS})
     add_test_executable(test_ck_tile_gemm_pipeline_universal_bf8 test_gemm_pipeline_universal_bf8.cpp)
@@ -34,7 +34,7 @@ else()
     message(DEBUG "Skipping ck_tile_gemm tests for current target")
 endif()
 
-if(GPU_TARGETS MATCHES "gfx94|gfx95|gfx90a|gfx11|gfx120")
+if(GPU_TARGETS MATCHES "gfx94|gfx95|gfx90a|gfx11|gfx12")
     add_test_executable(test_ck_tile_gemm_pipeline_universal_fp16 test_gemm_pipeline_universal_fp16.cpp)
     target_compile_options(test_ck_tile_gemm_pipeline_universal_fp16 PRIVATE ${EXAMPLE_GEMM_COMPILE_OPTIONS})
     target_compile_options(test_ck_tile_gemm_pipeline_universal_fp16 PRIVATE --save-temps -Wno-gnu-line-marker)

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ck/utility/common_header.hpp"
+#include "ck/host_utility/device_prop.hpp"
 #include "ck/tensor_description/multi_index_transform_helper.hpp"
 #include "ck/tensor_description/tensor_descriptor.hpp"
 #include "ck/tensor_description/tensor_descriptor_helper.hpp"
@@ -1094,7 +1095,7 @@ struct GridwiseGemmMultiD_xdl_cshuffle_v3
             return false;
         }
 
-        if(!ck::is_xdl_wmma_k_supported<ComputeTypeA, KPerBlock>())
+        if(!is_xdl_wmma_k_supported<ComputeTypeA, KPerBlock>())
         {
             return false;
         }

@@ -5,6 +5,7 @@
 
 #include "ck/utility/common_header.hpp"
 #include "ck/utility/env.hpp"
+#include "ck/host_utility/device_prop.hpp"
 #include "ck/tensor_description/multi_index_transform_helper.hpp"
 #include "ck/tensor_description/tensor_descriptor.hpp"
 #include "ck/tensor_description/tensor_descriptor_helper.hpp"
@@ -464,7 +465,7 @@ struct GridwiseGemm_bk0mk1_bk0nk1_mn_xdlops_v2r4r2
 
     __host__ static bool CheckValidity(const Argument& karg)
     {
-        if(!is_xdl_wmma_k_supported<FloatAB, K0PerBlock, K1Value>())
+        if(!is_xdl_wmma_k_supported<ComputeTypeA, K1Value * K0PerBlock, K1Value>())
         {
             return false;
         }

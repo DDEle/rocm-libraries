@@ -43,10 +43,10 @@ using DeviceConvBwdWeightInstance =
         128,                  // NPerBlock
         4,                    // K0PerBlock
         8,                    // K1
-        32,                   // MPerXdl
-        32,                   // NPerXdl
-        2,                    // MXdlPerWave
-        2,                    // NXdlPerWave
+        16,                   // MPerXdl
+        16,                   // NPerXdl
+        4,                    // MXdlPerWave
+        4,                    // NXdlPerWave
         S<1, 4, 16, 4>,       // ABlockTransferThreadClusterLengths_K0_M_K1
         S<0, 3, 1, 2>,        // ABlockTransferThreadClusterArrangeOrder
         S<0, 2, 1, 3>,        // ABlockTransferSrcAccessOrder
@@ -64,7 +64,7 @@ using DeviceConvBwdWeightInstance =
         1,                    // CShuffleMXdlPerWavePerShuffle
         1,                    // CShuffleNXdlPerWavePerShuffle
         S<1, 32, 1, 4>,       // CBlockTransferClusterLengths_MBlock_MPerBlock_NBlock_NPerBlock
-        128 / (sizeof(WeiDataType) * CHAR_BIT)>; // CBlockTransferScalarPerVector_NWaveNPerXdl
+        4>;                   // CBlockTransferScalarPerVector_NWaveNPerXdl
 
 template <ck::index_t NDimSpatial>
 using HostConvBwdWeightInstance = ck::tensor_operation::host::ReferenceConvBwdWeight<NDimSpatial,

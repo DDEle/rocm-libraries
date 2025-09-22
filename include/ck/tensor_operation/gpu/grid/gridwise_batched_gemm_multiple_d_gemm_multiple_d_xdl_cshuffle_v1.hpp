@@ -196,8 +196,9 @@ struct GridwiseBatchedGemmMultipleDGemmMultipleD_Xdl_CShuffle
     __host__ __device__ static constexpr auto
     MakeGemm1BMmaTileDescriptor_N0_N1_N2_K(const BBlockDesc_BK0_N_BK1&)
     {
-        constexpr index_t Gemm1NWaves = Gemm1NPerBlock / (Gemm1NXdlPerWave * NPerXdl);
-        constexpr auto mfma_info      = MfmaSelector<FloatAB, MPerXdl, NPerXdl>::selected_mfma;
+        constexpr index_t Gemm1NWaves = Gemm1NPerBlock / (Gemm1NXdlPerWave * Gemm0NPerXdl);
+        constexpr auto mfma_info =
+            MfmaSelector<A0B0B1DataType, Gemm0MPerXdl, Gemm0NPerXdl>::selected_mfma;
         if constexpr(mfma_info.k_per_blk > mfma_info.group_size && mfma_info.num_input_blks > 1)
         {
             constexpr auto KGroup      = mfma_info.k_per_blk / mfma_info.group_size;
@@ -205,7 +206,6 @@ struct GridwiseBatchedGemmMultipleDGemmMultipleD_Xdl_CShuffle
             constexpr auto KPerXdlops  = mfma_info.k_per_blk * mfma_info.num_input_blks;
             static_assert(mfma_info.group_size % B1K1 == 0);
             static_assert(Gemm1KPerBlock % KPerXdlops == 0);
-            static_assert(B1K0 == BBlockDesc_BK0_N_BK1{}.GetLength(Number<0>{}));
             static_assert(B1K1 == BBlockDesc_BK0_N_BK1{}.GetLength(Number<2>{}));
 
             constexpr auto K0 = Gemm1KPerBlock / KPerXdlops;
@@ -232,7 +232,9 @@ struct GridwiseBatchedGemmMultipleDGemmMultipleD_Xdl_CShuffle
                 make_tuple(Sequence<0, 2, 1, 3>{}, Sequence<4>{}, Sequence<5>{}),
                 make_tuple(Sequence<0>{}, Sequence<1>{}, Sequence<2>{}));
 
-            return MakeGemmMmaTileDescriptor_MN0_MN1_MN2_K<Gemm1NXdlPerWave, Gemm1NWaves, NPerXdl>(
+            return MakeGemmMmaTileDescriptor_MN0_MN1_MN2_K<Gemm1NXdlPerWave,
+                                                           Gemm1NWaves,
+                                                           Gemm0NPerXdl>(
                 b1_permute_blockdesc_k0_n_k1);
         }
         else

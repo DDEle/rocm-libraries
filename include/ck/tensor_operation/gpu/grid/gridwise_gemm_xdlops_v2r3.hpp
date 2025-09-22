@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ck/utility/common_header.hpp"
+#include "ck/host_utility/device_prop.hpp"
 #include "ck/tensor_description/multi_index_transform_helper.hpp"
 #include "ck/tensor_description/tensor_descriptor.hpp"
 #include "ck/tensor_description/tensor_descriptor_helper.hpp"
@@ -371,7 +372,7 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
                           (NPerBlock % (NXdlPerWave * NPerXdl)) == 0,
                       "Invalid tuning param!");
 
-        if(!is_xdl_wmma_k_supported<FloatAB, K0PerBlock, K1Value>())
+        if(!is_xdl_wmma_k_supported<FloatAB, K0PerBlock * K1Value, K1Value>())
         {
             return false;
         }

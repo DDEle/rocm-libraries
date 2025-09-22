@@ -46,6 +46,25 @@ def runShell(String command){
     return (output != "")
 }
 
+def checkoutAndFetchDevelop() {
+    checkout scm
+    withCredentials([gitUsernamePassword(credentialsId: "${ck_githubemu_creds}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel')]) {
+        sh """
+            # Fetch the develop branch from origin
+            git fetch origin develop
+            
+            # Display information about what we fetched
+            echo "========================================="
+            echo "Git fetch completed successfully"
+            echo "FETCH_HEAD now points to: \$(git rev-parse FETCH_HEAD)"
+            echo "Current branch: \$(git branch --show-current)"
+            echo "Current commit: \$(git rev-parse HEAD)"
+            echo "Develop branch commit: \$(git rev-parse origin/develop)"
+            echo "========================================="
+        """
+    }
+}
+
 def getBaseDockerImageName(){
     def img
     if (params.USE_CUSTOM_DOCKER != ""){
@@ -177,7 +196,7 @@ def getDockerImage(Map conf=[:]){
 def buildDocker(install_prefix){
     show_node_info()
     env.DOCKER_BUILDKIT=1
-    checkout scm
+    checkoutAndFetchDevelop()
     def image_name = getDockerImageName()
     def base_image_name = getBaseDockerImageName()
     echo "Building Docker for ${image_name}"
@@ -450,7 +469,7 @@ def buildHipClangJob(Map conf=[:]){
         show_node_info()
 
         env.HSA_ENABLE_SDMA=0
-        checkout scm
+        checkoutAndFetchDevelop()
         def prefixpath = conf.get("prefixpath", "/opt/rocm")
 
         // Jenkins is complaining about the render group 
@@ -516,7 +535,7 @@ def Build_CK(Map conf=[:]){
 
         env.HSA_ENABLE_SDMA=0
         env.DOCKER_BUILDKIT=1
-        checkout scm
+        checkoutAndFetchDevelop()
         def prefixpath = conf.get("prefixpath", "/opt/rocm")
 
         // Jenkins is complaining about the render group 
@@ -718,7 +737,7 @@ def Build_CK_and_Reboot(Map conf=[:]){
 
 def process_results(Map conf=[:]){
     env.HSA_ENABLE_SDMA=0
-    checkout scm
+    checkoutAndFetchDevelop()
     //use older image that has user jenkins
     def image = "${env.CK_DOCKERHUB}:ck_ub22.04_rocm6.3"
     def prefixpath = "/opt/rocm"

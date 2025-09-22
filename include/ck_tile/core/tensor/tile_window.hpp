@@ -10,6 +10,7 @@
 #include "ck_tile/core/container/sequence.hpp"
 #include "ck_tile/core/container/tuple.hpp"
 #include "ck_tile/core/container/container_helper.hpp"
+#include "ck_tile/core/tensor/null_tile_window.hpp"
 #include "ck_tile/core/tensor/static_distributed_tensor.hpp"
 #include "ck_tile/core/tensor/tensor_adaptor.hpp"
 #include "ck_tile/core/tensor/tile_distribution.hpp"
@@ -395,6 +396,149 @@ struct tile_window_with_static_distribution
                         window_adaptor_thread_coord, bottom_tensor_thread_coord, idx_diff_ps_ys);
                 }
             });
+        });
+    }
+
+    template <typename LdsTileWindow_, typename GatherIndexView_, index_t i_access_ = -1>
+    CK_TILE_DEVICE auto tdm_load_to_lds(LdsTileWindow_&& lds_tile,
+                                        const GatherIndexView_& gather_index_view,
+                                        number<i_access_> = {}) const
+    {
+        using LdsTileWindow      = remove_cvref_t<LdsTileWindow_>;
+        using LdsDataType        = typename LdsTileWindow::DataType;
+        constexpr auto tile_dstr = typename Base::TileDstr{};
+
+        static constexpr index_t num_tensor_dims = BottomTensorView_::get_num_of_dimension();
+        // constexpr auto tile_dstr = typename Base::TileDstr{};
+
+        const auto lds_window_origin       = lds_tile.get_window_origin();
+        const auto& lds_bottom_tensor_view = lds_tile.get_bottom_tensor_view();
+        const auto& lds_tensor_descriptor  = lds_bottom_tensor_view.get_tensor_descriptor();
+        auto smem_base_ptr                 = lds_bottom_tensor_view.get_buffer_view().p_data_;
+
+        const auto& glb_tensor_descriptor = this->get_bottom_tensor_view().get_tensor_descriptor();
+
+        const auto tensor_dims =
+            tuple_reverse(glb_tensor_descriptor.get_lengths() - this->get_window_origin());
+        const auto global_strides = (container_reverse_exclusive_scan(
+            glb_tensor_descriptor.get_lengths(), multiplies{}, 1));
+
+        auto process_coord = [&](auto iCoord) {
+            auto window_adaptor_thread_coord = pre_computed_coords_[iCoord][I0]; // without origin
+            auto bottom_tensor_thread_coord  = pre_computed_coords_[iCoord][I1]; // with origin
+
+            auto lds_bottom_tensor_thread_idx =
+                lds_window_origin + window_adaptor_thread_coord.get_bottom_index();
+
+            // tdm's box dim is reversed from tile distribution
+            constexpr auto box_dim =
+                to_sequence(tile_dstr.get_ys_to_d_descriptor().get_lengths()).reverse();
+
+            // Use precomputed tensor descriptor
+            const auto lds_coord =
+                make_tensor_coordinate(lds_tensor_descriptor, lds_bottom_tensor_thread_idx);
+
+            // Calculate SMEM address using base pointer
+            CK_TILE_LDS_ADDR LdsDataType* smem = smem_base_ptr + lds_coord.get_offset();
+
+            // Assert that both window origins have the same dimensionality
+            static_assert(
+                std::is_same<std::remove_cv_t<std::remove_reference_t<decltype(lds_window_origin)>>,
+                             std::remove_cv_t<std::remove_reference_t<
+                                 decltype(this->get_window_origin())>>>::value,
+                "Window origin types mismatch - dimensions must be consistent!");
+            // if GatherIndexView_ is null_tile_window, then we are doing TDM load
+            if constexpr(is_null_tile_window_v<GatherIndexView_>)
+            {
+                this->get_bottom_tensor_view()
+                    .template get_tdm_elements<remove_cvref_t<decltype(box_dim)>, num_tensor_dims>(
+                        smem,
+                        bottom_tensor_thread_coord,
+                        tensor_dims,
+                        global_strides,
+                        number<num_tensor_dims>{});
+            }
+            // if GatherIndexView_ is not null_tile_view, then we are doing TDM gather
+            else
+            {
+                constexpr index_t RowNumPerTDMIter =
+                    std::is_same_v<typename GatherIndexView_::DataType, uint16_t> ? 16 : 8;
+                constexpr index_t NumIterations = i_access_ / RowNumPerTDMIter;
+
+                static_for<0, NumIterations, 1>{}([&](auto iIter) {
+                    this->get_bottom_tensor_view()
+                        .template get_tdm_elements<remove_cvref_t<decltype(box_dim)>,
+                                                   num_tensor_dims>(
+                            smem,
+                            bottom_tensor_thread_coord,
+                            tensor_dims,
+                            global_strides,
+                            number<num_tensor_dims>{},
+                            gather_index_view.get_bottom_tensor_view(),
+                            number<iIter * RowNumPerTDMIter>{});
+                });
+            }
+        };
+
+        if constexpr(is_null_tile_window_v<GatherIndexView_>)
+        {
+            ignore = gather_index_view;
+        }
+
+        static_for<0, NumCoord, 1>{}(process_coord);
+    }
+
+    template <typename LdsTileWindow_, index_t i_access_unsupport_ = -1>
+    CK_TILE_DEVICE auto tdm_store_from_lds(const LdsTileWindow_& lds_tile,
+                                           number<i_access_unsupport_> = {}) const
+    {
+        using LdsTileWindow      = remove_cvref_t<LdsTileWindow_>;
+        using LdsDataType        = typename LdsTileWindow::DataType;
+        constexpr auto tile_dstr = typename Base::TileDstr{};
+
+        static constexpr index_t num_tensor_dims = BottomTensorView_::get_num_of_dimension();
+
+        const auto lds_window_origin       = lds_tile.get_window_origin();
+        const auto& lds_bottom_tensor_view = lds_tile.get_bottom_tensor_view();
+        const auto& lds_tensor_descriptor  = lds_bottom_tensor_view.get_tensor_descriptor();
+        auto smem_base_ptr                 = lds_bottom_tensor_view.get_buffer_view().p_data_;
+
+        const auto& glb_tensor_descriptor = this->get_bottom_tensor_view().get_tensor_descriptor();
+
+        const auto tensor_dims =
+            tuple_reverse(glb_tensor_descriptor.get_lengths() - this->get_window_origin());
+        const auto global_strides = (container_reverse_exclusive_scan(
+            glb_tensor_descriptor.get_lengths(), multiplies{}, 1));
+
+        static_for<0, NumCoord, 1>{}([&](auto iCoord) {
+            auto window_adaptor_thread_coord = pre_computed_coords_[iCoord][I0]; // without origin
+            auto bottom_tensor_thread_coord  = pre_computed_coords_[iCoord][I1]; // with origin
+
+            auto lds_bottom_tensor_thread_idx =
+                lds_window_origin + window_adaptor_thread_coord.get_bottom_index();
+
+            constexpr auto box_dim =
+                to_sequence(tile_dstr.get_ys_to_d_descriptor().get_lengths()).reverse();
+            // Use precomputed tensor descriptor
+            const auto lds_coord =
+                make_tensor_coordinate(lds_tensor_descriptor, lds_bottom_tensor_thread_idx);
+
+            // Calculate SMEM address using base pointer
+            CK_TILE_LDS_ADDR LdsDataType* smem = smem_base_ptr + lds_coord.get_offset();
+            // Assert that both window origins have the same dimensionality
+            static_assert(
+                std::is_same<std::remove_cv_t<std::remove_reference_t<decltype(lds_window_origin)>>,
+                             std::remove_cv_t<std::remove_reference_t<
+                                 decltype(this->get_window_origin())>>>::value,
+                "Window origin types mismatch - dimensions must be consistent!");
+
+            this->get_bottom_tensor_view()
+                .template store_tdm_elements<remove_cvref_t<decltype(box_dim)>, num_tensor_dims>(
+                    smem,
+                    bottom_tensor_thread_coord,
+                    tensor_dims,
+                    global_strides,
+                    number<num_tensor_dims>{});
         });
     }
 

@@ -10,6 +10,7 @@
 #else
 #include "ck_tile/core/arch/amd_buffer_addressing.hpp"
 #endif
+#include "ck_tile/core/arch/amd_tdm_descriptor.hpp"
 #include "ck_tile/core/arch/generic_memory_space_atomic.hpp"
 #include "ck_tile/core/container/array.hpp"
 #include "ck_tile/core/numeric/integer.hpp"
@@ -37,6 +38,9 @@ template <address_space_enum BufferAddressSpace,
           amd_buffer_coherence_enum Coherence = amd_buffer_coherence_enum::coherence_default>
 struct buffer_view;
 
+struct null_buffer_view
+{
+};
 // Address Space: generic
 // T may be scalar or vector
 // X may be scalar or vector
@@ -728,6 +732,107 @@ struct buffer_view<address_space_enum::global,
         {
             atomic_max_g<remove_cvref_t<T>, t_per_x>(&p_data_[i + linear_offset], x);
         }
+    }
+
+    template <typename DimTuple_,
+              typename BoxDim_,
+              index_t num_tensor_dims,
+              typename GatherIndexView_ = null_buffer_view,
+              index_t gather_index_offset>
+    CK_TILE_DEVICE void tdm_get(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
+                                index_t linear_offset,
+                                const DimTuple_& tensor_dims,
+                                const DimTuple_& global_strides,
+                                number<num_tensor_dims>                   = {},
+                                const GatherIndexView_& gather_index_view = null_buffer_view{},
+                                number<gather_index_offset>               = {})
+    {
+        TDMConfig tdm_config; // default initialize all fields to zero/false
+
+        // Convert tensor dimensions to uint32_t array
+        array<uint32_t, num_tensor_dims> tensor_dims_uint32;
+        static_for<0, num_tensor_dims, 1>{}(
+            [&](auto i) { tensor_dims_uint32(i) = static_cast<uint32_t>(tensor_dims[i]); });
+
+        // Convert global strides to uint64_t array
+        array<uint64_t, num_tensor_dims> global_strides_uint64;
+        static_for<0, num_tensor_dims, 1>{}(
+            [&](auto i) { global_strides_uint64(i) = static_cast<uint64_t>(global_strides[i]); });
+
+        // Convert box dimensions to uint16_t array
+        constexpr auto box_dim = BoxDim_{};
+        constexpr auto box_dim_uint16 =
+            generate_array([&](auto i) { return static_cast<uint16_t>(box_dim.at(i)); },
+                           number<num_tensor_dims>{});
+
+        auto TDMDescriptor = [&]() {
+            if constexpr(std::is_same_v<GatherIndexView_, null_buffer_view>)
+            {
+                return createTDMDescriptor<remove_cvref_t<T>, num_tensor_dims>(
+                    p_data_ + linear_offset,
+                    smem,
+                    tensor_dims_uint32.data,
+                    global_strides_uint64.data,
+                    box_dim_uint16.data,
+                    tdm_config);
+            }
+            else
+            {
+                using GatherIndexType = typename GatherIndexView_::type;
+
+                constexpr TDMGatherIndexSize tdm_index_size =
+                    std::is_same_v<GatherIndexType, int32_t> ? TDMGatherIndexSize::Row32bit_Index
+                                                             : TDMGatherIndexSize::Row16bit_Index;
+
+                return createTDMDescriptor<remove_cvref_t<T>, num_tensor_dims, true>(
+                    p_data_ + linear_offset,
+                    smem,
+                    tensor_dims_uint32.data,
+                    global_strides_uint64.data,
+                    box_dim_uint16.data,
+                    tdm_config,
+                    gather_index_view.p_data_ + gather_index_offset,
+                    tdm_index_size);
+            }
+        }();
+
+        amd_tdm_load<Coherence>(TDMDescriptor);
+    }
+
+    template <typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
+    CK_TILE_DEVICE void tdm_store(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
+                                  index_t linear_offset,
+                                  const DimTuple_& tensor_dims,
+                                  const DimTuple_& global_strides,
+                                  number<num_tensor_dims> = {})
+    {
+        TDMConfig tdm_config; // default initialize all fields to zero/false
+
+        // Convert tensor dimensions to uint32_t array
+        array<uint32_t, num_tensor_dims> tensor_dims_uint32;
+        static_for<0, num_tensor_dims, 1>{}(
+            [&](auto i) { tensor_dims_uint32(i) = static_cast<uint32_t>(tensor_dims[i]); });
+
+        // Convert global strides to uint64_t array
+        array<uint64_t, num_tensor_dims> global_strides_uint64;
+        static_for<0, num_tensor_dims, 1>{}(
+            [&](auto i) { global_strides_uint64(i) = static_cast<uint64_t>(global_strides[i]); });
+
+        // Convert box dimensions to uint16_t array
+        constexpr auto box_dim = BoxDim_{};
+        constexpr auto box_dim_uint16 =
+            generate_array([&](auto i) { return static_cast<uint16_t>(box_dim.at(i)); },
+                           number<num_tensor_dims>{});
+
+        auto TDMDescriptor =
+            createTDMDescriptor<remove_cvref_t<T>, num_tensor_dims>(p_data_ + linear_offset,
+                                                                    smem,
+                                                                    tensor_dims_uint32.data,
+                                                                    global_strides_uint64.data,
+                                                                    box_dim_uint16.data,
+                                                                    tdm_config);
+
+        amd_tdm_store<Coherence>(TDMDescriptor);
     }
 
     // FIXME: remove

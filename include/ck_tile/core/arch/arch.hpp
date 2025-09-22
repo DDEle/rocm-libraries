@@ -200,6 +200,14 @@ CK_TILE_DEVICE void block_sync_lds()
 #endif
 }
 
+template <index_t tensorcnt = 0>
+CK_TILE_DEVICE void s_wait_tensorcnt()
+{
+#if CK_TILE_ENABLE_TDM_FEATURE
+    __builtin_amdgcn_s_wait_tensorcnt(tensorcnt);
+#endif
+}
+
 template <index_t vmcnt = 0>
 CK_TILE_DEVICE void block_sync_lds_direct_load()
 {

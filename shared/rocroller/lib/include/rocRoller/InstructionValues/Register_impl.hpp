@@ -95,6 +95,7 @@ namespace rocRoller
             case Type::EXEC:
             case Type::EXEC_LO:
             case Type::EXEC_HI:
+            case Type::TTMP6:
             case Type::TTMP7:
             case Type::TTMP9:
             case Type::Constant:
@@ -131,6 +132,7 @@ namespace rocRoller
             case Type::EXEC:
             case Type::EXEC_LO:
             case Type::EXEC_HI:
+            case Type::TTMP6:
             case Type::TTMP7:
             case Type::TTMP9:
                 return true;
@@ -154,6 +156,7 @@ namespace rocRoller
             case Type::EXEC_HI:
                 return true;
 
+            case Type::TTMP6:
             case Type::TTMP7:
             case Type::TTMP9:
             default:
@@ -165,6 +168,7 @@ namespace rocRoller
         {
             switch(t)
             {
+            case Type::TTMP6:
             case Type::TTMP7:
             case Type::TTMP9:
                 return true;
@@ -222,6 +226,7 @@ namespace rocRoller
             case Type::EXEC:
             case Type::EXEC_LO:
             case Type::EXEC_HI:
+            case Type::TTMP6:
             case Type::TTMP7:
             case Type::TTMP9:
             case Type::VCC:
@@ -271,6 +276,8 @@ namespace rocRoller
                 return "EXEC_LO";
             case Type::EXEC_HI:
                 return "EXEC_HI";
+            case Type::TTMP6:
+                return "TTMP6";
             case Type::TTMP7:
                 return "TTMP7";
             case Type::TTMP9:
@@ -674,6 +681,9 @@ namespace rocRoller
             case Type::EXEC_HI:
                 os << "exec_hi";
                 return;
+            case Type::TTMP6:
+                os << "ttmp6";
+                return;
             case Type::TTMP7:
                 os << "ttmp7";
                 return;
@@ -781,6 +791,7 @@ namespace rocRoller
             case Type::EXEC:
             case Type::EXEC_LO:
             case Type::EXEC_HI:
+            case Type::TTMP6:
             case Type::TTMP7:
             case Type::TTMP9:
                 specialString(os);

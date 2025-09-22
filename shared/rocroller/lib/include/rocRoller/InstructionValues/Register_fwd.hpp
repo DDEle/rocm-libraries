@@ -52,6 +52,7 @@ namespace rocRoller
             EXEC,
             EXEC_LO,
             EXEC_HI,
+            TTMP6,
             TTMP7,
             TTMP9,
             Constant,

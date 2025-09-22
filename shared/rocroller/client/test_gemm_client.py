@@ -244,6 +244,9 @@ workgroup_size_y: 2
 workgroupMappingDim: -1
 workgroupRemapXCC: false
 workgroupRemapXCCValue: -1
+workgroup_cluster_size_x: 0
+workgroup_cluster_size_y: 0
+workgroup_cluster_size_z: 0
 unroll_x: 0
 unroll_y: 0
 loadLDS_A: true
@@ -302,6 +305,9 @@ workgroup_size_y: 2
 workgroupMappingDim: -1
 workgroupRemapXCC: false
 workgroupRemapXCCValue: -1
+workgroup_cluster_size_x: 0
+workgroup_cluster_size_y: 0
+workgroup_cluster_size_z: 0
 unroll_x: 0
 unroll_y: 0
 loadLDS_A: true
@@ -359,6 +365,9 @@ workgroup_size_y: 2
 workgroupMappingDim: -1
 workgroupRemapXCC: false
 workgroupRemapXCCValue: -1
+workgroup_cluster_size_x: 0
+workgroup_cluster_size_y: 0
+workgroup_cluster_size_z: 0
 unroll_x: 0
 unroll_y: 0
 loadLDS_A: true

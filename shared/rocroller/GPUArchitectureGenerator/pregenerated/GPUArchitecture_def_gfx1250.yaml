@@ -45,6 +45,7 @@ Architectures:
       HasWMMA_scale_f8f6f4: 0
       HasWave32: 0
       HasWave64: 0
+      HasWorkgroupClusters: 0
       HasXCC: 0
       MaxExpcnt: 7
       MaxLdsSize: 65536

@@ -123,24 +123,10 @@ namespace AssertTest
 
             m_context->schedule(k->postamble());
             m_context->schedule(k->amdgpu_metadata());
-            if(arch.HasCapability(GPUCapability::WorkgroupIdxViaTTMP))
-            {
-                EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s2, 0"));
-            }
-            else
-            {
-                EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s3, 0"));
-            }
+            EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s3, 0"));
             if(assertOpKind != AssertOpKind::NoOp)
             {
-                if(arch.HasCapability(GPUCapability::WorkgroupIdxViaTTMP))
-                {
-                    EXPECT_THAT(output(), testing::HasSubstr("s_cmp_eq_i32 s2, 1"));
-                }
-                else
-                {
-                    EXPECT_THAT(output(), testing::HasSubstr("s_cmp_eq_i32 s3, 1"));
-                }
+                EXPECT_THAT(output(), testing::HasSubstr("s_cmp_eq_i32 s3, 1"));
                 EXPECT_THAT(output(), testing::HasSubstr("s_cbranch_scc1"));
                 EXPECT_THAT(output(), testing::HasSubstr("AssertFailed"));
                 EXPECT_THAT(output(),
@@ -193,14 +179,7 @@ namespace AssertTest
                     }
                 }
                 EXPECT_THAT(output(), testing::HasSubstr("AssertPassed"));
-                if(arch.HasCapability(GPUCapability::WorkgroupIdxViaTTMP))
-                {
-                    EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s2, 1"));
-                }
-                else
-                {
-                    EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s3, 1"));
-                }
+                EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s3, 1"));
             }
             else
             {

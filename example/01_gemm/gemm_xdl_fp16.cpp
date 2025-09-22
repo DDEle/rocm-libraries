@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2018-2024, Advanced Micro Devices, Inc. All rights reserved.
 
-// TEST COMMENT: This is for testing git diff functionality
-
 #include "common.hpp"
 
 #include "ck/tensor_operation/gpu/device/impl/device_gemm_xdl.hpp"

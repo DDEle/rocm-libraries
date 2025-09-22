@@ -54,7 +54,7 @@ struct WmmaTraits<gfx12_t, fp16_t, fp16_t, float, 16, 16, 16>
     CK_TILE_DEVICE static CVecType
     wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
     {
-#ifdef __gfx12__
+#ifdef __gfx120__
         return __builtin_amdgcn_wmma_f32_16x16x16_f16_w32_gfx12(a_vec, b_vec, c_vec);
 #else
         ck_tile::ignore = a_vec;
@@ -74,7 +74,7 @@ struct WmmaTraits<gfx12_t, bf16_t, bf16_t, float, 16, 16, 16>
     CK_TILE_DEVICE static CVecType
     wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
     {
-#ifdef __gfx12__
+#ifdef __gfx120__
         return __builtin_amdgcn_wmma_f32_16x16x16_bf16_w32_gfx12(a_vec, b_vec, c_vec);
 #else
         ck_tile::ignore = a_vec;

@@ -1,3 +1,6 @@
+// Copyright © Advanced Micro Devices, Inc., or its affiliates.
+// SPDX-License-Identifier: MIT
+
 #include "gtest/gtest.h"
 #include "ck/library/utility/device_memory.hpp"
 #include "ck/utility/data_type.hpp"

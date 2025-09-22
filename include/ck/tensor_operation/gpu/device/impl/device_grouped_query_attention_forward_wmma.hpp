@@ -290,7 +290,7 @@ struct DeviceGroupedQueryAttentionForward_Wmma
     static constexpr auto I5 = Number<5>{};
     static constexpr auto I6 = Number<6>{};
 
-#ifdef __gfx125__
+#ifdef USE_GFX125_CONFIG
     static constexpr auto WmmaK = 32;
 #else
     static constexpr auto WmmaK = 16;

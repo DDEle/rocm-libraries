@@ -44,8 +44,7 @@ list(APPEND GEMM_OPTIONS "SHELL: -mllvm -greedy-reverse-local-assignment=1 -mllv
 example_compile_options(example_gemm_xdl_fp8_v3 PRIVATE ${GEMM_OPTIONS})
 example_compile_options(example_gemm_xdl_bf16_v3 PRIVATE ${GEMM_OPTIONS})
 
-
-list(APPEND gpu_list gfx942 gfx950)
+list(APPEND gpu_list gfx942 gfx950 gfx1200 gfx1201 gfx12-generic)
 set(target 0)
 foreach(gpu IN LISTS GPU_TARGETS)
     if(gpu IN_LIST gpu_list AND target EQUAL 0)
@@ -89,7 +88,14 @@ foreach(gpu IN LISTS GPU_TARGETS)
 
         add_example_executable(example_gemm_xdl_lds_direct_load_fp16 gemm_xdl_lds_direct_load_fp16.cpp)
         add_example_dependencies(example_gemm_xdl example_gemm_xdl_lds_direct_load_fp16)
+        set(target 1)
+    endif()
+endforeach()
 
+list(APPEND gpu_list gfx90a gfx942 gfx950 gfx1200 gfx1201 gfx12-generic)
+set(target 0)
+foreach(gpu IN LISTS GPU_TARGETS)
+    if(gpu IN_LIST gpu_list AND target EQUAL 0)
         add_example_executable(example_gemm_xdl_bf16_streamk_v3 gemm_xdl_bf16_streamk_v3.cpp)
         add_example_dependencies(example_gemm_xdl example_gemm_xdl_bf16_streamk_v3)
 
@@ -122,6 +128,9 @@ add_example_executable(example_gemm_wmma_bf16_pk_i4_v3 gemm_wmma_bf16_pk_i4_v3.c
 add_example_dependencies(example_gemm_wmma example_gemm_wmma_bf16_pk_i4_v3)
 add_example_executable(example_gemm_wmma_fp8_v3 gemm_wmma_fp8_v3.cpp)
 add_example_dependencies(example_gemm_wmma example_gemm_wmma_fp8_v3)
+add_example_executable(example_gemm_wmma_fp8_v3_reg_spill gemm_wmma_fp8_v3_reg_spill.cpp)
+example_compile_options(example_gemm_wmma_fp8_v3_reg_spill PRIVATE "SHELL: -Rpass-analysis=kernel-resource-usage ")
+add_example_dependencies(example_gemm_wmma example_gemm_wmma_fp8_v3_reg_spill)
 add_example_executable(example_gemm_wmma_fp16_v3 gemm_wmma_fp16_v3.cpp)
 add_example_dependencies(example_gemm_wmma example_gemm_wmma_fp16_v3)
 add_example_executable(example_gemm_wmma_fp16_pk_i4_v3 gemm_wmma_fp16_pk_i4_v3.cpp)

@@ -688,6 +688,10 @@ struct DeviceGroupedGemm_Xdl_Multi_ABD_Fixed_NK
 
     static bool IsSupportedArgument(const Argument& arg)
     {
+        if(!ck::is_xdl_wmma_supported<ComputeType, ComputeType, MPerXDL, NPerXDL>())
+        {
+            return false;
+        }
         if(ck::type_convert<ck::index_t>(arg.gemm_desc_kernel_arg_.size()) != arg.group_count_)
         {
             return false;

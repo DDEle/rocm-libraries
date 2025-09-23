@@ -322,7 +322,28 @@ struct GridwiseGemmMultipleD_xdl_cshuffle
         return true;
     }
 
-    IS_VALID_COMPILATION_PARAMETER_IMPL(EDataType)
+    template <
+        InMemoryDataOperationEnum CGlobalMemoryDataOperation_ = InMemoryDataOperationEnum::Set>
+    __device__ static bool constexpr IsValidCompilationParameter()
+    {
+#if defined(__gfx11__) || defined(__gfx120__)
+        if constexpr(is_same_v<AComputeDataType_, float>)
+        {
+
+            return false;
+        }
+#endif
+        return ck::tensor_operation::device::IsValidGemmCompilationParameter<
+            BlockSize,
+            MPerBlock,
+            NPerBlock,
+            MPerXdl,
+            NPerXdl,
+            MXdlPerWave,
+            NXdlPerWave,
+            EDataType,
+            CGlobalMemoryDataOperation_>();
+    }
 
     template <typename AGridDesc_M_K,
               typename BGridDesc_N_K,

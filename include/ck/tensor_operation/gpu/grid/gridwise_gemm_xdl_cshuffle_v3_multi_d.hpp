@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ck/utility/common_header.hpp"
+#include "ck/host_utility/device_prop.hpp"
 #include "ck/tensor_description/multi_index_transform_helper.hpp"
 #include "ck/tensor_description/tensor_descriptor.hpp"
 #include "ck/tensor_description/tensor_descriptor_helper.hpp"
@@ -1072,7 +1073,6 @@ struct GridwiseGemmMultiD_xdl_cshuffle_v3
             KPerBlock / (MfmaInst::GetKPerXdlops() / MfmaInst::GetK1PerXdlops());
         if constexpr(KPerThread % KPack != 0)
         {
-            static_assert(0);
             return false;
         }
 
@@ -1095,6 +1095,10 @@ struct GridwiseGemmMultiD_xdl_cshuffle_v3
             return false;
         }
 
+        if(!is_xdl_wmma_k_supported<ComputeTypeA, KPerBlock>())
+        {
+            return false;
+        }
         if constexpr(!(GemmSpec == tensor_operation::device::GemmSpecialization::MPadding ||
                        GemmSpec == tensor_operation::device::GemmSpecialization::MNPadding ||
                        GemmSpec == tensor_operation::device::GemmSpecialization::MKPadding ||

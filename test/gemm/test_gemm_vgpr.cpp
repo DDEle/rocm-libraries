@@ -165,7 +165,7 @@ void verify_largevgpr()
     HIP_CHECK_ERROR(hipMemcpy(device_b, b.data(), b.size() * sizeof(float), hipMemcpyHostToDevice));
 
     hipLaunchKernelGGL(
-        test_largevgpr<MatSize>, dim3(1), dim3(32), 0, 0, device_a, device_b, device_c);
+        test_largevgpr<MatSize>, dim3(1), dim3(32), 0, nullptr, device_a, device_b, device_c);
 
     HIP_CHECK_ERROR(hipMemcpy(c.data(), device_c, c.size() * sizeof(float), hipMemcpyDeviceToHost));
 

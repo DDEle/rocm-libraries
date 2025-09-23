@@ -65,10 +65,10 @@ using DeviceOpInstance = ck::tensor_operation::device::DeviceGemmMultipleDMultip
          16,                        // KPerBlock
          4,                         // AK1
          4,                         // BK1
-         32,                        // MPerXdl
-         32,                        // NPerXdl
-         4,                         // MXdlPerWave
-         2,                         // NXdlPerWave
+         16,                        // MPerXdl
+         16,                        // NPerXdl
+         8,                         // MXdlPerWave
+         4,                         // NXdlPerWave
          S<4, 64, 1>,               // ABlockTransfer ThreadCluster Lengths_K0_M_K1
          S<1, 0, 2>,                // ABlockTransfer ThreadCluster ArrangeOrder
          S<1, 0, 2>,                // ABlockTransfer SrcAccessOrder
@@ -85,7 +85,7 @@ using DeviceOpInstance = ck::tensor_operation::device::DeviceGemmMultipleDMultip
          1,                         // BBlockLdsExtraN
          1,                         // CShuffleMXdlPerWavePerShuffle
          1,                         // CShuffleNXdlPerWavePerShuffle
-         S<64, 4>,                  // CD Reduce Thread Transfer ClusterLengths _MPerBlock_NPerBlock
+         S<32, 8>,                  // CD Reduce Thread Transfer ClusterLengths _MPerBlock_NPerBlock
          4,                         // CDE ReduceThreadTransfer ScalarPerVector _NPerBlock
          1>;                        // RThread DstScalarPerVector _MPerBlock
 // clang-format on
@@ -146,7 +146,7 @@ int main(int argc, char* argv[])
         exit(0);
     }
 
-    if(ck::is_gfx11_supported() || ck::is_gfx12_supported())
+    if(ck::is_gfx11_supported() || ck::is_gfx120_supported())
     {
         return 0;
     }

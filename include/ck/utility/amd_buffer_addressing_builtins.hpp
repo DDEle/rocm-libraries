@@ -260,11 +260,16 @@ amd_buffer_load_impl(__amdgpu_buffer_rsrc_t src_wave_buffer_resource,
             (is_same<T, half_t>::value && (N == 1 || N == 2 || N == 4 || N == 8 || N == 16)) ||
             (is_same<T, bhalf_t>::value && (N == 1 || N == 2 || N == 4 || N == 8 || N == 16)) ||
             (is_same<T, int32_t>::value && (N == 1 || N == 2 || N == 4 || N == 8 || N == 16)) ||
-            (is_same<T, f8_t>::value && (N == 1 || N == 2 || N == 4 || N == 8 || N == 16)) ||
-            (is_same<T, bf8_t>::value && (N == 1 || N == 2 || N == 4 || N == 8 || N == 16)) ||
-            (is_same<T, int8_t>::value && (N == 1 || N == 2 || N == 4 || N == 8 || N == 16)) ||
-            (is_same<T, uint8_t>::value && (N == 1 || N == 2 || N == 4 || N == 8 || N == 16)) ||
-            (is_same<T, pk_i4_t>::value && (N == 1 || N == 2 || N == 4 || N == 8 || N == 16)),
+            (is_same<T, f8_t>::value &&
+             (N == 1 || N == 2 || N == 4 || N == 8 || N == 16 || N == 32)) ||
+            (is_same<T, bf8_t>::value &&
+             (N == 1 || N == 2 || N == 4 || N == 8 || N == 16 || N == 32)) ||
+            (is_same<T, int8_t>::value &&
+             (N == 1 || N == 2 || N == 4 || N == 8 || N == 16 || N == 32)) ||
+            (is_same<T, uint8_t>::value &&
+             (N == 1 || N == 2 || N == 4 || N == 8 || N == 16 || N == 32)) ||
+            (is_same<T, pk_i4_t>::value &&
+             (N == 1 || N == 2 || N == 4 || N == 8 || N == 16 || N == 32)),
         "wrong! not implemented");
 
     using r_t     = typename vector_type<T, N>::type;

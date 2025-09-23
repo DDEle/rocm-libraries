@@ -8,7 +8,7 @@ namespace ck_tile {
 // int8 specialization - GFX11
 template <>
 struct WmmaTraits<gfx11_t, int8_t, int8_t, int32_t, 16, 16, 16>
-    : WmmaTraitsBase<gfx11_t, int8_t, int8_t, int32_t, 16>
+    : WmmaTraitsBase<gfx11_t, int8_t, int8_t, int32_t>
 {
     template <bool clamp = false>
     CK_TILE_DEVICE static CVecType
@@ -32,8 +32,8 @@ struct WmmaTraits<gfx11_t, int8_t, int8_t, int32_t, 16, 16, 16>
 
 // int8 specialization - GFX12
 template <>
-struct WmmaTraits<gfx120_t, int8_t, int8_t, int32_t, 16, 16, 16>
-    : WmmaTraitsBase<gfx12_t, int8_t, int8_t, int32_t, 16>
+struct WmmaTraits<gfx12_t, int8_t, int8_t, int32_t, 16, 16, 16>
+    : WmmaTraitsBase<gfx12_t, int8_t, int8_t, int32_t>
 {
     template <bool clamp = false>
     CK_TILE_DEVICE static CVecType
@@ -57,8 +57,8 @@ struct WmmaTraits<gfx120_t, int8_t, int8_t, int32_t, 16, 16, 16>
 
 // fp8/bf8 specialization - GFX12
 template <>
-struct WmmaTraits<gfx120_t, fp8_t, fp8_t, float, 16, 16, 16>
-    : WmmaTraitsBase<gfx12_t, fp8_t, fp8_t, float, 16>
+struct WmmaTraits<gfx12_t, fp8_t, fp8_t, float, 16, 16, 16>
+    : WmmaTraitsBase<gfx12_t, fp8_t, fp8_t, float>
 {
     template <bool clamp = false>
     CK_TILE_DEVICE static CVecType
@@ -77,8 +77,8 @@ struct WmmaTraits<gfx120_t, fp8_t, fp8_t, float, 16, 16, 16>
 };
 
 template <>
-struct WmmaTraits<gfx120_t, bf8_t, bf8_t, float, 16, 16, 16>
-    : WmmaTraitsBase<gfx12_t, bf8_t, bf8_t, float, 16>
+struct WmmaTraits<gfx12_t, bf8_t, bf8_t, float, 16, 16, 16>
+    : WmmaTraitsBase<gfx12_t, bf8_t, bf8_t, float>
 {
     template <bool clamp = false>
     CK_TILE_DEVICE static CVecType
@@ -97,8 +97,8 @@ struct WmmaTraits<gfx120_t, bf8_t, bf8_t, float, 16, 16, 16>
 };
 
 template <>
-struct WmmaTraits<gfx120_t, fp8_t, bf8_t, float, 16, 16, 16>
-    : WmmaTraitsBase<gfx12_t, fp8_t, bf8_t, float, 16>
+struct WmmaTraits<gfx12_t, fp8_t, bf8_t, float, 16, 16, 16>
+    : WmmaTraitsBase<gfx12_t, fp8_t, bf8_t, float>
 {
     template <bool clamp = false>
     CK_TILE_DEVICE static CVecType
@@ -117,8 +117,8 @@ struct WmmaTraits<gfx120_t, fp8_t, bf8_t, float, 16, 16, 16>
 };
 
 template <>
-struct WmmaTraits<gfx120_t, bf8_t, fp8_t, float, 16, 16, 16>
-    : WmmaTraitsBase<gfx12_t, bf8_t, fp8_t, float, 16>
+struct WmmaTraits<gfx12_t, bf8_t, fp8_t, float, 16, 16, 16>
+    : WmmaTraitsBase<gfx12_t, bf8_t, fp8_t, float>
 {
     template <bool clamp = false>
     CK_TILE_DEVICE static CVecType
@@ -127,199 +127,6 @@ struct WmmaTraits<gfx120_t, bf8_t, fp8_t, float, 16, 16, 16>
 #ifdef __gfx120__
         return __builtin_amdgcn_wmma_f32_16x16x16_bf8_fp8_w32_gfx12(
             bit_cast<int32x2_t>(a_vec), bit_cast<int32x2_t>(b_vec), bit_cast<fp32x8_t>(c_vec));
-#else
-        ck_tile::ignore = a_vec;
-        ck_tile::ignore = b_vec;
-        ck_tile::ignore = c_vec;
-        return CVecType{0};
-#endif
-    }
-};
-
-// fp8/bf8 specialization - GFX125
-
-template <>
-struct WmmaTraits<gfx125_t, fp8_t, fp8_t, float, 16, 16, 64>
-    : WmmaTraitsBase<gfx12_t, fp8_t, fp8_t, float, 64>
-{
-    template <bool clamp = false>
-    CK_TILE_DEVICE static CVecType
-    wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
-    {
-#ifdef __gfx125__
-        return __builtin_amdgcn_wmma_f32_16x16x64_fp8_fp8(bit_cast<int32x8_t>(a_vec),
-                                                          bit_cast<int32x8_t>(b_vec),
-                                                          0,
-                                                          bit_cast<fp32x8_t>(c_vec),
-                                                          false,
-                                                          true);
-#else
-        ck_tile::ignore = a_vec;
-        ck_tile::ignore = b_vec;
-        ck_tile::ignore = c_vec;
-        return CVecType{0};
-#endif
-    }
-};
-
-template <>
-struct WmmaTraits<gfx125_t, bf8_t, bf8_t, float, 16, 16, 64>
-    : WmmaTraitsBase<gfx12_t, bf8_t, bf8_t, float, 64>
-{
-    template <bool clamp = false>
-    CK_TILE_DEVICE static CVecType
-    wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
-    {
-#ifdef __gfx125__
-        return __builtin_amdgcn_wmma_f32_16x16x64_bf8_bf8(bit_cast<int32x8_t>(a_vec),
-                                                          bit_cast<int32x8_t>(b_vec),
-                                                          0,
-                                                          bit_cast<fp32x8_t>(c_vec),
-                                                          false,
-                                                          true);
-#else
-        ck_tile::ignore = a_vec;
-        ck_tile::ignore = b_vec;
-        ck_tile::ignore = c_vec;
-        return CVecType{0};
-#endif
-    }
-};
-
-template <>
-struct WmmaTraits<gfx125_t, fp8_t, bf8_t, float, 16, 16, 64>
-    : WmmaTraitsBase<gfx12_t, fp8_t, bf8_t, float, 64>
-{
-    template <bool clamp = false>
-    CK_TILE_DEVICE static CVecType
-    wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
-    {
-#ifdef __gfx125__
-        return __builtin_amdgcn_wmma_f32_16x16x64_fp8_bf8(bit_cast<int32x8_t>(a_vec),
-                                                          bit_cast<int32x8_t>(b_vec),
-                                                          0,
-                                                          bit_cast<fp32x8_t>(c_vec),
-                                                          false,
-                                                          true);
-#else
-        ck_tile::ignore = a_vec;
-        ck_tile::ignore = b_vec;
-        ck_tile::ignore = c_vec;
-        return CVecType{0};
-#endif
-    }
-};
-
-template <>
-struct WmmaTraits<gfx125_t, bf8_t, fp8_t, float, 16, 16, 64>
-    : WmmaTraitsBase<gfx12_t, bf8_t, fp8_t, float, 64>
-{
-    template <bool clamp = false>
-    CK_TILE_DEVICE static CVecType
-    wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
-    {
-#ifdef __gfx125__
-        return __builtin_amdgcn_wmma_f32_16x16x64_bf8_fp8(bit_cast<int32x8_t>(a_vec),
-                                                          bit_cast<int32x8_t>(b_vec),
-                                                          0,
-                                                          bit_cast<fp32x8_t>(c_vec),
-                                                          false,
-                                                          true);
-#else
-        ck_tile::ignore = a_vec;
-        ck_tile::ignore = b_vec;
-        ck_tile::ignore = c_vec;
-        return CVecType{0};
-#endif
-    }
-};
-
-template <>
-struct WmmaTraits<gfx125_t, fp8_t, fp8_t, fp16_t, 16, 16, 64>
-    : WmmaTraitsBase<gfx12_t, fp8_t, fp8_t, fp16_t, 64>
-{
-    template <bool clamp = false>
-    CK_TILE_DEVICE static CVecType
-    wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
-    {
-#ifdef __gfx125__
-        return __builtin_amdgcn_wmma_f16_16x16x64_fp8_fp8(bit_cast<int32x8_t>(a_vec),
-                                                          bit_cast<int32x8_t>(b_vec),
-                                                          0,
-                                                          bit_cast<fp16x8_t>(c_vec),
-                                                          false,
-                                                          true);
-#else
-        ck_tile::ignore = a_vec;
-        ck_tile::ignore = b_vec;
-        ck_tile::ignore = c_vec;
-        return CVecType{0};
-#endif
-    }
-};
-
-template <>
-struct WmmaTraits<gfx125_t, fp8_t, bf8_t, fp16_t, 16, 16, 64>
-    : WmmaTraitsBase<gfx12_t, fp8_t, bf8_t, fp16_t, 64>
-{
-    template <bool clamp = false>
-    CK_TILE_DEVICE static CVecType
-    wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
-    {
-#ifdef __gfx125__
-        return __builtin_amdgcn_wmma_f16_16x16x64_fp8_bf8(bit_cast<int32x8_t>(a_vec),
-                                                          bit_cast<int32x8_t>(b_vec),
-                                                          0,
-                                                          bit_cast<fp16x8_t>(c_vec),
-                                                          false,
-                                                          true);
-#else
-        ck_tile::ignore = a_vec;
-        ck_tile::ignore = b_vec;
-        ck_tile::ignore = c_vec;
-        return CVecType{0};
-#endif
-    }
-};
-template <>
-struct WmmaTraits<gfx125_t, bf8_t, fp8_t, fp16_t, 16, 16, 64>
-    : WmmaTraitsBase<gfx12_t, bf8_t, fp8_t, fp16_t, 64>
-{
-    template <bool clamp = false>
-    CK_TILE_DEVICE static CVecType
-    wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
-    {
-#ifdef __gfx125__
-        return __builtin_amdgcn_wmma_f16_16x16x64_bf8_fp8(bit_cast<int32x8_t>(a_vec),
-                                                          bit_cast<int32x8_t>(b_vec),
-                                                          0,
-                                                          bit_cast<fp16x8_t>(c_vec),
-                                                          false,
-                                                          true);
-#else
-        ck_tile::ignore = a_vec;
-        ck_tile::ignore = b_vec;
-        ck_tile::ignore = c_vec;
-        return CVecType{0};
-#endif
-    }
-};
-
-template <>
-struct WmmaTraits<gfx125_t, bf8_t, bf8_t, fp16_t, 16, 16, 64>
-    : WmmaTraitsBase<gfx12_t, bf8_t, bf8_t, fp16_t, 64>
-{
-    template <bool clamp = false>
-    CK_TILE_DEVICE static CVecType
-    wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
-    {
-#ifdef __gfx125__
-        return __builtin_amdgcn_wmma_f16_16x16x64_bf8_bf8(bit_cast<int32x8_t>(a_vec),
-                                                          bit_cast<int32x8_t>(b_vec),
-                                                          0,
-                                                          bit_cast<fp16x8_t>(c_vec),
-                                                          false,
-                                                          true);
 #else
         ck_tile::ignore = a_vec;
         ck_tile::ignore = b_vec;

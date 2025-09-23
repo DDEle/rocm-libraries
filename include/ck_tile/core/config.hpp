@@ -229,10 +229,10 @@
 #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x00020000
 #elif defined(__gfx103__) // for GPU code
 #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x31014000
-#elif defined(__gfx125__)
-#define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x1004000
 #elif defined(__gfx11__) || defined(__gfx120__)
 #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x31004000
+#elif defined(__gfx125__)
+#define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x0
 #endif
 
 #ifndef CK_TILE_EXPERIMENTAL_BLOCK_SYNC_LDS_WITHOUT_SYNC_VMEM

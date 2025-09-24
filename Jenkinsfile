@@ -526,9 +526,20 @@ def Build_CK(Map conf=[:]){
         env.DOCKER_BUILDKIT=1
         checkout scm
         def prefixpath = conf.get("prefixpath", "/opt/rocm")
+        // Check the architecture
+        def arch = check_arch()
 
         // Jenkins is complaining about the render group 
-        def dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+        // There's no group render for gfx1250
+        if ( arch == 8 ){
+            def dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+        }
+        else{
+            def dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+            def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
+            def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
+            dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
+        }
         if (conf.get("enforce_xnack_on", false)) {
             dockerOpts = dockerOpts + " --env HSA_XNACK=1 "
         }
@@ -541,9 +552,7 @@ def Build_CK(Map conf=[:]){
         if(params.BUILD_LEGACY_OS){
             dockerOpts = dockerOpts + " --env LD_LIBRARY_PATH='/opt/Python-3.8.13/lib' "
         }
-        def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
-        def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
-        dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
+
         echo "Docker flags: ${dockerOpts}"
 
         def variant = env.STAGE_NAME
@@ -573,7 +582,6 @@ def Build_CK(Map conf=[:]){
                 timeout(time: 20, unit: 'HOURS')
                 {
                     //check whether to run performance tests on this node
-                    def arch = check_arch()
                     cmake_build(conf)
                     if ( params.RUN_INDUCTOR_TESTS && !params.BUILD_LEGACY_OS && arch == 1 ){
                             echo "Run inductor codegen tests"

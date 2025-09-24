@@ -1039,6 +1039,10 @@ pipeline {
             defaultValue: false,
             description: "Build CK and run tests on gfx950 (default: OFF)")
         booleanParam(
+            name: "BUILD_GFX1250",
+            defaultValue: true,
+            description: "Build CK for gfx1250 (default: ON)")
+        booleanParam(
             name: "BUILD_GFX10",
             defaultValue: true,
             description: "Build CK and run tests on gfx10 (default: ON)")
@@ -1543,7 +1547,7 @@ pipeline {
                 {
                     when {
                         beforeAgent true
-                        expression { params.BUILD_GFX950.toBoolean() && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
+                        expression { params.BUILD_GFX1250.toBoolean() && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
                     }
                     agent{ label rocmnode("gfx90a") }
                     environment{

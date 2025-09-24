@@ -381,10 +381,9 @@ def cmake_build(Map conf=[:]){
     dir("build"){
         //build CK
         sh cmd
-        def arch = check_arch()
         //run tests except when NO_CK_BUILD or BUILD_LEGACY_OS are set
         //don't run tests for gfx1250
-        if(!setup_args.contains("NO_CK_BUILD") && !params.BUILD_LEGACY_OS && arch!=8){
+        if(!setup_args.contains("NO_CK_BUILD") && !params.BUILD_LEGACY_OS && !setup_args.contains("gfx1250")){
             if ((setup_args.contains("gfx9") && params.NINJA_BUILD_TRACE) || params.BUILD_INSTANCES_ONLY){
                 if (params.NINJA_FTIME_TRACE) {
                     echo "running ninja ftime trace"
@@ -526,13 +525,11 @@ def Build_CK(Map conf=[:]){
         env.DOCKER_BUILDKIT=1
         checkout scm
         def prefixpath = conf.get("prefixpath", "/opt/rocm")
-        // Check the architecture
-        def arch = check_arch()
 
         // Jenkins is complaining about the render group 
         // There's no group render for gfx1250
         def dockerOpts
-        if ( arch == 8 ){
+        if ( setup_args.contains("gfx1250" ) ){
             dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
         }
         else{
@@ -583,6 +580,8 @@ def Build_CK(Map conf=[:]){
                 timeout(time: 20, unit: 'HOURS')
                 {
                     //check whether to run performance tests on this node
+                    // Check the architecture
+                    def arch = check_arch()
                     cmake_build(conf)
                     if ( params.RUN_INDUCTOR_TESTS && !params.BUILD_LEGACY_OS && arch == 1 ){
                             echo "Run inductor codegen tests"

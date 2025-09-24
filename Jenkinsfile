@@ -122,7 +122,7 @@ def check_arch(){
     else if ( runShell('grep -n "gfx11" rocminfo.log') ) {
         arch_type = 4
     }
-    else if ( runShell('grep -n "gfx12" rocminfo.log') ) {
+    else if ( runShell('grep -n "gfx120" rocminfo.log') ) {
         arch_type = 5
     }
     else if ( runShell('grep -n "gfx908" rocminfo.log') ) {
@@ -130,6 +130,9 @@ def check_arch(){
     }
     else if ( runShell('grep -n "gfx950" rocminfo.log') ) {
         arch_type = 7
+    }
+    else if ( runShell('grep -n "gfx125" rocminfo.log') ) {
+        arch_type = 8
     }
     return arch_type
 }
@@ -276,8 +279,11 @@ def cmake_build(Map conf=[:]){
             cd build
         """
     def invocation_tag=""
-    if (setup_args.contains("gfx12")){
-        invocation_tag="gfx12"
+    if (setup_args.contains("gfx120|gfx12-generic")){
+        invocation_tag="gfx120"
+    }
+    if (setup_args.contains("gfx125")){
+        invocation_tag="gfx125"
     }
     if (setup_args.contains("gfx11")){
         invocation_tag="gfx11"
@@ -375,8 +381,10 @@ def cmake_build(Map conf=[:]){
     dir("build"){
         //build CK
         sh cmd
+        def arch = check_arch()
         //run tests except when NO_CK_BUILD or BUILD_LEGACY_OS are set
-        if(!setup_args.contains("NO_CK_BUILD") && !params.BUILD_LEGACY_OS){
+        //don't run tests for gfx1250
+        if(!setup_args.contains("NO_CK_BUILD") && !params.BUILD_LEGACY_OS && arch!=8){
             if ((setup_args.contains("gfx9") && params.NINJA_BUILD_TRACE) || params.BUILD_INSTANCES_ONLY){
                 if (params.NINJA_FTIME_TRACE) {
                     echo "running ninja ftime trace"
@@ -1528,6 +1536,24 @@ pipeline {
                     }
                     steps{
                         Build_CK_and_Reboot(setup_args: setup_args, docker_name: "${env.CK_DOCKERHUB_PRIVATE}:ck_ub24.04_rocm7.0", config_targets: "install", no_reboot:true, build_type: 'Release', execute_cmd: execute_args, prefixpath: '/usr/local')
+                        cleanWs()
+                    }
+                }
+                stage("Build CK for gfx1250")
+                {
+                    when {
+                        beforeAgent true
+                        expression { params.BUILD_GFX950.toBoolean() && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
+                    }
+                    agent{ label rocmnode("gfx90a") }
+                    environment{
+                        setup_args = """ -DCMAKE_INSTALL_PREFIX=../install \
+                                         -DGPU_TARGETS="gfx1250" \
+                                         -DCMAKE_CXX_FLAGS=" -O3 " """
+                        execute_args = ""
+                    }
+                    steps{
+                        Build_CK_and_Reboot(setup_args: setup_args, docker_name: "${env.CK_DOCKERHUB_PRIVATE}:npi-mi450-latest", config_targets: "install", no_reboot:true, build_type: 'Release', execute_cmd: execute_args, prefixpath: '/usr/local')
                         cleanWs()
                     }
                 }

@@ -122,7 +122,7 @@ def check_arch(){
     else if ( runShell('grep -n "gfx11" rocminfo.log') ) {
         arch_type = 4
     }
-    else if ( runShell('grep -n "gfx12" rocminfo.log') ) {
+    else if ( runShell('grep -n "gfx120" rocminfo.log') ) {
         arch_type = 5
     }
     else if ( runShell('grep -n "gfx908" rocminfo.log') ) {
@@ -130,6 +130,9 @@ def check_arch(){
     }
     else if ( runShell('grep -n "gfx950" rocminfo.log') ) {
         arch_type = 7
+    }
+    else if ( runShell('grep -n "gfx125" rocminfo.log') ) {
+        arch_type = 8
     }
     return arch_type
 }
@@ -149,7 +152,7 @@ def getDockerImage(Map conf=[:]){
         image = conf.get("docker_name", "")
         echo "Using legacy docker: ${image}"
     }
-    else if ( (params.BUILD_GFX950 || params.RUN_CK_TILE_FMHA_TESTS) && conf.get("docker_name", "") != "" ){
+    else if ( (params.BUILD_GFX1250 || params.BUILD_GFX950 || params.RUN_CK_TILE_FMHA_TESTS) && conf.get("docker_name", "") != "" ){
         image = conf.get("docker_name", "")
         echo "Using special docker: ${image}"
     }
@@ -276,8 +279,11 @@ def cmake_build(Map conf=[:]){
             cd build
         """
     def invocation_tag=""
-    if (setup_args.contains("gfx12")){
-        invocation_tag="gfx12"
+    if (setup_args.contains("gfx120|gfx12-generic")){
+        invocation_tag="gfx120"
+    }
+    if (setup_args.contains("gfx125")){
+        invocation_tag="gfx125"
     }
     if (setup_args.contains("gfx11")){
         invocation_tag="gfx11"
@@ -376,7 +382,8 @@ def cmake_build(Map conf=[:]){
         //build CK
         sh cmd
         //run tests except when NO_CK_BUILD or BUILD_LEGACY_OS are set
-        if(!setup_args.contains("NO_CK_BUILD") && !params.BUILD_LEGACY_OS){
+        //don't run tests for gfx1250
+        if(!setup_args.contains("NO_CK_BUILD") && !params.BUILD_LEGACY_OS && !setup_args.contains("gfx1250")){
             if ((setup_args.contains("gfx9") && params.NINJA_BUILD_TRACE) || params.BUILD_INSTANCES_ONLY){
                 if (params.NINJA_FTIME_TRACE) {
                     echo "running ninja ftime trace"
@@ -520,7 +527,17 @@ def Build_CK(Map conf=[:]){
         def prefixpath = conf.get("prefixpath", "/opt/rocm")
 
         // Jenkins is complaining about the render group 
-        def dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+        // There's no group render for gfx1250
+        def dockerOpts
+        if ( setup_args.contains("gfx1250" ) ){
+            dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+        }
+        else{
+            dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+            def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
+            def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
+            dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
+        }
         if (conf.get("enforce_xnack_on", false)) {
             dockerOpts = dockerOpts + " --env HSA_XNACK=1 "
         }
@@ -533,9 +550,7 @@ def Build_CK(Map conf=[:]){
         if(params.BUILD_LEGACY_OS){
             dockerOpts = dockerOpts + " --env LD_LIBRARY_PATH='/opt/Python-3.8.13/lib' "
         }
-        def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
-        def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
-        dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
+
         echo "Docker flags: ${dockerOpts}"
 
         def variant = env.STAGE_NAME
@@ -565,6 +580,7 @@ def Build_CK(Map conf=[:]){
                 timeout(time: 20, unit: 'HOURS')
                 {
                     //check whether to run performance tests on this node
+                    // Check the architecture
                     def arch = check_arch()
                     cmake_build(conf)
                     if ( params.RUN_INDUCTOR_TESTS && !params.BUILD_LEGACY_OS && arch == 1 ){
@@ -1030,6 +1046,10 @@ pipeline {
             name: "BUILD_GFX950",
             defaultValue: false,
             description: "Build CK and run tests on gfx950 (default: OFF)")
+        booleanParam(
+            name: "BUILD_GFX1250",
+            defaultValue: true,
+            description: "Build CK for gfx1250 (default: ON)")
         booleanParam(
             name: "BUILD_GFX10",
             defaultValue: true,
@@ -1528,6 +1548,23 @@ pipeline {
                     }
                     steps{
                         Build_CK_and_Reboot(setup_args: setup_args, docker_name: "${env.CK_DOCKERHUB_PRIVATE}:ck_ub24.04_rocm7.0", config_targets: "install", no_reboot:true, build_type: 'Release', execute_cmd: execute_args, prefixpath: '/usr/local')
+                        cleanWs()
+                    }
+                }
+                stage("Build CK for gfx1250")
+                {
+                    when {
+                        beforeAgent true
+                        expression { params.BUILD_GFX1250.toBoolean() && !params.BUILD_INSTANCES_ONLY.toBoolean() && !params.BUILD_LEGACY_OS.toBoolean() }
+                    }
+                    agent{ label rocmnode("gfx90a") }
+                    environment{
+                        setup_args = """ -DCMAKE_INSTALL_PREFIX=../install \
+                                         -DGPU_TARGETS="gfx1250" \
+                                         -DCMAKE_CXX_FLAGS=" -O3 " """
+                    }
+                    steps{
+                        Build_CK_and_Reboot(setup_args: setup_args, docker_name: "${env.CK_DOCKERHUB_PRIVATE}:npi-mi450-latest", config_targets: "install", no_reboot:true, build_type: 'Release', prefixpath: '/usr/local')
                         cleanWs()
                     }
                 }

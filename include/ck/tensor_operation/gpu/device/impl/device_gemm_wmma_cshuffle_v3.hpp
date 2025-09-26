@@ -233,13 +233,8 @@ struct DeviceGemm_Wmma_CShuffleV3 : public DeviceGemmV2<ALayout,
 
     using DeviceGemmCommon =
         DeviceGemm_Wmma_CShuffleV3_Common<GridwiseGemm,
-<<<<<<< HEAD
-                                          ADataType,
-                                          BDataType,
-=======
                                           Tuple<ADataType>,
                                           Tuple<BDataType>,
->>>>>>> develop
                                           Tuple<>,
                                           CDataType,
                                           MPerBlock,
@@ -286,108 +281,82 @@ struct DeviceGemm_Wmma_CShuffleV3 : public DeviceGemmV2<ALayout,
                              index_t KBatch,
                              AElementwiseOperation a_element_op,
                              BElementwiseOperation b_element_op,
-                             CElementwiseOperation cde_element_op){
-<<<<<<< HEAD
-        return Argument {
-            p_a,
-            p_b,
-=======
-        return Argument {
-            std::array<const void*, 1>{p_a},
-            std::array<const void*, 1>{p_b},
->>>>>>> develop
-            std::array<const void*, 0>{}, // p_ds_grid_
-            p_c,
-            M,
-            N,
-            K,
-<<<<<<< HEAD
-            StrideA,
-            StrideB,
-=======
-            std::array<index_t, 1>{StrideA},
-            std::array<index_t, 1>{StrideB},
->>>>>>> develop
-            std::array<index_t, 0>{}, // StrideDs_
-            StrideC,
-            KBatch,
-            a_element_op,
-            b_element_op,
-            cde_element_op
-        };
-}
+                             CElementwiseOperation cde_element_op)
+    {
+        return Argument{std::array<const void*, 1>{p_a},
+                        std::array<const void*, 1>{p_b},
+                        std::array<const void*, 0>{}, // p_ds_grid_
+                        p_c,
+                        M,
+                        N,
+                        K,
+                        std::array<index_t, 1>{StrideA},
+                        std::array<index_t, 1>{StrideB},
+                        std::array<index_t, 0>{}, // StrideDs_
+                        StrideC,
+                        KBatch,
+                        a_element_op,
+                        b_element_op,
+                        cde_element_op};
+    }
 
-static auto
-MakeInvoker()
-{
-    return Invoker{};
-}
+    static auto MakeInvoker() { return Invoker{}; }
 
-// polymorphic
-std::unique_ptr<BaseArgument> MakeArgumentPointer(const void* p_a,
-                                                  const void* p_b,
-                                                  void* p_c,
-                                                  index_t M,
-                                                  index_t N,
-                                                  index_t K,
-                                                  index_t StrideA,
-                                                  index_t StrideB,
-                                                  index_t StrideC,
-                                                  index_t KBatch,
-                                                  AElementwiseOperation a_element_op,
-                                                  BElementwiseOperation b_element_op,
-                                                  CElementwiseOperation c_element_op) override
-{
-<<<<<<< HEAD
-    return std::make_unique<Argument>(static_cast<const ADataType*>(p_a),
-                                      static_cast<const BDataType*>(p_b),
-=======
-    return std::make_unique<Argument>(std::array<const void*, 1>{p_a},
-                                      std::array<const void*, 1>{p_b},
->>>>>>> develop
-                                      std::array<const void*, 0>{}, // p_ds_grid_
-                                      static_cast<CDataType*>(p_c),
-                                      M,
-                                      N,
-                                      K,
-<<<<<<< HEAD
-                                      StrideA,
-                                      StrideB,
-=======
-                                      std::array<index_t, 1>{StrideA},
-                                      std::array<index_t, 1>{StrideB},
->>>>>>> develop
-                                      std::array<index_t, 0>{}, // StrideDs_
-                                      StrideC,
-                                      KBatch,
-                                      a_element_op,
-                                      b_element_op,
-                                      c_element_op);
-}
+    // polymorphic
+    std::unique_ptr<BaseArgument> MakeArgumentPointer(const void* p_a,
+                                                      const void* p_b,
+                                                      void* p_c,
+                                                      index_t M,
+                                                      index_t N,
+                                                      index_t K,
+                                                      index_t StrideA,
+                                                      index_t StrideB,
+                                                      index_t StrideC,
+                                                      index_t KBatch,
+                                                      AElementwiseOperation a_element_op,
+                                                      BElementwiseOperation b_element_op,
+                                                      CElementwiseOperation c_element_op) override
+    {
+        return std::make_unique<Argument>(std::array<const void*, 1>{p_a},
+                                          std::array<const void*, 1>{p_b},
+                                          std::array<const void*, 0>{}, // p_ds_grid_
+                                          static_cast<CDataType*>(p_c),
+                                          M,
+                                          N,
+                                          K,
+                                          std::array<index_t, 1>{StrideA},
+                                          std::array<index_t, 1>{StrideB},
+                                          std::array<index_t, 0>{}, // StrideDs_
+                                          StrideC,
+                                          KBatch,
+                                          a_element_op,
+                                          b_element_op,
+                                          c_element_op);
+    }
 
-// polymorphic
-std::unique_ptr<BaseInvoker> MakeInvokerPointer() override
-{
-    return std::make_unique<Invoker>(Invoker{});
-}
+    // polymorphic
+    std::unique_ptr<BaseInvoker> MakeInvokerPointer() override
+    {
+        return std::make_unique<Invoker>(Invoker{});
+    }
 
-// polymorphic
-std::string GetTypeString() const override
-{
-    auto str = std::stringstream();
+    // polymorphic
+    std::string GetTypeString() const override
+    {
+        auto str = std::stringstream();
 
-    std::map<BlockGemmPipelineScheduler, std::string> BlkGemmPipelineSchedulerToString{
-        {BlockGemmPipelineScheduler::Intrawave, "Intrawave"},
-        {BlockGemmPipelineScheduler::Interwave, "Interwave"}};
+        std::map<BlockGemmPipelineScheduler, std::string> BlkGemmPipelineSchedulerToString{
+            {BlockGemmPipelineScheduler::Intrawave, "Intrawave"},
+            {BlockGemmPipelineScheduler::Interwave, "Interwave"}};
 
-    std::map<BlockGemmPipelineVersion, std::string> BlkGemmPipelineVersionToString{
-        {BlockGemmPipelineVersion::v1, "v1"},
-        {BlockGemmPipelineVersion::v2, "v2"},
-        {BlockGemmPipelineVersion::v3, "v3"},
-        {BlockGemmPipelineVersion::v4, "v4"},
-        {BlockGemmPipelineVersion::v5, "v5"}};
+        std::map<BlockGemmPipelineVersion, std::string> BlkGemmPipelineVersionToString{
+            {BlockGemmPipelineVersion::v1, "v1"},
+            {BlockGemmPipelineVersion::v2, "v2"},
+            {BlockGemmPipelineVersion::v3, "v3"},
+            {BlockGemmPipelineVersion::v4, "v4"},
+            {BlockGemmPipelineVersion::v5, "v5"}};
 
-    // clang-format off
+        // clang-format off
         str << "DeviceGemm_Wmma_CShuffleV3"
             << "<"
             << getGemmSpecializationString(GemmSpec) << ", "
@@ -413,13 +382,13 @@ std::string GetTypeString() const override
             << GridwiseGemm::BlockwiseGemmPipe::PrefetchStages << ", "
             << "KPack: "
             << GridwiseGemm::KPack;
-    // clang-format on
+        // clang-format on
 
-    return str.str();
-}
-REGISTER_EXTRA_PRINTING_METHODS
+        return str.str();
+    }
+    REGISTER_EXTRA_PRINTING_METHODS
 }; // namespace device
 
+} // namespace device
 } // namespace tensor_operation
-} // namespace ck
 } // namespace ck

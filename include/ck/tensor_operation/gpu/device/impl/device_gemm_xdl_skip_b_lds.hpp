@@ -321,12 +321,6 @@ struct DeviceGemmXdlSkipBLds : public DeviceGemm<ALayout,
 
             float ave_time = 0;
 
-            auto c_grid_desc_m0_n0_m1_n1_m2_m3_m4_n2 =
-                GridwiseGemm::MakeCGridDescriptor_M0_N0_M1_N1_M2_M3_M4_N2(arg.c_grid_desc_m_n_);
-
-            auto b_grid_desc_k0_k1_k2_n0_n1_n2_n3_k3 =
-                GridwiseGemm::MakeBGridDescriptor_K0_K1_K2_N0_N1_N2_N3_K3(arg.b_grid_desc_k0_n_k1_);
-
             if(has_main_k0_block_loop)
             {
                 const auto kernel = kernel_gemm_xdlops_skip_b_lds_v1<

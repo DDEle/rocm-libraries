@@ -41,7 +41,7 @@ using DeviceConvBwdWeightInstance =
         256,                  // BlockSize
         128,                  // MPerBlock
         128,                  // NPerBlock
-        4,                    // K0PerBlock
+        8,                    // K0PerBlock
         8,                    // K1
         16,                   // MPerXdl
         16,                   // NPerXdl

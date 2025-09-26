@@ -546,17 +546,10 @@ def Build_CK(Map conf=[:]){
         def prefixpath = conf.get("prefixpath", "/opt/rocm")
 
         // Jenkins is complaining about the render group 
-        // There's no group render for gfx1250
-        def dockerOpts
-        if ( setup_args.contains("gfx1250" ) ){
-            dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
-        }
-        else{
-            dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
-            def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
-            def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
-            dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
-        }
+        def dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+        def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
+        def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
+        dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
         if (conf.get("enforce_xnack_on", false)) {
             dockerOpts = dockerOpts + " --env HSA_XNACK=1 "
         }

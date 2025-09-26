@@ -483,7 +483,7 @@ def buildHipClangJob(Map conf=[:]){
         if ( params.BUILD_INSTANCES_ONLY ){
             dockerOpts = "--group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
         }
-        else if(execute_cmd.contains("codegen")){
+        else if(execute_args.contains("codegen")){
             dockerOpts = "--device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
         }
         else{

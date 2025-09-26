@@ -483,8 +483,14 @@ def buildHipClangJob(Map conf=[:]){
         if ( params.BUILD_INSTANCES_ONLY ){
             dockerOpts = "--group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
         }
+        else if(execute_cmd.contains("codegen")){
+            dockerOpts = "--device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+        }
         else{
             dockerOpts = "--device=/dev/kfd --device=/dev/dri --group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+            def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
+            def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
+            dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
         }
         if (conf.get("enforce_xnack_on", false)) {
             dockerOpts = dockerOpts + " --env HSA_XNACK=1 "
@@ -495,9 +501,7 @@ def buildHipClangJob(Map conf=[:]){
             // newer clang22 compilers and running with older hip runtima libraries
             dockerOpts = dockerOpts + " --env HIP_CLANG_PATH='/llvm-project/build/bin' --env COMPRESSED_BUNDLE_FORMAT_VERSION=2 "
         }
-        def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
-        def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
-        dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
+
         echo "Docker flags: ${dockerOpts}"
 
         def variant = env.STAGE_NAME

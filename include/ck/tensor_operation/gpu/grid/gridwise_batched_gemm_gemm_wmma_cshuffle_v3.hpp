@@ -109,13 +109,9 @@ struct GridwiseBatchedGemmGemm_wmma_cshuffle_v3
     static constexpr auto LWaves = LPerBlock / (LRepeat * LPerWmma);
     static constexpr auto NWaves = NPerBlock / (NRepeat * NPerWmma);
 
-    // TODO: Each GEMM should have own KPack
-    static constexpr index_t KPack = math::max(
-        math::lcm(math::lcm(AK1Value, L1Value), BK1Value),
-        WmmaSelector<ADataType, B0DataType, Acc0DataType, MPerWmma, LPerWmma>::selected_wmma
-            .k_per_wmma,
-        WmmaSelector<ADataType, B1DataType, Acc1DataType, MPerWmma, NPerWmma>::selected_wmma
-            .k_per_wmma);
+    // TODO: I am pretty sure this is always 16 and *should* always be 16.
+    static constexpr auto KPack =
+        math::integer_least_multiple(math::integer_least_multiple(AK1Value, BK1Value), 16);
 
     using ThisThreadBlock = ThisThreadBlock<BlockSize>;
 
@@ -402,41 +398,54 @@ struct GridwiseBatchedGemmGemm_wmma_cshuffle_v3
 
         if(!(M == c_grid_desc_m_n.GetLength(I0) && N == c_grid_desc_m_n.GetLength(I1)))
         {
-            print("GridwiseOp: M/N Length err, A_M/N = %d, %d | C_M/N = %d, %d\n",
-                  M,
-                  N,
-                  c_grid_desc_m_n.GetLength(I0),
-                  c_grid_desc_m_n.GetLength(I1));
+            if(ck::EnvIsEnabled(CK_ENV(CK_LOGGING)))
+            {
+                print("GridwiseOp: M/N Length err, A_M/N = %d, %d | C_M/N = %d, %d\n",
+                      M,
+                      N,
+                      c_grid_desc_m_n.GetLength(I0),
+                      c_grid_desc_m_n.GetLength(I1));
+            }
             return false;
         }
 
         if(!(M % MPerBlock == 0 && L % LPerBlock == 0 && K % KPerBlock == 0 && N % NPerBlock == 0))
         {
-            print("GridwiseOp: M/L/K/N Division err, M/L/K/N = %d, %d, %d, %d | M/L/K/NPerBlock = "
-                  "%d, %d, %d, %d\n",
-                  M,
-                  L,
-                  K,
-                  N,
-                  MPerBlock,
-                  LPerBlock,
-                  KPerBlock,
-                  NPerBlock);
+            if(ck::EnvIsEnabled(CK_ENV(CK_LOGGING)))
+            {
+                print("GridwiseOp: M/L/K/N Division err, M/L/K/N = %d, %d, %d, %d | "
+                      "M/L/K/NPerBlock = "
+                      "%d, %d, %d, %d\n",
+                      M,
+                      L,
+                      K,
+                      N,
+                      MPerBlock,
+                      LPerBlock,
+                      KPerBlock,
+                      NPerBlock);
+            }
             return false;
         }
 
         // check gemm1 gridwise gemm pipeline
         if(!(LPerBlock % LTilePerBlock == 0))
         {
-            print("GridwiseOp: inner loop division, L/LTilePerblock: %d, %d\n",
-                  LPerBlock,
-                  LTilePerBlock);
+            if(ck::EnvIsEnabled(CK_ENV(CK_LOGGING)))
+            {
+                print("GridwiseOp: inner loop division, L/LTilePerblock: %d, %d\n",
+                      LPerBlock,
+                      LTilePerBlock);
+            }
             return false;
         }
 
         if(!block_2_ctile_map.CheckValidity(c_grid_desc_m_n))
         {
-            print("GridwiseOp: invalid block_2_ctile_map\n");
+            if(ck::EnvIsEnabled(CK_ENV(CK_LOGGING)))
+            {
+                print("GridwiseOp: invalid block_2_ctile_map\n");
+            }
             return false;
         }
 

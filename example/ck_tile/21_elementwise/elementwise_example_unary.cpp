@@ -15,7 +15,7 @@ auto create_args(int argc, char* argv[])
         .insert("n", "1024", "n dimension")
         .insert("stride", "-1", "stride per row, if -1 then equal to n")
         .insert("v", "1", "cpu validation or not")
-        .insert("prec", "fp16", "precision: fp32|fp16")
+        .insert("op", "1", "unary operation, 1: square, 2: convert")
         .insert("x_prec", "fp16", "input precision")
         .insert("y_prec", "fp16", "output precision")
         .insert("warmup", "10", "cold iter")
@@ -27,7 +27,7 @@ auto create_args(int argc, char* argv[])
     return std::make_tuple(result, arg_parser);
 }
 
-template <typename XElementwiseOperation, typename XDataType, typename YDataType = XDataType>
+template <typename XElementwiseOperation, typename XDataType, typename YDataType>
 bool run(const ck_tile::ArgParser& arg_parser)
 {
     ck_tile::index_t M      = arg_parser.get_int("m");
@@ -35,7 +35,6 @@ bool run(const ck_tile::ArgParser& arg_parser)
     ck_tile::index_t stride = arg_parser.get_int("stride");
     if(stride < 0)
         stride = N;
-
     int do_validation = arg_parser.get_int("v");
     int warmup        = arg_parser.get_int("warmup");
     int repeat        = arg_parser.get_int("repeat");
@@ -153,10 +152,8 @@ bool filter_then_run(const ck_tile::ArgParser& arg_parser)
 {
     auto throw_unsupported = [&]() {
         const auto x_prec = arg_parser.get_str("x_prec");
-        const auto y_prec = arg_parser.get_str("y_prec");
         const auto op     = arg_parser.get_str("op");
-        throw std::runtime_error("Unsupported! x_prec: " + x_prec + ", y_prec: " + y_prec +
-                                 ", op: " + op);
+        throw std::runtime_error("Unsupported! x_prec: " + x_prec + ", op: " + op);
     };
     bool pass = true;
 
@@ -185,9 +182,9 @@ auto string_to_op(const std::string& op)
     using OpVariant =
         std::variant<ck_tile::element_wise::UnarySquare, ck_tile::element_wise::UnaryConvert>;
 
-    if(op == "square")
+    if(op == "1")
         return OpVariant{ck_tile::element_wise::UnarySquare{}};
-    else if(op == "convert")
+    else if(op == "2")
         return OpVariant{ck_tile::element_wise::UnaryConvert{}};
     else
     {
@@ -204,45 +201,8 @@ int main(int argc, char* argv[])
     if(!result)
         return return_code;
 
-    const std::string data_type = arg_parser.get_str("prec");
-    if(data_type == "fp16" || data_type == "fp32")
-    {
-        printf("Running fp16/fp32 path: \n");
-        const std::string op = arg_parser.get_str("op");
-        if(data_type == "fp16")
-        {
-            if(op == "square")
-                return_code =
-                    run<ck_tile::element_wise::UnarySquare, ck_tile::half_t>(arg_parser) ? 0 : -2;
-            if(op == "tanh")
-                return_code =
-                    run<ck_tile::element_wise::TanH, ck_tile::half_t>(arg_parser) ? 0 : -2;
-            if(op == "fastgelu")
-                return_code =
-                    run<ck_tile::element_wise::FastGelu, ck_tile::half_t>(arg_parser) ? 0 : -2;
-            if(op == "convert")
-                return_code =
-                    run<ck_tile::element_wise::UnaryConvert, ck_tile::half_t>(arg_parser) ? 0 : -2;
-        }
-        if(data_type == "fp32")
-        {
-            if(op == "square")
-                return_code = run<ck_tile::element_wise::UnarySquare, float>(arg_parser) ? 0 : -2;
-            if(op == "tanh")
-                return_code = run<ck_tile::element_wise::TanH, float>(arg_parser) ? 0 : -2;
-            if(op == "fastgelu")
-                return_code = run<ck_tile::element_wise::FastGelu, float>(arg_parser) ? 0 : -2;
-            if(op == "convert")
-                return_code = run<ck_tile::element_wise::UnaryConvert, float>(arg_parser) ? 0 : -2;
-        }
-        if(return_code != 0)
-        {
-            return return_code;
-        }
-    }
     try
     {
-        printf("Running mixed precision path: \n");
         const auto x_prec_variant = string_to_datatype(arg_parser.get_str("x_prec"));
         const auto y_prec_variant = string_to_datatype(arg_parser.get_str("y_prec"));
         const auto op_variant     = string_to_op(arg_parser.get_str("op"));

@@ -75,7 +75,7 @@ function(add_instance_library INSTANCE_NAME)
         endif()
         # Do not build XDL gemm_universal_f8 or gemm_multiply_multiply_f8 for any targets except gfx94, gfx95 and gfx12
         if(NOT CK_USE_FP8_ON_UNSUPPORTED_ARCH)
-            if((NOT INST_TARGETS MATCHES "gfx94|gfx95|gfx12") AND source_name MATCHES "gemm_multiply_multiply" AND source_name MATCHES "_f8_")
+            if(NOT INST_TARGETS MATCHES "gfx94|gfx95|gfx12" AND source_name MATCHES "gemm_multiply_multiply" AND source_name MATCHES "_f8_")
                 message(DEBUG "removing gemm_multiply_multiply_f8 instance ${source} ")
                 list(REMOVE_ITEM ARGN "${source}")
             endif()
@@ -92,6 +92,11 @@ function(add_instance_library INSTANCE_NAME)
         # Do not build gemm_universal_preshuffle_f8 for any targets except gfx94, gfx95 and gfx12
         if(NOT (INST_TARGETS MATCHES "gfx942" OR INST_TARGETS MATCHES "gfx950" OR INST_TARGETS MATCHES "gfx12") AND (source_name MATCHES "gemm_universal_preshuffle" OR source_name MATCHES "gemm_xdl_universal_preshuffle") AND (source_name MATCHES "_f8_f8_f16" OR source_name MATCHES "_f8_f8_bf16"))
             message(DEBUG "removing gemm_universal_preshuffle_f8 instance ${source} ")
+            list(REMOVE_ITEM ARGN "${source}")
+        endif()
+        # Only build tf32 instances for gfx942
+        if(NOT INST_TARGETS MATCHES "gfx942" AND source_name MATCHES "_tf32_")
+            message(DEBUG "removing tf32 instance ${source} ")
             list(REMOVE_ITEM ARGN "${source}")
         endif()
 
@@ -282,11 +287,11 @@ FOREACH(subdir_path ${dir_list})
             message(DEBUG "Found only xdl and dl instances, but gfx9 is not on the targets listand DL_KERNELS is not set. Skipping.")
             set(add_inst 0)
         endif()
-        if(("${cmake_instance}" MATCHES "ONLY XDL_AND_WMMA_KERNELS") AND (NOT INST_TARGETS MATCHES "gfx9|gfx11|gfx12"))
+	    if(("${cmake_instance}" MATCHES "ONLY XDL_AND_WMMA_KERNELS") AND (NOT INST_TARGETS MATCHES "gfx9|gfx11|gfx12"))
             message(DEBUG "Found only xdl and wmma instances, but gfx11 and gfx9 are not on the targets list. Skipping.")
             set(add_inst 0)
         endif()
-        if(("${cmake_instance}" MATCHES "XDL_DL_WMMA_KERNELS") AND (NOT INST_TARGETS MATCHES "gfx9|gfx11|gfx12") AND (NOT DEFINED DL_KERNELS))
+	    if(("${cmake_instance}" MATCHES "XDL_DL_WMMA_KERNELS") AND (NOT INST_TARGETS MATCHES "gfx9|gfx11|gfx12") AND (NOT DEFINED DL_KERNELS))
             message(DEBUG "Found xdl, dl, and wmma instances, but none of those meet the target list. Skipping.")
             set(add_inst 0)
         endif()
@@ -445,7 +450,7 @@ if(CK_DEVICE_MHA_INSTANCES AND NOT MIOPEN_REQ_LIBS_ONLY AND BUILD_MHA_LIB)
             add_library(composablekernels::device_mha_operations ALIAS device_mha_operations)
             target_compile_features(device_mha_operations PUBLIC)
             set_target_properties(device_mha_operations PROPERTIES POSITION_INDEPENDENT_CODE ON)
-            
+
             rocm_install(TARGETS device_mha_operations
                 EXPORT device_mha_operationsTargets)
             rocm_install(EXPORT device_mha_operationsTargets

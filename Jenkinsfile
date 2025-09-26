@@ -477,22 +477,18 @@ def buildHipClangJob(Map conf=[:]){
         env.HSA_ENABLE_SDMA=0
         checkoutAndFetchDevelop()
         def prefixpath = conf.get("prefixpath", "/opt/rocm")
-        def execute_cmd = conf.get("execute_cmd", "")
 
         // Jenkins is complaining about the render group
         def dockerOpts
         if ( params.BUILD_INSTANCES_ONLY ){
             dockerOpts = "--group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
         }
-        else if( execute_cmd.contains("codegen") ){
-            dockerOpts = "--device=/dev/kfd --device=/dev/dri --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
-        }
         else{
             dockerOpts = "--device=/dev/kfd --device=/dev/dri --group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
-            def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
-            def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
-            dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
         }
+        def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
+        def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
+        dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
         if (conf.get("enforce_xnack_on", false)) {
             dockerOpts = dockerOpts + " --env HSA_XNACK=1 "
         }
@@ -1327,7 +1323,7 @@ pipeline {
                         execute_args = """ cmake -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ -DCMAKE_PREFIX_PATH=/opt/rocm ../codegen && make -j64 check"""
                     }
                     steps{
-                        buildHipClangJobAndReboot(setup_args:setup_args, docker_name: "${env.CK_DOCKERHUB_PRIVATE}:npi-mi450-latest", no_reboot:true, build_type: 'Release', execute_cmd: execute_args)
+                        buildHipClangJobAndReboot(setup_args:setup_args, no_reboot:true, build_type: 'Release', execute_cmd: execute_args)
                         cleanWs()
                     }
                 }
@@ -1613,6 +1609,7 @@ pipeline {
                     environment{
                         setup_args = """ -DCMAKE_INSTALL_PREFIX=../install \
                                          -DGPU_TARGETS="gfx1250" \
+                                         -DDISABLE_DL_KERNELS="ON" \
                                          -DCMAKE_CXX_FLAGS=" -O3 " """
                     }
                     steps{

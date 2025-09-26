@@ -1323,7 +1323,7 @@ pipeline {
                                            make -j64 check"""
                     }
                     steps{
-                        buildHipClangJobAndReboot(setup_args:setup_args, no_reboot:true, build_type: 'Release', execute_cmd: execute_args)
+                        buildHipClangJobAndReboot(setup_args:setup_args, docker_name: "${env.CK_DOCKERHUB_PRIVATE}:npi-mi450-latest", no_reboot:true, build_type: 'Release', execute_cmd: execute_args)
                         cleanWs()
                     }
                 }

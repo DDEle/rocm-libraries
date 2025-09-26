@@ -1324,8 +1324,7 @@ pipeline {
                     agent{ label rocmnode("gfx90a")}
                     environment{
                         setup_args = "NO_CK_BUILD"
-                        execute_args = """ CXX=/opt/rocm/llvm/bin/clang++ cmake -DCMAKE_PREFIX_PATH=/opt/rocm ../codegen && \
-                                           make -j64 check"""
+                        execute_args = """ cmake -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ -DCMAKE_PREFIX_PATH=/opt/rocm ../codegen && make -j64 check"""
                     }
                     steps{
                         buildHipClangJobAndReboot(setup_args:setup_args, docker_name: "${env.CK_DOCKERHUB_PRIVATE}:npi-mi450-latest", no_reboot:true, build_type: 'Release', execute_cmd: execute_args)

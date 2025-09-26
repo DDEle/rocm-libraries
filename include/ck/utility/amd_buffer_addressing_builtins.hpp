@@ -909,6 +909,13 @@ template <typename T,
 __device__ void amd_async_copy_to_lds_impl_raw(__attribute__((address_space(1))) const T* src_ptr,
                                                __attribute__((address_space(3))) T* dst_ptr)
 {
+    static_assert(NumBytesPerThread == 1 || NumBytesPerThread == 4 || NumBytesPerThread == 8 ||
+                      NumBytesPerThread == 16,
+                  "NumBytesPerThread must be 1, 4, 8, or 16");
+
+    // ROCm 7.0.1 compiler flags unsupported builtins even though the function is never instantiated
+    // for gfx9xx architectures
+#if defined(__gfx125__)
     if constexpr(NumBytesPerThread == 1)
     {
         __attribute__((address_space(1))) char* cv_ptr =
@@ -956,6 +963,10 @@ __device__ void amd_async_copy_to_lds_impl_raw(__attribute__((address_space(1)))
             cv_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
         return;
     }
+#else
+    ignore = src_ptr;
+    ignore = dst_ptr;
+#endif
 }
 
 template <typename T,
@@ -965,6 +976,14 @@ __device__ void amd_async_store_to_global_impl_raw(__attribute__((address_space(
                                                    const T* src_ptr,
                                                    __attribute__((address_space(1))) T* dst_ptr)
 {
+
+    static_assert(NumBytesPerThread == 1 || NumBytesPerThread == 4 || NumBytesPerThread == 8 ||
+                      NumBytesPerThread == 16,
+                  "NumBytesPerThread must be 1, 4, 8, or 16");
+
+    // ROCm 7.0.1 compiler flags unsupported builtins even though the function is never instantiated
+    // for gfx9xx architectures
+#if defined(__gfx125__)
     if constexpr(NumBytesPerThread == 1)
     {
         __attribute__((address_space(3))) char* lds_ptr =
@@ -1012,6 +1031,10 @@ __device__ void amd_async_store_to_global_impl_raw(__attribute__((address_space(
             global_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
         return;
     }
+#else
+    ignore = src_ptr;
+    ignore = dst_ptr;
+#endif
 }
 
 template <typename T,

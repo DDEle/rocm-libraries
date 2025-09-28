@@ -442,13 +442,15 @@ struct tensor_view
             coord.get_offset() / PackedSize, linear_offset / PackedSize, is_valid_element, x);
     }
 
-    template <typename BoxDim_,
+    template <typename TDMConfig_,
+              typename BoxDim_,
               index_t num_tensor_dims,
               typename DimTuple_,
               typename GatherIndexView_   = null_tensor_view,
               index_t gather_index_offset = -1>
     CK_TILE_DEVICE constexpr void
-    get_tdm_elements(CK_TILE_LDS_ADDR remove_cvref_t<DataType>* smem,
+    get_tdm_elements(const TDMConfig_& tdm_config,
+                     CK_TILE_LDS_ADDR remove_cvref_t<DataType>* smem,
                      const TensorCoord& coord,
                      DimTuple_& tensor_dims,
                      DimTuple_& global_strides,
@@ -458,11 +460,13 @@ struct tensor_view
     {
         if constexpr(std::is_same_v<GatherIndexView_, null_tensor_view>)
         {
-            return buf_.template tdm_get<DimTuple_,
+            return buf_.template tdm_get<TDMConfig_,
+                                         DimTuple_,
                                          BoxDim_,
                                          num_tensor_dims,
                                          null_buffer_view,
-                                         gather_index_offset>(smem,
+                                         gather_index_offset>(tdm_config,
+                                                              smem,
                                                               coord.get_offset(),
                                                               tensor_dims,
                                                               global_strides,
@@ -473,11 +477,13 @@ struct tensor_view
         else
         {
             auto buffer_view = gather_index_view.get_buffer_view();
-            return buf_.template tdm_get<DimTuple_,
+            return buf_.template tdm_get<TDMConfig_,
+                                         DimTuple_,
                                          BoxDim_,
                                          num_tensor_dims,
                                          decltype(buffer_view),
-                                         gather_index_offset>(smem,
+                                         gather_index_offset>(tdm_config,
+                                                              smem,
                                                               coord.get_offset(),
                                                               tensor_dims,
                                                               global_strides,

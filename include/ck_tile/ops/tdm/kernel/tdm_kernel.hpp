@@ -44,7 +44,8 @@ template <typename DataType_,
           bool IsGatherMode_        = false,
           bool IterateEnable_       = false,
           bool PadEnable_           = false,
-          bool EarlyTimeOutEnable_  = false>
+          bool EarlyTimeOutEnable_  = false,
+          bool ClusterEnable_       = false>
 struct TDMPipelineTraits
 {
     using DataType            = remove_cvref_t<DataType_>;
@@ -56,6 +57,7 @@ struct TDMPipelineTraits
     static constexpr bool IterateEnable       = IterateEnable_;
     static constexpr bool PadEnable           = PadEnable_;
     static constexpr bool EarlyTimeOutEnable  = EarlyTimeOutEnable_;
+    static constexpr bool ClusterEnable       = ClusterEnable_;
 };
 
 template <typename TDMShape_, typename TDMTraits_>
@@ -70,8 +72,9 @@ struct TDMPipelineProblem
     using DataType = typename TDMTraits::DataType;
     using Layout   = typename TDMTraits::Layout;
 
-    using GatherDataType               = typename TDMTraits::GatherIndexDataType;
-    static constexpr bool IsGatherMode = TDMTraits::IsGatherMode;
+    using GatherDataType                = typename TDMTraits::GatherIndexDataType;
+    static constexpr bool IsGatherMode  = TDMTraits::IsGatherMode;
+    static constexpr bool ClusterEnable = TDMTraits::ClusterEnable;
 
     static constexpr index_t TensorRank = TDMShape::tensor_rank;
     // currently only support 2D
@@ -91,10 +94,11 @@ struct TDMCopyKernel
 {
     using Problem = remove_cvref_t<Problem_>;
 
-    using DataType                     = typename Problem::DataType;
-    using Layout                       = typename Problem::Layout;
-    using GatherDataType               = typename Problem::GatherDataType;
-    static constexpr bool IsGatherMode = Problem::IsGatherMode;
+    using DataType                      = typename Problem::DataType;
+    using Layout                        = typename Problem::Layout;
+    using GatherDataType                = typename Problem::GatherDataType;
+    static constexpr bool IsGatherMode  = Problem::IsGatherMode;
+    static constexpr bool ClusterEnable = Problem::ClusterEnable;
 
     using Args = TDMCopyDeviceKernArgs;
 
@@ -277,6 +281,9 @@ struct TDMCopyKernel
                         bool_constant<true>{}));
             }
         }();
+
+        TDMConfig tdm_config;
+
         if constexpr(IsGatherMode)
         {
             static_assert(std::is_same_v<GatherDataType, uint16_t> ||
@@ -294,14 +301,17 @@ struct TDMCopyKernel
                                  make_tuple(number<CountPerWarp>{}),
                                  {0});
 
-            load_tile_tdm(
-                lds_block_window, input_block_window, gather_index_view, number<CountPerWarp>{});
+            load_tile_tdm(tdm_config,
+                          lds_block_window,
+                          input_block_window,
+                          gather_index_view,
+                          number<CountPerWarp>{});
             s_wait_tensorcnt();
             store_tile_tdm(output_block_window, lds_block_window);
         }
         else
         {
-            load_tile_tdm(lds_block_window, input_block_window);
+            load_tile_tdm(tdm_config, lds_block_window, input_block_window);
             s_wait_tensorcnt();
             store_tile_tdm(output_block_window, lds_block_window);
         }

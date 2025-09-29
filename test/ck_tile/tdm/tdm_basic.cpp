@@ -162,6 +162,95 @@ class TDMBasicTypedTest : public ::testing::Test
 
         return true;
     }
+
+    bool run_tdm_cluster_test(const TDMTestParams& params)
+    {
+        // just row major
+        const std::vector<index_t> dims = std::vector<index_t>{params.m, params.n};
+
+        HostTensor<DataType> x_host({dims[0], dims[1]}, {params.x_stride, 1});
+        HostTensor<DataType> y_host({dims[0], dims[1]}, {params.y_stride, 1});
+        FillUniformDistribution<DataType>{-.5f, .5f}(x_host);
+
+        DeviceMem x_buf(x_host.get_element_space_size_in_bytes());
+        DeviceMem y_buf(y_host.get_element_space_size_in_bytes());
+
+        x_buf.ToDevice(x_host.data());
+        y_buf.SetZero();
+
+        using TDMShape = TDMTileShape<tensor_rank,
+                                      sequence<tile_m, tile_n>,
+                                      sequence<warp_m, warp_n>,
+                                      sequence<warp_tile_m, warp_tile_n>>;
+
+        using TDMTraits  = TDMPipelineTraits<DataType,
+                                             tensor_layout::gemm::RowMajor,
+                                             GatherModeDType,
+                                             false, /*AtomicBarrierEnable_*/
+                                             false, /*IsGatherMode_*/
+                                             false, /*IterateEnable_*/
+                                             false, /*PadEnable_*/
+                                             false, /*EarlyTimeOutEnable_*/
+                                             true /*ClusterEnable_*/>;
+        using TDMProblem = TDMPipelineProblem<TDMShape, TDMTraits>;
+
+        // each cluster includes 2 workgroups in m dimension
+        dim3 grid((params.m + tile_m - 1) / tile_m, (params.n + tile_n - 1) / tile_n);
+        assert(is_wave32());
+        const index_t block_size = warp_m * warp_n * 32; // 32 is warp size
+        dim3 block(block_size);
+
+        std::cout << "grid.x: " << grid.x << " grid.y: " << grid.y << std::endl;
+        std::cout << block_size << std::endl;
+        // TDMCopyKernel<TDMProblem> tdm_kernel;
+
+        stream_config s{nullptr, false, 0, params.warmup, params.repeat};
+
+        TDMCopyDeviceKernArgs args{x_buf.GetDeviceBuffer(),
+                                   y_buf.GetDeviceBuffer(),
+                                   nullptr,
+                                   params.m,
+                                   params.n,
+                                   params.x_stride,
+                                   params.y_stride};
+        hipLaunchConfig_t config{};
+
+        config.gridDim          = grid;
+        config.blockDim         = block;
+        config.dynamicSmemBytes = 0;
+        config.stream           = s.stream_id_;
+
+        hipLaunchAttribute attribute[1];
+        attribute[0].id               = hipLaunchAttributeClusterDimension;
+        attribute[0].val.clusterDim.x = 2; // Cluster size in X-dimension
+        attribute[0].val.clusterDim.y = 1; // Cluster size in Y-dimension
+        attribute[0].val.clusterDim.z = 1; // Cluster size in Z-dimension
+        config.attrs                  = attribute;
+        config.numAttrs               = 1;
+
+        auto kernel_func =
+            kentry<CK_TILE_MIN_BLOCK_PER_CU, TDMCopyKernel<TDMProblem>, TDMCopyDeviceKernArgs>;
+        HIP_CHECK_ERROR(hipLaunchKernelEx(&config, kernel_func, args));
+
+        y_buf.FromDevice(y_host.data());
+
+        if(params.do_validation)
+        {
+            // this test is used to verify tdm with cluster load; both half will have the same data
+            ck_tile::span<DataType> ref_value(x_host.data(), x_host.size() / 2);
+            ck_tile::span<DataType> half_result0(y_host.data(), y_host.size() / 2);
+            ck_tile::span<DataType> half_result1(y_host.data() + y_host.size() / 2,
+                                                 y_host.size() / 2);
+            bool passed =
+                check_err(half_result0, ref_value, "Error: Incorrect tdm copy first half results!");
+
+            passed &= check_err(
+                half_result1, ref_value, "Error: Incorrect tdm copy second half results!");
+            return passed;
+        }
+
+        return true;
+    }
 };
 
 TYPED_TEST_SUITE(TDMBasicTypedTest, TestTypes);
@@ -175,6 +264,17 @@ TYPED_TEST(TDMBasicTypedTest, SanityTest)
     params.template normalize<typename TestFixture::Layout>();
 
     EXPECT_TRUE(this->run_tdm_test(params));
+}
+
+TYPED_TEST(TDMBasicTypedTest, SanityClusterTest)
+{
+    TDMTestParams params;
+    params.m = 32;
+    params.n = 16;
+
+    params.template normalize<Row>();
+
+    EXPECT_TRUE(this->run_tdm_cluster_test(params));
 }
 
 TYPED_TEST(TDMBasicTypedTest, RectangleTest)

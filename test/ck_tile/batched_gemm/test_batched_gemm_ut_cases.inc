@@ -30,6 +30,11 @@ TYPED_TEST(TestCkTileBatchedGemm, Basic)
                                        {256, 256, 64, 8},
                                        {256, 256, 64, 16}};
 
+    if(ck_tile::get_device_name() != "gfx950")
+    {
+        gemmParams.emplace_back(256, 256, 128, 2);
+    }
+
     for(auto& params : gemmParams)
     {
         std::vector<StrideConfig> strideConfigs{{params.K,

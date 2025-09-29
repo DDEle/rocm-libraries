@@ -23,7 +23,7 @@ python3 "$SCRIPT_DIR/dependency-parser/main.py" parse "$BUILD_NINJA_FILE" --work
 # Get the directory containing build.ninja
 BUILD_DIR=$(dirname "$BUILD_NINJA_FILE")
 
-# Path to enhanced_dependency_mapping.json in the same directory
+# Path to enhanced_dependency_mapping.json in the same directory 
 JSON_FILE="$BUILD_DIR/enhanced_dependency_mapping.json"
 
 # Check if the JSON file exists
@@ -49,7 +49,7 @@ with open('$TEST_FILE', 'r') as f:
     if tests:
         # Extract just the filename after the last '/'
         clean_tests = [os.path.basename(test) for test in tests]
-        print('ctest -R \"' + '|'.join(clean_tests) + '\"')
+        print('ctest --output-on-failure -R \"' + '|'.join(clean_tests) + '\"')
     else:
         print('# No tests to run')
 ")
@@ -57,5 +57,3 @@ with open('$TEST_FILE', 'r') as f:
 echo "$command"
 
 eval "$command"
-
-

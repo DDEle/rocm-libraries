@@ -1148,6 +1148,7 @@ CK_TILE_DEVICE_EXTERN double llvm_amdgcn_raw_buffer_atomic_max_fp64(
     int glc_slc) __asm("llvm.amdgcn.raw.buffer.atomic.fmax.f64.v4i32");
 
 // Direct loads from global to LDS.
+#if __clang_major__ >= 21
 CK_TILE_DEVICE_EXTERN void
 llvm_amdgcn_raw_buffer_load_lds(int32x4_t rsrc,
                                 as3_uint32_ptr lds_ptr,
@@ -1156,6 +1157,16 @@ llvm_amdgcn_raw_buffer_load_lds(int32x4_t rsrc,
                                 index_t soffset,
                                 index_t offset,
                                 index_t aux) __asm("llvm.amdgcn.raw.buffer.load.lds.v4i32");
+#else
+CK_TILE_DEVICE_EXTERN void
+llvm_amdgcn_raw_buffer_load_lds(int32x4_t rsrc,
+                                as3_uint32_ptr lds_ptr,
+                                index_t size,
+                                index_t voffset,
+                                index_t soffset,
+                                index_t offset,
+                                index_t aux) __asm("llvm.amdgcn.raw.buffer.load.lds");
+#endif
 
 template <unsigned num_dwords, bool pre_nop = false>
 CK_TILE_DEVICE void async_buffer_load_dwordxn_v(void* smem,
@@ -2581,6 +2592,60 @@ CK_TILE_DEVICE void amd_buffer_atomic_max(const thread_buffer<T, N>& src_thread_
             src_thread_data, dst_wave_buffer_resource, dst_thread_addr_offset, 0);
     }
 #endif
+}
+
+// amd_wave_read_first_lane is the SGPR function from AMD GPU device to load 1 or a series of the
+// memory to the SGPR registers.
+__device__ inline uint32_t amd_wave_read_first_lane(uint16_t v)
+{
+    return __builtin_amdgcn_readfirstlane(static_cast<uint32_t>(v));
+}
+
+__device__ inline uint32_t amd_wave_read_first_lane(uint8_t v)
+{
+    return __builtin_amdgcn_readfirstlane(static_cast<uint32_t>(v));
+}
+
+__device__ inline uint32_t amd_wave_read_first_lane(uint32_t value)
+{
+    return __builtin_amdgcn_readfirstlane(value);
+}
+
+__device__ inline int32_t amd_wave_read_first_lane(int32_t value)
+{
+    return __builtin_amdgcn_readfirstlane(value);
+}
+
+template <typename Object, std::enable_if_t<std::is_trivially_copyable_v<Object>, int> = 0>
+__device__ inline auto amd_wave_read_first_lane(const Object& obj)
+{
+    constexpr size_t ObjectSize = sizeof(Object);
+    constexpr size_t SGPR_size  = 4;
+    constexpr size_t NumFull    = ObjectSize / SGPR_size;
+    constexpr size_t Tail       = ObjectSize % SGPR_size;
+
+    const unsigned char* src = reinterpret_cast<const unsigned char*>(&obj);
+    alignas(Object) unsigned char dst[ObjectSize];
+
+    static_for<0, NumFull, 1>{}([&](auto Ic) {
+        constexpr size_t offset = Ic * SGPR_size;
+        uint32_t read_src;
+        __builtin_memcpy(&read_src, src + offset, SGPR_size);
+        read_src = __builtin_amdgcn_readfirstlane(read_src);
+        __builtin_memcpy(dst + offset, &read_src, SGPR_size);
+    });
+
+    if constexpr(Tail != 0)
+    {
+        constexpr size_t offset = NumFull * SGPR_size;
+        uint32_t tail_loc       = 0;
+        __builtin_memcpy(&tail_loc, src + offset, Tail);
+        tail_loc = __builtin_amdgcn_readfirstlane(tail_loc);
+        __builtin_memcpy(dst + offset, &tail_loc, Tail);
+    }
+    Object out;
+    __builtin_memcpy(&out, dst, ObjectSize);
+    return out;
 }
 
 template <typename T, index_t NumElemsPerThread>

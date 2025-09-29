@@ -76,7 +76,7 @@ class TDMBasicTypedTest : public ::testing::Test
     template <typename T, bool Enable>
     struct GatherModeDTypeHelper
     {
-        using type = uint8_t; // dummy data type when gather mode is disabled
+        using type = uint16_t; // dummy data type when gather mode is disabled
     };
 
     template <typename T>
@@ -235,8 +235,7 @@ class TDMBasicTypedTest : public ::testing::Test
         stream_config s{nullptr, false, 0, params.warmup, params.repeat};
 
         // Determine gather pointer based on usage
-        void* gather_ptr =
-            (use_gather && !use_cluster) ? test_data.gather_index_buf.GetDeviceBuffer() : nullptr;
+        void* gather_ptr = use_gather ? test_data.gather_index_buf.GetDeviceBuffer() : nullptr;
 
         TDMCopyDeviceKernArgs args{test_data.x_buf.GetDeviceBuffer(),
                                    test_data.y_buf.GetDeviceBuffer(),
@@ -308,9 +307,10 @@ class TDMBasicTypedTest : public ::testing::Test
         return run_tdm_test_generic<false, std::is_same_v<GatherMode, GatherModeEnable>>(params);
     }
 
+    template <bool is_gather_enable = false>
     bool run_tdm_cluster_test(const TDMTestParams& params)
     {
-        return run_tdm_test_generic<true, false>(params);
+        return run_tdm_test_generic<true, is_gather_enable>(params);
     }
 };
 
@@ -339,6 +339,20 @@ TYPED_TEST(TDMBasicTypedTest, SanityClusterTest)
     params.template normalize<typename TestFixture::Layout>();
 
     EXPECT_TRUE(this->run_tdm_cluster_test(params));
+}
+
+TYPED_TEST(TDMBasicTypedTest, SanityClusterGatherTest)
+{
+    TDMTestParams params;
+    params.m = 32;
+    params.n = 16;
+    if constexpr(std::is_same_v<typename TestFixture::Layout, Col>)
+    {
+        GTEST_SKIP();
+    }
+    params.template normalize<typename TestFixture::Layout>();
+
+    EXPECT_TRUE(this->template run_tdm_cluster_test<true>(params));
 }
 
 TYPED_TEST(TDMBasicTypedTest, RectangleTest)

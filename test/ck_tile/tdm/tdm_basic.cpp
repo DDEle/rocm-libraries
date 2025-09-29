@@ -55,8 +55,14 @@ struct TDMTestParams
     }
 };
 
-using TestTypes = ::testing::
-    Types<std::tuple<F16, Row>, std::tuple<F16, Col>, std::tuple<F8, Row>, std::tuple<F8, Col>>;
+using TestTypes = ::testing::Types<std::tuple<F16, Row>,
+                                   std::tuple<F16, Col>,
+                                   std::tuple<F16, Row, Gather16bitIndex>,
+                                   std::tuple<F16, Col, Gather16bitIndex>,
+                                   std::tuple<F8, Row>,
+                                   std::tuple<F8, Col>,
+                                   std::tuple<F8, Row, Gather16bitIndex>,
+                                   std::tuple<F8, Col, Gather16bitIndex>>;
 
 template <typename TypeParam>
 class TDMBasicTypedTest : public ::testing::Test
@@ -132,14 +138,19 @@ class TDMBasicTypedTest : public ::testing::Test
     {
         HostTensor<DataType> x_host;
         HostTensor<DataType> y_host;
+        HostTensor<DataType> ref_host;
         HostTensor<GatherModeDType> gather_index_host;
         DeviceMem x_buf;
         DeviceMem y_buf;
         DeviceMem gather_index_buf;
 
-        TDMTestData(const std::vector<index_t>& dims, const TDMTestParams& params, bool use_gather)
+        TDMTestData(const std::vector<index_t>& dims,
+                    const TDMTestParams& params,
+                    bool use_cluster,
+                    bool use_gather)
             : x_host({dims[0], dims[1]}, {params.x_stride, 1}),
               y_host({dims[0], dims[1]}, {params.y_stride, 1}),
+              ref_host({dims[0], dims[1]}, {params.y_stride, 1}),
               gather_index_host(use_gather ? std::vector<index_t>{warp_tile_m}
                                            : std::vector<index_t>{}),
               x_buf(x_host.get_element_space_size_in_bytes()),
@@ -158,6 +169,51 @@ class TDMBasicTypedTest : public ::testing::Test
                              gather_index_host.end(),
                              std::mt19937{std::random_device{}()});
                 gather_index_buf.ToDevice(gather_index_host.data());
+
+                for(index_t r = 0; r < dims[0]; r += warp_tile_m)
+                {
+                    for(index_t inner_r = 0; inner_r < warp_tile_m; inner_r++)
+                    {
+                        index_t ref_idx = 0;
+                        index_t gather_idx =
+                            static_cast<index_t>(gather_index_host(static_cast<size_t>(inner_r)));
+                        for(index_t c = 0; c < dims[1]; c++)
+                        {
+                            ref_host({static_cast<size_t>(r + inner_r + ref_idx),
+                                      static_cast<size_t>(c)}) =
+                                x_host(
+                                    {static_cast<size_t>(r + gather_idx), static_cast<size_t>(c)});
+                        }
+                        ref_idx++;
+                    }
+                }
+            }
+            else
+            {
+                for(index_t r = 0; r < dims[0]; r += 1)
+                {
+                    for(index_t c = 0; c < dims[1]; c += 1)
+                    {
+                        ref_host({static_cast<size_t>(r), static_cast<size_t>(c)}) =
+                            x_host({static_cast<size_t>(r), static_cast<size_t>(c)});
+                    }
+                }
+            }
+
+            if(use_cluster)
+            {
+                // for sanity test; only copy the fist half data.
+                for(index_t r = 0; r < dims[0]; r += 1)
+                {
+                    for(index_t c = 0; c < dims[1]; c += 1)
+                    {
+                        ref_host({static_cast<size_t>(r), static_cast<size_t>(c)}) =
+                            r >= dims[0] / 2
+                                ? x_host({static_cast<size_t>(r - dims[0] / 2),
+                                          static_cast<size_t>(c)})
+                                : x_host({static_cast<size_t>(r), static_cast<size_t>(c)});
+                    }
+                }
             }
 
             x_buf.ToDevice(x_host.data());
@@ -221,34 +277,17 @@ class TDMBasicTypedTest : public ::testing::Test
         return true;
     }
 
-    bool validate_results(TDMTestData& test_data, bool is_cluster_test) const
+    bool validate_results(TDMTestData& test_data) const
     {
-        if(is_cluster_test)
-        {
-            ck_tile::span<DataType> ref_value(test_data.x_host.data(), test_data.x_host.size() / 2);
-            ck_tile::span<DataType> half_result0(test_data.y_host.data(),
-                                                 test_data.y_host.size() / 2);
-            ck_tile::span<DataType> half_result1(
-                test_data.y_host.data() + test_data.y_host.size() / 2, test_data.y_host.size() / 2);
-
-            bool passed =
-                check_err(half_result0, ref_value, "Error: Incorrect tdm copy first half results!");
-            passed &= check_err(
-                half_result1, ref_value, "Error: Incorrect tdm copy second half results!");
-            return passed;
-        }
-        else
-        {
-            return check_err(
-                test_data.y_host, test_data.x_host, "Error: Incorrect tdm copy results!");
-        }
+        return check_err(
+            test_data.y_host, test_data.ref_host, "Error: Incorrect tdm copy results!");
     }
 
     template <bool IsClusterMode, bool IsGatherMode>
     bool run_tdm_test_generic(const TDMTestParams& params)
     {
         const std::vector<index_t> dims = get_tensor_dims(params, IsClusterMode);
-        TDMTestData test_data(dims, params, IsGatherMode);
+        TDMTestData test_data(dims, params, IsClusterMode, IsGatherMode);
 
         using TDMTraits  = typename TDMTraitsFactory<IsClusterMode, IsGatherMode>::type;
         using TDMProblem = TDMPipelineProblem<TDMShape, TDMTraits>;
@@ -257,7 +296,7 @@ class TDMBasicTypedTest : public ::testing::Test
 
         if(params.do_validation)
         {
-            return validate_results(test_data, IsClusterMode);
+            return validate_results(test_data);
         }
 
         return true;

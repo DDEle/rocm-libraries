@@ -838,6 +838,7 @@ amd_buffer_atomic_max(const typename vector_type_maker<T, N>::type::type src_thr
 }
 
 // Direct loads from global to LDS.
+#if __clang_major__ >= 21
 __device__ void
 llvm_amdgcn_raw_buffer_load_lds(int32x4_t rsrc,
                                 __attribute__((address_space(3))) uint32_t* lds_ptr,
@@ -846,6 +847,16 @@ llvm_amdgcn_raw_buffer_load_lds(int32x4_t rsrc,
                                 index_t soffset,
                                 index_t offset,
                                 index_t aux) __asm("llvm.amdgcn.raw.buffer.load.lds.v4i32");
+#else
+__device__ void
+llvm_amdgcn_raw_buffer_load_lds(int32x4_t rsrc,
+                                __attribute__((address_space(3))) uint32_t* lds_ptr,
+                                index_t size,
+                                index_t voffset,
+                                index_t soffset,
+                                index_t offset,
+                                index_t aux) __asm("llvm.amdgcn.raw.buffer.load.lds");
+#endif
 
 #ifndef __HIPCC_RTC__
 template <typename T, index_t NumElemsPerThread>
@@ -909,6 +920,13 @@ template <typename T,
 __device__ void amd_async_copy_to_lds_impl_raw(__attribute__((address_space(1))) const T* src_ptr,
                                                __attribute__((address_space(3))) T* dst_ptr)
 {
+    static_assert(NumBytesPerThread == 1 || NumBytesPerThread == 4 || NumBytesPerThread == 8 ||
+                      NumBytesPerThread == 16,
+                  "NumBytesPerThread must be 1, 4, 8, or 16");
+
+    // ROCm 7.0.1 compiler flags unsupported builtins even though the function is never instantiated
+    // for gfx9xx architectures
+#if defined(__gfx125__)
     if constexpr(NumBytesPerThread == 1)
     {
         __attribute__((address_space(1))) char* cv_ptr =
@@ -956,6 +974,10 @@ __device__ void amd_async_copy_to_lds_impl_raw(__attribute__((address_space(1)))
             cv_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
         return;
     }
+#else
+    ignore = src_ptr;
+    ignore = dst_ptr;
+#endif
 }
 
 template <typename T,
@@ -965,6 +987,14 @@ __device__ void amd_async_store_to_global_impl_raw(__attribute__((address_space(
                                                    const T* src_ptr,
                                                    __attribute__((address_space(1))) T* dst_ptr)
 {
+
+    static_assert(NumBytesPerThread == 1 || NumBytesPerThread == 4 || NumBytesPerThread == 8 ||
+                      NumBytesPerThread == 16,
+                  "NumBytesPerThread must be 1, 4, 8, or 16");
+
+    // ROCm 7.0.1 compiler flags unsupported builtins even though the function is never instantiated
+    // for gfx9xx architectures
+#if defined(__gfx125__)
     if constexpr(NumBytesPerThread == 1)
     {
         __attribute__((address_space(3))) char* lds_ptr =
@@ -1012,6 +1042,10 @@ __device__ void amd_async_store_to_global_impl_raw(__attribute__((address_space(
             global_ptr, lds_ptr, 0, static_cast<index_t>(coherence));
         return;
     }
+#else
+    ignore = src_ptr;
+    ignore = dst_ptr;
+#endif
 }
 
 template <typename T,

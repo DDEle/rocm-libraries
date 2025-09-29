@@ -23,7 +23,7 @@ using RsGlobalReduceOp =
 static constexpr auto ConvSpec =
     ck::tensor_operation::device::ConvolutionForwardSpecialization::Default;
 
-static constexpr auto GemmDefault = ck::tensor_operation::device::GemmSpecialization::Default;
+static constexpr auto GemmDefault = ck::tensor_operation::device::GemmSpecialization::MNKPadding;
 
 static constexpr auto KPerBlock = sizeof(ADataType) == 1 ? 64 : 32;
 // clang-format off

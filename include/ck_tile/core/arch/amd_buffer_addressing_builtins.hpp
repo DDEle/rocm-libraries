@@ -2663,9 +2663,8 @@ CK_TILE_DEVICE void amd_direct_load_global_to_lds(const T* global_base_ptr,
     const index_t global_offset_bytes = is_valid ? global_offset * sizeof(T) : 0x80000000;
 
 #if CK_TILE_USE_AMD_LDS_DIRECT_LOAD_INLINE_ASM
-    T* lds_ptr = lds_base_ptr + lds_offset;
-    auto const lds_ptr_sgpr =
-        __builtin_amdgcn_readfirstlane((reinterpret_cast<uintptr_t>(lds_ptr)));
+    T* lds_ptr              = lds_base_ptr + lds_offset;
+    auto const lds_ptr_sgpr = amd_wave_read_first_lane((reinterpret_cast<uintptr_t>(lds_ptr)));
     asm volatile("s_mov_b32 m0, %0; \n\t"
                  "buffer_load_dword %1, %2, 0 offen lds;\n\t" ::"s"(lds_ptr_sgpr),
                  "v"(global_offset_bytes),

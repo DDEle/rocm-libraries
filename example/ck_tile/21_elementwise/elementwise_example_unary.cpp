@@ -198,7 +198,7 @@ int main(int argc, char* argv[])
     ck_tile::ArgParser arg_parser;
     std::tie(result, arg_parser) = create_args(argc, argv);
     if(!result)
-        return return_code;
+        return -1;
 
     try
     {

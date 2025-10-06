@@ -110,9 +110,9 @@ enum struct MfmaInstr
 
     wmma_f32_16x16x128_f8f6f4_gfx125,         // not implemented
     wmma_scale16_f32_16x16x128_f8f6f4_gfx125, // not implemented
-    wmma_scale_f32_16x16x128_f8f6f_gfx125,    // not implemented
-    wmm_scale16_f32_32x16x128_f4_gfx125,      // not implemented
-    wmm_scale_f32_32x16x128_f4_gfx125,        // not implemented
+    wmma_scale_f32_16x16x128_f8f6f4_gfx125,
+    wmm_scale16_f32_32x16x128_f4_gfx125, // not implemented
+    wmm_scale_f32_32x16x128_f4_gfx125,   // not implemented
 
     wmma_f32_16x16x4_f32_gfx125,
 
@@ -1364,6 +1364,30 @@ struct mfma_type<MfmaInstr::wmma_f64_16x16x4_f64_gfx1251> : public mfma_type_gfx
     }
 };
 
+template <>
+struct mfma_type<MfmaInstr::wmma_scale_f32_16x16x128_f8f6f4_gfx125>
+    : public mfma_type_gfx125_base_128
+{
+    template <index_t MPerWmma,
+              index_t NPerWmma,
+              index_t ScaleOpselA,
+              index_t ScaleOpselB,
+              class FloatA,
+              class ScaleA,
+              class FloatB,
+              class ScaleB,
+              class FloatC>
+    __device__ void run(const FloatA& a,
+                        const ScaleA& scale_a,
+                        const FloatB& b,
+                        const ScaleB& scale_b,
+                        FloatC& reg_c) const
+    {
+        intrin_wmma_scale_f32_16x16x128_f8f6f4<MPerWmma, NPerWmma, ScaleOpselA, ScaleOpselB>::Run(
+            a, bit_cast<int32_t>(scale_a), b, bit_cast<int32_t>(scale_b), reg_c);
+    }
+};
+
 /**
  * @class MfmaSelector
  * @brief Selects the appropriate MFMA instruction type and configuration for given data types
@@ -1750,7 +1774,9 @@ struct MfmaSelector
     template <>
     constexpr auto GetMfma<f8_t, 16, 16, f8_t, is_single_rate_mfma, true>()
     {
-#if defined(__gfx12__)
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_scale_f32_16x16x128_f8f6f4_gfx125;
+#elif defined(__gfx120__)
         return MfmaInstr::wmma_unsupport_16x16_gfx12;
 #elif defined(__gfx11__)
         return MfmaInstr::wmma_unsupport_16x16_gfx11;

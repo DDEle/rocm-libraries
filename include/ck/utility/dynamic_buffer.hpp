@@ -225,14 +225,16 @@ struct DynamicBuffer
                       "Source data must come from a global memory buffer.");
         static_assert(DstBuffer::GetAddressSpace() == AddressSpaceEnum::Lds,
                       "Destination data must be stored in an LDS memory buffer.");
+        static_assert(is_same_v<typename DstBuffer::type, remove_cvref_t<T>>,
+                      "Source and destination buffer must have the same data type.");
 
-        amd_async_load_global_to_lds<T, NumElemsPerThread, coherence>(p_data_,
-                                                                      src_offset,
-                                                                      dst_buf.p_data_,
-                                                                      dst_offset,
-                                                                      is_valid_element,
-                                                                      element_space_size_ /
-                                                                          PackedSize);
+        amd_async_load_global_to_lds<typename DstBuffer::type, NumElemsPerThread, coherence>(
+            p_data_,
+            src_offset,
+            dst_buf.p_data_,
+            dst_offset,
+            is_valid_element,
+            element_space_size_ / PackedSize);
     }
 
     template <typename X,

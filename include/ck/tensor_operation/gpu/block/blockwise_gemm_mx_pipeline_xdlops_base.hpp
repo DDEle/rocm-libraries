@@ -12,8 +12,11 @@
 namespace ck {
 
 template <index_t BlockSize,
+          index_t ScaleBlockSize,
           typename ADataType,
+          typename AScaleDataType,
           typename BDataType,
+          typename BScaleDataType,
           typename ATileDesc,
           typename BTileDesc,
           typename AMmaTileDesc,
@@ -45,7 +48,6 @@ struct BlockwiseGemmXdlops_mx_pipeline_base
 
     using ThisThreadBlock = ThisThreadBlock<BlockSize>;
 
-    // Hardcode to 64, as HIP-provided "WarpSize" would return 32 on RDNA GPUs.
     static constexpr index_t MWaves   = MPerBlock / (MRepeat * MPerXDL);
     static constexpr index_t NWaves   = NPerBlock / (NRepeat * NPerXDL);
     static constexpr index_t WaveSize = BlockSize / MWaves / NWaves;
@@ -79,11 +81,29 @@ struct BlockwiseGemmXdlops_mx_pipeline_base
     static constexpr index_t KRepeat       = KPerThread / KPack;
     static constexpr index_t KPerInnerLoop = KPack;
 
-    // Hardcode to 2, for better 8-bit access pattern
+    // Tuning parameters for better 8-bit access pattern
+    // gfx125 scale32 wmma instructions can access two sets of scales per wave per matrix
+    // gfx950 mfma instructions can access four sets of scales per wave per matrix
+    // Ultimately, we aim to support the following configurations:
+    // gfx950: MXdlPack=2, NXdlPack=2, KXdlPack=2
+    // gfx1250, scale32: MXdlPack=2, NXdlPack=2, KXdlPack=1
+    // gfx1250, scale16: MXdlPack=1, NXdlPack=1, KXdlPack=1
+    static constexpr index_t MXdlPack = (ScaleBlockSize == 32) ? 2 : 1;
+    static constexpr index_t NXdlPack = (ScaleBlockSize == 32) ? 2 : 1;
+    static constexpr index_t KXdlPack = (xdlops_gemm.K1PerXdlops == 64) ? 1 : 2;
 
-    static constexpr index_t MXdlPack = 2;
-    static constexpr index_t NXdlPack = 2;
-    static constexpr index_t KXdlPack = 2;
+    using mx_scale_t                        = e8m0_bexp_t;
+    static constexpr auto scale_pack_size_a = sizeof(AScaleDataType) / sizeof(mx_scale_t);
+    static constexpr auto scale_pack_size_b = sizeof(BScaleDataType) / sizeof(mx_scale_t);
+
+    static_assert(scale_pack_size_a == 1 || scale_pack_size_a == 2 || scale_pack_size_a == 4,
+                  "A scale must be packed into 1, 2 or 4 bytes!");
+    static_assert(scale_pack_size_b == 1 || scale_pack_size_b == 2 || scale_pack_size_b == 4,
+                  "B scale must be packed into 1, 2 or 4 bytes!");
+
+    // MX WMMA/MFMA builtins pack scales into int32_t registers
+    static constexpr auto a_scale_thread_vec_size = sizeof(int32_t) / scale_pack_size_a;
+    static constexpr auto b_scale_thread_vec_size = sizeof(int32_t) / scale_pack_size_b;
 
     using HotLoopInstList = ck::BlockwiseGemmXdlops_pipeline_hotloop_inst< //
         BlockSize,

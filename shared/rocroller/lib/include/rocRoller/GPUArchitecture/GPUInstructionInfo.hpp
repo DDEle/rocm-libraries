@@ -55,6 +55,7 @@ namespace rocRoller
             DSQueue,
             EXPQueue,
             VSQueue,
+            TensorQueue,
             FinalInstruction,
             Count,
             None = Count,
@@ -116,6 +117,7 @@ namespace rocRoller
             DSQueue,
             EXPQueue,
             VSQueue,
+            TensorQueue,
             Count,
             None = Count,
         };
@@ -158,6 +160,9 @@ namespace rocRoller
                 break;
             case GPUWaitQueueType::VSQueue:
                 m_value = Value::VSQueue;
+                break;
+            case GPUWaitQueueType::TensorQueue:
+                m_value = Value::TensorQueue;
                 break;
             default:
                 m_value = Value::None;
@@ -260,6 +265,7 @@ namespace rocRoller
         static bool isLDS(std::string const& inst);
         static bool isLDSRead(std::string const& inst);
         static bool isLDSWrite(std::string const& inst);
+        static bool isTensor(std::string const& inst);
 
         static bool isACCVGPRRead(std::string const& inst);
         static bool isACCVGPRWrite(std::string const& inst);

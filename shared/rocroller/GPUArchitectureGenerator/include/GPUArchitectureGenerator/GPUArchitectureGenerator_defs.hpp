@@ -201,6 +201,7 @@ namespace GPUArchitectureGenerator
             {rocRoller::GPUCapability::s_barrier_signal, {{"s_barrier_signal -1"}, ""}},
 
             {rocRoller::GPUCapability::HasExpcnt, {{"s_waitcnt expcnt(0)", "s_wait_expcnt 0"}, ""}},
+            {rocRoller::GPUCapability::HasTensorcnt, {{"s_wait_tensorcnt 0"}, ""}},
 
             {rocRoller::GPUCapability::HasAtomicAdd,
              {{"buffer_atomic_add_f32 v0, v1, s[0:3], 0 offen offset:0"}, ""}},
@@ -245,6 +246,8 @@ namespace GPUArchitectureGenerator
             {rocRoller::GPUCapability::SeparateVscnt, {{"s_waitcnt_vscnt 0"}, ""}},
             {rocRoller::GPUCapability::HasSplitWaitCounters, {{"s_wait_kmcnt 0"}, ""}},
 
+            {rocRoller::GPUCapability::HasTDM,
+             {{"tensor_load_to_lds s[0:3], s[4:11], s[12:15], s[16:19]"}, ""}},
     };
 
     // GPUCapability -> <Vector of ISAs That Support It>
@@ -1216,6 +1219,20 @@ namespace GPUArchitectureGenerator
                                                /*implicitAccess*/ false,
                                                /*branch*/ false,
                                                (1 << 16) - 1),
+
+                 // Tensor Data Mover instructions
+                 rocRoller::GPUInstructionInfo("tensor_load_to_lds",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::TensorQueue},
+                                               0, // FIXME: latency is variable
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false),
+                 rocRoller::GPUInstructionInfo("tensor_store_from_lds",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::TensorQueue},
+                                               0, // FIXME: latency is variable
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false),
              }},
             // TODO: add support for gfx1251
             // {{rocRoller::GPUArchitectureGFX::GFX1251},

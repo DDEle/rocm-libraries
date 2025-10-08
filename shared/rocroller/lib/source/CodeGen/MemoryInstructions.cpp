@@ -354,4 +354,53 @@ namespace rocRoller
             co_yield m_context.lock()->copier()->pack(result->element({i}), values);
         }
     }
+
+    Generator<Instruction>
+        MemoryInstructions::loadTensorToLDS(std::shared_ptr<TensorDataMover::TDMDescriptor> tdmDesc)
+    {
+        auto ctx = m_context.lock();
+
+        const auto [g0, g1, g2, g3] = tdmDesc->getAllRegisters();
+        AssertFatal(not(g2 == nullptr xor g3 == nullptr),
+                    "Either both or neither of TDMGroup2 & TDMGroup3 registers can be used");
+
+        if(g2 != nullptr)
+        {
+            co_yield_(
+                Instruction("tensor_load_to_lds", {}, {g0, g1, g2, g3}, {}, "load tensor to LDS"));
+        }
+        else
+        {
+            co_yield_(Instruction("tensor_load_to_lds", {}, {g0, g1}, {}, "load tensor to LDS"));
+        }
+
+        if(ctx->kernelOptions()->alwaysWaitAfterLoad)
+            co_yield Instruction::Wait(
+                WaitCount::Zero(ctx->targetArchitecture(), "DEBUG: Wait after load"));
+    }
+
+    Generator<Instruction> MemoryInstructions::storeTensorFromLDS(
+        std::shared_ptr<TensorDataMover::TDMDescriptor> tdmDesc)
+    {
+        auto ctx = m_context.lock();
+
+        const auto [g0, g1, g2, g3] = tdmDesc->getAllRegisters();
+        AssertFatal(not(g2 == nullptr xor g3 == nullptr),
+                    "Either both or neither of TDMGroup2 & TDMGroup3 registers can be used");
+
+        if(g2 != nullptr)
+        {
+            co_yield_(Instruction(
+                "tensor_store_from_lds", {}, {g0, g1, g2, g3}, {}, "store tensor from LDS"));
+        }
+        else
+        {
+            co_yield_(
+                Instruction("tensor_store_from_lds", {}, {g0, g1}, {}, "store tensor from LDS"));
+        }
+
+        if(ctx->kernelOptions()->alwaysWaitAfterStore)
+            co_yield Instruction::Wait(
+                WaitCount::Zero(ctx->targetArchitecture(), "DEBUG: Wait after store"));
+    }
 }

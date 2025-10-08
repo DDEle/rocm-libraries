@@ -135,6 +135,8 @@ namespace rocRoller
             MaxLgkmcnt,
             MaxExpcnt,
             HasExpcnt,
+            MaxTensorcnt,
+            HasTensorcnt,
             SupportedSource,
 
             Waitcnt0Disabled,
@@ -198,6 +200,8 @@ namespace rocRoller
             HasVGPRIndexing,
 
             HasWorkgroupClusters,
+
+            HasTDM,
 
             Count,
         };

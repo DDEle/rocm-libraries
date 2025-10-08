@@ -32,6 +32,8 @@ Architectures:
       HasPermLanes16: 0
       HasSMulHi: 0
       HasSplitWaitCounters: 0
+      HasTDM: 0
+      HasTensorcnt: 0
       HasVGPRIndexing: 0
       HasWMMA: 0
       HasWMMA_F16_ACC: 0
@@ -50,6 +52,7 @@ Architectures:
       MaxExpcnt: 7
       MaxLdsSize: 65536
       MaxLgkmcnt: 31
+      MaxTensorcnt: 63
       MaxVmcnt: 63
       PackedWorkitemIDs: 0
       PartiallyActiveWaveSize: 16
@@ -7769,8 +7772,9 @@ Architectures:
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
+        WaitCount: 1
+        WaitQueues:
+        - TensorQueue
       tensor_save:
         ImplicitAccess: false
         Instruction: tensor_save
@@ -7793,8 +7797,9 @@ Architectures:
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
-        WaitCount: -1
-        WaitQueues: []
+        WaitCount: 1
+        WaitQueues:
+        - TensorQueue
       v_add3_nc_u32:
         ImplicitAccess: false
         Instruction: v_add3_nc_u32

@@ -168,6 +168,11 @@ namespace rocRoller
                    || opCode.find("store") != std::string::npos);
     }
 
+    bool GPUInstructionInfo::isTensor(std::string const& opCode)
+    {
+        return opCode.starts_with("tensor_");
+    }
+
     bool GPUInstructionInfo::isACCVGPRWrite(std::string const& opCode)
     {
         return opCode.starts_with("v_accvgpr_write");
@@ -261,7 +266,7 @@ namespace rocRoller
         if(isVMEM(opCode) || isFlat(opCode))
             return CoexecCategory::VMEM;
 
-        if(isLDS(opCode))
+        if(isLDS(opCode) || isTensor(opCode))
             return CoexecCategory::LDS;
 
         if(Settings::Get(Settings::AllowUnknownInstructions))

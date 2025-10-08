@@ -151,6 +151,8 @@ namespace rocRoller
             {"MaxLgkmcnt", Value::MaxLgkmcnt},
             {"MaxExpcnt", Value::MaxExpcnt},
             {"HasExpcnt", Value::HasExpcnt},
+            {"MaxTensorcnt", Value::MaxTensorcnt},
+            {"HasTensorcnt", Value::HasTensorcnt},
             {"SupportedSource", Value::SupportedSource},
 
             {"Waitcnt0Disabled", Value::Waitcnt0Disabled},
@@ -214,5 +216,7 @@ namespace rocRoller
             {"HasVGPRIndexing", Value::HasVGPRIndexing},
 
             {"HasWorkgroupClusters", Value::HasWorkgroupClusters},
+
+            {"HasTDM", Value::HasTDM},
     };
 }

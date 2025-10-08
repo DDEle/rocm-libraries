@@ -184,6 +184,24 @@ namespace rocRoller
             val);
     }
 
+    inline uint64_t getUInt64(CommandArgumentValue val)
+    {
+        return visit(
+            [](auto value) -> uint64_t {
+                using T = std::decay_t<decltype(value)>;
+
+                if constexpr(std::integral<T>)
+                {
+                    return static_cast<uint64_t>(value);
+                }
+                else
+                {
+                    throw std::runtime_error("Not integer type");
+                }
+            },
+            val);
+    }
+
     inline bool isInteger(CommandArgumentValue val)
     {
         return visit(

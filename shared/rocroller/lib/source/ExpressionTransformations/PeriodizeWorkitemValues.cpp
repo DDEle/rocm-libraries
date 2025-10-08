@@ -26,6 +26,7 @@
 
 #include <rocRoller/AssemblyKernel.hpp>
 #include <rocRoller/Expression.hpp>
+#include <rocRoller/KernelGraph/KernelGraph_fwd.hpp>
 #include <variant>
 
 namespace rocRoller
@@ -34,10 +35,12 @@ namespace rocRoller
     {
         struct PeriodizeWorkitemValuesVisitor
         {
-            PeriodizeWorkitemValuesVisitor(ContextPtr ctx, const uint period)
+            PeriodizeWorkitemValuesVisitor(ContextPtr                  ctx,
+                                           KernelGraph::KernelGraphPtr graph,
+                                           const uint                  period)
                 : m_context(ctx)
-                , workitemX{ctx->kernel()->workitemIndex()[0]}
-                , period{period} {};
+                , m_graph(graph)
+                , m_period{period} {};
 
             template <CUnary Expr>
             ExpressionPtr operator()(Expr const& expr) const
@@ -121,39 +124,48 @@ namespace rocRoller
             template <CValue Value>
             ExpressionPtr operator()(Value const& expr) const
             {
-                if constexpr(std::same_as<Value, Register::ValuePtr>)
+                // TODO represent this expression directly in the CoordinateGraph
+                if constexpr(std::same_as<Value, DataFlowTag>)
                 {
-                    if(expr == workitemX)
+                    auto node = m_graph->coordinates.getNode(expr.tag);
+                    if(std::holds_alternative<KernelGraph::CoordinateGraph::Workitem>(node))
                     {
-                        auto const wavefrontSize = m_context->targetArchitecture().GetCapability(
-                            GPUCapability::DefaultWavefrontSize);
-                        AssertFatal(period < wavefrontSize && period != 0
-                                        && (period & (period - 1)) == 0,
-                                    "period must be a non-zero power of 2 less than the "
-                                    "wavefront size: ",
-                                    period);
+                        auto workitem = std::get<KernelGraph::CoordinateGraph::Workitem>(node);
+                        if(workitem.dim == 0)
+                        {
+                            DataFlowTag df{expr};
+                            auto const  wavefrontSize
+                                = m_context->targetArchitecture().GetCapability(
+                                    GPUCapability::DefaultWavefrontSize);
+                            AssertFatal(m_period < wavefrontSize && m_period != 0
+                                            && (m_period & (m_period - 1)) == 0,
+                                        "period must be a non-zero power of 2 less than the "
+                                        "wavefront size: ",
+                                        ShowValue(m_period),
+                                        ShowValue(wavefrontSize));
 
-                        auto const logPeriod        = static_cast<uint>(log2(period));
-                        auto const logWavefrontSize = static_cast<uint>(log2(wavefrontSize));
+                            auto const logPeriod        = static_cast<uint>(log2(m_period));
+                            auto const logWavefrontSize = static_cast<uint>(log2(wavefrontSize));
 
-                        auto workitemXExpr        = expr->expression();
-                        auto logPeriodExpr        = literal(logPeriod);
-                        auto periodMask           = literal(period - 1);
-                        auto logWavefrontSizeExpr = literal(logWavefrontSize);
+                            auto workitemXExpr        = std::make_shared<Expression>(df);
+                            auto logPeriodExpr        = literal(logPeriod);
+                            auto periodMask           = literal(m_period - 1);
+                            auto logWavefrontSizeExpr = literal(logWavefrontSize);
 
-                        auto nWave = std::make_shared<Expression>(
-                            ArithmeticShiftR({workitemXExpr, logWavefrontSizeExpr}));
+                            auto nWave = std::make_shared<Expression>(
+                                ArithmeticShiftR({workitemXExpr, logWavefrontSizeExpr}));
 
-                        auto nWaveOffset
-                            = std::make_shared<Expression>(ShiftL({nWave, logPeriodExpr}));
+                            auto nWaveOffset
+                                = std::make_shared<Expression>(ShiftL({nWave, logPeriodExpr}));
 
-                        auto maskedPeriodInWave
-                            = std::make_shared<Expression>(BitwiseAnd({workitemXExpr, periodMask}));
+                            auto maskedPeriodInWave = std::make_shared<Expression>(
+                                BitwiseAnd({workitemXExpr, periodMask}));
 
-                        auto newExpr
-                            = std::make_shared<Expression>(Add({maskedPeriodInWave, nWaveOffset}));
+                            auto newExpr = std::make_shared<Expression>(
+                                Add({maskedPeriodInWave, nWaveOffset}));
 
-                        return newExpr;
+                            return newExpr;
+                        }
                     }
                 }
                 return std::make_shared<Expression>(expr);
@@ -168,14 +180,17 @@ namespace rocRoller
             }
 
         private:
-            ContextPtr         m_context;
-            Register::ValuePtr workitemX;
-            const uint         period;
+            ContextPtr                  m_context;
+            KernelGraph::KernelGraphPtr m_graph;
+            const uint                  m_period;
         };
 
-        ExpressionPtr periodizeWorkitemValues(ExpressionPtr expr, ContextPtr ctx, const uint period)
+        ExpressionPtr periodizeWorkitemValues(ExpressionPtr               expr,
+                                              ContextPtr                  ctx,
+                                              KernelGraph::KernelGraphPtr graph,
+                                              const uint                  period)
         {
-            auto visitor = PeriodizeWorkitemValuesVisitor(ctx, period);
+            auto visitor = PeriodizeWorkitemValuesVisitor(ctx, graph, period);
             return visitor.call(expr);
         }
 

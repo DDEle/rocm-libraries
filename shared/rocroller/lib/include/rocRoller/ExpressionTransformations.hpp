@@ -29,6 +29,7 @@
 #include <rocRoller/Expression_fwd.hpp>
 
 #include <rocRoller/Context_fwd.hpp>
+#include <rocRoller/KernelGraph/KernelGraph_fwd.hpp>
 #include <rocRoller/KernelGraph/RegisterTagManager_fwd.hpp>
 
 namespace rocRoller
@@ -232,11 +233,14 @@ namespace rocRoller
          *
          * @param expr Input expression
          * @param context
+         * @param graph The kernel graph containing the workitem coordinates.
          * @param period The number of unique indicies to repeat in a wave,
          *               must be a power of 2.
          * @return ExpressionPtr Transformed expression
          */
-        ExpressionPtr
-            periodizeWorkitemValues(ExpressionPtr expr, ContextPtr ctx, const uint period);
+        ExpressionPtr periodizeWorkitemValues(ExpressionPtr               expr,
+                                              ContextPtr                  ctx,
+                                              KernelGraph::KernelGraphPtr graph,
+                                              const uint                  period);
     }
 }

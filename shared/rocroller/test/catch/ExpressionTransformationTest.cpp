@@ -951,19 +951,21 @@ TEST_CASE("LowerUnsignedArithmeticShiftR ExpressionTransformation works",
 TEST_CASE("periodizeWorkitemValues works", "[expression][expression-transformation]")
 {
     using namespace rocRoller;
+    using namespace KernelGraph::CoordinateGraph;
     using Expression::ExpressionPtr;
     using Expression::literal;
 
     auto context = TestContext::ForDefaultTarget();
 
-    auto kernel = context.get()->kernel();
-    auto loader = context->argLoader();
+    auto graph    = KernelGraph::KernelGraph();
+    auto wiXCoord = graph.coordinates.addElement(Workitem(0));
+    auto wiYCoord = graph.coordinates.addElement(Workitem(1));
+    auto graphPtr = std::make_shared<KernelGraph::KernelGraph>(graph);
 
-    kernel->setKernelDimensions(2);
-
-    context.get()->schedule(kernel->allocateInitialRegisters());
-
-    auto wiXExpr = context->kernel()->workitemIndex()[0]->expression();
+    auto wiXExpr = std::make_shared<Expression::Expression>(
+        Expression::DataFlowTag{wiXCoord, Register::Type::Vector, DataType::UInt32});
+    auto wiYExpr = std::make_shared<Expression::Expression>(
+        Expression::DataFlowTag{wiYCoord, Register::Type::Vector, DataType::UInt32});
 
     uint period        = 16;
     auto logPeriod     = static_cast<uint>(log2(period));
@@ -973,17 +975,16 @@ TEST_CASE("periodizeWorkitemValues works", "[expression][expression-transformati
     auto const wavefrontSize
         = context.get()->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
     auto logWavefrontSize     = static_cast<uint>(log2(wavefrontSize));
-    auto workitemXExpr        = context->kernel()->workitemIndex()[0]->expression();
     auto logWavefrontSizeExpr = literal(logWavefrontSize);
 
     auto nWave = std::make_shared<Expression::Expression>(
-        Expression::ArithmeticShiftR({workitemXExpr, logWavefrontSizeExpr}));
+        Expression::ArithmeticShiftR({wiXExpr, logWavefrontSizeExpr}));
 
     auto nWaveOffset
         = std::make_shared<Expression::Expression>(Expression::ShiftL({nWave, logPeriodExpr}));
 
-    auto maskedPeriodInWave = std::make_shared<Expression::Expression>(
-        Expression::BitwiseAnd({workitemXExpr, periodMask}));
+    auto maskedPeriodInWave
+        = std::make_shared<Expression::Expression>(Expression::BitwiseAnd({wiXExpr, periodMask}));
 
     auto expectedBase = std::make_shared<Expression::Expression>(
         Expression::Add({maskedPeriodInWave, nWaveOffset}));
@@ -991,7 +992,7 @@ TEST_CASE("periodizeWorkitemValues works", "[expression][expression-transformati
     SECTION("Simple")
     {
         auto expected = expectedBase;
-        auto actual   = Expression::periodizeWorkitemValues(wiXExpr, context.get(), period);
+        auto actual = Expression::periodizeWorkitemValues(wiXExpr, context.get(), graphPtr, period);
 
         CHECK(toString(expected) == toString(actual));
     }
@@ -1000,28 +1001,26 @@ TEST_CASE("periodizeWorkitemValues works", "[expression][expression-transformati
     {
         auto expected = expectedBase * expectedBase;
         auto expr     = wiXExpr * wiXExpr;
-        auto actual   = Expression::periodizeWorkitemValues(expr, context.get(), period);
+        auto actual   = Expression::periodizeWorkitemValues(expr, context.get(), graphPtr, period);
 
         CHECK(toString(expected) == toString(actual));
     }
 
     SECTION("Workitem Y")
     {
-        auto wiYExpr  = context->kernel()->workitemIndex()[1]->expression();
         auto expected = expectedBase * wiYExpr;
         auto expr     = wiXExpr * wiYExpr;
-        auto actual   = Expression::periodizeWorkitemValues(expr, context.get(), period);
+        auto actual   = Expression::periodizeWorkitemValues(expr, context.get(), graphPtr, period);
 
         CHECK(toString(expected) == toString(actual));
     }
 
     SECTION("Complex")
     {
-        auto wiYExpr  = context->kernel()->workitemIndex()[1]->expression();
         auto expected = expectedBase + wiYExpr / literal(wavefrontSize)
                         << literal(period) + expectedBase;
         auto expr   = wiXExpr + wiYExpr / literal(wavefrontSize) << literal(period) + wiXExpr;
-        auto actual = Expression::periodizeWorkitemValues(expr, context.get(), period);
+        auto actual = Expression::periodizeWorkitemValues(expr, context.get(), graphPtr, period);
 
         CHECK(toString(expected) == toString(actual));
     }

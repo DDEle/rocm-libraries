@@ -227,20 +227,17 @@ namespace rocRoller
 
             auto const& arch = context->targetArchitecture();
             if(arch.HasCapability(GPUCapability::PartiallyActiveWaveSize)
-                && isScaleType(ci.valueType))
+               && isScaleType(ci.valueType))
             {
-                auto activeLanesInWave
-                    = arch.GetCapability(GPUCapability::PartiallyActiveWaveSize);
-                indexExpr = Expression::periodizeWorkitemValues(
-                    indexExpr, context, activeLanesInWave);
+                auto activeLanesInWave = arch.GetCapability(GPUCapability::PartiallyActiveWaveSize);
+                indexExpr              = Expression::periodizeWorkitemValues(
+                    indexExpr, context, std::make_shared<KernelGraph>(graph), activeLanesInWave);
             }
-
 
             auto const& typeInfo = DataTypeInfo::Get(ci.valueType);
             auto        numBits  = DataTypeInfo::Get(typeInfo.segmentVariableType).elementBits;
 
-            auto const& arch = context->targetArchitecture();
-            const auto  needsPadding
+            const auto needsPadding
                 = numBits == 6 && isTransposed
                   && arch.HasCapability(GPUCapability::DSReadTransposeB6PaddingBytes);
 

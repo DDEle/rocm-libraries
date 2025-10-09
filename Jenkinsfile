@@ -1821,7 +1821,7 @@ pipeline {
                     script {
                         // Report the parent stage build ck and run tests status
                         def variant = env.STAGE_NAME
-                        gitStatusWrapper(credentialsId: "${env.ck_git_creds}", gitHubContext: "${variant}", account: 'ROCm', repo: 'composable_kernel') {
+                        gitStatusWrapper(credentialsId: "${env.ck_git_creds}", gitHubContext: "${variant}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel') {
                             echo "Reporting success status for build ck and run tests"
                         }
                     }
@@ -1849,12 +1849,12 @@ pipeline {
                     script {
                         // Report the skipped parent's stage status
                         def parentVariant = "Process Performance Test Results"
-                        gitStatusWrapper(credentialsId: "${env.ck_git_creds}", gitHubContext: "${parentVariant}", account: 'ROCm', repo: 'composable_kernel') {
+                        gitStatusWrapper(credentialsId: "${env.ck_git_creds}", gitHubContext: "${parentVariant}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel') {
                             echo "Process Performance Test Results stage skipped."
                         }
                         // Report the skipped stage's status
                         def variant = "Process results"
-                        gitStatusWrapper(credentialsId: "${env.ck_git_creds}", gitHubContext: "${variant}", account: 'ROCm', repo: 'composable_kernel') {
+                        gitStatusWrapper(credentialsId: "${env.ck_git_creds}", gitHubContext: "${variant}", account: 'AMD-ROCm-Internal', repo: 'composable_kernel') {
                             echo "Process Performance Test Results stage skipped."
                         }
                     }

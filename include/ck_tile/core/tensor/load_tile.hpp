@@ -125,7 +125,8 @@ CK_TILE_DEVICE auto async_load_tile(LdsTileWindow_&& lds_tile,
         lds_tile, number<i_access>{}, bool_constant<oob_conditional_check>{});
 }
 
-template <typename LdsTileWindow_,
+template <typename TDMConfig_,
+          typename LdsTileWindow_,
           typename BottomTensorView_,
           typename WindowLengths_,
           typename TileDistribution_,
@@ -133,7 +134,8 @@ template <typename LdsTileWindow_,
           typename GatherIndexView_ = null_tile_window<WindowLengths_>,
           index_t i_access          = -1> // this i_access is used for gather mode
 CK_TILE_DEVICE auto
-load_tile_tdm(LdsTileWindow_&& lds_tile,
+load_tile_tdm(const TDMConfig_& tdm_config,
+              LdsTileWindow_&& lds_tile,
               const tile_window_with_static_distribution<BottomTensorView_,
                                                          WindowLengths_,
                                                          TileDistribution_,
@@ -141,7 +143,7 @@ load_tile_tdm(LdsTileWindow_&& lds_tile,
               const GatherIndexView_& gather_index_view = null_tile_window<WindowLengths_>{},
               number<i_access>                          = {})
 {
-    return tile_window.tdm_load_to_lds(lds_tile, gather_index_view, number<i_access>{});
+    return tile_window.tdm_load_to_lds(tdm_config, lds_tile, gather_index_view, number<i_access>{});
 }
 
 template <typename LdsTileWindow_,

@@ -509,8 +509,12 @@ struct tile_window_with_static_distribution
         });
     }
 
-    template <typename LdsTileWindow_, typename GatherIndexView_, index_t i_access_ = -1>
-    CK_TILE_DEVICE auto tdm_load_to_lds(LdsTileWindow_&& lds_tile,
+    template <typename TDMConfig_,
+              typename LdsTileWindow_,
+              typename GatherIndexView_,
+              index_t i_access_ = -1>
+    CK_TILE_DEVICE auto tdm_load_to_lds(const TDMConfig_& tdm_config,
+                                        LdsTileWindow_&& lds_tile,
                                         const GatherIndexView_& gather_index_view,
                                         number<i_access_> = {}) const
     {
@@ -561,12 +565,14 @@ struct tile_window_with_static_distribution
             if constexpr(is_null_tile_window_v<GatherIndexView_>)
             {
                 this->get_bottom_tensor_view()
-                    .template get_tdm_elements<remove_cvref_t<decltype(box_dim)>, num_tensor_dims>(
-                        smem,
-                        bottom_tensor_thread_coord,
-                        tensor_dims,
-                        global_strides,
-                        number<num_tensor_dims>{});
+                    .template get_tdm_elements<TDMConfig_,
+                                               remove_cvref_t<decltype(box_dim)>,
+                                               num_tensor_dims>(tdm_config,
+                                                                smem,
+                                                                bottom_tensor_thread_coord,
+                                                                tensor_dims,
+                                                                global_strides,
+                                                                number<num_tensor_dims>{});
             }
             // if GatherIndexView_ is not null_tile_view, then we are doing TDM gather
             else
@@ -577,8 +583,10 @@ struct tile_window_with_static_distribution
 
                 static_for<0, NumIterations, 1>{}([&](auto iIter) {
                     this->get_bottom_tensor_view()
-                        .template get_tdm_elements<remove_cvref_t<decltype(box_dim)>,
+                        .template get_tdm_elements<TDMConfig_,
+                                                   remove_cvref_t<decltype(box_dim)>,
                                                    num_tensor_dims>(
+                            tdm_config,
                             smem,
                             bottom_tensor_thread_coord,
                             tensor_dims,

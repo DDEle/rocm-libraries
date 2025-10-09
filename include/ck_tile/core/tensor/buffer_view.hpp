@@ -734,12 +734,14 @@ struct buffer_view<address_space_enum::global,
         }
     }
 
-    template <typename DimTuple_,
+    template <typename TDMConfig_,
+              typename DimTuple_,
               typename BoxDim_,
               index_t num_tensor_dims,
               typename GatherIndexView_ = null_buffer_view,
               index_t gather_index_offset>
-    CK_TILE_DEVICE void tdm_get(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
+    CK_TILE_DEVICE void tdm_get(const TDMConfig_& tdm_config,
+                                CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
                                 index_t linear_offset,
                                 const DimTuple_& tensor_dims,
                                 const DimTuple_& global_strides,
@@ -747,8 +749,6 @@ struct buffer_view<address_space_enum::global,
                                 const GatherIndexView_& gather_index_view = null_buffer_view{},
                                 number<gather_index_offset>               = {})
     {
-        TDMConfig tdm_config; // default initialize all fields to zero/false
-
         // Convert tensor dimensions to uint32_t array
         array<uint32_t, num_tensor_dims> tensor_dims_uint32;
         static_for<0, num_tensor_dims, 1>{}(

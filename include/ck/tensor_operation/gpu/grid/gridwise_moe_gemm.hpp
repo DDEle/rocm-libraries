@@ -200,7 +200,12 @@ struct GridwiseMoeGemm
         // A memory instruction can only read 16 bytes at a time. If K1PerXdlops *
         // sizeof(ComputeDataType) > 16, memory read will not conitnues in a wave in B preshuffle
         // mode. So, we need split K into mutiple groups.
-        return mfma_selector::GetK1PerXdlops() * sizeof(ComputeTypeA) > 16 ? 2 : 1;
+        // TODO: Dequant pipeline doesn't support KGroup now, we have to align it in grid level.
+        constexpr bool isDequantPipe = (is_same_v<ADataType, BDataType> == false) &&
+                                       (BlkGemmPipelineVer == BlockGemmPipelineVersion::v1 ||
+                                        BlkGemmPipelineVer == BlockGemmPipelineVersion::v3);
+        return (mfma_selector::GetK1PerXdlops() * sizeof(ComputeTypeA) > 16) && !isDequantPipe ? 2
+                                                                                               : 1;
 #else
         if constexpr(is_same_v<remove_cvref_t<BDataType>, f8_t>)
             // On gfx950, we have a mfma that required 32 f8 elements as input,

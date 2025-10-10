@@ -233,7 +233,13 @@ struct GemmConfigComputeV3_WMMA : public GemmConfigBase
 
     static constexpr ck_tile::index_t M_Warp_Tile = 16;
     static constexpr ck_tile::index_t N_Warp_Tile = 16;
+#if defined(CK_USE_GFX1250)
+    static constexpr bool is_8bit_float =
+        std::is_same_v<PrecType, ck_tile::fp8_t> || std::is_same_v<PrecType, ck_tile::bf8_t>;
+    static constexpr ck_tile::index_t K_Warp_Tile = is_8bit_float ? 64 : 32;
+#else
     static constexpr ck_tile::index_t K_Warp_Tile = 16;
+#endif
 
     static constexpr bool DoubleSmemBuffer     = false;
     static constexpr ck_tile::index_t Pipeline = CK_TILE_PIPELINE_COMPUTE_V3;

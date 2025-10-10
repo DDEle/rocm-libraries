@@ -327,13 +327,21 @@ struct gfx11_t
 struct gfx12_t
 {
 };
+struct gfx120_t
+{
+};
+struct gfx125_t
+{
+};
 
 CK_TILE_DEVICE static constexpr auto get_device_arch()
 {
 #if defined(__gfx11__)
     return gfx11_t{};
-#else // if defined(__gfx12__)
-    return gfx12_t{};
+#elif defined(__gfx125__)
+    return gfx125_t{};
+#else // if defined(__gfx120__)
+    return gfx120_t{};
 #endif
 }
 

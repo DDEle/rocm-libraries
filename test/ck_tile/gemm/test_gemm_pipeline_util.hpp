@@ -12,6 +12,25 @@
 #include "ck_tile/ops/gemm.hpp"
 #include "ck_tile/core/numeric/math.hpp"
 
+template <typename PrecType, ck_tile::index_t M_Warp_Tile>
+constexpr ck_tile::index_t get_k_warp_tile()
+{
+#if defined(CK_GFX950_SUPPORT)
+    constexpr bool is_8bit_float =
+        std::is_same_v<PrecType, ck_tile::fp8_t> || std::is_same_v<PrecType, ck_tile::bf8_t>;
+    if constexpr(M_Warp_Tile == 32)
+        return is_8bit_float ? 64 : 16;
+    else
+        return is_8bit_float ? 128 : 32;
+#elif defined(CK_USE_GFX1250)
+    constexpr bool is_8bit_float =
+        std::is_same_v<PrecType, ck_tile::fp8_t> || std::is_same_v<PrecType, ck_tile::bf8_t>;
+    return is_8bit_float ? 64 : 32;
+#else
+    return 16;
+#endif
+}
+
 template <typename ADataType, typename BDataType, typename AccDataType, typename CDataType>
 auto calculate_rtol_atol(const ck_tile::index_t K,
                          const ck_tile::index_t kbatch,
@@ -81,8 +100,8 @@ class TestCkTileGemmPipeline : public ::testing::Test
     using BDataType                    = std::tuple_element_t<4, Tuple>;
     using AccDataType                  = std::tuple_element_t<5, Tuple>;
     using CDataType                    = std::tuple_element_t<6, Tuple>;
-    static constexpr auto Scheduler    = std::tuple_element_t<13, Tuple>::value;
-    static constexpr auto PipelineType = std::tuple_element_t<14, Tuple>::value;
+    static constexpr auto Scheduler    = std::tuple_element_t<12, Tuple>::value;
+    static constexpr auto PipelineType = std::tuple_element_t<13, Tuple>::value;
 
     static constexpr ck_tile::index_t M_Tile = std::tuple_element_t<7, Tuple>{};
     static constexpr ck_tile::index_t N_Tile = std::tuple_element_t<8, Tuple>{};
@@ -90,13 +109,13 @@ class TestCkTileGemmPipeline : public ::testing::Test
 
     static constexpr ck_tile::index_t M_Warp_Tile = std::tuple_element_t<10, Tuple>{};
     static constexpr ck_tile::index_t N_Warp_Tile = std::tuple_element_t<11, Tuple>{};
-    static constexpr ck_tile::index_t K_Warp_Tile = std::tuple_element_t<12, Tuple>{};
+    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<ADataType, M_Warp_Tile>();
 
     using DsLayout   = ck_tile::tuple<>;
     using DsDataType = ck_tile::tuple<>;
 
     static constexpr bool Persistent =
-        ck_tile::tuple_element_or_default_t<Tuple, 15, std::false_type>::value;
+        ck_tile::tuple_element_or_default_t<Tuple, 14, std::false_type>::value;
 
     template <bool PadM, bool PadN, bool PadK, bool Preshuffle>
     void invoke_gemm(const ck_tile::GemmHostArgs& args, const ck_tile::stream_config& s)

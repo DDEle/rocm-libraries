@@ -102,7 +102,14 @@ CK_TILE_DEVICE int32x4_t make_wave_buffer_resource(const void* ptr,
 #endif
     res.config[3] = CK_TILE_BUFFER_RESOURCE_3RD_DWORD;
 
-    return res.content;
+    if constexpr(std::is_same_v<ForceSGPR, std::true_type>)
+    {
+        return amd_wave_read_first_lane(res.content);
+    }
+    else
+    {
+        return res.content;
+    }
 }
 
 namespace impl {

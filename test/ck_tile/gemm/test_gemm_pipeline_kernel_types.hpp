@@ -165,7 +165,7 @@ using KernelTypesCompV4 = ::testing::Types<
 >;
 
 using KernelTypesCompAsync = ::testing::Types<
-    std::tuple<    Row,     Col,     Row,       F16,       F16,         F32,       F16,        I256,        I256,         I32,        I32,        I32,        I16, Intrawave,        CompAsync>
+    std::tuple<    Row,     Col,     Row,       F16,       F16,         F32,       F16,        I256,        I256,         I32,        I32,        I32, Intrawave,        CompAsync>
 >;
 
 using KernelTypesCompV4Wmma = ::testing::Types<

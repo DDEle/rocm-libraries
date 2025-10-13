@@ -123,25 +123,21 @@ int main(int argc, char* argv[])
     {
         // do nothing
     }
-    else if(argc == 4)
+    else if(argc == 4 || argc == 10)
     {
         do_verification = std::stoi(argv[1]);
         init_method     = std::stoi(argv[2]);
         time_kernel     = std::stoi(argv[3]);
-    }
-    else if(argc == 10)
-    {
-        do_verification = std::stoi(argv[1]);
-        init_method     = std::stoi(argv[2]);
-        time_kernel     = std::stoi(argv[3]);
+        if(argc == 10)
+        {
+            M = std::stoi(argv[4]);
+            N = std::stoi(argv[5]);
+            K = std::stoi(argv[6]);
 
-        M = std::stoi(argv[4]);
-        N = std::stoi(argv[5]);
-        K = std::stoi(argv[6]);
-
-        StrideA = std::stoi(argv[7]);
-        StrideB = std::stoi(argv[8]);
-        StrideE = std::stoi(argv[9]);
+            StrideA = std::stoi(argv[7]);
+            StrideB = std::stoi(argv[8]);
+            StrideE = std::stoi(argv[9]);
+        }
     }
     else
     {
@@ -150,7 +146,7 @@ int main(int argc, char* argv[])
                   << " arg3: Measure kernel execution time (1=ON, 0=Off)\n"
                   << " arg4 to 9: M (256x), N(128x), K(32x), StrideA, StrideB, StrideE\n"
                   << std::endl;
-        exit(EXIT_SUCCESS);
+        exit(1);
     }
 
     if(ck::is_gfx11_supported() || ck::is_gfx120_supported())

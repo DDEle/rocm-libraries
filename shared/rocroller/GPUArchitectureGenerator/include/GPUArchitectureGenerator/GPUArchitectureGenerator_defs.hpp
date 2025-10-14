@@ -333,6 +333,7 @@ namespace GPUArchitectureGenerator
                                                  {.xnack = true}},
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950,
                                                  {.sramecc = true}},
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
             }},
            {rocRoller::GPUCapability::HasE5M3Scale,
             {

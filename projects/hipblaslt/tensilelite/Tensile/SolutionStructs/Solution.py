@@ -458,13 +458,16 @@ class Solution(collections.abc.Mapping):
     if state["WaveSeparateGlobalRead%s"%tc]:
       totalElementsPerp = roundupRatio(totalElementsPerp, state["NumThreads"] // state["WavefrontSize"])
 
+    if (tc == "A" or tc == "B") and state["enableGLTr%s"%tc]:
+      totalVectorsCoalesced, totalElementsPerp = totalElementsPerp, totalVectorsCoalesced
+
     # nlc = 1
-    if state["NumLoadsCoalesced%s"%tc] == 1 :
+    if state["NumLoadsCoalesced%s"%tc] == 1:
       foundValid = False
       nlcStart = 1
       if (tc == "A" or tc == "B") and state["DirectToVgpr%s"%tc]:
         # adjust nlc for DirectToVgprA/B
-        if state["ProblemType"]["TLU%s"%tc]:
+        if state["ProblemType"]["TLU%s"%tc] and not state["enableGLTr%s"%tc]:
           nlcStart = roundupRatio(state["MIWaveTile%s"%tc], state["GlobalReadVectorWidth%s"%tc])
         else:
           nlcStart = roundupRatio(depthU, state["MatrixInstK"] * state["GlobalReadVectorWidth%s"%tc] * state["LocalSplitU"] // state["MIInputPerThread"])
@@ -523,6 +526,9 @@ class Solution(collections.abc.Mapping):
         reject(state, printRejectionReason, "%s: totalElementsPerp %u %% numLoadsPerp %u != 0" \
               % (tc, totalElementsPerp, state["NumLoadsPerpendicular%s"%tc]))
         return False
+
+    if (tc == "A" or tc == "B") and state["enableGLTr%s"%tc]:
+      state["NumLoadsCoalesced%s"%tc], state["NumLoadsPerpendicular%s"%tc] = state["NumLoadsPerpendicular%s"%tc], state["NumLoadsCoalesced%s"%tc]
 
     if state["ProblemType"]["TLU%s"%tc]:
       state["LSC%s"%tc] = state["MacroTile%s"%tc] // state["NumLoadsCoalesced%s"%tc]
@@ -609,8 +615,10 @@ class Solution(collections.abc.Mapping):
       state["PrefetchLocalRead"] = 0
       # So far, DTVA + DTVB does not perform well (waitcnt is not ideal).
       # Disable it for now (TODO: improve waitcnt and re-enable)
-      reject(state, printRejectionReason, "DirectToVgprA + DirectToVgprB disabled")
-      return False
+      # Exception: allow if enableGLTrA or enableGLTrB are set; this still provides better performance than enabling only one side
+      if not (state["enableGLTrA"] or state["enableGLTrB"]):
+        reject(state, printRejectionReason, "DirectToVgprA + DirectToVgprB disabled")
+        return False
 
     # DTV + input type conversion
     if state["ProblemType"]["DataType%s"%tc] != state["ProblemType"]["DataType"]:
@@ -624,7 +632,7 @@ class Solution(collections.abc.Mapping):
       return False
 
     # Does not work with TLU = False and PrefetchLocalRead = 0
-    if (not state["ProblemType"]["TLU%c"%tc]) and state["PrefetchLocalRead"] == 0:
+    if (not state["ProblemType"]["TLU%c"%tc]) and state["PrefetchLocalRead"] == 0 and not (state["DirectToVgprA"] and state["DirectToVgprB"]):
       reject(state, printRejectionReason, "DirectToVgpr%c does not supports TLU%c = False and PrefetchLocalRead = 0"%(tc, tc))
       return False
 
@@ -641,7 +649,7 @@ class Solution(collections.abc.Mapping):
 
     if numBytes < 4:
       # numBytes < 4 case
-      if state["ProblemType"]["TLU%c"%tc]:
+      if state["ProblemType"]["TLU%c"%tc] and not state["enableGLTr%c"%tc]:
         # use pack logic (with v_perm) same as local read (only if VgprForLocalReadPacking is doable)
         if not Solution.isVgprForLocalReadPackingDoable(state, isaInfoMap):
           reject(state, printRejectionReason, "Does not meet the requirement for DirectToVgpr%c + TLU%c + numByte < 4"%(tc, tc))
@@ -672,7 +680,7 @@ class Solution(collections.abc.Mapping):
       return False
 
     # Does not work with TLU + VectorWidth != GlobalReadVectorWidth (VW = 2 + GRVW = 1 or VW = 1 + GRVW = 2 does not work)
-    if state["ProblemType"]["TLU%c"%tc] and state["VectorWidth%s"%tc] != state["GlobalReadVectorWidth%c"%tc]:
+    if state["ProblemType"]["TLU%c"%tc] and (state["VectorWidth%s"%tc] != state["GlobalReadVectorWidth%c"%tc]) and (not state["enableGLTr%s"%tc]):
       reject(state, printRejectionReason, "DirectToVgpr%c does not supports TLU + VectorWidth%s(=%u) != GlobalReadVectorWidth%c(%u)"%(tc, tc, state["VectorWidth%s"%tc], tc, state["GlobalReadVectorWidth%c"%tc]))
       return False
 
@@ -680,6 +688,11 @@ class Solution(collections.abc.Mapping):
     if (not state["ProblemType"]["TLU%c"%tc]) and \
         state["NumLoadsCoalesced%c"%tc] != state["DepthU"] // (state["MatrixInstK"] * state["GlobalReadVectorWidth%c"%tc] * state["LocalSplitU"] // state["MIInputPerThread"]):
       reject(state, printRejectionReason, "DirectToVgpr%c does not supports TLU=False and NumLoadsCoalesced%c != DepthU//(MatrixInstK*GlobalReadVectorWidth*LocalSplitU//MIInputPerThread(=%u))"%(tc, tc, state["MIInputPerThread"]))
+      return False
+
+    # Does not work with enableGLTr and GRVW != 8
+    if state["enableGLTr%c"%tc] and state["GlobalReadVectorWidth%c"%tc] != 8:
+      reject(state, printRejectionReason, "DirectToVgpr%c does not supports enableGLTr%c and GlobalReadVectorWidth != 8"%(tc, tc))
       return False
 
     # TLU=False case, need GlobalReadVectorWidth == LocalReadVectorWidth
@@ -734,7 +747,7 @@ class Solution(collections.abc.Mapping):
         state["AssertSummationElementMultiple"] = max(state["AssertSummationElementMultiple"], state["DepthU"])
 
     # for DTVB, does not work with NN and Tail-loop
-    if  tc == 'B' and (not state["ProblemType"]["TransposeA"] and not state["ProblemType"]["TransposeB"]):
+    if tc == 'B' and (not state["ProblemType"]["TransposeA"] and not state["ProblemType"]["TransposeB"]):
         # Use AssertSummationElementMultiple (BoundSizeMultiple in predicates) to exclude failed tail-loop cases
         state["AssertSummationElementMultiple"] = max(state["AssertSummationElementMultiple"], state["DepthU"])
 
@@ -1335,10 +1348,19 @@ class Solution(collections.abc.Mapping):
       reject(state, printRejectionReason, "LDSTrInst is True but none of A/B can be enabled")
       return
 
-    if state["enableLDSTrA"]:
+    state["enableGLTrA"] = state["DirectToVgprA"] and state["ProblemType"]["TLUA"] \
+      and ((numBytes == 1 and isaInfoMap[isa].asmCaps["HasGLTr8B64"]) \
+        or (numBytes == 2 and isaInfoMap[isa].asmCaps["HasGLTr16B128"]) \
+      )
+    state["enableGLTrB"] = state["DirectToVgprB"] and state["ProblemType"]["TLUB"] \
+      and ((numBytes == 1 and isaInfoMap[isa].asmCaps["HasGLTr8B64"]) \
+        or (numBytes == 2 and isaInfoMap[isa].asmCaps["HasGLTr16B128"]) \
+      )
+
+    if state["enableLDSTrA"] or state["enableGLTrA"]:
       state["VectorWidthA"] = 1
 
-    if state["enableLDSTrB"]:
+    if state["enableLDSTrB"] or state["enableGLTrB"]:
       state["VectorWidthB"] = 1
 
     # The real value of "1LDSBuffer" will be determined later (when it is -1), not here
@@ -1434,7 +1456,6 @@ class Solution(collections.abc.Mapping):
         "ScheduleLocalWrite": state["ScheduleLocalWrite"] == 1,
         "GlobalReadPerMfma": state["GlobalReadPerMfma"] == 1,
         "InterleaveAlpha": not state["InterleaveAlpha"],
-        "DirectToVgprA": not state["DirectToVgprA"],
         "DirectToLds": not state["DirectToLds"],
         "UseSgprForGRO": state["UseSgprForGRO"] == -1,
         "UseInstOffsetForGRO": not state["UseInstOffsetForGRO"],
@@ -3139,6 +3160,9 @@ class Solution(collections.abc.Mapping):
         reject(state, printRejectionReason, "PrefetchGlobalRead need to be 2 if UnrollLoopSwapGlobalReadOrder")
       if state["ProblemType"]["DataTypeA"].numBytes() != state["ProblemType"]["DataTypeB"].numBytes():
         reject(state, printRejectionReason, "UnrollLoopSwapGlobalReadOrder doesn't support mixed precision.")
+
+    if state["ExpandPointerSwap"] == 1 and state["LDSTrInst"]:
+      reject(state, printRejectionReason, "LDSTrInst + ExpandPointerSwap not supported")
 
     # guard against out of bounds reads
     # None: don't guard against ou

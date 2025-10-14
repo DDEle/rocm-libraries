@@ -12,13 +12,13 @@ Architectures:
       HasBufferOutOfBoundsCheckOption: 0
       HasCodeObjectV4: 0
       HasCodeObjectV5: 0
-      HasE4M3Scale: 0
-      HasE5M3Scale: 0
-      HasE8M0Scale: 0
       HasDSReadTransposeB16: 0
       HasDSReadTransposeB4: 0
       HasDSReadTransposeB6: 0
       HasDSReadTransposeB8: 0
+      HasE4M3Scale: 0
+      HasE5M3Scale: 0
+      HasE8M0Scale: 0
       HasExplicitNC: 0
       HasExplicitScalarCO: 0
       HasExplicitScalarCOCI: 0

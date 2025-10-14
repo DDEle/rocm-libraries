@@ -1087,6 +1087,9 @@ int main(int argc, const char* argv[])
         .workgroupMappingDim    = -1,
         .workgroupRemapXCC      = false,
         .workgroupRemapXCCValue = -1,
+        .workgroupClusterSizeX  = 0,
+        .workgroupClusterSizeY  = 0,
+        .workgroupClusterSizeZ  = 0,
 
         .types = {.scaleA     = Operations::ScaleMode::None,
                   .scaleTypeA = DataType::None,
@@ -1293,6 +1296,15 @@ int main(int argc, const char* argv[])
     app.add_option("--workgroupRemapXCCValue",
                    solution.workgroupRemapXCCValue,
                    "Force an XCC-aware workgroup remapping value. (Optional)");
+    app.add_option("--workgroup_cluster_size_x",
+                   solution.workgroupClusterSizeX,
+                   "Workgroup cluster size in the x dimension.");
+    app.add_option("--workgroup_cluster_size_y",
+                   solution.workgroupClusterSizeY,
+                   "Workgroup cluster size in the y dimension.");
+    app.add_option("--workgroup_cluster_size_z",
+                   solution.workgroupClusterSizeZ,
+                   "Workgroup cluster size in the z dimension.");
     app.add_option("--unroll_x", solution.unrollX, "Unroll size in X.");
     app.add_option("--unroll_y", solution.unrollY, "Unroll size in Y.");
     app.add_flag("--loadLDS_A", solution.loadLDSA, "Use LDS when loading A.");

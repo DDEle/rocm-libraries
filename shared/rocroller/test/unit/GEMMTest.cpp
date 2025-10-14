@@ -45,6 +45,7 @@
 #include <rocRoller/Utilities/Error.hpp>
 #include <rocRoller/Utilities/Logging.hpp>
 #include <rocRoller/Utilities/Timer.hpp>
+#include <rocRoller/WorkgroupClusters_detail.hpp>
 
 #include "GPUContextFixture.hpp"
 #include "SourceMatcher.hpp"
@@ -490,6 +491,31 @@ namespace GEMMDriverTest
             auto params = std::make_shared<CommandParameters>();
             params->setManualKernelDimension(2);
             params->setManualWorkgroupSize({workgroupSizeX, workgroupSizeY, 1});
+
+            if(gemm.workgroupClusterSizeX > 0 || gemm.workgroupClusterSizeY > 0
+               || gemm.workgroupClusterSizeZ > 0)
+            {
+                REQUIRE_ARCH_CAP(GPUCapability::HasWorkgroupClusters);
+
+                auto const workgroupClusterSizeX
+                    = gemm.workgroupClusterSizeX > 0 ? gemm.workgroupClusterSizeX : 1;
+                auto const workgroupClusterSizeY
+                    = gemm.workgroupClusterSizeY > 0 ? gemm.workgroupClusterSizeY : 1;
+                auto const workgroupClusterSizeZ
+                    = gemm.workgroupClusterSizeZ > 0 ? gemm.workgroupClusterSizeZ : 1;
+
+                AssertFatal(workgroupClusterSizeX * workgroupClusterSizeY * workgroupClusterSizeZ
+                                <= WorkgroupClustersDetail::MaxWorkgroupsPerCluster,
+                            fmt::format("Requested ClusterSize {}x{}x{} exceeds maximum allowed "
+                                        "number of workgroups per cluster ({})",
+                                        ShowValue(workgroupClusterSizeX),
+                                        ShowValue(workgroupClusterSizeY),
+                                        ShowValue(workgroupClusterSizeZ),
+                                        WorkgroupClustersDetail::MaxWorkgroupsPerCluster));
+
+                params->setManualWorkgroupClusterSize(
+                    {workgroupClusterSizeX, workgroupClusterSizeY, workgroupClusterSizeZ});
+            }
 
             // TODO: Calculate these values internally based on workgroup sizes.
             params->setManualWavefrontCount(
@@ -980,6 +1006,10 @@ namespace GEMMDriverTest
               int,
               std::tuple<rocRoller::Operations::ScaleMode, rocRoller::Operations::ScaleMode, int>,
               std::pair<std::string, std::string>>>
+    {
+    };
+
+    class GEMMTestWMMAClustersGPU : public BaseGEMMContextFixture<std::array<unsigned int, 3>>
     {
     };
 
@@ -3915,6 +3945,40 @@ namespace GEMMDriverTest
         }
     }
 
+    TEST_P(GEMMTestWMMAClustersGPU, GPU_BasicGEMM)
+    {
+        REQUIRE_ARCH_CAP(GPUCapability::HasWorkgroupClusters);
+        REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f32_16x16x32_f16);
+
+        GEMMProblem gemm;
+        gemm.m     = 2048;
+        gemm.n     = 2048;
+        gemm.k     = 128;
+        gemm.waveM = 16;
+        gemm.waveN = 16;
+        gemm.waveK = 32;
+        gemm.wavefrontSize
+            = m_context->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
+        gemm.workgroupSizeX = 2 * gemm.wavefrontSize;
+
+        auto clusterSize    = std::get<1>(GetParam());
+        auto numWorkgroupsX = gemm.n / static_cast<uint>(gemm.macN);
+        auto numWorkgroupsY = gemm.m / static_cast<uint>(gemm.macM);
+
+        AssertFatal(WorkgroupClustersDetail::IsValidWorkgroupClusterSize(
+                        clusterSize, {numWorkgroupsX, numWorkgroupsY, 1}),
+                    "Invalid workgroup cluster sizes",
+                    ShowValue(clusterSize),
+                    ShowValue(numWorkgroupsX),
+                    ShowValue(numWorkgroupsY));
+
+        gemm.workgroupClusterSizeX = clusterSize[0];
+        gemm.workgroupClusterSizeY = clusterSize[1];
+        gemm.workgroupClusterSizeZ = clusterSize[2];
+
+        basicGEMM<Half, Half, float>(gemm);
+    }
+
     TEST_P(MixedGEMMTestWMMAGPU, GPU_BasicGEMM)
     {
         REQUIRE_ARCH_CAP(GPUCapability::HasWMMA);
@@ -4199,6 +4263,15 @@ namespace GEMMDriverTest
                                   std::pair<std::string, std::string>("N", "T"),
                                   std::pair<std::string, std::string>("T", "N"),
                                   std::pair<std::string, std::string>("T", "T")))));
+
+    INSTANTIATE_TEST_SUITE_P(
+        GEMMTestWMMA1250,
+        GEMMTestWMMAClustersGPU,
+        ::testing::Combine(currentGPUISA(),
+                           ::testing::ValuesIn(WorkgroupClustersDetail::ValidWorkgroupClusterSizes(
+                               {WorkgroupClustersDetail::MaxWorkgroupsPerCluster,
+                                WorkgroupClustersDetail::MaxWorkgroupsPerCluster,
+                                1}))));
 
     INSTANTIATE_TEST_SUITE_P(
         MixedGEMMTestWMMA,

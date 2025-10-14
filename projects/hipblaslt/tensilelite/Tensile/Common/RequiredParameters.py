@@ -58,6 +58,7 @@ def getRequiredParametersMin() -> set:
         'LdsPadA',
         'LdsPadB',
         'LdsPadMetadata',
+        'LDSTrInst',
         'LocalReadVectorWidth',
         'LocalWritePerMfma',
         'MIArchVgpr',

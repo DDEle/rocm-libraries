@@ -82,6 +82,7 @@ target_sources(rocroller-tests-catch
         "${CMAKE_CURRENT_SOURCE_DIR}/TransposeLoadsTest.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/UnrollLoopsTest.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/UtilsTest.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/VGPRIndexingObserverTest.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/WMMAHazardObserverTest.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/WMMAObserverUnitTest.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/WidenAddrExprTo64bitTest.cpp"

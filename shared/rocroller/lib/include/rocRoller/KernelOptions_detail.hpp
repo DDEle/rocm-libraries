@@ -133,6 +133,8 @@ namespace rocRoller
          */
         bool removeSetCoordinate = false;
 
+        bool coexecutionEnabled = true;
+
         std::string toString() const;
     };
 

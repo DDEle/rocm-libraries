@@ -66,7 +66,11 @@ using InputTypes = ::testing::Types<std::tuple<float>,
                                     std::tuple<rocRoller::FP6x16>,
                                     std::tuple<rocRoller::BF6x16>,
                                     std::tuple<rocRoller::E8M0>,
-                                    std::tuple<rocRoller::E8M0x4>>;
+                                    std::tuple<rocRoller::E8M0x4>,
+                                    std::tuple<rocRoller::E5M3>,
+                                    std::tuple<rocRoller::E5M3x4>,
+                                    std::tuple<rocRoller::E4M3>,
+                                    std::tuple<rocRoller::E4M3x4>>;
 
 TYPED_TEST_SUITE(TypedDataTypesTest, InputTypes);
 

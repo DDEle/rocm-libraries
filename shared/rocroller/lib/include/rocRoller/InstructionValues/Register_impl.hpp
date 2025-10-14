@@ -36,6 +36,7 @@
 #include <rocRoller/DataTypes/DataTypes.hpp>
 #include <rocRoller/InstructionValues/RegisterAllocator.hpp>
 #include <rocRoller/Operations/CommandArgument.hpp>
+#include <rocRoller/Scheduling/Observers/VGPRIndexingObserver_detail.hpp>
 #include <rocRoller/Scheduling/Scheduling.hpp>
 #include <rocRoller/Utilities/Error.hpp>
 #include <rocRoller/Utilities/Generator.hpp>
@@ -500,6 +501,20 @@ namespace rocRoller
             return Instruction::Allocate(shared_from_this());
         }
 
+        inline void Value::setForceReservedRegion()
+        {
+            AssertFatal(regType() == Register::Type::Vector, ShowValue(regType()));
+            AssertFatal(allocationState() == AllocationState::Unallocated,
+                        "Must be unallocated to enforce a AllocationOption",
+                        ShowValue(allocationState()));
+
+            AssertFatal(m_allocation);
+
+            auto options                = m_allocation->options();
+            options.forceReservedRegion = true;
+            m_allocation->m_options     = options;
+        }
+
         inline void Value::allocate(Instruction& inst)
         {
             if(allocationState() != AllocationState::Unallocated)
@@ -671,7 +686,7 @@ namespace rocRoller
             Throw<FatalError>("Invalid special register: ", (int)m_regType);
         }
 
-        inline void Value::gprString(std::ostream& os) const
+        inline void Value::gprString(std::ostream& os, bool useNormalized) const
         {
             AssertFatal(m_regType == Type::Accumulator || m_regType == Type::Scalar
                             || m_regType == Type::Vector,
@@ -686,7 +701,8 @@ namespace rocRoller
 
             auto prefix = TypePrefix(m_regType);
 
-            auto const& regIndices = m_allocation->m_registerIndices;
+            auto const& regIndices = useNormalized ? m_allocation->normalizedRegisterIndices()
+                                                   : m_allocation->registerIndices();
 
             if(m_negate)
             {
@@ -702,12 +718,17 @@ namespace rocRoller
             else if(hasContiguousIndices())
             {
                 // contiguous range of registers, e.g. v[0:3].
-                os << concatenate(prefix,
-                                  "[",
-                                  regIndices[m_allocationCoord.front()],
-                                  ":",
-                                  regIndices[m_allocationCoord.back()],
-                                  "]");
+                auto front = regIndices[m_allocationCoord.front()];
+                auto back  = regIndices[m_allocationCoord.back()];
+
+                if(back < front)
+                {
+                    AssertFatal(useNormalized);
+                    // Fixup normalized register indices that cross the 255/256 boundary.
+                    back += Scheduling::VGPRIndexingObserverDetail::RegisterBankSize();
+                }
+
+                os << concatenate(prefix, "[", front, ":", back, "]");
             }
             else
             {
@@ -737,14 +758,16 @@ namespace rocRoller
             return oss.str();
         }
 
-        inline void Value::toStream(std::ostream& os) const
+        inline void Value::toStream(std::ostream& os, bool useNormalized) const
         {
             switch(m_regType)
             {
             case Type::Accumulator:
             case Type::Scalar:
-            case Type::Vector:
                 gprString(os);
+                return;
+            case Type::Vector:
+                gprString(os, useNormalized);
                 return;
             case Type::Label:
             case Type::NullLiteral:
@@ -1095,6 +1118,8 @@ namespace rocRoller
                 m_options.contiguousChunkWidth = 1;
             }
 
+            m_options.forceReservedRegion = options.forceReservedRegion;
+
             AssertFatal(m_options.contiguousChunkWidth > 0, ShowValue(m_options));
         }
 
@@ -1256,6 +1281,25 @@ namespace rocRoller
             setAllocation(allocator, std::move(copy));
         }
 
+        static inline std::vector<int>
+            computeNormalizedRegisterIndices(std::vector<int> const& regInd)
+        {
+            auto normalize = [](auto idx) {
+                // TODO: Should be capability check:
+                // e.g. m_context.targetArchitecture().target().GetCapability(GPUCapability::MaxVGPRs)
+                AssertFatal(0 <= idx and idx < 1024, ShowValue(idx));
+                return static_cast<uint>(idx)
+                       & Scheduling::VGPRIndexingObserverDetail::RegisterIndexNormalizationMask();
+            };
+            std::vector<int> normalizedRegisterIndices;
+            for(auto idx : regInd)
+            {
+                normalizedRegisterIndices.push_back(normalize(idx));
+            }
+
+            return normalizedRegisterIndices;
+        }
+
         inline void Allocation::setAllocation(std::shared_ptr<Allocator> allocator,
                                               std::vector<int>&&         registers)
         {
@@ -1267,12 +1311,19 @@ namespace rocRoller
             m_allocator       = allocator;
             m_registerIndices = std::move(registers);
 
+            m_normalizedRegisterIndices = computeNormalizedRegisterIndices(m_registerIndices);
+
             m_allocationState = AllocationState::Allocated;
         }
 
         inline std::vector<int> const& Allocation::registerIndices() const
         {
             return m_registerIndices;
+        }
+
+        inline std::vector<int> const& Allocation::normalizedRegisterIndices() const
+        {
+            return m_normalizedRegisterIndices;
         }
 
         inline void Allocation::free()

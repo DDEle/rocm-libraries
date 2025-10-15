@@ -116,7 +116,7 @@ namespace rocRoller
                                                     Register::ValuePtr arg);
 
     public:
-        static const std::string Name;
+        inline static const std::string Name = "ConvertGenerator";
     };
 
     /**
@@ -178,7 +178,7 @@ namespace rocRoller
                                         Register::ValuePtr rhs,
                                         Expression::SRConvert<DATATYPE> const&) override;
 
-        inline static const std::string Name;
+        inline static const std::string Name = concatenate("SRConvert<", toString(DATATYPE), ">");
     };
 
 }

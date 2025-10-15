@@ -201,6 +201,7 @@ class GEMMSolution:
     direct2LDS_B: bool = False
 
     scheduler: str = "Priority"
+    schedulerCost: str = "LinearWeighted"
 
     prefetch: bool = True
     prefetchInFlight: int = 2
@@ -232,6 +233,8 @@ class GEMM(GEMMProblem, GEMMSolution):
     numWarmUp: int = 1
     numOuter: int = 1
     numInner: int = 10
+
+    noCheck: bool = False
 
     visualize: bool = False
 
@@ -549,18 +552,19 @@ def cast_missing_parameters(result):
         result: a dictionary with parameters (keys) and their values
 
     """
-    if 'workgroupMapping' in result:
+    if "workgroupMapping" in result:
 
-        assert len(result['workgroupMapping']) == 2, \
-               "workgroupMapping should contain a dimension and a value"
+        assert (
+            len(result["workgroupMapping"]) == 2
+        ), "workgroupMapping should contain a dimension and a value"
 
-        wgmDim = result['workgroupMapping'][0]
-        wgmValue = result['workgroupMapping'][1]
+        wgmDim = result["workgroupMapping"][0]
+        wgmValue = result["workgroupMapping"][1]
 
-        del result['workgroupMapping']
+        del result["workgroupMapping"]
 
-        result['workgroupMappingDim'] = wgmDim
-        result['workgroupMappingValue'] = wgmValue
+        result["workgroupMappingDim"] = wgmDim
+        result["workgroupMappingValue"] = wgmValue
 
 
 def load_results(path: pathlib.Path):

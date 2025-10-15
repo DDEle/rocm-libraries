@@ -8,5 +8,5 @@ ROCm/FunctionalPlus@v0.2.22
 ROCm/eigen@3.4.0
 ROCm/frugally-deep@38c52448b1a4996b3e0e435a877d02441098b1dd
 ../composablekernel/  -DCMAKE_BUILD_TYPE=Release -DGPU_ARCHS=gfx1250
-#ROCm/composable_kernel@0856b3f4a29bd454fb8a9cef3d8776fb84e38119 -DCMAKE_BUILD_TYPE=Release
+#ROCm/composable_kernel@b7a806f2442ed04db9e835e3e4e14aaebe3db9b4 -DCMAKE_BUILD_TYPE=Release
 google/googletest@v1.14.0

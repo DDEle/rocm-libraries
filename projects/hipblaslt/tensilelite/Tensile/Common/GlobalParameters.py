@@ -423,6 +423,7 @@ defaultBenchmarkCommonParameters = [
     {"LDSTrInst": [False]},
     {"WaveSplitK": [ False ]},
     {"MbskPrefetchMethod": [0]},
+    {"UseCustomMainLoopSchedule": [1]}
 ]
 
 # dictionary of defaults comprised of default option for each parameter

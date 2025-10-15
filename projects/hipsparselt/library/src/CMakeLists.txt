@@ -25,7 +25,7 @@ set(hipsparselt_source_common  src/hipsparselt_ostream.cpp
 if(NOT BUILD_CUDA)
 
   # Set up Tensile Dependency
-  if( BUILD_WITH_TENSILE AND NOT BUILD_USE_LOCAL_TENSILE)
+  if( BUILD_WITH_TENSILE AND NOT BUILD_USE_LOCAL_TENSILE_HIPBLASLT_NEXT_CMAKE)
     # If we want to build a shared rocblas lib, force Tensile to build as a static lib to absorb into rocblas
     if( BUILD_SHARED_LIBS )
       set( ROCSPARSELT_SHARED_LIBS ON )
@@ -109,15 +109,6 @@ if(NOT BUILD_CUDA)
       set( BUILD_SHARED_LIBS ON )
       set_target_properties( TensileHost PROPERTIES POSITION_INDEPENDENT_CODE ON )
     endif()
-
-    if( BUILD_WITH_TENSILE )
-      set(Tensile_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/hcc_detail/rocsparselt/src/tensile_host.cpp)
-      set(Tensile_INC ${CMAKE_CURRENT_SOURCE_DIR}/src/hcc_detail/rocsparselt/src/Tensile)
-    endif()
-
-  else()
-    set_target_properties(tensilelite-host PROPERTIES CXX_VISIBILITY_PRESET hidden)
-    set_target_properties(tensilelite-host PROPERTIES C_VISIBILITY_PRESET hidden)
 
     if( BUILD_WITH_TENSILE )
       set(Tensile_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/hcc_detail/rocsparselt/src/tensile_host.cpp)

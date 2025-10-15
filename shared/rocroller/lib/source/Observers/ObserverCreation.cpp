@@ -77,6 +77,7 @@ namespace rocRoller
                 AllocatingObserver,
                 WaitcntObserver,
                 MFMAObserver,
+                MFMACoexecObserver,
                 VMEMObserver,
                 DSMEMObserver,
                 WMMAObserver,

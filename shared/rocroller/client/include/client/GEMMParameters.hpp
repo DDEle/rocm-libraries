@@ -165,6 +165,7 @@ namespace rocRoller
                 unsigned int unrollY = 0;
 
                 std::string scheduler;
+                std::string schedulerCost;
                 bool        matchMemoryAccess;
 
                 bool streamK        = false;

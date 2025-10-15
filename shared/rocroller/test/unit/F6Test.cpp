@@ -160,6 +160,7 @@ namespace rocRollerTest
 
                 co_yield m_context->mem()->loadBuffer(v_a, vgprSerial, 0, bufDesc, bufInstOpts, N);
                 co_yield bufDesc->setBasePointer(s_result);
+                co_yield bufDesc->setSize(Register::Value::Literal(N));
                 co_yield m_context->mem()->storeBuffer(v_a, vgprSerial, 0, bufDesc, bufInstOpts, N);
             };
 

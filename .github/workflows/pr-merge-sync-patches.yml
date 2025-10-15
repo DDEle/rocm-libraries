@@ -25,7 +25,7 @@ name: Merged PR to Patch Subrepos
 on:
   push:
     branches:
-      - 'develop'
+      - 'gfx1250'
 
 concurrency:
   group: pr-merge-sync-patch-${{ github.sha }}
@@ -33,14 +33,15 @@ concurrency:
 
 jobs:
   patch:
-    runs-on: ubuntu-24.04
+    runs-on: 
+      group: "AMD-ROCm-Internal-large-runners"
     outputs:
       pr_number: ${{ steps.pr-check.outputs.pr }}
     steps:
       - name: Check if commit is a merged PR
         id: pr-check
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ROCM_SERVICE_ACCOUNT_PAT}}
         run: |
           echo "🔍 Checking if commit is a merged PR..."
           PR_NUMBER=$(gh api repos/${{ github.repository }}/commits/${{ github.sha }}/pulls --jq '.[0].number')
@@ -117,7 +118,7 @@ jobs:
       - name: Generate and apply patches
         if: steps.detect.outputs.subtrees
         env:
-          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.ROCM_SERVICE_ACCOUNT_PAT}}
         run: |
           python .github/scripts/pr_merge_sync_patches.py \
             --repo "${{ github.repository }}" \

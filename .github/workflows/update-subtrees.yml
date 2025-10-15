@@ -6,17 +6,17 @@ on:
     - cron: '0 * * * *'
 
 env:
-  MONOREPO_URL: github.com/ROCm/rocm-libraries.git
-  MONOREPO_BRANCH: develop
+  MONOREPO_URL: github.com/AMD-ROCm-Internal/rocm-libraries.git
+  MONOREPO_BRANCH: ${{ github.ref_name }}
 
 concurrency:
-  group: pr-update-subtrees-develop
+  group: pr-update-subtrees-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   synchronize-subtrees:
-    if: github.repository == 'ROCm/rocm-libraries'
-    runs-on: ubuntu-24.04
+    runs-on: 
+      group: "AMD-ROCm-Internal-large-runners"
     steps:
       - name: Generate a token
         id: generate-token

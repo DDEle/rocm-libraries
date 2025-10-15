@@ -133,6 +133,10 @@ namespace rocRoller
          */
         bool removeSetCoordinate = false;
 
+        bool coexecutionEnabled = true;
+
+        std::optional<std::array<unsigned int, 3>> workgroupClusterSize;
+
         std::string toString() const;
     };
 

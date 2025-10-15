@@ -40,6 +40,8 @@ namespace rocRoller
         std::array<unsigned int, 3> workitemCount  = {1, 1, 1};
         std::array<unsigned int, 3> workgroupSize  = {1, 1, 1};
         unsigned int                sharedMemBytes = 0;
+
+        std::optional<std::array<unsigned int, 3>> workgroupClusterSize;
     };
 
     // The executer class can load a kernel from a string of machine code and

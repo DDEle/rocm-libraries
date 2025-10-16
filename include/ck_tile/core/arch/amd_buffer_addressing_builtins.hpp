@@ -555,11 +555,17 @@ struct buffer_store<16>
                                    index_t /*flag*/ = 1)
     {
         static_assert(sizeof(T) == 16);
-        using mbuf_t = fp32x4_t;
+        using mbuf_t = uint32x4_t;
+#if HAS_RAW_BUFFER_BUILTINS
+        index_t s_offset = i_offset;
+        __builtin_amdgcn_raw_buffer_store_b128(
+            bit_cast<mbuf_t>(value), cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
+#else
         asm volatile("buffer_store_dwordx4 %0, %1, %2," BUFFER_NULL_OFFSET "offen offset:%3"
                      :
                      : "v"(bit_cast<mbuf_t>(value)), "v"(v_offset), "s"(res), "n"(i_offset)
                      : "memory");
+#endif
     }
 };
 
@@ -575,11 +581,17 @@ struct buffer_store<8>
                                    index_t /*flag*/ = 1)
     {
         static_assert(sizeof(T) == 8);
-        using mbuf_t = fp32x2_t;
+        using mbuf_t = uint32x2_t;
+#if HAS_RAW_BUFFER_BUILTINS
+        index_t s_offset = i_offset;
+        __builtin_amdgcn_raw_buffer_store_b64(
+            bit_cast<mbuf_t>(value), cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
+#else
         asm volatile("buffer_store_dwordx2 %0, %1, %2," BUFFER_NULL_OFFSET "offen offset:%3"
                      :
                      : "v"(bit_cast<mbuf_t>(value)), "v"(v_offset), "s"(res), "n"(i_offset)
                      : "memory");
+#endif
     }
 };
 
@@ -595,11 +607,17 @@ struct buffer_store<4>
                                    index_t /*flag*/ = 1)
     {
         static_assert(sizeof(T) == 4);
-        using mbuf_t = float;
+        using mbuf_t = uint32_t;
+#if HAS_RAW_BUFFER_BUILTINS
+        index_t s_offset = i_offset;
+        __builtin_amdgcn_raw_buffer_store_b32(
+            bit_cast<mbuf_t>(value), cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
+#else
         asm volatile("buffer_store_dword %0, %1, %2," BUFFER_NULL_OFFSET "offen offset:%3"
                      :
                      : "v"(bit_cast<mbuf_t>(value)), "v"(v_offset), "s"(res), "n"(i_offset)
                      : "memory");
+#endif
     }
 };
 
@@ -615,7 +633,12 @@ struct buffer_store<2>
                                    index_t /*flag*/ = 1)
     {
         static_assert(sizeof(T) == 2);
-        using mbuf_t = short;
+        using mbuf_t = uint16_t;
+#if HAS_RAW_BUFFER_BUILTINS
+        index_t s_offset = i_offset;
+        __builtin_amdgcn_raw_buffer_store_b16(
+            bit_cast<mbuf_t>(value), cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
+#else
         asm volatile("buffer_store_short %0, %1, %2," BUFFER_NULL_OFFSET "offen offset:%3"
                      :
                      : "v"(static_cast<index_t>(bit_cast<mbuf_t>(value))),
@@ -623,6 +646,7 @@ struct buffer_store<2>
                        "s"(res),
                        "n"(i_offset)
                      : "memory");
+#endif
     }
 };
 
@@ -637,18 +661,40 @@ struct buffer_store<1>
                                    index_t i_offset /*max 0xFFF*/,
                                    index_t /*flag*/ = 1)
     {
-        static_assert(sizeof(T) == 4);
-        using mbuf_t = float;
+        static_assert(sizeof(T) == 1);
+        using mbuf_t = uint8_t;
+#if HAS_RAW_BUFFER_BUILTINS
+        index_t s_offset = i_offset;
+        __builtin_amdgcn_raw_buffer_store_b8(
+            bit_cast<mbuf_t>(value), cast_to_amdgpu_buffer_rsrc_t(res), v_offset, s_offset, 0);
+#else
         asm volatile("buffer_store_byte %0, %1, %2," BUFFER_NULL_OFFSET "offen offset:%3"
                      :
                      : "v"(bit_cast<mbuf_t>(value)), "v"(v_offset), "s"(res), "n"(i_offset)
                      : "memory");
+#endif
     }
 };
 
+#if HAS_RAW_BUFFER_BUILTINS
 template <index_t bytes>
-struct buffer_store_if;
-
+struct buffer_store_if
+{
+    template <typename T>
+    CK_TILE_DEVICE void operator()(const T& value,
+                                   int32x4_t res /*buffer resource*/,
+                                   index_t v_offset,
+                                   index_t s_offset,
+                                   index_t i_offset /*max 0xFFF*/,
+                                   index_t flag = 1)
+    {
+        if LIKELY(1 <= flag)
+        {
+            buffer_store<bytes>{}(value, res, v_offset, s_offset, i_offset);
+        }
+    }
+};
+#else
 template <>
 struct buffer_store_if<16>
 {
@@ -789,6 +835,7 @@ struct buffer_store_if<1>
                      : "memory");
     }
 };
+#endif
 
 CK_TILE_DEVICE void buffer_load_fence(index_t cnt = 0)
 {

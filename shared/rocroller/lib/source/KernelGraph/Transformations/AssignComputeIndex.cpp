@@ -225,6 +225,17 @@ namespace rocRoller
 
             auto indexExpr = ci.forward ? coords.forward({target})[0] : coords.reverse({target})[0];
 
+            auto const& arch = context->targetArchitecture();
+            if(arch.HasCapability(GPUCapability::PartiallyActiveWaveSize)
+                && isScaleType(ci.valueType))
+            {
+                auto activeLanesInWave
+                    = arch.GetCapability(GPUCapability::PartiallyActiveWaveSize);
+                indexExpr = Expression::periodizeWorkitemValues(
+                    indexExpr, context, activeLanesInWave);
+            }
+
+
             auto const& typeInfo = DataTypeInfo::Get(ci.valueType);
             auto        numBits  = DataTypeInfo::Get(typeInfo.segmentVariableType).elementBits;
 

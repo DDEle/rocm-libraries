@@ -725,58 +725,38 @@ struct Relu
 // gpu code use lower accuracy "_ocml_exp_f32" and "rcp" function
 struct FastGelu
 {
-    template <typename Y, typename X>
-    CK_TILE_HOST void operator()(Y& y, const X& x) const;
-
-    template <typename Y, typename X>
-    CK_TILE_DEVICE void operator()(Y& y, const X& x) const;
-
-    template <>
-    CK_TILE_HOST void operator()<float, float>(float& y, const float& x) const
-    {
-        // const float u   = -2.f * x * (0.035677f * x * x + 0.797885f);
-        const float c1  = -2.0 * 0.035677f;
-        const float c2  = -2.0 * 0.797885f;
-        const float u   = x * (c1 * x * x + c2);
-        const float emu = exp(u);
-        y               = x / (1.f + emu);
-    }
-
     // device code, use lower precision "__ocml_exp_f32" and "rcp"
-    template <>
-    CK_TILE_DEVICE void operator()<float, float>(float& y, const float& x) const
+    template <typename Y, typename X>
+    CK_TILE_HOST_DEVICE void operator()(Y& y, const X& x) const
     {
+        const float x_f = type_convert<float>(x);
 #if defined(__gfx125__)
         const float c1 = 0.035677f;
         const float c2 = 0.797885f;
-        const float u  = x * (c1 * x * x + c2);
+        const float u  = x_f * (c1 * x_f * x_f + c2);
 
-        y = 0.5f * x * (1.f + __builtin_amdgcn_tanhf(u));
-#else
+        y = type_convert<Y>(0.5f * x_f * (1.f + __builtin_amdgcn_tanhf(u)));
+#elif defined(__HIP_DEVICE_COMPILE__)
         // const float u   = 2.f * x * (0.035677f * x * x + 0.797885f);
         const float c1  = -2.0 * 0.035677f;
         const float c2  = -2.0 * 0.797885f;
-        const float u   = x * (c1 * x * x + c2);
+        const float u   = x_f * (c1 * x_f * x_f + c2);
         const float emu = __ocml_exp_f32(u);
 
-        y = x * ck_tile::rcp(1.f + emu);
+        y = type_convert<Y>(x_f * ck_tile::rcp(1.f + emu));
+#else
+        // const float u   = -2.f * x * (0.035677f * x * x + 0.797885f);
+        const float c1  = -2.0 * 0.035677f;
+        const float c2  = -2.0 * 0.797885f;
+        const float u   = x_f * (c1 * x_f * x_f + c2);
+        const float emu = exp(u);
+        y               = x_f / (1.f + emu);
 #endif
     }
 
     template <>
-    CK_TILE_HOST void operator()<ck_tile::fp16_t, ck_tile::fp16_t>(ck_tile::fp16_t& y,
-                                                                   const ck_tile::fp16_t& x) const
-    {
-        float y_f;
-
-        this->operator()<float, float>(y_f, type_convert<float>(x));
-
-        y = type_convert<ck_tile::fp16_t>(y_f);
-    }
-
-    template <>
-    CK_TILE_DEVICE void operator()<ck_tile::fp16_t, ck_tile::fp16_t>(ck_tile::fp16_t& y,
-                                                                     const ck_tile::fp16_t& x) const
+    CK_TILE_HOST_DEVICE void
+    operator()<ck_tile::fp16_t, ck_tile::fp16_t>(ck_tile::fp16_t& y, const ck_tile::fp16_t& x) const
     {
 #if defined(__gfx125__)
         const ck_tile::fp16_t c1 = type_convert<ck_tile::fp16_t>(0.035677f);
@@ -786,73 +766,13 @@ struct FastGelu
         y = type_convert<ck_tile::fp16_t>(0.5f) * x *
             (type_convert<ck_tile::fp16_t>(1.f) + __builtin_amdgcn_tanhh(u));
 #else
-        float y_f;
-
-        this->operator()<float, float>(y_f, type_convert<float>(x));
-
-        y = type_convert<ck_tile::fp16_t>(y_f);
+        this->operator()(y, type_convert<float>(x));
 #endif
     }
 
     template <>
-    CK_TILE_HOST void operator()<ck_tile::fp16_t, float>(ck_tile::fp16_t& y, const float& x) const
-    {
-        float y_f;
-
-        this->operator()<float, float>(y_f, x);
-
-        y = type_convert<ck_tile::fp16_t>(y_f);
-    }
-
-    template <>
-    CK_TILE_DEVICE void operator()<ck_tile::fp16_t, float>(ck_tile::fp16_t& y, const float& x) const
-    {
-#if defined(__gfx125__)
-        const float c1 = 0.035677f;
-        const float c2 = 0.797885f;
-        const float u  = x * (c1 * x * x + c2);
-
-        y = type_convert<ck_tile::fp16_t>(0.5f * x * (1.f + __builtin_amdgcn_tanhf(u)));
-#else
-        float y_f;
-
-        this->operator()<float, float>(y_f, x);
-
-        y = type_convert<ck_tile::fp16_t>(y_f);
-#endif
-    }
-
-    template <>
-    CK_TILE_HOST void operator()<ck_tile::bf16_t, float>(ck_tile::bf16_t& y, const float& x) const
-    {
-        float y_f;
-
-        this->operator()<float, float>(y_f, x);
-
-        y = type_convert<ck_tile::bf16_t>(y_f);
-    }
-
-    template <>
-    CK_TILE_DEVICE void operator()<ck_tile::bf16_t, float>(ck_tile::bf16_t& y, const float& x) const
-    {
-#if defined(__gfx125__)
-        const float c1 = 0.035677f;
-        const float c2 = 0.797885f;
-        const float u  = x * (c1 * x * x + c2);
-
-        y = type_convert<ck_tile::bf16_t>(0.5f * x * (1.f + __builtin_amdgcn_tanhf(u)));
-#else
-        float y_f;
-
-        this->operator()<float, float>(y_f, x);
-
-        y = type_convert<ck_tile::bf16_t>(y_f);
-#endif
-    }
-
-    template <>
-    CK_TILE_DEVICE void operator()<ck_tile::bf16_t, ck_tile::bf16_t>(ck_tile::bf16_t& y,
-                                                                     const ck_tile::bf16_t& x) const
+    CK_TILE_HOST_DEVICE void
+    operator()<ck_tile::bf16_t, ck_tile::bf16_t>(ck_tile::bf16_t& y, const ck_tile::bf16_t& x) const
     {
 #if defined(__gfx125__)
         const ck_tile::bf16_t c1 = type_convert<ck_tile::bf16_t>(0.035677f);
@@ -862,23 +782,8 @@ struct FastGelu
         y = type_convert<ck_tile::bf16_t>(0.5f) * x *
             (type_convert<ck_tile::bf16_t>(1.f) + __builtin_amdgcn_tanh_bf16(u));
 #else
-        float y_f;
-
-        this->operator()<float, float>(y_f, type_convert<float>(x));
-
-        y = type_convert<ck_tile::bf16_t>(y_f);
+        this->operator()(y, type_convert<float>(x));
 #endif
-    }
-
-    template <>
-    CK_TILE_HOST void operator()<ck_tile::bf16_t, ck_tile::bf16_t>(ck_tile::bf16_t& y,
-                                                                   const ck_tile::bf16_t& x) const
-    {
-        float y_f;
-
-        this->operator()<float, float>(y_f, type_convert<float>(x));
-
-        y = type_convert<ck_tile::bf16_t>(y_f);
     }
 };
 
@@ -1108,15 +1013,16 @@ struct SiluAsm
 
 struct TanH
 {
-    template <typename T>
-    CK_TILE_HOST_DEVICE void operator()(T& y, const T& x) const
+    template <typename Y, typename X>
+    CK_TILE_HOST_DEVICE void operator()(Y& y, const X& x) const
     {
-        static_assert(std::is_same_v<T, float> || std::is_same_v<T, double> ||
-                          std::is_same_v<T, ck_tile::fp16_t> || std::is_same_v<T, int8_t> ||
-                          std::is_same_v<T, int32_t>,
+        static_assert(std::is_same_v<X, float> || std::is_same_v<X, double> ||
+                          std::is_same_v<X, ck_tile::fp16_t> ||
+                          std::is_same_v<X, ck_tile::bf16_t> || std::is_same_v<X, int8_t> ||
+                          std::is_same_v<X, int32_t>,
                       "Data type is not supported by this operation!");
 
-        y = ck_tile::tanh(x);
+        y = type_convert<Y>(ck_tile::tanh(x));
     };
 };
 

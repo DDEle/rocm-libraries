@@ -57,6 +57,9 @@ CK_TILE_TYPE_CONVERT(float, float, bf16_t, bf16)
 CK_TILE_TYPE_CONVERT(float, float, fp8_t, fp8)
 CK_TILE_TYPE_CONVERT(float, float, bf8_t, bf8)
 
+CK_TILE_TYPE_CONVERT(fp16_t, fp16, bf16_t, bf16)
+CK_TILE_TYPE_CONVERT(bf16_t, bf16, fp16_t, fp16)
+
 CK_TILE_TYPE_CONVERT(fp16_t, fp16, float, float)
 CK_TILE_TYPE_CONVERT(bf16_t, bf16, float, float)
 CK_TILE_TYPE_CONVERT(fp8_t, fp8, float, float)

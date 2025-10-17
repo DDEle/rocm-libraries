@@ -1,14 +1,5 @@
 set(INST_TARGETS ${SUPPORTED_GPU_TARGETS})
 
-if(INST_TARGETS MATCHES "gfx125")
-    list(FILTER INST_TARGETS EXCLUDE REGEX "gfx125")
-    message(WARNING "Skipping RMSNORM2D RDQUANT compilation for GFX125x targets.")
-    if(NOT INST_TARGETS)
-        return()
-    endif()
-endif()
-
-
 set(TILE_ADD_RMSNORM2D_RDQUANT_FWD "tile_add_rmsnorm2d_rdquant_fwd")
 # not using add_example_executable() to add this target, since we don't want this to have
 # to be included in "make all/install/check"

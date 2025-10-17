@@ -188,7 +188,7 @@ function(add_gtest_executable TEST_NAME)
     endforeach()
 
     foreach(source IN LISTS ARGN)
-    if(NOT TEST_TARGETS MATCHES "gfx95" AND source MATCHES "mx_")
+    if(NOT TEST_TARGETS MATCHES "gfx95|gfx125" AND source MATCHES "mx_")
         message(DEBUG "removing microscaling test ${source} ")
         list(REMOVE_ITEM ARGN "${source}")
     endif()
@@ -218,7 +218,7 @@ function(add_gtest_executable TEST_NAME)
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx908:xnack+ gfx908:xnack- gfx90a:xnack+ gfx90a:xnack- gfx908 gfx90a gfx942 gfx1030 gfx950 gfx1200 gfx1201 gfx10-3-generic gfx11-generic gfx12-generic)
         elseif(ARGN MATCHES "_smfmac")
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx1030 gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx908 gfx90a gfx1200 gfx1201 gfx10-3-generic gfx11-generic gfx12-generic gfx1250 gfx1251)
-        elseif(ARGN MATCHES "_mx") #only build mx example for gfx950
+        elseif(ARGN MATCHES "_mx") #only build mx example for gfx950 and gfx125x
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx908:xnack+ gfx908:xnack- gfx90a:xnack+ gfx90a:xnack- gfx908 gfx90a gfx942 gfx1030 gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx1200 gfx1201 gfx10-3-generic gfx11-generic gfx12-generic)
         endif()
         set_source_files_properties(${ARGN} PROPERTIES LANGUAGE HIP)

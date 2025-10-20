@@ -3,12 +3,13 @@
 
 set(TENSILELITE_BUILD_PARALLEL_LEVEL "" CACHE STRING "Number of CPU cores to use for building device libraries (will use nproc if unset).")
 set(TENSILELITE_KEEP_BUILD_TMP OFF CACHE STRING "Keep temporary build directory for device libraries (turning this ON  bloat the build size).")
-set(TENSILELITE_LIBLOGIC_PATH "" CACHE STRING "Path to library logic files (will use 'library' if unset).")
 set(TENSILELITE_LIBRARY_FORMAT "" CACHE STRING "Format of master solution library files (msgpack or yaml).")
 set(TENSILELITE_ASM_DEBUG "" CACHE STRING "Keep debug information for built code objects.")
 set(TENSILELITE_LOGIC_FILTER "" CACHE STRING "Cutomsized logic filter, default is *, i.e. all logics.")
 set(TENSILELITE_NO_COMPRESS "" CACHE STRING "Do not compress device code object files.")
 set(TENSILELITE_EXPERIMENTAL "" CACHE STRING "Process experimental logic files.")
+option(HIPBLASLT_ENABLE_EXOPTS "" ON)
+option(HIPBLASLT_ENABLE_TRANSFORM "" ON)
 
 set(HIPBLASLT_TENSILE_LIBPATH "${hipblaslt_BINARY_DIR}/Tensile" CACHE STRING "Path to output the device gemm libraries.")
 file(MAKE_DIRECTORY "${HIPBLASLT_TENSILE_LIBPATH}/library")
@@ -80,5 +81,9 @@ add_custom_target(tensilelite-device-libraries ALL
     DEPENDS "${output_stamp}"
 )
 
-add_subdirectory(extops)
-add_subdirectory(matrix-transform)
+if(HIPBLASLT_ENABLE_EXOPTS)
+    add_subdirectory(extops)
+endif()
+if(HIPBLASLT_ENABLE_TRANSFORM)
+    add_subdirectory(matrix-transform)
+endif()

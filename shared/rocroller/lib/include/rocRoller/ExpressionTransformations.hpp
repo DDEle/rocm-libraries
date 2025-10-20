@@ -29,6 +29,7 @@
 #include <rocRoller/Expression_fwd.hpp>
 
 #include <rocRoller/Context_fwd.hpp>
+#include <rocRoller/KernelGraph/KernelGraph_fwd.hpp>
 #include <rocRoller/KernelGraph/RegisterTagManager_fwd.hpp>
 
 namespace rocRoller
@@ -200,5 +201,46 @@ namespace rocRoller
          * @return ExpressionPtr Transformed expression
          */
         ExpressionPtr lowerBitfieldValues(ExpressionPtr expr);
+
+        /**
+         * @brief Periodize the WorkitemX index space within and across waves.
+         *
+         * This transform modifies all occurances of the WorkitemX
+         * index within an expression.  Workitem indices are repeated
+         * with a given period, p, within each wave; and are strided,
+         * by p, across waves.
+         *
+         * The transformation is defined as follows:
+         *
+         *   WI -> (WI & (p - 1)) + floor(WI / wavefrontSize) * p
+         *
+         * For example, consider a Wave-32 architecture with a kernel
+         * launched with 256 workitems per workgroup.
+         *
+         * Originally, the workitem X indices are:
+         *
+         *      wave 0: [  0   1   2   3   4   5   6   7 ...  31]
+         *      wave 1: [ 32  33  34  35  36  37  38  39 ...  63]
+         *      ...
+         *      wave 7: [224 225 226 227 228 229 230 231 ... 255]
+         *
+         * With p=4, after periodization:
+         *
+         *      wave 0: [  0   1   2   3   0   1   2   3 ...   3]
+         *      wave 1: [  4   5   6   7   4   5   6   7 ...   7]
+         *      ...
+         *      wave 7: [ 28  29  30  31  28  29  30  31 ...  31]
+         *
+         * @param expr Input expression
+         * @param context
+         * @param graph The kernel graph containing the workitem coordinates.
+         * @param period The number of unique indicies to repeat in a wave,
+         *               must be a power of 2.
+         * @return ExpressionPtr Transformed expression
+         */
+        ExpressionPtr periodizeWorkitemValues(ExpressionPtr               expr,
+                                              ContextPtr                  ctx,
+                                              KernelGraph::KernelGraphPtr graph,
+                                              const uint                  period);
     }
 }

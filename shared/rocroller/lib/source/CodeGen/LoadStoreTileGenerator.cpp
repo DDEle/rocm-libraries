@@ -642,6 +642,8 @@ namespace rocRoller
                 const auto trLoadPairStride
                     = getUnsignedInt(evaluate(info.colStrideAttributes.trLoadPairStride));
 
+                const auto wfs = arch.GetCapability(GPUCapability::DefaultWavefrontSize);
+
                 AssertFatal((info.n * info.packedAmount) % elementsPerTrLoad == 0,
                             "WaveTileN must be multiple of the number of elements loaded by each "
                             "transpose load!",
@@ -686,7 +688,9 @@ namespace rocRoller
                         auto start = (i * numTrLoads + (j + 0)) * numVGPRBlocks;
                         auto stop  = (i * numTrLoads + (j + 1)) * numVGPRBlocks;
                         auto trLoadOffset
-                            = (j % 2) * trLoadPairStride + (j / 2) * elementBlockStride;
+                            = (wfs == 32 && isF16(info.data->variableType().dataType))
+                                  ? j * trLoadPairStride
+                                  : (j % 2) * trLoadPairStride + (j / 2) * elementBlockStride;
                         co_yield m_context->mem()->transposeLoadLocal(
                             info.data->element(Generated(iota(start, stop))),
                             info.rowOffsetReg,
@@ -942,12 +946,26 @@ namespace rocRoller
                 auto allocOptions = Register::AllocationOptions::FullyContiguous();
 
                 auto elementBits = DataTypeInfo::Get(varTypeInfo.segmentVariableType).elementBits;
-                if(elementBits == 6 && info.isPadded && !info.isTransposedTile)
+                const auto& arch = m_context->targetArchitecture();
+                auto        macTile = m_graph->coordinates.getNode<MacroTile>(macTileTag);
+                if(macTile.memoryType == MemoryType::VGPR && elementBits == 6
+                   && (!arch.HasCapability(GPUCapability::DSReadTransposeB6PaddingBytes)
+                       || isPadded)
+                   && !info.isTransposedTile)
                 {
-                    auto registerCount = varTypeInfo.registerCount;
+                    // FIXME: fix contiguousChunkWidth calculation
+                    auto registerCount = arch.target().gfx == GPUArchitectureGFX::GFX1250
+                                             ? n * varTypeInfo.registerCount
+                                             : varTypeInfo.registerCount;
                     allocOptions = {.contiguousChunkWidth = int(registerCount), .alignment = 2};
                     co_yield Instruction::Comment(
                         concatenate("Allocation options: ", allocOptions));
+                }
+
+                if(arch.HasCapability(GPUCapability::HasVGPRIndexing)
+                   and isScaleType(varTypeInfo.variableType.dataType))
+                {
+                    allocOptions.forceReservedRegion = true;
                 }
 
                 auto tmpl = Register::Value::Placeholder(

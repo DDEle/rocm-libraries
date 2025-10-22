@@ -109,9 +109,13 @@ struct GridwiseBatchedGemmGemm_wmma_cshuffle_v3
     static constexpr auto LWaves = LPerBlock / (LRepeat * LPerWmma);
     static constexpr auto NWaves = NPerBlock / (NRepeat * NPerWmma);
 
-    // TODO: I am pretty sure this is always 16 and *should* always be 16.
-    static constexpr auto KPack =
-        math::integer_least_multiple(math::integer_least_multiple(AK1Value, BK1Value), 16);
+    // TODO: Each GEMM should have own KPack
+    static constexpr index_t KPack = math::max(
+        math::lcm(math::lcm(AK1Value, L1Value), BK1Value),
+        WmmaSelector<ADataType, B0DataType, Acc0DataType, MPerWmma, LPerWmma>::selected_wmma
+            .k_per_wmma,
+        WmmaSelector<ADataType, B1DataType, Acc1DataType, MPerWmma, NPerWmma>::selected_wmma
+            .k_per_wmma);
 
     using ThisThreadBlock = ThisThreadBlock<BlockSize>;
 

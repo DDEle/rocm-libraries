@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ck/utility/common_header.hpp"
+#include "ck/host_utility/device_prop.hpp"
 #include "ck/tensor_description/multi_index_transform_helper.hpp"
 #include "ck/tensor_description/tensor_descriptor.hpp"
 #include "ck/tensor_description/tensor_descriptor_helper.hpp"
@@ -164,6 +165,8 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
 
     using ThisThreadBlock = ThisThreadBlock<BlockSize>;
 
+    using ElementDataTypeAB = conditional_t<is_same_v<FloatAB, ck::tf32_t>, float, FloatAB>;
+
     __host__ static auto CalculateGridSize(index_t M, index_t N)
     {
         return std::make_tuple(Block2CTileMap::CalculateGridSize(M, N), 1, 1);
@@ -236,8 +239,8 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
     // Argument
     struct Argument : public Problem, public tensor_operation::device::BaseArgument
     {
-        __host__ Argument(const FloatAB* p_a_grid_,
-                          const FloatAB* p_b_grid_,
+        __host__ Argument(const ElementDataTypeAB* p_a_grid_,
+                          const ElementDataTypeAB* p_b_grid_,
                           FloatC* p_c_grid_,
                           index_t M_,
                           index_t N_,
@@ -252,8 +255,8 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
         {
         }
 
-        const FloatAB* p_a_grid;
-        const FloatAB* p_b_grid;
+        const ElementDataTypeAB* p_a_grid;
+        const ElementDataTypeAB* p_b_grid;
         FloatC* p_c_grid;
     };
 
@@ -329,14 +332,15 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
         constexpr auto b_block_space_size_aligned =
             math::integer_least_multiple(b_block_desc_k0_n_k1.GetElementSpaceSize(), max_lds_align);
 
-        return (a_block_space_size_aligned + b_block_space_size_aligned) * sizeof(FloatAB);
+        return (a_block_space_size_aligned + b_block_space_size_aligned) *
+               sizeof(ElementDataTypeAB);
     }
 
     template <
         InMemoryDataOperationEnum CGlobalMemoryDataOperation_ = InMemoryDataOperationEnum::Set>
     __device__ static bool constexpr IsValidCompilationParameter()
     {
-        return ck::tensor_operation::device::IsValidGemmCompilationParameter<
+        constexpr bool valid = tensor_operation::device::IsValidGemmCompilationParameter<
             BlockSize,
             MPerBlock,
             NPerBlock,
@@ -345,14 +349,24 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
             MXdlPerWave,
             NXdlPerWave,
             FloatC,
-            CGlobalMemoryDataOperation>();
+            CGlobalMemoryDataOperation_>();
+        if constexpr(!valid)
+        {
+            return false;
+        }
+
+        if constexpr(K1Value % MfmaSelector<FloatAB, MPerXdl, NPerXdl>::selected_mfma.k_per_blk !=
+                     0)
+        {
+            return false;
+        }
+        return true;
     }
 
     template <typename AGridDesc_K0_M_K1, typename BGridDesc_K0_N_K1, typename CGridDesc_M_N>
-    __host__ __device__ static constexpr bool
-    CheckValidity(const AGridDesc_K0_M_K1& a_grid_desc_k0_m_k1,
-                  const BGridDesc_K0_N_K1& b_grid_desc_k0_n_k1,
-                  const CGridDesc_M_N& c_grid_desc_m_n)
+    __host__ static bool CheckValidity(const AGridDesc_K0_M_K1& a_grid_desc_k0_m_k1,
+                                       const BGridDesc_K0_N_K1& b_grid_desc_k0_n_k1,
+                                       const CGridDesc_M_N& c_grid_desc_m_n)
     {
         static_assert(is_known_at_compile_time<remove_cv_t<decltype(K1)>>::value,
                       "wrong! K1 need to be known at compile-time");
@@ -360,6 +374,11 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
         static_assert((MPerBlock % (MPerXdl * MXdlPerWave) == 0) &&
                           (NPerBlock % (NXdlPerWave * NPerXdl)) == 0,
                       "Invalid tuning param!");
+
+        if(!is_xdl_wmma_k_supported<FloatAB, K0PerBlock * K1Value, K1Value>())
+        {
+            return false;
+        }
 
         const auto M  = a_grid_desc_k0_m_k1.GetLength(I1);
         const auto N  = b_grid_desc_k0_n_k1.GetLength(I1);
@@ -450,8 +469,8 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
 
         using BlockwiseGemm =
             BlockwiseGemmXdlops_k0mk1_k0nk1_m0n0m1n1m2m3m4n2_v1<BlockSize,
-                                                                FloatABAdjusted,
-                                                                FloatABAdjusted,
+                                                                ElementDataTypeAB,
+                                                                ElementDataTypeAB,
                                                                 FloatAcc,
                                                                 decltype(a_block_desc_k0_m_k1),
                                                                 decltype(b_block_desc_k0_n_k1),
@@ -459,7 +478,9 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
                                                                 NPerXdl,
                                                                 MXdlPerWave,
                                                                 NXdlPerWave,
-                                                                K1>;
+                                                                K1,
+                                                                FloatABAdjusted,
+                                                                FloatABAdjusted>;
 
         return BlockwiseGemm::MakeCGridDescriptor_M0_N0_M1_N1_M2_M3_M4_N2(c_grid_desc_m_n);
     }
@@ -471,8 +492,8 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
               typename AGridDesc_K0_M_K1,
               typename BGridDesc_K0_N_K1,
               typename CGridDesc_M_N>
-    __device__ static void Run(const FloatAB* p_a_grid,
-                               const FloatAB* p_b_grid,
+    __device__ static void Run(const ElementDataTypeAB* p_a_grid,
+                               const ElementDataTypeAB* p_b_grid,
                                FloatC* p_c_grid,
                                void* __restrict__ p_shared,
                                const AGridDesc_K0_M_K1& a_grid_desc_k0_m_k1,
@@ -533,8 +554,8 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
                                                 Sequence<K0PerBlock, MPerBlock, K1>,
                                                 ABlockTransferThreadClusterLengths_K0_M_K1,
                                                 ABlockTransferThreadClusterArrangeOrder,
-                                                FloatAB,
-                                                FloatABAdjusted,
+                                                ElementDataTypeAB,
+                                                ElementDataTypeAB,
                                                 decltype(a_grid_desc_k0_m_k1),
                                                 decltype(a_block_desc_k0_m_k1),
                                                 ABlockTransferSrcAccessOrder,
@@ -564,8 +585,8 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
                                                 Sequence<K0PerBlock, NPerBlock, K1>,
                                                 BBlockTransferThreadClusterLengths_K0_N_K1,
                                                 BBlockTransferThreadClusterArrangeOrder,
-                                                FloatAB,
-                                                FloatABAdjusted,
+                                                ElementDataTypeAB,
+                                                ElementDataTypeAB,
                                                 decltype(b_grid_desc_k0_n_k1),
                                                 decltype(b_block_desc_k0_n_k1),
                                                 BBlockTransferSrcAccessOrder,
@@ -595,8 +616,8 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
         // sanity check
         auto blockwise_gemm = BlockwiseGemmXdlops_k0mk1_k0nk1_m0n0m1n1m2m3m4n2_Selector<
             BlockSize,
-            FloatABAdjusted,
-            FloatABAdjusted,
+            ElementDataTypeAB,
+            ElementDataTypeAB,
             FloatAcc,
             decltype(a_block_desc_k0_m_k1),
             decltype(b_block_desc_k0_n_k1),
@@ -605,7 +626,9 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
             MXdlPerWave,
             NXdlPerWave,
             K1,
-            LoopSched>();
+            LoopSched,
+            FloatABAdjusted,
+            FloatABAdjusted>();
 
         auto c_thread_buf = blockwise_gemm.GetCThreadBuffer();
 
@@ -614,10 +637,10 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
             math::integer_least_multiple(a_block_desc_k0_m_k1.GetElementSpaceSize(), max_lds_align);
 
         auto a_block_buf = make_dynamic_buffer<AddressSpaceEnum::Lds>(
-            static_cast<FloatABAdjusted*>(p_shared), a_block_desc_k0_m_k1.GetElementSpaceSize());
+            static_cast<ElementDataTypeAB*>(p_shared), a_block_desc_k0_m_k1.GetElementSpaceSize());
 
         auto b_block_buf = make_dynamic_buffer<AddressSpaceEnum::Lds>(
-            static_cast<FloatABAdjusted*>(p_shared) + a_block_space_size_aligned,
+            static_cast<ElementDataTypeAB*>(p_shared) + a_block_space_size_aligned,
             b_block_desc_k0_n_k1.GetElementSpaceSize());
 
         constexpr auto a_block_slice_copy_step = make_multi_index(K0PerBlock, 0, 0);

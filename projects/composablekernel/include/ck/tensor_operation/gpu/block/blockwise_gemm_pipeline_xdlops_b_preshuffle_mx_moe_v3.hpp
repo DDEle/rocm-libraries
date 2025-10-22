@@ -80,8 +80,11 @@ struct BlockwiseGemmXdlops_pipeline_bpreshuffle_mx_moe_v3<BlockGemmPipelineSched
                                                           NRepeat,
                                                           KPack>
     : BlockwiseGemmXdlops_mx_pipeline_base<ThreadBlockSize,
+                                           ScaleBlockSize,
                                            ADataType,
+                                           AScaleDataType,
                                            BDataType,
+                                           BScaleDataType,
                                            ATileDesc,
                                            BTileDesc,
                                            AMmaTileDesc,
@@ -100,8 +103,11 @@ struct BlockwiseGemmXdlops_pipeline_bpreshuffle_mx_moe_v3<BlockGemmPipelineSched
 {
 
     using Base = BlockwiseGemmXdlops_mx_pipeline_base<ThreadBlockSize,
+                                                      ScaleBlockSize,
                                                       ADataType,
+                                                      AScaleDataType,
                                                       BDataType,
+                                                      BScaleDataType,
                                                       ATileDesc,
                                                       BTileDesc,
                                                       AMmaTileDesc,

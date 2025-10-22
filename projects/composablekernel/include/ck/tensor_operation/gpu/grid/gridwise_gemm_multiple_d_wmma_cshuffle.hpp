@@ -340,7 +340,11 @@ struct GridwiseGemmMultipleD_Wmma
 
     static constexpr auto MWaves = MPerBlock / (MRepeat * MPerWmma);
     static constexpr auto NWaves = NPerBlock / (NRepeat * NPerWmma);
-    static constexpr auto WmmaK  = K1 == 16 ? 32 : 16;
+#ifdef __gfx125__
+    static constexpr auto WmmaK = is_same<ADataType, int8_t>::value ? 64 : 32;
+#else
+    static constexpr auto WmmaK = K1 == 16 ? 32 : 16;
+#endif
 
     using ThisThreadBlock = ThisThreadBlock<BlockSize>;
 

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.14) 
 if(POLICY CMP0140)
   # policies CMP0140 not known to CMake until 3.25
   cmake_policy(SET CMP0140 NEW)
@@ -194,7 +194,7 @@ if(NOT ENABLE_ASAN_PACKAGING)
     elseif(NOT WIN32 AND ${hip_VERSION_FLAT} GREATER_EQUAL 600400000 AND ${hip_VERSION_FLAT} LESS 600443483)
         set(CK_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201;gfx950")
     elseif(NOT WIN32 AND ${hip_VERSION_FLAT} GREATER_EQUAL 600443483)
-        set(CK_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx950;gfx10-3-generic;gfx11-generic;gfx12-generic")
+        set(CK_GPU_TARGETS "gfx1250")
     endif()
 else()
     #build CK only for xnack-supported targets when using ASAN
@@ -220,6 +220,9 @@ rocm_check_target_ids(SUPPORTED_GPU_TARGETS
 
 message(STATUS "Building CK for the following targets: ${SUPPORTED_GPU_TARGETS}")
 
+# Cache SUPPORTED_GPU_TARGETS for debug
+set(SUPPORTED_GPU_TARGETS "${SUPPORTED_GPU_TARGETS}" CACHE STRING "List of supported GPU targets")
+
 if (SUPPORTED_GPU_TARGETS MATCHES "gfx9|gfx11|gfx12")
     message(STATUS "Enabling XDL instances")
     add_definitions(-DCK_USE_XDL)
@@ -230,13 +233,12 @@ if (SUPPORTED_GPU_TARGETS MATCHES "gfx94" OR SUPPORTED_GPU_TARGETS MATCHES "gfx9
     add_definitions(-DCK_USE_GFX94)
     set(CK_USE_GFX94 "ON")
 endif()
-
-# new macro CK_TILE_USE_WMMA in order to separately compile examples for MFMA/WMMA
-set(CK_TILE_USE_WMMA 0)
-
 if (SUPPORTED_GPU_TARGETS MATCHES "gfx10")
     add_definitions(-DCK_GFX1030_SUPPORT)
 endif()
+
+# new macro CK_TILE_USE_WMMA in order to separately compile examples for MFMA/WMMA
+set(CK_TILE_USE_WMMA 0)
 
 if (SUPPORTED_GPU_TARGETS MATCHES "gfx11" OR SUPPORTED_GPU_TARGETS MATCHES "gfx12")
     message(STATUS "Enabling WMMA instances")
@@ -266,6 +268,11 @@ if (SUPPORTED_GPU_TARGETS MATCHES "gfx950")
     set(CK_USE_NATIVE_MX_SUPPORT "ON")
     add_definitions(-DCK_GFX950_SUPPORT)
     set(CK_GFX950_SUPPORT "ON")
+endif()
+if (SUPPORTED_GPU_TARGETS MATCHES "gfx1250")
+    add_definitions(-DCK_USE_GFX1250)
+    add_definitions(-DCK_USE_NATIVE_MX_SUPPORT)
+    set(CK_USE_NATIVE_MX_SUPPORT "ON")
 endif()
 
 option(CK_USE_FP8_ON_UNSUPPORTED_ARCH "Enable FP8 GEMM instances on older architectures" OFF)
@@ -337,8 +344,8 @@ endif()
 
 
 option(USE_BITINT_EXTENSION_INT4 "Whether to enable clang's BitInt extension to provide int4 data type." OFF)
-option(USE_OPT_GFX11 "Whether to enable LDS cumode and Wavefront32 mode for GFX11 silicons." OFF)
 option(ENABLE_ASM_DUMP "Whether to enable assembly dump for kernels." OFF)
+option(ENABLE_JSON_DUMP "Whether to enable json dump for examples." OFF)
 
 if(USE_BITINT_EXTENSION_INT4)
     add_compile_definitions(CK_EXPERIMENTAL_BIT_INT_EXTENSION_INT4)
@@ -350,6 +357,11 @@ if(ENABLE_ASM_DUMP)
     add_compile_options(--save-temps) 
     add_compile_options(-Wno-gnu-line-marker)
     message("CK compiled with ENABLE_ASM_DUMP set to ${ENABLE_ASM_DUMP}")
+endif()
+
+if (ENABLE_JSON_DUMP)
+    add_compile_definitions(CK_ENABLE_JSON_DUMP)
+    message("CK compiled with ENABLE_JSON_DUMP set to ${ENABLE_JSON_DUMP}")
 endif()
 
 ## Threads

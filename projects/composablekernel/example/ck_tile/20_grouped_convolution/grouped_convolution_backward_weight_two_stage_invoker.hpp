@@ -66,10 +66,8 @@ struct GroupedConvolutionBackwardWeightTwoStageInvoker
             typename GroupedConvTraitsType::GroupedConvImplicitGemmTraitsBwdWeight,
             ck_tile::element_wise::PassThrough,
             ck_tile::element_wise::PassThrough,
-            InDataType,
-            true,
-            GroupedConvTraitsType::VectorSizeA,
-            GroupedConvTraitsType::VectorSizeB>;
+            InDataType>;
+
         using CodegenPipeline = ck_tile::GemmPipelineAGmemBGmemCRegV1<CodegenPipelineProblem>;
 
         const auto Run = [&](const auto memory_operation_) {

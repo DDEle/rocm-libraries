@@ -178,7 +178,7 @@ struct DeviceGemm_Xdl_CShuffle_Streamk_V3 : public DeviceGemm_Streamk_V2<ALayout
                     hip_check_error(hipGetDevice(&dev));
                     hip_check_error(hipGetDeviceProperties(&dev_prop, dev));
                     num_cu        = dev_prop.multiProcessorCount;
-                    arg.Grid_size = num_cu * occupancy;
+                    arg.Grid_size = num_cu * std::max(occupancy, 1);
                     grid_dim      = arg.Grid_size;
                 }
                 else
@@ -553,7 +553,7 @@ struct DeviceGemm_Xdl_CShuffle_Streamk_V3 : public DeviceGemm_Streamk_V2<ALayout
             hip_check_error(hipGetDevice(&dev));
             hip_check_error(hipGetDeviceProperties(&dev_prop, dev));
             num_cu    = dev_prop.multiProcessorCount;
-            Grid_size = num_cu * occupancy;
+            Grid_size = num_cu * math::max(occupancy, 1);
         };
 
         if constexpr(IsValid)

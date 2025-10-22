@@ -7,8 +7,25 @@
 #include <cstdint>
 #include <type_traits>
 
+#define CONSTEXPR_LOOKUP_TABLE_FOR_BF16 1
+#define CONSTEXPR_LOOKUP_TABLE_FOR_FP8 0
+#define CONSTEXPR_LOOKUP_TABLE_FOR_BF8 0
+
 namespace ck_tile {
 namespace element_wise {
+
+// Generalized constexpr lookup table generator
+template <typename T, std::size_t N, typename F, std::size_t... Is>
+constexpr std::array<T, N> make_lookup_table_impl(F&& func, std::index_sequence<Is...>)
+{
+    return {func(Is)...};
+}
+
+template <typename T, std::size_t N, typename F>
+constexpr std::array<T, N> make_lookup_table(F&& func)
+{
+    return make_lookup_table_impl<T, N>(std::forward<F>(func), std::make_index_sequence<N>{});
+}
 
 /**
  * @brief Fast int4x4 to fp16x8_t data type conversion based on paper
@@ -121,6 +138,8 @@ CK_TILE_DEVICE fp16x4_t i4_to_half4_scale(int q, const fp16x2_t& scale)
  */
 CK_TILE_DEVICE bf16x4_t i4_to_bhalf4(int q)
 {
+#if !CONSTEXPR_LOOKUP_TABLE_FOR_BF16
+    // This approach fails validation in GEMM tests.
     uint32_t i8s = (q & 0xf) | ((q & 0xf0) << 4) | ((q & 0xf00) << 8) | ((q & 0xf000) << 12);
 
     static constexpr uint32_t fp32_base = 0x4B000000;
@@ -146,8 +165,19 @@ CK_TILE_DEVICE bf16x4_t i4_to_bhalf4(int q)
         __byte_perm(fp32_intermediates_casted[3], fp32_intermediates_casted[2], 0x7632));
 
     return res;
+#else
+    // Lookup table for bf16_t values corresponding to int4 values -8 to 7
+    constexpr auto bf16_lookup_table = make_lookup_table<bf16_t, 16>(
+        [](int i) { return bit_cast<bf16_t>(float_to_bf16_rtn_raw(i - 8)); });
+
+    return bf16x4_t{bf16_lookup_table[(q >> 0) & 0xf],
+                    bf16_lookup_table[(q >> 16) & 0xf],
+                    bf16_lookup_table[(q >> 4) & 0xf],
+                    bf16_lookup_table[(q >> 20) & 0xf]};
+#endif
 }
 
+#if !CONSTEXPR_LOOKUP_TABLE_FOR_FP8
 /**
  * @brief This function converts 8 packed 4-bit integers into 8 fp8 values.
  *
@@ -209,6 +239,21 @@ CK_TILE_DEVICE fp8x8_t amd_assembly_i4_to_fp8x8(int a)
 
     return bit_cast<fp8x8_t>((static_cast<uint64_t>(tmp_res_high) << 32) | tmp_res_low);
 }
+#else
+CK_TILE_DEVICE fp8x4_t i4_to_fp8x4(int q)
+{
+    // The approach below can be used once this compiler issue is resolved:
+    // "constexpr bit cast involving type 'unsigned _BitInt(8)' is not yet supported"
+    // Lookup table for fp8_t values corresponding to int4 values -8 to 7
+    constexpr auto fp8_lookup_table = make_lookup_table<fp8_t, 16>(
+        [](int i) { return impl::cast_to_f8<float, fp8_t, true, false>(i - 8, 0); });
+
+    return fp8x4_t{fp8_lookup_table[(q >> 0) & 0xf],
+                   fp8_lookup_table[(q >> 16) & 0xf],
+                   fp8_lookup_table[(q >> 4) & 0xf],
+                   fp8_lookup_table[(q >> 20) & 0xf]};
+}
+#endif
 
 CK_TILE_DEVICE float amd_assembly_fp8_to_fp32(uint32_t src)
 {
@@ -224,6 +269,7 @@ CK_TILE_DEVICE float amd_assembly_bf8_to_fp32(uint32_t src)
     return res;
 }
 
+#if !CONSTEXPR_LOOKUP_TABLE_FOR_BF8
 /**
  * @brief This function converts 8 packed 4-bit integers into 8 bf8 values.
  *
@@ -285,6 +331,21 @@ CK_TILE_DEVICE bf8x8_t amd_assembly_i4_to_bf8x8(uint32_t a)
 
     return bit_cast<bf8x8_t>((static_cast<uint64_t>(tmp_res_high) << 32) | tmp_res_low);
 }
+#else
+CK_TILE_DEVICE bf8x4_t i4_to_bf8x4(int q)
+{
+    // The approach below can be used once this compiler issue is resolved:
+    // "constexpr bit cast involving type 'unsigned _BitInt(8)' is not yet supported"
+    // Lookup table for bf8_t values corresponding to int4 values -8 to 7
+    constexpr auto bf8_lookup_table = make_lookup_table<bf8_t, 16>(
+        [](int i) { return impl::cast_to_f8<float, bf8_t, true, false>(i - 8, 0); });
+
+    return bf8x4_t{bf8_lookup_table[(q >> 0) & 0xf],
+                   bf8_lookup_table[(q >> 16) & 0xf],
+                   bf8_lookup_table[(q >> 4) & 0xf],
+                   bf8_lookup_table[(q >> 20) & 0xf]};
+}
+#endif
 
 struct PassThroughPack8
 {
@@ -300,17 +361,27 @@ struct PassThroughPack8
     CK_TILE_HOST_DEVICE constexpr void operator()(bf16x8_t& y, const pk_int4x4_t& x) const
     {
         y.lo = i4_to_bhalf4(bit_cast<int>(x));
-        y.hi = i4_to_bhalf4(bit_cast<int>(x) >> 16);
+        y.hi = i4_to_bhalf4(bit_cast<int>(x) >> 8);
     }
 
     CK_TILE_HOST_DEVICE constexpr void operator()(fp8x8_t& y, const pk_int4x4_t& x) const
     {
+#if !CONSTEXPR_LOOKUP_TABLE_FOR_FP8
         y = amd_assembly_i4_to_fp8x8(bit_cast<uint32_t>(x));
+#else
+        y.lo = i4_to_fp8x4(bit_cast<int>(x));
+        y.hi = i4_to_fp8x4(bit_cast<int>(x) >> 8);
+#endif
     }
 
     CK_TILE_HOST_DEVICE constexpr void operator()(bf8x8_t& y, const pk_int4x4_t& x) const
     {
+#if !CONSTEXPR_LOOKUP_TABLE_FOR_BF8
         y = amd_assembly_i4_to_bf8x8(bit_cast<uint32_t>(x));
+#else
+        y.lo = i4_to_bf8x4(bit_cast<int>(x));
+        y.hi = i4_to_bf8x4(bit_cast<int>(x) >> 8);
+#endif
     }
     constexpr const static bool is_pack8_invocable = true;
 };
@@ -654,118 +725,65 @@ struct Relu
 // gpu code use lower accuracy "_ocml_exp_f32" and "rcp" function
 struct FastGelu
 {
-    template <typename Y, typename X>
-    CK_TILE_HOST void operator()(Y& y, const X& x) const;
-
-    template <typename Y, typename X>
-    CK_TILE_DEVICE void operator()(Y& y, const X& x) const;
-
-    template <>
-    CK_TILE_HOST void operator()<float, float>(float& y, const float& x) const
-    {
-        // const float u   = -2.f * x * (0.035677f * x * x + 0.797885f);
-        const float c1  = -2.0 * 0.035677f;
-        const float c2  = -2.0 * 0.797885f;
-        const float u   = x * (c1 * x * x + c2);
-        const float emu = exp(u);
-        y               = x / (1.f + emu);
-    }
-
     // device code, use lower precision "__ocml_exp_f32" and "rcp"
-    template <>
-    CK_TILE_DEVICE void operator()<float, float>(float& y, const float& x) const
+    template <typename Y, typename X>
+    CK_TILE_HOST_DEVICE void operator()(Y& y, const X& x) const
     {
+        const float x_f = type_convert<float>(x);
+#if defined(__gfx125__)
+        const float c1 = 0.035677f;
+        const float c2 = 0.797885f;
+        const float u  = x_f * (c1 * x_f * x_f + c2);
+
+        y = type_convert<Y>(0.5f * x_f * (1.f + __builtin_amdgcn_tanhf(u)));
+#elif defined(__HIP_DEVICE_COMPILE__)
         // const float u   = 2.f * x * (0.035677f * x * x + 0.797885f);
         const float c1  = -2.0 * 0.035677f;
         const float c2  = -2.0 * 0.797885f;
-        const float u   = x * (c1 * x * x + c2);
+        const float u   = x_f * (c1 * x_f * x_f + c2);
         const float emu = __ocml_exp_f32(u);
 
-        y = x * ck_tile::rcp(1.f + emu);
+        y = type_convert<Y>(x_f * ck_tile::rcp(1.f + emu));
+#else
+        // const float u   = -2.f * x * (0.035677f * x * x + 0.797885f);
+        const float c1  = -2.0 * 0.035677f;
+        const float c2  = -2.0 * 0.797885f;
+        const float u   = x_f * (c1 * x_f * x_f + c2);
+        const float emu = exp(u);
+        y               = x_f / (1.f + emu);
+#endif
     }
 
     template <>
-    CK_TILE_HOST void operator()<ck_tile::fp16_t, ck_tile::fp16_t>(ck_tile::fp16_t& y,
-                                                                   const ck_tile::fp16_t& x) const
+    CK_TILE_HOST_DEVICE void
+    operator()<ck_tile::fp16_t, ck_tile::fp16_t>(ck_tile::fp16_t& y, const ck_tile::fp16_t& x) const
     {
-        float y_f;
+#if defined(__gfx125__)
+        const ck_tile::fp16_t c1 = type_convert<ck_tile::fp16_t>(0.035677f);
+        const ck_tile::fp16_t c2 = type_convert<ck_tile::fp16_t>(0.797885f);
+        const ck_tile::fp16_t u  = x * (c1 * x * x + c2);
 
-        this->operator()<float, float>(y_f, type_convert<float>(x));
-
-        y = type_convert<ck_tile::fp16_t>(y_f);
+        y = type_convert<ck_tile::fp16_t>(0.5f) * x *
+            (type_convert<ck_tile::fp16_t>(1.f) + __builtin_amdgcn_tanhh(u));
+#else
+        this->operator()(y, type_convert<float>(x));
+#endif
     }
 
     template <>
-    CK_TILE_DEVICE void operator()<ck_tile::fp16_t, ck_tile::fp16_t>(ck_tile::fp16_t& y,
-                                                                     const ck_tile::fp16_t& x) const
+    CK_TILE_HOST_DEVICE void
+    operator()<ck_tile::bf16_t, ck_tile::bf16_t>(ck_tile::bf16_t& y, const ck_tile::bf16_t& x) const
     {
-        float y_f;
+#if defined(__gfx125__)
+        const ck_tile::bf16_t c1 = type_convert<ck_tile::bf16_t>(0.035677f);
+        const ck_tile::bf16_t c2 = type_convert<ck_tile::bf16_t>(0.797885f);
+        const ck_tile::bf16_t u  = x * (c1 * x * x + c2);
 
-        this->operator()<float, float>(y_f, type_convert<float>(x));
-
-        y = type_convert<ck_tile::fp16_t>(y_f);
-    }
-
-    template <>
-    CK_TILE_HOST void operator()<ck_tile::fp16_t, float>(ck_tile::fp16_t& y, const float& x) const
-    {
-        float y_f;
-
-        this->operator()<float, float>(y_f, x);
-
-        y = type_convert<ck_tile::fp16_t>(y_f);
-    }
-
-    template <>
-    CK_TILE_DEVICE void operator()<ck_tile::fp16_t, float>(ck_tile::fp16_t& y, const float& x) const
-    {
-        float y_f;
-
-        this->operator()<float, float>(y_f, x);
-
-        y = type_convert<ck_tile::fp16_t>(y_f);
-    }
-
-    template <>
-    CK_TILE_HOST void operator()<ck_tile::bf16_t, float>(ck_tile::bf16_t& y, const float& x) const
-    {
-        float y_f;
-
-        this->operator()<float, float>(y_f, x);
-
-        y = type_convert<ck_tile::bf16_t>(y_f);
-    }
-
-    template <>
-    CK_TILE_DEVICE void operator()<ck_tile::bf16_t, float>(ck_tile::bf16_t& y, const float& x) const
-    {
-        float y_f;
-
-        this->operator()<float, float>(y_f, x);
-
-        y = type_convert<ck_tile::bf16_t>(y_f);
-    }
-
-    template <>
-    CK_TILE_DEVICE void operator()<ck_tile::bf16_t, ck_tile::bf16_t>(ck_tile::bf16_t& y,
-                                                                     const ck_tile::bf16_t& x) const
-    {
-        float y_f;
-
-        this->operator()<float, float>(y_f, type_convert<float>(x));
-
-        y = type_convert<ck_tile::bf16_t>(y_f);
-    }
-
-    template <>
-    CK_TILE_HOST void operator()<ck_tile::bf16_t, ck_tile::bf16_t>(ck_tile::bf16_t& y,
-                                                                   const ck_tile::bf16_t& x) const
-    {
-        float y_f;
-
-        this->operator()<float, float>(y_f, type_convert<float>(x));
-
-        y = type_convert<ck_tile::bf16_t>(y_f);
+        y = type_convert<ck_tile::bf16_t>(0.5f) * x *
+            (type_convert<ck_tile::bf16_t>(1.f) + __builtin_amdgcn_tanh_bf16(u));
+#else
+        this->operator()(y, type_convert<float>(x));
+#endif
     }
 };
 
@@ -995,15 +1013,16 @@ struct SiluAsm
 
 struct TanH
 {
-    template <typename T>
-    CK_TILE_HOST_DEVICE void operator()(T& y, const T& x) const
+    template <typename Y, typename X>
+    CK_TILE_HOST_DEVICE void operator()(Y& y, const X& x) const
     {
-        static_assert(std::is_same_v<T, float> || std::is_same_v<T, double> ||
-                          std::is_same_v<T, ck_tile::fp16_t> || std::is_same_v<T, int8_t> ||
-                          std::is_same_v<T, int32_t>,
+        static_assert(std::is_same_v<X, float> || std::is_same_v<X, double> ||
+                          std::is_same_v<X, ck_tile::fp16_t> ||
+                          std::is_same_v<X, ck_tile::bf16_t> || std::is_same_v<X, int8_t> ||
+                          std::is_same_v<X, int32_t>,
                       "Data type is not supported by this operation!");
 
-        y = ck_tile::tanh(x);
+        y = type_convert<Y>(ck_tile::tanh(x));
     };
 };
 

@@ -54,6 +54,9 @@ struct BlockwiseGemmXdlops_pipeline_base
     static constexpr auto xdlops_gemm =
         XdlopsGemm<ComputeDataType, MPerXDL, NPerXDL, KPack, ComputeDataType, TransposeC>{};
 
+    using ComputeDataTypeBuf =
+        conditional_t<std::is_same<ComputeDataType, ck::tf32_t>::value, float, ComputeDataType>;
+
     static constexpr index_t AMmaKStride = KPack;
     static constexpr index_t BMmaKStride = KPack;
 
@@ -62,18 +65,10 @@ struct BlockwiseGemmXdlops_pipeline_base
     static constexpr index_t KPerInnerLoop = KPack;
 
     static constexpr index_t KGroup = []() {
-        if constexpr(is_same_v<remove_cvref_t<ComputeDataType>, f8_t>)
-            // On gfx950, we have mfma that required 32 f8 elements as input,
-            // splited into 2 groups of 16 f8 elements.
-            // the 2 groups is not contiguous in the B preshuffed layout.
-            // and we do not want it to be contiguous in the B preshuffled layout
-            // because a memory instruction can only read 16 f8 elements at a time.
-            return ((MPerXDL == 16 && MPerXDL == 16 && xdlops_gemm.KPerXdlops == 128) ||
-                    (MPerXDL == 32 && MPerXDL == 32 && xdlops_gemm.KPerXdlops == 64))
-                       ? 2
-                       : 1;
-        else
-            return 1;
+        // A memory instruction can only read 16 bytes at a time. If K1PerXdlops *
+        // sizeof(ComputeDataType) > 16, memory read will not conitnues  in a wave in B preshuffle
+        // mode so, we need split K into mutiple groups.
+        return xdlops_gemm.K1PerXdlops * sizeof(ComputeDataType) > 16 ? 2 : 1;
     }();
 
     using HotLoopInstList =
@@ -156,6 +151,7 @@ struct BlockwiseGemmXdlops_pipeline_base
     __device__ static auto
     CalculateCThreadOriginDataIndex(Number<m0>, Number<n0>, Number<xdlops_i>, Number<blk_i>)
     {
+
         const auto wave_idx = GetWaveIdx();
 
         const auto waveId_m = wave_idx[I0];
@@ -376,7 +372,7 @@ struct BlockwiseGemmXdlops_pipeline_base
         make_tuple(Number<MRepeat>{}, Number<NRepeat>{}, xdlops_gemm.GetRegSizePerXdlops()));
 
     using AThreadCopy = ThreadwiseTensorSliceTransfer_v4<ADataType,
-                                                         ComputeDataType,
+                                                         ComputeDataTypeBuf,
                                                          decltype(a_block_desc_m0_m1_m2_k),
                                                          decltype(a_thread_desc_),
                                                          Sequence<1, 1, 1, KPack>,
@@ -386,7 +382,7 @@ struct BlockwiseGemmXdlops_pipeline_base
                                                          A_K1>;
 
     using BThreadCopy = ThreadwiseTensorSliceTransfer_v4<BDataType,
-                                                         ComputeDataType,
+                                                         ComputeDataTypeBuf,
                                                          decltype(b_block_desc_n0_n1_n2_k),
                                                          decltype(b_thread_desc_),
                                                          Sequence<1, 1, 1, KPack>,

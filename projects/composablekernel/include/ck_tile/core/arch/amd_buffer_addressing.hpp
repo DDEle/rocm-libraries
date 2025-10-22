@@ -5,6 +5,7 @@
 
 #if !CK_TILE_USE_BUFFER_ADDRESSING_BUILTIN
 
+#include "ck_tile/core/arch/amd_tdm_descriptor.hpp"
 #include "ck_tile/core/numeric/integer.hpp"
 #include "ck_tile/core/numeric/integral_constant.hpp"
 #include "ck_tile/core/numeric/vector_type.hpp"
@@ -28,20 +29,96 @@ using as3_uint32_ptr = uint32_t __attribute__((address_space(3)))*;
 
 namespace ck_tile {
 
-// 128 bit SGPRs to supply buffer resource in buffer instructions
-// https://rocm-documentation.readthedocs.io/en/latest/GCN_ISA_Manuals/testdocbook.html#vector-memory-buffer-instructions
-struct __attribute__((packed)) buffer_resource
+// amd_wave_read_first_lane is the SGPR function from AMD GPU device to load 1 or a series of the
+// memory to the SGPR registers.
+__device__ inline uint32_t amd_wave_read_first_lane(uint16_t v)
 {
-    const void* ptr;
-    uint32_t range;
-    uint32_t config;
+    return __builtin_amdgcn_readfirstlane(static_cast<uint32_t>(v));
+}
+
+__device__ inline uint32_t amd_wave_read_first_lane(uint8_t v)
+{
+    return __builtin_amdgcn_readfirstlane(static_cast<uint32_t>(v));
+}
+
+__device__ inline uint32_t amd_wave_read_first_lane(uint32_t value)
+{
+    return __builtin_amdgcn_readfirstlane(value);
+}
+
+__device__ inline int32_t amd_wave_read_first_lane(int32_t value)
+{
+    return __builtin_amdgcn_readfirstlane(value);
+}
+
+template <typename Object, std::enable_if_t<std::is_trivially_copyable_v<Object>, int> = 0>
+__device__ inline auto amd_wave_read_first_lane(const Object& obj)
+{
+    constexpr size_t ObjectSize = sizeof(Object);
+    constexpr size_t SGPR_size  = 4;
+    constexpr size_t NumFull    = ObjectSize / SGPR_size;
+    constexpr size_t Tail       = ObjectSize % SGPR_size;
+
+    const unsigned char* src = reinterpret_cast<const unsigned char*>(&obj);
+    alignas(Object) unsigned char dst[ObjectSize];
+
+    static_for<0, NumFull, 1>{}([&](auto Ic) {
+        constexpr size_t offset = Ic * SGPR_size;
+        uint32_t read_src;
+        __builtin_memcpy(&read_src, src + offset, SGPR_size);
+        read_src = __builtin_amdgcn_readfirstlane(read_src);
+        __builtin_memcpy(dst + offset, &read_src, SGPR_size);
+    });
+
+    if constexpr(Tail != 0)
+    {
+        constexpr size_t offset = NumFull * SGPR_size;
+        uint32_t tail_loc       = 0;
+        __builtin_memcpy(&tail_loc, src + offset, Tail);
+        tail_loc = __builtin_amdgcn_readfirstlane(tail_loc);
+        __builtin_memcpy(dst + offset, &tail_loc, Tail);
+    }
+    Object out;
+    __builtin_memcpy(&out, dst, ObjectSize);
+    return out;
+}
+
+union buffer_resource
+{
+    CK_TILE_DEVICE constexpr buffer_resource() : content{} {}
+
+    // 128 bit SGPRs to supply buffer resource in buffer instructions
+    // https://rocm-documentation.readthedocs.io/en/latest/GCN_ISA_Manuals/testdocbook.html#vector-memory-buffer-instructions
+    int32x4_t content;
+    array<void*, 2> address;
+    array<uint32_t, 4> range;
+    array<uint32_t, 4> config;
 };
 
-CK_TILE_DEVICE int32x4_t make_wave_buffer_resource(const void* ptr, uint32_t size = 0xffffffff)
+template <typename ForceSGPR = std::false_type>
+CK_TILE_DEVICE int32x4_t make_wave_buffer_resource(const void* ptr,
+                                                   uint32_t size = 0xffffffff,
+                                                   ForceSGPR     = {})
 {
-    buffer_resource res{ptr, size, CK_TILE_BUFFER_RESOURCE_3RD_DWORD};
-    int32x4_t r = __builtin_bit_cast(int32x4_t, res);
-    return r;
+    buffer_resource res;
+#if defined(__gfx125__)
+    res.address[0] = const_cast<void*>(ptr);
+    res.range[1] |= (size & 0x7f) << 25;
+    res.range[2] = (size >> 7) & 0xffffffff;
+#else
+    res.address[0] = const_cast<void*>(ptr);
+    res.range[2]   = size;
+#endif
+    res.config[3] = CK_TILE_BUFFER_RESOURCE_3RD_DWORD;
+
+    if constexpr(std::is_same_v<ForceSGPR, std::true_type>)
+    {
+        return amd_wave_read_first_lane(res.content);
+    }
+    else
+    {
+        return res.content;
+    }
 }
 
 namespace impl {
@@ -470,7 +547,7 @@ struct buffer_store<16>
                                    index_t /*flag*/ = 1)
     {
         static_assert(sizeof(T) == 16);
-        using mbuf_t = fp32x4_t;
+        using mbuf_t = uint32x4_t;
 #if HAS_RAW_BUFFER_BUILTINS
         index_t s_offset = i_offset;
         __builtin_amdgcn_raw_buffer_store_b128(
@@ -496,7 +573,7 @@ struct buffer_store<8>
                                    index_t /*flag*/ = 1)
     {
         static_assert(sizeof(T) == 8);
-        using mbuf_t = fp32x2_t;
+        using mbuf_t = uint32x2_t;
 #if HAS_RAW_BUFFER_BUILTINS
         index_t s_offset = i_offset;
         __builtin_amdgcn_raw_buffer_store_b64(
@@ -522,7 +599,7 @@ struct buffer_store<4>
                                    index_t /*flag*/ = 1)
     {
         static_assert(sizeof(T) == 4);
-        using mbuf_t = float;
+        using mbuf_t = uint32_t;
 #if HAS_RAW_BUFFER_BUILTINS
         index_t s_offset = i_offset;
         __builtin_amdgcn_raw_buffer_store_b32(
@@ -548,7 +625,7 @@ struct buffer_store<2>
                                    index_t /*flag*/ = 1)
     {
         static_assert(sizeof(T) == 2);
-        using mbuf_t = short;
+        using mbuf_t = uint16_t;
 #if HAS_RAW_BUFFER_BUILTINS
         index_t s_offset = i_offset;
         __builtin_amdgcn_raw_buffer_store_b16(
@@ -573,8 +650,8 @@ struct buffer_store<1>
                                    index_t i_offset /*max 0xFFF*/,
                                    index_t /*flag*/ = 1)
     {
-        static_assert(sizeof(T) == 4);
-        using mbuf_t = float;
+        static_assert(sizeof(T) == 1);
+        using mbuf_t = uint8_t;
 #if HAS_RAW_BUFFER_BUILTINS
         index_t s_offset = i_offset;
         __builtin_amdgcn_raw_buffer_store_b8(
@@ -2788,7 +2865,7 @@ CK_TILE_DEVICE void amd_buffer_atomic_max(const thread_buffer<T, N>& src_thread_
 }
 
 #if defined(__gfx950__)
-template <typename T, index_t N, address_space_enum BufferAddressSpace>
+template <typename T, index_t N>
 __device__ auto amd_transpose_load_to_vgpr(const T* __restrict__ in_ptr)
 {
 #define __LDS_ADDR __attribute__((address_space(3)))
@@ -2828,6 +2905,123 @@ __device__ auto amd_transpose_load_to_vgpr(const T* __restrict__ in_ptr)
 #undef __LDS_ADDR
 }
 #endif
+
+template <amd_buffer_coherence_enum coherence = amd_buffer_coherence_enum::coherence_default,
+          typename DataType,
+          index_t TensorRank,
+          bool IsGatherMode = false>
+CK_TILE_DEVICE void
+amd_tdm_load(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor)
+{
+#if CK_TILE_ENABLE_TDM_FEATURE
+    static constexpr auto I0 = number<0>{};
+    static constexpr auto I1 = number<1>{};
+    static constexpr auto I2 = number<2>{};
+    static constexpr auto I3 = number<3>{};
+    if constexpr(TensorRank == 2 && !IsGatherMode)
+    {
+        auto tdm_desc_grp = descriptor.getResourceDescriptorGroup2();
+        __builtin_amdgcn_tensor_load_to_lds_d2(
+            tdm_desc_grp.get(I0), tdm_desc_grp.get(I1), static_cast<index_t>(coherence));
+    }
+    else
+    {
+        auto tdm_desc_grp = descriptor.getResourceDescriptorGroup4();
+        __builtin_amdgcn_tensor_load_to_lds(tdm_desc_grp.get(I0),
+                                            tdm_desc_grp.get(I1),
+                                            tdm_desc_grp.get(I2),
+                                            tdm_desc_grp.get(I3),
+                                            static_cast<index_t>(coherence));
+    }
+#else
+    ignore = descriptor;
+#endif
+}
+
+template <amd_buffer_coherence_enum coherence = amd_buffer_coherence_enum::coherence_default,
+          typename DataType,
+          index_t TensorRank,
+          bool IsGatherMode = false>
+CK_TILE_DEVICE void
+amd_tdm_store(const TDMDescriptor<DataType, TensorRank, IsGatherMode>& descriptor)
+{
+#if CK_TILE_ENABLE_TDM_FEATURE
+    static constexpr auto I0 = number<0>{};
+    static constexpr auto I1 = number<1>{};
+    static constexpr auto I2 = number<2>{};
+    static constexpr auto I3 = number<3>{};
+    if constexpr(TensorRank == 2 && !IsGatherMode)
+    {
+        auto tdm_desc_grp = descriptor.getResourceDescriptorGroup2();
+        __builtin_amdgcn_tensor_store_from_lds_d2(
+            tdm_desc_grp.get(I0), tdm_desc_grp.get(I1), static_cast<index_t>(coherence));
+    }
+    else
+    {
+        auto tdm_desc_grp = descriptor.getResourceDescriptorGroup4();
+        __builtin_amdgcn_tensor_store_from_lds(tdm_desc_grp.get(I0),
+                                               tdm_desc_grp.get(I1),
+                                               tdm_desc_grp.get(I2),
+                                               tdm_desc_grp.get(I3),
+                                               static_cast<index_t>(coherence));
+    }
+#else
+    ignore = descriptor;
+#endif
+
+    // amd_wave_read_first_lane is the SGPR function from AMD GPU device to load 1 or a series of
+    // the memory to the SGPR registers.
+    __device__ inline uint32_t amd_wave_read_first_lane(uint16_t v)
+    {
+        return __builtin_amdgcn_readfirstlane(static_cast<uint32_t>(v));
+    }
+
+    __device__ inline uint32_t amd_wave_read_first_lane(uint8_t v)
+    {
+        return __builtin_amdgcn_readfirstlane(static_cast<uint32_t>(v));
+    }
+
+    __device__ inline uint32_t amd_wave_read_first_lane(uint32_t value)
+    {
+        return __builtin_amdgcn_readfirstlane(value);
+    }
+
+    __device__ inline int32_t amd_wave_read_first_lane(int32_t value)
+    {
+        return __builtin_amdgcn_readfirstlane(value);
+    }
+
+    template <typename Object, std::enable_if_t<std::is_trivially_copyable_v<Object>, int> = 0>
+    __device__ inline auto amd_wave_read_first_lane(const Object& obj)
+    {
+        constexpr size_t ObjectSize = sizeof(Object);
+        constexpr size_t SGPR_size  = 4;
+        constexpr size_t NumFull    = ObjectSize / SGPR_size;
+        constexpr size_t Tail       = ObjectSize % SGPR_size;
+
+        const unsigned char* src = reinterpret_cast<const unsigned char*>(&obj);
+        alignas(Object) unsigned char dst[ObjectSize];
+
+        static_for<0, NumFull, 1>{}([&](auto Ic) {
+            constexpr size_t offset = Ic * SGPR_size;
+            uint32_t read_src;
+            __builtin_memcpy(&read_src, src + offset, SGPR_size);
+            read_src = __builtin_amdgcn_readfirstlane(read_src);
+            __builtin_memcpy(dst + offset, &read_src, SGPR_size);
+        });
+
+        if constexpr(Tail != 0)
+        {
+            constexpr size_t offset = NumFull * SGPR_size;
+            uint32_t tail_loc       = 0;
+            __builtin_memcpy(&tail_loc, src + offset, Tail);
+            tail_loc = __builtin_amdgcn_readfirstlane(tail_loc);
+            __builtin_memcpy(dst + offset, &tail_loc, Tail);
+        }
+        Object out;
+        __builtin_memcpy(&out, dst, ObjectSize);
+        return out;
+    }
 
 } // namespace ck_tile
 

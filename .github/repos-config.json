@@ -29,7 +29,7 @@
       "url": "AMD-ROCm-Internal/composable_kernel",
       "branch": "gfx1250",
       "category": "projects",
-      "auto_subtree_pull": true,
+      "auto_subtree_pull": false,
       "auto_subtree_push": false
     },
     {

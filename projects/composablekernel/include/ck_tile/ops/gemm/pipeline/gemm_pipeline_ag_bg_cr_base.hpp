@@ -53,6 +53,19 @@ struct GemmPipelineAgBgCrImplBase
         move_tile_window(dram_tile_window, dram_tile_window_step);
     }
 
+    template <typename TDMConfig_,
+              typename DstBlockWindow,
+              typename SrcTileWindow,
+              typename DramTileWindowStep>
+    CK_TILE_DEVICE void GlobalPrefetchTDM(const TDMConfig_& tdm_config,
+                                          DstBlockWindow& dst_block_window,
+                                          SrcTileWindow& dram_tile_window,
+                                          const DramTileWindowStep& dram_tile_window_step) const
+    {
+        load_tile_tdm(tdm_config, dst_block_window, dram_tile_window);
+        move_tile_window(dram_tile_window, dram_tile_window_step);
+    }
+
     template <typename DstTileWindow, typename SrcBlockTile, typename ElementFunction>
     CK_TILE_DEVICE void LocalPrefill(DstTileWindow& lds_tile_window,
                                      const SrcBlockTile& src_block_tile,

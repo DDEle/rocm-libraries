@@ -3,10 +3,12 @@
 
 #pragma once
 
+#include "ck_tile/core/arch/amd_wave_read_first_lane.hpp"
 #include "ck_tile/core/container/sequence.hpp"
 #include "ck_tile/core/container/tuple.hpp"
 #include "ck_tile/core/numeric/integer.hpp"
 #include "ck_tile/core/numeric/vector_type.hpp"
+
 namespace ck_tile {
 
 enum class TDMGatherIndexSize : uint32_t
@@ -423,7 +425,8 @@ class TDMDescriptor
         configureGroup1(group1);
 
         // generate tuples with 2 elements; first is int32x4_t, second is int32x8_t
-        return make_tuple(group0.bitfield, group1.bitfield);
+        return make_tuple(amd_wave_read_first_lane(group0.bitfield),
+                          amd_wave_read_first_lane(group1.bitfield));
     }
 
     CK_TILE_DEVICE auto
@@ -445,7 +448,10 @@ class TDMDescriptor
         TDM_GROUP3 group3;
         configureGroup3(group3);
 
-        return make_tuple(group0.bitfield, group1.bitfield, group2.bitfield, group3.bitfield);
+        return make_tuple(amd_wave_read_first_lane(group0.bitfield),
+                          amd_wave_read_first_lane(group1.bitfield),
+                          amd_wave_read_first_lane(group2.bitfield),
+                          amd_wave_read_first_lane(group3.bitfield));
     }
 
     private:

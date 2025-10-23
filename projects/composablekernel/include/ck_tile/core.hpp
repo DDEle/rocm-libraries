@@ -12,6 +12,7 @@
 #include "ck_tile/core/arch/amd_buffer_addressing_builtins.hpp"
 #include "ck_tile/core/arch/amd_tdm_descriptor.hpp"
 #include "ck_tile/core/arch/amd_transpose_load_encoding.hpp"
+#include "ck_tile/core/arch/amd_wave_read_first_lane.hpp"
 #include "ck_tile/core/arch/arch.hpp"
 #include "ck_tile/core/arch/generic_memory_space_atomic.hpp"
 #include "ck_tile/core/arch/utility.hpp"

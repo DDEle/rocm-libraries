@@ -118,9 +118,29 @@ template <typename ADataType,
           index_t K_Warp_Tile>
 CK_TILE_HOST bool check_wmma_supported()
 {
-    if(is_gfx12_supported() || is_gfx11_supported())
+    if(is_gfx120_supported())
     {
-        return has_wmma_traits_v<DeviceIp,
+        return has_wmma_traits_v<gfx120_t,
+                                 ADataType,
+                                 BDataType,
+                                 AccDataType,
+                                 M_Warp_Tile,
+                                 N_Warp_Tile,
+                                 K_Warp_Tile>;
+    }
+    else if(is_gfx125_supported())
+    {
+        return has_wmma_traits_v<gfx125_t,
+                                 ADataType,
+                                 BDataType,
+                                 AccDataType,
+                                 M_Warp_Tile,
+                                 N_Warp_Tile,
+                                 K_Warp_Tile>;
+    }
+    else if(is_gfx11_supported())
+    {
+        return has_wmma_traits_v<gfx11_t,
                                  ADataType,
                                  BDataType,
                                  AccDataType,

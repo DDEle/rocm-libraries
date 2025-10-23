@@ -30,6 +30,7 @@ using Mem       = ck_tile::integral_constant<GemmPipelineType, GemmPipelineType:
 using CompV3    = ck_tile::integral_constant<GemmPipelineType, GemmPipelineType::CompV3>;
 using CompV4    = ck_tile::integral_constant<GemmPipelineType, GemmPipelineType::CompV4>;
 using CompAsync = ck_tile::integral_constant<GemmPipelineType, GemmPipelineType::CompAsync>;
+using CompTDM   = ck_tile::integral_constant<GemmPipelineType, GemmPipelineType::CompTDM>;
 
 using Persistent    = std::true_type;
 using NonPersistent = std::false_type;
@@ -166,6 +167,10 @@ using KernelTypesCompV4 = ::testing::Types<
 
 using KernelTypesCompAsync = ::testing::Types<
     std::tuple<    Row,     Col,     Row,       F16,       F16,         F32,       F16,        I256,        I256,         I32,        I32,        I32, Intrawave,        CompAsync>
+>;
+
+using KernelTypesCompTDMWmma = ::testing::Types<
+    std::tuple<    Row,     Col,     Row,       F16,       F16,         F32,       F16,        I64,         I64,          I32,        I16,        I16, Intrawave,        CompTDM>
 >;
 
 using KernelTypesCompV4Wmma = ::testing::Types<

@@ -1021,3 +1021,81 @@ TEST_CASE("BitfieldCombine epxression and lowering", "[expression][expression-tr
         CHECK_THAT(lowerBitfieldCombine(bfc), IdenticalTo(expected));
     }
 }
+
+TEST_CASE("periodizeWorkitemValues works", "[expression][expression-transformation]")
+{
+    using namespace rocRoller;
+    using namespace KernelGraph::CoordinateGraph;
+    using Expression::ExpressionPtr;
+    using Expression::literal;
+
+    auto context = TestContext::ForDefaultTarget();
+
+    auto graph    = KernelGraph::KernelGraph();
+    auto wiXCoord = graph.coordinates.addElement(Workitem(0));
+    auto wiYCoord = graph.coordinates.addElement(Workitem(1));
+    auto graphPtr = std::make_shared<KernelGraph::KernelGraph>(graph);
+
+    auto wiXExpr = std::make_shared<Expression::Expression>(
+        Expression::DataFlowTag{wiXCoord, Register::Type::Vector, DataType::UInt32});
+    auto wiYExpr = std::make_shared<Expression::Expression>(
+        Expression::DataFlowTag{wiYCoord, Register::Type::Vector, DataType::UInt32});
+
+    uint period        = 16;
+    auto logPeriod     = static_cast<uint>(log2(period));
+    auto logPeriodExpr = literal(logPeriod);
+    auto periodMask    = literal(period - 1);
+
+    auto const wavefrontSize
+        = context.get()->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
+    auto logWavefrontSize     = static_cast<uint>(log2(wavefrontSize));
+    auto logWavefrontSizeExpr = literal(logWavefrontSize);
+
+    auto nWave = std::make_shared<Expression::Expression>(
+        Expression::ArithmeticShiftR({wiXExpr, logWavefrontSizeExpr}));
+
+    auto nWaveOffset
+        = std::make_shared<Expression::Expression>(Expression::ShiftL({nWave, logPeriodExpr}));
+
+    auto maskedPeriodInWave
+        = std::make_shared<Expression::Expression>(Expression::BitwiseAnd({wiXExpr, periodMask}));
+
+    auto expectedBase = std::make_shared<Expression::Expression>(
+        Expression::Add({maskedPeriodInWave, nWaveOffset}));
+
+    SECTION("Simple")
+    {
+        auto expected = expectedBase;
+        auto actual = Expression::periodizeWorkitemValues(wiXExpr, context.get(), graphPtr, period);
+
+        CHECK(toString(expected) == toString(actual));
+    }
+
+    SECTION("Simple twice")
+    {
+        auto expected = expectedBase * expectedBase;
+        auto expr     = wiXExpr * wiXExpr;
+        auto actual   = Expression::periodizeWorkitemValues(expr, context.get(), graphPtr, period);
+
+        CHECK(toString(expected) == toString(actual));
+    }
+
+    SECTION("Workitem Y")
+    {
+        auto expected = expectedBase * wiYExpr;
+        auto expr     = wiXExpr * wiYExpr;
+        auto actual   = Expression::periodizeWorkitemValues(expr, context.get(), graphPtr, period);
+
+        CHECK(toString(expected) == toString(actual));
+    }
+
+    SECTION("Complex")
+    {
+        auto expected = expectedBase + wiYExpr / literal(wavefrontSize)
+                        << literal(period) + expectedBase;
+        auto expr   = wiXExpr + wiYExpr / literal(wavefrontSize) << literal(period) + wiXExpr;
+        auto actual = Expression::periodizeWorkitemValues(expr, context.get(), graphPtr, period);
+
+        CHECK(toString(expected) == toString(actual));
+    }
+}

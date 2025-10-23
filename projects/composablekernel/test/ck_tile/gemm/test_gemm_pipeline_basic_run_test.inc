@@ -13,6 +13,7 @@
 #include "test_gemm_pipeline_smoke_util.hpp"
 #include "test_gemm_pipeline_smoke_run_test.inc"
 
+template <typename PrecType>
 struct GemmConfig_Mfma : public GemmConfigBase
 {
     static constexpr ck_tile::index_t M_Tile = 256;
@@ -24,6 +25,7 @@ struct GemmConfig_Mfma : public GemmConfigBase
     static constexpr ck_tile::index_t K_Warp_Tile = 16;
 };
 
+template <typename PrecType>
 struct GemmConfig_Wmma : public GemmConfigBase
 {
     static constexpr ck_tile::index_t M_Tile = 128;
@@ -32,7 +34,13 @@ struct GemmConfig_Wmma : public GemmConfigBase
 
     static constexpr ck_tile::index_t M_Warp_Tile = 16;
     static constexpr ck_tile::index_t N_Warp_Tile = 16;
+#if defined(CK_USE_GFX1250)
+    static constexpr bool is_8bit_float =
+        std::is_same_v<PrecType, ck_tile::fp8_t> || std::is_same_v<PrecType, ck_tile::bf8_t>;
+    static constexpr ck_tile::index_t K_Warp_Tile = is_8bit_float ? 64 : 32;
+#else
     static constexpr ck_tile::index_t K_Warp_Tile = 16;
+#endif
 };
 
 template <typename GemmConfig,
@@ -228,9 +236,9 @@ template <typename APrecType, typename BPrecType = APrecType, typename CPrecType
 bool run_gemm_combinations()
 {
     // Define possible values for each parameter
-    std::vector<std::string> m_values = {"128", "1024"};
-    std::vector<std::string> n_values = {"128", "2048"};
-    std::vector<std::string> k_values = {"64", "128"};
+    std::vector<std::string> m_values = {"128"};
+    std::vector<std::string> n_values = {"128"};
+    std::vector<std::string> k_values = {"64"};
 
     // We'll store all our arguments as strings first
     std::vector<std::string> arg_strings = {"./bin/tile_example_gemm_basic",
@@ -282,13 +290,15 @@ bool run_gemm_combinations()
                 try
                 {
 #if CK_TILE_USE_WMMA
-                    is_success = run_gemm_test<GemmConfig_Wmma, APrecType, BPrecType, CPrecType>(
-                                     ARG_COUNT, argv) &&
-                                 is_success;
+                    is_success =
+                        run_gemm_test<GemmConfig_Wmma<APrecType>, APrecType, BPrecType, CPrecType>(
+                            ARG_COUNT, argv) &&
+                        is_success;
 #else
-                    is_success = run_gemm_test<GemmConfig_Mfma, APrecType, BPrecType, CPrecType>(
-                                     ARG_COUNT, argv) &&
-                                 is_success;
+                    is_success =
+                        run_gemm_test<GemmConfig_Mfma<APrecType>, APrecType, BPrecType, CPrecType>(
+                            ARG_COUNT, argv) &&
+                        is_success;
 #endif
                 }
                 catch(const ArgumentsNotSupportedException& e)

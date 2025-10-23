@@ -59,14 +59,15 @@ jobs:
             --dir "$(dirname $CCACHE_CONFIGPATH)" \
             --local-path "$CACHE_DIR/ccache"
 
-      - name: Runner health status
-        run: |
-          ./TheRock/build_tools/health_status.py
-
       - name: Fetch sources
         timeout-minutes: 30
         run: |
           ./TheRock/build_tools/fetch_sources.py --jobs 12 --no-include-rocm-libraries --no-include-ml-frameworks
+
+      - name: Install python deps
+        run: |
+          pip install -r TheRock/requirements.txt
+          pip freeze
 
       - name: Patch rocm-libraries
         run: |

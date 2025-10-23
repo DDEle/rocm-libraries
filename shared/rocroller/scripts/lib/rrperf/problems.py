@@ -186,6 +186,10 @@ class GEMMSolution:
     workgroupRemapXCC: bool = False
     workgroupRemapXCCValue: int = -1
 
+    workgroup_cluster_size_x: int = 0
+    workgroup_cluster_size_y: int = 0
+    workgroup_cluster_size_z: int = 0
+
     unroll_x: int = 0
     unroll_y: int = 0
 

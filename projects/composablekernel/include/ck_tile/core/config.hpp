@@ -20,7 +20,17 @@
     defined(__gfx1152__) || defined(__gfx11_generic__)
 #define __gfx11__
 #endif
+#if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__) || \
+    defined(__gfx1250__) || defined(__gfx1251__)
+#define __gfx12__
+#endif
 #if defined(__gfx1200__) || defined(__gfx1201__) || defined(__gfx12_generic__)
+#define __gfx120__
+#endif
+#if defined(__gfx1250__) || defined(__gfx1251__)
+#define __gfx125__
+#endif
+#if defined(__gfx120__) || defined(__gfx125__)
 #define __gfx12__
 #endif
 
@@ -181,6 +191,12 @@
 #endif
 #endif
 
+#if(defined(__gfx125__))
+#define CK_TILE_ENABLE_TDM_FEATURE 1
+#else
+#define CK_TILE_ENABLE_TDM_FEATURE 0
+#endif
+
 // workaround for ROCm 6.2 and later
 #ifndef CK_TILE_WORKAROUND_ROCM_6_2_SCRATCH_MEMORY_ISSUE
 #if(HIP_VERSION_MAJOR == 6 && HIP_VERSION_MINOR == 2 && HIP_VERSION_PATCH >= 41133) ||  \
@@ -213,8 +229,10 @@
 #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x00020000
 #elif defined(__gfx103__) // for GPU code
 #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x31014000
-#elif defined(__gfx11__) || defined(__gfx12__) // for GPU code
+#elif defined(__gfx11__) || defined(__gfx120__)
 #define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x31004000
+#elif defined(__gfx125__)
+#define CK_TILE_BUFFER_RESOURCE_3RD_DWORD 0x0
 #endif
 
 #ifndef CK_TILE_EXPERIMENTAL_BLOCK_SYNC_LDS_WITHOUT_SYNC_VMEM

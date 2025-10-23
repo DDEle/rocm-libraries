@@ -36,6 +36,7 @@
 #include <rocRoller/CodeGen/ArgumentLoader.hpp>
 #include <rocRoller/Expression.hpp>
 #include <rocRoller/ExpressionTransformations.hpp>
+#include <rocRoller/InstructionValues/RegisterAllocator_detail.hpp>
 #include <rocRoller/KernelGraph/KernelGraph.hpp>
 #include <rocRoller/KernelGraph/Transforms/RemoveSetCoordinate.hpp>
 #include <rocRoller/KernelGraph/Visitors.hpp>
@@ -122,24 +123,10 @@ namespace AssertTest
 
             m_context->schedule(k->postamble());
             m_context->schedule(k->amdgpu_metadata());
-            if(arch.HasCapability(GPUCapability::WorkgroupIdxViaTTMP))
-            {
-                EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s2, 0"));
-            }
-            else
-            {
-                EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s3, 0"));
-            }
+            EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s3, 0"));
             if(assertOpKind != AssertOpKind::NoOp)
             {
-                if(arch.HasCapability(GPUCapability::WorkgroupIdxViaTTMP))
-                {
-                    EXPECT_THAT(output(), testing::HasSubstr("s_cmp_eq_i32 s2, 1"));
-                }
-                else
-                {
-                    EXPECT_THAT(output(), testing::HasSubstr("s_cmp_eq_i32 s3, 1"));
-                }
+                EXPECT_THAT(output(), testing::HasSubstr("s_cmp_eq_i32 s3, 1"));
                 EXPECT_THAT(output(), testing::HasSubstr("s_cbranch_scc1"));
                 EXPECT_THAT(output(), testing::HasSubstr("AssertFailed"));
                 EXPECT_THAT(output(),
@@ -155,27 +142,44 @@ namespace AssertTest
                 else
                 { // MEMORY_VIOLATION
                     auto const HasVMov64 = arch.HasCapability(GPUCapability::v_mov_b64);
-                    if(HasVMov64)
+
+                    if(arch.HasCapability(GPUCapability::HasVGPRIndexing))
                     {
-                        EXPECT_THAT(output(), testing::HasSubstr("v_mov_b64 v[2:3], 0"));
+                        AssertFatal(HasVMov64, ShowValue(arch.target()));
+                        auto reservedRegionSize
+                            = Register::RegisterAllocatorDetail::ReservedRegionSize();
+                        EXPECT_THAT(output(),
+                                    testing::HasSubstr(fmt::format("v_mov_b64 v[{}:{}], 0",
+                                                                   reservedRegionSize,
+                                                                   reservedRegionSize + 1)));
+                        EXPECT_THAT(output(),
+                                    testing::HasSubstr(
+                                        fmt::format("v_mov_b32 v{}, 42", reservedRegionSize + 2)));
+                        EXPECT_THAT(
+                            output(),
+                            testing::HasSubstr(fmt::format("global_store_dword v[{}:{}], v{} off",
+                                                           reservedRegionSize,
+                                                           reservedRegionSize + 1,
+                                                           reservedRegionSize + 2)));
                     }
                     else
                     {
-                        EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v2, 0"));
-                        EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v3, 0"));
+                        if(HasVMov64)
+                        {
+                            EXPECT_THAT(output(), testing::HasSubstr("v_mov_b64 v[2:3], 0"));
+                        }
+                        else
+                        {
+                            EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v2, 0"));
+                            EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v3, 0"));
+                        }
+                        EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v1, 42"));
+                        EXPECT_THAT(output(),
+                                    testing::HasSubstr("global_store_dword v[2:3], v1 off"));
                     }
-                    EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v1, 42"));
-                    EXPECT_THAT(output(), testing::HasSubstr("global_store_dword v[2:3], v1 off"));
                 }
                 EXPECT_THAT(output(), testing::HasSubstr("AssertPassed"));
-                if(arch.HasCapability(GPUCapability::WorkgroupIdxViaTTMP))
-                {
-                    EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s2, 1"));
-                }
-                else
-                {
-                    EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s3, 1"));
-                }
+                EXPECT_THAT(output(), testing::HasSubstr("s_mov_b32 s3, 1"));
             }
             else
             {
@@ -289,17 +293,41 @@ namespace AssertTest
                 { // MEMORY_VIOLATION
                     auto const HasVMov64
                         = m_context->targetArchitecture().HasCapability(GPUCapability::v_mov_b64);
-                    if(HasVMov64)
+
+                    if(arch.HasCapability(GPUCapability::HasVGPRIndexing))
                     {
-                        EXPECT_THAT(output(), testing::HasSubstr("v_mov_b64 v[2:3], 0"));
+                        AssertFatal(HasVMov64, ShowValue(arch.target()));
+                        auto reservedRegionSize
+                            = Register::RegisterAllocatorDetail::ReservedRegionSize();
+                        EXPECT_THAT(output(),
+                                    testing::HasSubstr(fmt::format("v_mov_b64 v[{}:{}], 0",
+                                                                   reservedRegionSize,
+                                                                   reservedRegionSize + 1)));
+                        EXPECT_THAT(output(),
+                                    testing::HasSubstr(
+                                        fmt::format("v_mov_b32 v{}, 42", reservedRegionSize + 2)));
+                        EXPECT_THAT(
+                            output(),
+                            testing::HasSubstr(fmt::format("global_store_dword v[{}:{}], v{} off",
+                                                           reservedRegionSize,
+                                                           reservedRegionSize + 1,
+                                                           reservedRegionSize + 2)));
                     }
                     else
                     {
-                        EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v2, 0"));
-                        EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v3, 0"));
+                        if(HasVMov64)
+                        {
+                            EXPECT_THAT(output(), testing::HasSubstr("v_mov_b64 v[2:3], 0"));
+                        }
+                        else
+                        {
+                            EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v2, 0"));
+                            EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v3, 0"));
+                        }
+                        EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v1, 42"));
+                        EXPECT_THAT(output(),
+                                    testing::HasSubstr("global_store_dword v[2:3], v1 off"));
                     }
-                    EXPECT_THAT(output(), testing::HasSubstr("v_mov_b32 v1, 42"));
-                    EXPECT_THAT(output(), testing::HasSubstr("global_store_dword v[2:3], v1 off"));
                 }
             }
             else

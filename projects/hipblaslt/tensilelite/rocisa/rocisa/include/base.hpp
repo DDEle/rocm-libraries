@@ -107,6 +107,8 @@ namespace rocisa
                 = {nb::cast<int>(arch[0]), nb::cast<int>(arch[1]), nb::cast<int>(arch[2])};
             m_mutex.lock();
             m_threads[id] = std::move(KernelInfo(isaVersion, wavefrontSize));
+            m_vgpridx[id] = std::move(std::map<std::string, int>());
+            m_vgprmsb[id] = 0;
             m_mutex.unlock();
         }
 
@@ -152,9 +154,37 @@ namespace rocisa
             return m_isainfo;
         }
 
+        std::map<std::string, int> getVgprIdx()
+        {
+            return m_vgpridx[std::this_thread::get_id()];
+        }
+
+        int getVgprMsb()
+        {
+            return m_vgprmsb[std::this_thread::get_id()];
+        }
+
         void setData(const std::map<IsaVersion, IsaInfo>& data)
         {
             m_isainfo = data;
+        }
+
+        void setVgprIdx(const std::string& s, const int idx)
+        {
+            std::thread::id id = std::this_thread::get_id();
+            // need lock here?
+            m_mutex.lock();
+            m_vgpridx[id][s] = idx;
+            m_mutex.unlock();
+        }
+
+        void setVgprMsb(const int msb)
+        {
+            std::thread::id id = std::this_thread::get_id();
+            // need lock here?
+            m_mutex.lock();
+            m_vgprmsb[id] = msb;
+            m_mutex.unlock();
         }
 
     private:
@@ -163,6 +193,8 @@ namespace rocisa
         std::mutex                            m_mutex;
         std::map<std::thread::id, KernelInfo> m_threads;
         std::map<IsaVersion, IsaInfo>         m_isainfo;
+        std::map<std::thread::id, std::map<std::string, int>> m_vgpridx;
+        std::map<std::thread::id, int>        m_vgprmsb;
     };
 
     struct Item
@@ -199,6 +231,16 @@ namespace rocisa
         std::map<std::string, bool> getAsmBugs() const
         {
             return rocIsa::getInstance().getAsmBugs();
+        }
+
+        std::map<std::string, int> getVgprIdx() const
+        {
+            return rocIsa::getInstance().getVgprIdx();
+        }
+
+        int getVgprMsb() const
+        {
+            return rocIsa::getInstance().getVgprMsb();
         }
 
         KernelInfo kernel() const

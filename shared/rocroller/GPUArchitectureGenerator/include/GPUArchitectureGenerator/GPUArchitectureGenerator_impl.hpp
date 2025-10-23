@@ -310,6 +310,10 @@ namespace GPUArchitectureGenerator
                 AddCapability(isaVersion, rocRoller::GPUCapability::MaxLgkmcnt, 0);
             }
             AddCapability(isaVersion, rocRoller::GPUCapability::MaxExpcnt, 7);
+            if(HasCapability(isaVersion, rocRoller::GPUCapability::HasTensorcnt))
+            {
+                AddCapability(isaVersion, rocRoller::GPUCapability::MaxTensorcnt, 63);
+            }
             AddCapability(isaVersion, rocRoller::GPUCapability::SupportedSource, 0);
 
             if(HasCapability(isaVersion, rocRoller::GPUCapability::HasWave32))
@@ -322,6 +326,9 @@ namespace GPUArchitectureGenerator
 
             if(HasCapability(isaVersion, rocRoller::GPUCapability::HasXCC))
                 AddCapability(isaVersion, rocRoller::GPUCapability::DefaultRemapXCCValue, 8);
+
+            if(isaVersion.toString().starts_with("gfx125"))
+                AddCapability(isaVersion, rocRoller::GPUCapability::PartiallyActiveWaveSize, 16);
 
             if(isaVersion.toString().starts_with("gfx95"))
                 AddCapability(isaVersion, rocRoller::GPUCapability::MaxLdsSize, 160 * (1 << 10));

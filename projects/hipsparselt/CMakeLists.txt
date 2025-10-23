@@ -324,7 +324,7 @@ endif()
 
 if(HIPSPARSELT_BUILD_COVERAGE OR BUILD_CODE_COVERAGE)
     message(STATUS "Configuring code coverage target")
-    
+
     # Apply coverage flags to library target
     target_compile_options(hipsparselt PRIVATE -fprofile-instr-generate -fcoverage-mapping)
     target_link_options(hipsparselt PRIVATE -fprofile-instr-generate)

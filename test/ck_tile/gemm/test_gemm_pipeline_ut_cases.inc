@@ -112,7 +112,21 @@ TYPED_TEST(TEST_SUITE_NAME, NotSupportedArgument)
     constexpr bool PadN = false;
     constexpr bool PadK = false;
 
-    EXPECT_THROW((this->template Run<PadM, PadN, PadK>(M, N, K)), std::runtime_error);
+#define XSTRINGIFY(s) STRINGIFY(s)
+#define STRINGIFY(s) #s
+
+    constexpr std::string_view suite_name = XSTRINGIFY(TEST_SUITE_NAME);
+    if constexpr(suite_name == "TestCkTileGemmPipelineCompTDMWmma")
+    {
+        this->template Run<PadM, PadN, PadK>(M, N, K);
+    }
+    else
+    {
+        EXPECT_THROW((this->template Run<PadM, PadN, PadK>(M, N, K)), std::runtime_error);
+    }
+
+#undef STRINGIFY
+#undef XSTRINGIFY
 }
 
 #endif

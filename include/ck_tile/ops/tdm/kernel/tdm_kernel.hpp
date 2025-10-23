@@ -292,7 +292,7 @@ struct TDMCopyKernel
 
             load_tile_tdm(tdm_config, lds_block_window, input_block_window);
             s_wait_tensorcnt();
-            store_tile_tdm(output_block_window, lds_block_window);
+            store_tile_tdm(tdm_config, output_block_window, lds_block_window);
         }
         else
         {
@@ -328,13 +328,13 @@ struct TDMCopyKernel
                               gather_index_view,
                               number<CountPerWarp>{});
                 s_wait_tensorcnt();
-                store_tile_tdm(output_block_window, lds_block_window);
+                store_tile_tdm(tdm_config, output_block_window, lds_block_window);
             }
             else
             {
                 load_tile_tdm(tdm_config, lds_block_window, input_block_window);
                 s_wait_tensorcnt();
-                store_tile_tdm(output_block_window, lds_block_window);
+                store_tile_tdm(tdm_config, output_block_window, lds_block_window);
             }
         }
     }

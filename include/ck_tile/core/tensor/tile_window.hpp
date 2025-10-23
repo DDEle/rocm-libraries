@@ -523,7 +523,6 @@ struct tile_window_with_static_distribution
         constexpr auto tile_dstr = typename Base::TileDstr{};
 
         static constexpr index_t num_tensor_dims = BottomTensorView_::get_num_of_dimension();
-        // constexpr auto tile_dstr = typename Base::TileDstr{};
 
         const auto lds_window_origin       = lds_tile.get_window_origin();
         const auto& lds_bottom_tensor_view = lds_tile.get_bottom_tensor_view();
@@ -532,10 +531,8 @@ struct tile_window_with_static_distribution
 
         const auto& glb_tensor_descriptor = this->get_bottom_tensor_view().get_tensor_descriptor();
 
-        const auto tensor_dims =
-            tuple_reverse(glb_tensor_descriptor.get_lengths() - this->get_window_origin());
-        const auto global_strides = (container_reverse_exclusive_scan(
-            glb_tensor_descriptor.get_lengths(), multiplies{}, 1));
+        // Use cached computation for global strides
+        const auto& global_strides = get_cached_global_strides();
 
         auto process_coord = [&](auto iCoord) {
             auto window_adaptor_thread_coord = pre_computed_coords_[iCoord][I0]; // without origin
@@ -547,7 +544,6 @@ struct tile_window_with_static_distribution
             // tdm's box dim is reversed from tile distribution
             constexpr auto box_dim =
                 to_sequence(tile_dstr.get_ys_to_d_descriptor().get_lengths()).reverse();
-
             // Use precomputed tensor descriptor
             const auto lds_coord =
                 make_tensor_coordinate(lds_tensor_descriptor, lds_bottom_tensor_thread_idx);
@@ -555,6 +551,9 @@ struct tile_window_with_static_distribution
             // Calculate SMEM address using base pointer
             CK_TILE_LDS_ADDR LdsDataType* smem = smem_base_ptr + lds_coord.get_offset();
 
+            const auto& tensor_dims = to_array<index_t, Base::NDimBottomTensor>(
+                tuple_reverse(glb_tensor_descriptor.get_lengths() - this->get_window_origin() -
+                              window_adaptor_thread_coord.get_bottom_index()));
             // Assert that both window origins have the same dimensionality
             static_assert(
                 std::is_same<std::remove_cv_t<std::remove_reference_t<decltype(lds_window_origin)>>,
@@ -606,8 +605,9 @@ struct tile_window_with_static_distribution
         static_for<0, NumCoord, 1>{}(process_coord);
     }
 
-    template <typename LdsTileWindow_, index_t i_access_unsupport_ = -1>
-    CK_TILE_DEVICE auto tdm_store_from_lds(const LdsTileWindow_& lds_tile,
+    template <typename TDMConfig_, typename LdsTileWindow_, index_t i_access_unsupport_ = -1>
+    CK_TILE_DEVICE auto tdm_store_from_lds(const TDMConfig_& tdm_config,
+                                           const LdsTileWindow_& lds_tile,
                                            number<i_access_unsupport_> = {}) const
     {
         using LdsTileWindow      = remove_cvref_t<LdsTileWindow_>;
@@ -616,17 +616,15 @@ struct tile_window_with_static_distribution
 
         static constexpr index_t num_tensor_dims = BottomTensorView_::get_num_of_dimension();
 
+        const auto& glb_tensor_descriptor = this->get_bottom_tensor_view().get_tensor_descriptor();
+
         const auto lds_window_origin       = lds_tile.get_window_origin();
         const auto& lds_bottom_tensor_view = lds_tile.get_bottom_tensor_view();
         const auto& lds_tensor_descriptor  = lds_bottom_tensor_view.get_tensor_descriptor();
         auto smem_base_ptr                 = lds_bottom_tensor_view.get_buffer_view().p_data_;
 
-        const auto& glb_tensor_descriptor = this->get_bottom_tensor_view().get_tensor_descriptor();
-
-        const auto tensor_dims =
-            tuple_reverse(glb_tensor_descriptor.get_lengths() - this->get_window_origin());
-        const auto global_strides = (container_reverse_exclusive_scan(
-            glb_tensor_descriptor.get_lengths(), multiplies{}, 1));
+        // Use cached computation for global strides
+        const auto& global_strides = get_cached_global_strides();
 
         static_for<0, NumCoord, 1>{}([&](auto iCoord) {
             auto window_adaptor_thread_coord = pre_computed_coords_[iCoord][I0]; // without origin
@@ -634,6 +632,10 @@ struct tile_window_with_static_distribution
 
             auto lds_bottom_tensor_thread_idx =
                 lds_window_origin + window_adaptor_thread_coord.get_bottom_index();
+
+            const auto& tensor_dims = to_array<index_t, Base::NDimBottomTensor>(
+                tuple_reverse(glb_tensor_descriptor.get_lengths() - this->get_window_origin() -
+                              window_adaptor_thread_coord.get_bottom_index()));
 
             constexpr auto box_dim =
                 to_sequence(tile_dstr.get_ys_to_d_descriptor().get_lengths()).reverse();
@@ -651,12 +653,14 @@ struct tile_window_with_static_distribution
                 "Window origin types mismatch - dimensions must be consistent!");
 
             this->get_bottom_tensor_view()
-                .template store_tdm_elements<remove_cvref_t<decltype(box_dim)>, num_tensor_dims>(
-                    smem,
-                    bottom_tensor_thread_coord,
-                    tensor_dims,
-                    global_strides,
-                    number<num_tensor_dims>{});
+                .template store_tdm_elements<TDMConfig_,
+                                             remove_cvref_t<decltype(box_dim)>,
+                                             num_tensor_dims>(tdm_config,
+                                                              smem,
+                                                              bottom_tensor_thread_coord,
+                                                              tensor_dims,
+                                                              global_strides,
+                                                              number<num_tensor_dims>{});
         });
     }
 
@@ -1055,11 +1059,32 @@ struct tile_window_with_static_distribution
         });
     }
 
+    private:
+    // Cached computation for global strides
+    CK_TILE_DEVICE auto get_cached_global_strides() const
+    {
+        if(!tensor_cache_initialized_)
+        {
+            const auto& glb_tensor_descriptor =
+                this->get_bottom_tensor_view().get_tensor_descriptor();
+            cached_global_strides_ = to_array<index_t, Base::NDimBottomTensor>(
+                tuple_reverse(container_reverse_inclusive_scan(
+                    glb_tensor_descriptor.get_lengths(), multiplies{}, 1)));
+            tensor_cache_initialized_ = true;
+        }
+
+        return cached_global_strides_;
+    }
+
     // this contains:
     //   per-thread coordinate for window adaptor
     //   per-thread coordinate for bottom tensor
     array<tuple<typename Base::WindowAdaptorCoord, typename Base::BottomTensorCoord>, NumCoord>
         pre_computed_coords_;
+
+    // Cached tensor computation variables
+    mutable bool tensor_cache_initialized_ = false;
+    mutable typename Base::BottomTensorIndex cached_global_strides_;
 };
 
 // TODO: use strategy

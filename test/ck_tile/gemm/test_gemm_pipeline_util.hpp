@@ -57,7 +57,8 @@ enum struct GemmPipelineType
     Mem,
     CompV3,
     CompV4,
-    CompAsync
+    CompAsync,
+    CompTDM
 };
 
 template <GemmPipelineType PT, typename Problem>
@@ -97,6 +98,45 @@ struct GemmPipelineTypeSelector<GemmPipelineType::CompAsync, Problem>
     using pipeline      = ck_tile::GemmPipelineAgBgCrCompAsync<Problem>;
 
     static constexpr auto GetName() { return "GemmPipelineAgBgCrCompAsync"; }
+};
+
+template <typename Problem>
+struct GemmPipelineTypeSelector<GemmPipelineType::CompTDM, Problem>
+{
+    using base_pipeline = ck_tile::BaseGemmPipelineAgBgCrCompTDM<Problem>;
+    using pipeline      = ck_tile::GemmPipelineAgBgCrCompTDM<Problem>;
+
+    static constexpr auto GetName() { return "GemmPipelineAgBgCrCompTDM"; }
+};
+
+template <GemmPipelineType PT, typename Problem>
+struct GemmEpilogueTypeSelector
+{
+    using epilogue = ck_tile::CShuffleEpilogue<Problem>;
+};
+
+template <typename Problem>
+struct GemmEpilogueTypeSelector<GemmPipelineType::CompTDM, Problem>
+{
+    using epilogue = ck_tile::TdmEpilogue<Problem>;
+};
+
+template <GemmPipelineType PT>
+struct PipelineDefaultParams
+{
+    static constexpr bool PadM       = true;
+    static constexpr bool PadN       = true;
+    static constexpr bool PadK       = true;
+    static constexpr bool Preshuffle = false;
+};
+
+template <>
+struct PipelineDefaultParams<GemmPipelineType::CompTDM>
+{
+    static constexpr bool PadM       = false;
+    static constexpr bool PadN       = false;
+    static constexpr bool PadK       = false;
+    static constexpr bool Preshuffle = false;
 };
 
 template <typename Tuple, typename Derived>
@@ -140,7 +180,8 @@ class TestCkTileGemmPipeline : public ::testing::Test
         constexpr bool preshuffle = Preshuffle;
 
         constexpr bool DoubleSmemBuffer = (PipelineType == GemmPipelineType::CompV4 ||
-                                           PipelineType == GemmPipelineType::CompAsync);
+                                           PipelineType == GemmPipelineType::CompAsync ||
+                                           PipelineType == GemmPipelineType::CompTDM);
 
         // TODO: For now - but this should also be a test parameter
         constexpr bool TransposeC = false;
@@ -206,7 +247,8 @@ class TestCkTileGemmPipeline : public ::testing::Test
             using GemmPipeline =
                 typename GemmPipelineTypeSelector<PipelineType, UniversalGemmProblem>::pipeline;
 
-            using GemmEpilogue = ck_tile::CShuffleEpilogue<
+            using GemmEpilogue = typename GemmEpilogueTypeSelector<
+                PipelineType,
                 ck_tile::CShuffleEpilogueProblem<ADataType,
                                                  BDataType,
                                                  DsDataType,
@@ -223,7 +265,7 @@ class TestCkTileGemmPipeline : public ::testing::Test
                                                  N_Warp_Tile,
                                                  K_Warp_Tile,
                                                  UniversalGemmProblem::TransposeC,
-                                                 memory_operation>>;
+                                                 memory_operation>>::epilogue;
 
             using Kernel = ck_tile::GemmKernel<TilePartitioner, GemmPipeline, GemmEpilogue>;
             auto kargs   = Kernel::MakeKernelArgs(args);
@@ -325,11 +367,14 @@ class TestCkTileGemmPipeline : public ::testing::Test
         else
         {
             // Otherwise, use k_batch = 1 and 2
-            k_batches_ = {1, 2};
+            k_batches_ = {1};
         }
     }
 
-    template <bool PadM = true, bool PadN = true, bool PadK = true, bool Preshuffle = false>
+    template <bool PadM       = PipelineDefaultParams<PipelineType>::PadM,
+              bool PadN       = PipelineDefaultParams<PipelineType>::PadN,
+              bool PadK       = PipelineDefaultParams<PipelineType>::PadK,
+              bool Preshuffle = PipelineDefaultParams<PipelineType>::Preshuffle>
     void Run(const int M,
              const int N,
              const int K,

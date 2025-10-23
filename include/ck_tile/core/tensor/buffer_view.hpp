@@ -755,6 +755,7 @@ struct buffer_view<address_space_enum::global,
             [&](auto i) { tensor_dims_uint32(i) = static_cast<uint32_t>(tensor_dims[i]); });
 
         // Convert global strides to uint64_t array
+        // Note: gfx1250 SPG mentiones tensor_dim1_stride is in units of tensor_dim0_stride
         array<uint64_t, num_tensor_dims> global_strides_uint64;
         static_for<0, num_tensor_dims, 1>{}(
             [&](auto i) { global_strides_uint64(i) = static_cast<uint64_t>(global_strides[i]); });
@@ -799,15 +800,14 @@ struct buffer_view<address_space_enum::global,
         amd_tdm_load<Coherence>(TDMDescriptor);
     }
 
-    template <typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
-    CK_TILE_DEVICE void tdm_store(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
+    template <typename TDMConfig_, typename DimTuple_, typename BoxDim_, index_t num_tensor_dims>
+    CK_TILE_DEVICE void tdm_store(const TDMConfig_& tdm_config,
+                                  CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
                                   index_t linear_offset,
                                   const DimTuple_& tensor_dims,
                                   const DimTuple_& global_strides,
                                   number<num_tensor_dims> = {})
     {
-        TDMConfig tdm_config; // default initialize all fields to zero/false
-
         // Convert tensor dimensions to uint32_t array
         array<uint32_t, num_tensor_dims> tensor_dims_uint32;
         static_for<0, num_tensor_dims, 1>{}(

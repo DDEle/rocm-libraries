@@ -493,16 +493,22 @@ struct tensor_view
         }
     }
 
-    template <typename BoxDim_, index_t num_tensor_dims, typename DimTuple_>
+    template <typename TDMConfig_, typename BoxDim_, index_t num_tensor_dims, typename DimTuple_>
     CK_TILE_DEVICE constexpr void
-    store_tdm_elements(CK_TILE_LDS_ADDR remove_cvref_t<DataType>* smem,
+    store_tdm_elements(const TDMConfig_& tdm_config,
+                       CK_TILE_LDS_ADDR remove_cvref_t<DataType>* smem,
                        const TensorCoord& coord,
                        DimTuple_& tensor_dims,
                        DimTuple_& global_strides,
                        number<num_tensor_dims> = {})
     {
-        return buf_.template tdm_store<DimTuple_, BoxDim_, num_tensor_dims>(
-            smem, coord.get_offset(), tensor_dims, global_strides, number<num_tensor_dims>{});
+        return buf_.template tdm_store<TDMConfig_, DimTuple_, BoxDim_, num_tensor_dims>(
+            tdm_config,
+            smem,
+            coord.get_offset(),
+            tensor_dims,
+            global_strides,
+            number<num_tensor_dims>{});
     }
 
     // member

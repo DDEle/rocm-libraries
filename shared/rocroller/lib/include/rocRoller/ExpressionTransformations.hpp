@@ -203,6 +203,16 @@ namespace rocRoller
         ExpressionPtr lowerBitfieldValues(ExpressionPtr expr);
 
         /**
+         * @brief Attempt to replace a BitfieldCombine expr with
+         * a composite expression consisting of shift and bitwise
+         * AND/OR
+         *
+         * @param expr Input expression
+         * @return ExpressionPtr Transformed expression
+         */
+        ExpressionPtr lowerBitfieldCombine(ExpressionPtr expr);
+
+        /**
          * @brief Periodize the WorkitemX index space within and across waves.
          *
          * This transform modifies all occurances of the WorkitemX

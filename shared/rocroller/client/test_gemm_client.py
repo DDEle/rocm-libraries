@@ -32,11 +32,11 @@ import functools
 import itertools
 import os
 import pathlib
-import pytest
 import subprocess
-import yaml
-
 from dataclasses import dataclass
+
+import pytest
+import yaml
 
 build = pathlib.Path(__file__).parent.parent / "build"
 if os.getenv("ROCROLLER_BUILD_DIR") is not None:
@@ -279,6 +279,7 @@ types:
   scaleSkipPermlane: false
 streamK: false
 streamKTwoTile: false
+streamKTwoTileDPFirst: false
 matchMemoryAccess: true
 loadLDSScale_A: false
 loadLDSScale_B: false
@@ -346,6 +347,7 @@ swizzleScale: false
 prefetchScale: false
 streamK: false
 streamKTwoTile: false
+streamKTwoTileDPFirst: false
 ...
 """
 
@@ -407,6 +409,7 @@ swizzleScale: false
 prefetchScale: false
 streamK: false
 streamKTwoTile: false
+streamKTwoTileDPFirst: false
 ...
 """
 

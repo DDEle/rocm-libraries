@@ -6696,6 +6696,10 @@ class KernelWriterAssembly(KernelWriter):
             if (vgprPerInput < 4 and is_mfma) or is_wmma_v2:
               shiftK.add(VSubU32(dst=vgpr(kReg), src0=sgpr(loopCntSgpr), src1=vgpr(kReg_first), comment="get distance between size and k index"))
               shiftK.add(VCmpLtI32(dst=sgpr(tmpSgprX2, self.states.laneSGPRCount), src0=vgpr(kReg), src1=numMIInput, comment="set partial 0 if distance less than input per thread"))
+            TailLoop_SkipZeroOutMask = Label((self.labels.getUniqueNamePrefix("TailLoop_SkipZeroOutMask")), comment="")
+            shiftK.add(SAndB32(dst=sgpr(tmpSgprX1), src0=sgpr("SizeL"), src1=8-1, comment="if summation is multiple of 8, skip masking"))
+            shiftK.add(SCmpEQU32(src0=sgpr(tmpSgprX1), src1=0))
+            shiftK.add(SCBranchSCC1(labelName=TailLoop_SkipZeroOutMask.getLabelName(), comment="skip mask"))
             if is_wmma_v3:
               shiftK.add(SAndB32(dst=sgpr(tmpSgprX1), src0=sgpr(loopCntSgpr), src1=int((64 // (numRegistersIn * 32))-1), comment="get inputs for edge thread"))
               shiftK.add(SSubU32(dst=sgpr(tmpSgprX1), src0=int((64 // (numRegistersIn * 32))), src1=sgpr(tmpSgprX1), comment="use shift to fill 0 for outside element"))
@@ -6762,6 +6766,7 @@ class KernelWriterAssembly(KernelWriter):
                   for bk in range(0, vgprPerInput):
                     aStr = vgpr(self.generateSrcStrForMFMA(kernel, tPA, innerUnroll, vregSetIdx, vgprPerInput, m, u, iui, a, bk=bk), 1)
                     shiftK.add(VCndMaskB32(dst=aStr, src0=aStr, src1=vgpr(abReg+bk), src2=sgpr(tmpSgprX2, self.states.laneSGPRCount), comment=""))
+
                 else: # mfma or wmma_v3
 
                   if kernel["ProblemType"]["Sparse"]:
@@ -6849,6 +6854,7 @@ class KernelWriterAssembly(KernelWriter):
                   for bk in range(0, vgprPerInput):
                     bStr = vgpr(self.generateSrcStrForMFMA(kernel, tPB, innerUnroll, vregSetIdx, vgprPerInput, m, u, iui, b, bk=bk), 1)
                     shiftK.add(VCndMaskB32(dst=bStr, src0=bStr, src1=vgpr(abReg+bk), src2=sgpr(tmpSgprX2, self.states.laneSGPRCount), comment=""))
+
                 else: # mfma or wmma_v3
 
                   if kernel["ProblemType"]["Sparse"]:
@@ -6891,7 +6897,7 @@ class KernelWriterAssembly(KernelWriter):
                           shiftK.add(SMinI32(dst=sgpr(loopCntSgpr), src0=sgpr(loopCounterName), src1=sgpr("LSUTailLoopOffset"), comment="check lsu bound"))
                         shiftK.add(VCmpGEI32(dst=sgpr(tmpSgprX2,2), src0=vgpr(kReg), src1=sgpr(loopCntSgpr), comment="check K index >= Size L"))
                       shiftK.add(VCndMaskB32(dst=bStr, src0=bStr, src1=vgpr(abReg+bk), src2=sgpr(tmpSgprX2,2), comment=""))
-
+            shiftK.add(TailLoop_SkipZeroOutMask)
             if vgprPerInput == 4 and is_wmma_v2:
               if tmpVgpr2 is not None: self.vgprPool.checkIn(tmpVgpr2)
         if kernel["LocalSplitU"] > 1:
@@ -14311,7 +14317,7 @@ class KernelWriterAssembly(KernelWriter):
       module.add(SSetVgprMsb(0))
       module.add(MacroInstruction(name=name, args=args, comment=comment))
       module.add(SSetVgprMsb(0))
-    
+
     return module
 
 def _getEccOffset(totalWidth, bpr, bpe, glvw, idx, numVgprG2L):

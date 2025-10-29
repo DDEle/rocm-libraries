@@ -44,7 +44,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: "ROCm/TheRock"
-          ref: dc05d637054ad197c84b00e24b6262af0ec797c6 # 10-03-2025 commit
+          ref: 409f43ad9d564454bb1b23f8c8aa15d6b9d25200
           path: "TheRock"
 
       - name: Setup ccache
@@ -60,7 +60,7 @@ jobs:
       - name: Runner Health Settings
         run: |
           ./TheRock/build_tools/health_status.py
-
+      
       - name: Fetch sources
         run: |
           ./TheRock/build_tools/fetch_sources.py --jobs 12 --no-include-rocm-libraries --no-include-ml-frameworks

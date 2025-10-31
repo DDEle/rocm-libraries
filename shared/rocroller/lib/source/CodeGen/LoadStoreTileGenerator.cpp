@@ -953,12 +953,12 @@ namespace rocRoller
                 auto        macTile = m_graph->coordinates.getNode<MacroTile>(macTileTag);
                 if(macTile.memoryType == MemoryType::VGPR && elementBits == 6
                    && (!arch.HasCapability(GPUCapability::DSReadTransposeB6PaddingBytes)
-                       || isPadded)
+                       || info.isPadded)
                    && !info.isTransposedTile)
                 {
                     // FIXME: fix contiguousChunkWidth calculation
                     auto registerCount = arch.target().gfx == GPUArchitectureGFX::GFX1250
-                                             ? n * varTypeInfo.registerCount
+                                             ? info.n * varTypeInfo.registerCount
                                              : varTypeInfo.registerCount;
                     allocOptions = {.contiguousChunkWidth = int(registerCount), .alignment = 2};
                     co_yield Instruction::Comment(

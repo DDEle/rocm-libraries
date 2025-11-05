@@ -1352,11 +1352,12 @@ class Solution(collections.abc.Mapping):
     state["enableLDSTrA"] = isLDSTrEnabled(isaInfoMap[isa].asmCaps, state["LDSTrInst"], state["UnrollMajorLDSA"], state["DirectToVgprA"], numBytes)
     state["enableLDSTrB"] = isLDSTrEnabled(isaInfoMap[isa].asmCaps, state["LDSTrInst"], state["UnrollMajorLDSB"], state["DirectToVgprB"], numBytes)
 
-    finalLDSTrInst = state["enableLDSTrA"] or state["enableLDSTrB"]
-    if state["LDSTrInst"] != finalLDSTrInst:
-      # This means LDSTrInst=True, but none of A/B can be enabled (False)
-      reject(state, printRejectionReason, "LDSTrInst is True but none of A/B can be enabled")
-      return
+    # This reject kernels in 950 logic yaml, temporarily comment it out.
+    # finalLDSTrInst = state["enableLDSTrA"] or state["enableLDSTrB"]
+    # if state["LDSTrInst"] != finalLDSTrInst:
+    #   # This means LDSTrInst=True, but none of A/B can be enabled (False)
+    #   reject(state, printRejectionReason, "LDSTrInst is True but none of A/B can be enabled")
+    #   return
 
     state["enableGLTrA"] = state["DirectToVgprA"] and state["ProblemType"]["TLUA"] \
       and ((numBytes == 1 and isaInfoMap[isa].asmCaps["HasGLTr8B64"]) \
@@ -1503,7 +1504,7 @@ class Solution(collections.abc.Mapping):
     # TODO-
     #  On gfx1250, i8, f8, it seem working for 1LDSBuffer=0 "BUT EPS=0", haven't checked for other archs/types, so we still reject by 1LDSBuffer only
     # if (state["enableLDSTrA"] or state["enableLDSTrB"]) and (not state["1LDSBuffer"] and state["ExpandPointerSwap"]):
-    if (state["enableLDSTrA"] or state["enableLDSTrB"]) and not state["1LDSBuffer"]:
+    if (state["enableLDSTrA"] or state["enableLDSTrB"]) and (not state["1LDSBuffer"] and state["ExpandPointerSwap"]):
       reject(state, printRejectionReason, "Current LDSTrInst implementation does not support 1LDSBuffer=0")
       return
 
@@ -2695,8 +2696,7 @@ class Solution(collections.abc.Mapping):
 
       offsetBlk = state["LdsOffsetB"] + ldsNumBytesAlignedB
 
-      state["StoreSwapAddr"] = (state["PrefetchGlobalRead"] == 2) and \
-        (state["1LDSBuffer"] == 0) and \
+      state["StoreSwapAddr"] = (state["1LDSBuffer"] != 1) and \
         (offsetBlk + int(2**(math.ceil(math.log(offsetBlk, 2)))) > state["MaxLDS"])
 
       if offsetBlk > 0 and not state["StoreSwapAddr"]:
@@ -2707,18 +2707,6 @@ class Solution(collections.abc.Mapping):
       state["LdsOffsetMetadata_Blk"] = state["LdsOffsetA_Blk"] + state["LdsNumElementsAlignedA"]
       state["LdsOffsetB_Blk"] = state["LdsOffsetMetadata_Blk"] + state["LdsNumElementsAlignedMetadata"]
       ldsNumBytesAB = state["LdsOffsetB_Blk"] + ldsNumBytesB
-      state["LdsAlignPow2"] = True
-      # For LDS size != pow(2)
-      if state["MaxLDS"] & (state["MaxLDS"]-1) != 0 and ldsNumBytesAB > state["MaxLDS"]:
-        # AAMMBB layout
-        # print("AAMMBB layout")
-        state["LdsAlignPow2"] = False
-        state["LdsOffsetA_Blk"] = state["LdsOffsetA"] + ldsNumBytesAlignedA
-        state["LdsOffsetMetadata"] = state["LdsOffsetA_Blk"] + ldsNumBytesAlignedA
-        state["LdsOffsetMetadata_Blk"] = state["LdsOffsetMetadata"] + ldsNumBytesAlignedMetadata
-        state["LdsOffsetB"] = state["LdsOffsetMetadata_Blk"] + ldsNumBytesAlignedMetadata
-        state["LdsOffsetB_Blk"] = state["LdsOffsetB"] + ldsNumBytesAlignedB
-        ldsNumBytesAB = state["LdsOffsetB_Blk"] + ldsNumBytesB
     else:
       state["LdsOffsetMetadata"] = ldsNumBytesAlignedA
       state["LdsOffsetB"] = state["LdsOffsetMetadata"] + ldsNumBytesAlignedMetadata
@@ -2732,7 +2720,6 @@ class Solution(collections.abc.Mapping):
       state["LocalSplitUReuseLDS"] = math.ceil(ldsNumBytesReduction / state["MaxLDS"])
       # reserve all the LDS to LSU.
       ldsNumBytesReduction = state["MaxLDS"]
-      state["ldsAlignPow2"] = False
 
     # lds max occupancy
     ldsSizeOccupancy = isaInfoMap[isa].archCaps["DeviceLDS"] // state["MaxOccupancy"]
@@ -2766,7 +2753,7 @@ class Solution(collections.abc.Mapping):
       state["LdsOffsetB"] = ldsNumBytesAlignedA
       state["LdsOffsetMetadata"] = state["LdsOffsetB"] + ldsNumBytesAlignedB
       ldsNumBytesAB = ldsNumBytesAlignedA + ldsNumBytesAlignedB + ldsNumBytesMetadata
-      state["LdsAlignPow2"] = False
+      state["StoreSwapAddr"] = False
 
     # lds size is the greater of the two
     ldsNumBytes = max(ldsNumBytesAB, ldsNumBytesReduction, ldsNumBytesOccupancy)

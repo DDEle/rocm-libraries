@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2018-2022, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2018-2025, Advanced Micro Devices, Inc. All rights reserved.
 
 #pragma once
 
@@ -552,7 +552,11 @@ struct DeviceBatchedGemmSoftmaxGemmPermute_Wmma_CShuffle
     static constexpr auto I5 = Number<5>{};
     static constexpr auto I6 = Number<6>{};
 
+#ifdef USE_GFX125_CONFIG
+    static constexpr auto WmmaK = 32;
+#else
     static constexpr auto WmmaK = 16;
+#endif
 
     static constexpr auto MWaves = MPerBlock / (MRepeat * MPerWmma);
     static constexpr auto LWaves = LPerBlock / (LRepeat * LPerWmma);

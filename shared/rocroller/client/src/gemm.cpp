@@ -198,8 +198,12 @@ namespace rocRoller::Client::GEMMClient
                       descC,
                       hostScaleA,
                       hostScaleB,
-                      problemParams.types.scaleA == Operations::ScaleMode::Separate,
-                      problemParams.types.scaleB == Operations::ScaleMode::Separate,
+                      problemParams.types.scaleA == Operations::ScaleMode::Separate
+                          ? problemParams.types.scaleTypeA
+                          : DataType::None,
+                      problemParams.types.scaleB == Operations::ScaleMode::Separate
+                          ? problemParams.types.scaleTypeB
+                          : DataType::None,
                       -1.f,
                       1.f,
                       static_cast<uint>(scaleBlockSize));
@@ -1185,7 +1189,10 @@ namespace rocRoller::Client::GEMMClient::CLI
         std::make_pair("--matchMemoryAccess", &SolutionParameters::matchMemoryAccess),
         std::make_pair("--streamK", &SolutionParameters::streamK),
         std::make_pair("--streamKTwoTile", &SolutionParameters::streamKTwoTile),
-        std::make_pair("--streamKTwoTileDPFirst", &SolutionParameters::streamKTwoTileDPFirst));
+        std::make_pair("--streamKTwoTileDPFirst", &SolutionParameters::streamKTwoTileDPFirst),
+        std::make_pair("--workgroup_cluster_size_x", &SolutionParameters::workgroupClusterSizeX),
+        std::make_pair("--workgroup_cluster_size_y", &SolutionParameters::workgroupClusterSizeY),
+        std::make_pair("--workgroup_cluster_size_z", &SolutionParameters::workgroupClusterSizeZ));
 
     template <typename T, typename U>
     std::string getSolutionParameterArgumentName(U T::*member_ptr)
@@ -1394,6 +1401,9 @@ int main(int argc, const char* argv[])
         .workgroupMappingDim    = -1,
         .workgroupRemapXCC      = false,
         .workgroupRemapXCCValue = -1,
+        .workgroupClusterSizeX  = 0,
+        .workgroupClusterSizeY  = 0,
+        .workgroupClusterSizeZ  = 0,
 
         .types = {.scaleA     = Operations::ScaleMode::None,
                   .scaleTypeA = DataType::None,
@@ -1636,6 +1646,16 @@ int main(int argc, const char* argv[])
                    runParams.workgroupMappingValue,
                    "Workgroup mapping value. Default: -1")
         ->check(CLI::IsMember({-1}) | CLI::PositiveNumber);
+
+    app.add_option("--workgroup_cluster_size_x",
+                   solution.workgroupClusterSizeX,
+                   "Workgroup cluster size in the x dimension.");
+    app.add_option("--workgroup_cluster_size_y",
+                   solution.workgroupClusterSizeY,
+                   "Workgroup cluster size in the y dimension.");
+    app.add_option("--workgroup_cluster_size_z",
+                   solution.workgroupClusterSizeZ,
+                   "Workgroup cluster size in the z dimension.");
 
     //
     // Benchmarking options

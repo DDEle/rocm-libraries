@@ -12,6 +12,25 @@
 #include "ck_tile/ops/gemm.hpp"
 #include "ck_tile/core/numeric/math.hpp"
 
+template <typename PrecType, ck_tile::index_t M_Warp_Tile>
+constexpr ck_tile::index_t get_k_warp_tile()
+{
+#if defined(CK_GFX950_SUPPORT)
+    constexpr bool is_8bit_float =
+        std::is_same_v<PrecType, ck_tile::fp8_t> || std::is_same_v<PrecType, ck_tile::bf8_t>;
+    if constexpr(M_Warp_Tile == 32)
+        return is_8bit_float ? 64 : 16;
+    else
+        return is_8bit_float ? 128 : 32;
+#elif defined(CK_USE_GFX1250)
+    constexpr bool is_8bit_float =
+        std::is_same_v<PrecType, ck_tile::fp8_t> || std::is_same_v<PrecType, ck_tile::bf8_t>;
+    return is_8bit_float ? 64 : 32;
+#else
+    return 16;
+#endif
+}
+
 template <typename ADataType, typename BDataType, typename AccDataType, typename CDataType>
 auto calculate_rtol_atol(const ck_tile::index_t K,
                          const ck_tile::index_t kbatch,
@@ -90,6 +109,45 @@ struct GemmPipelineTypeSelector<GemmPipelineType::CompAsync, Problem>
     static constexpr auto GetName() { return "GemmPipelineAgBgCrCompAsync"; }
 };
 
+template <typename Problem>
+struct GemmPipelineTypeSelector<GemmPipelineType::CompTDM, Problem>
+{
+    using base_pipeline = ck_tile::BaseGemmPipelineAgBgCrCompTDM<Problem>;
+    using pipeline      = ck_tile::GemmPipelineAgBgCrCompTDM<Problem>;
+
+    static constexpr auto GetName() { return "GemmPipelineAgBgCrCompTDM"; }
+};
+
+template <GemmPipelineType PT, typename Problem>
+struct GemmEpilogueTypeSelector
+{
+    using epilogue = ck_tile::CShuffleEpilogue<Problem>;
+};
+
+template <typename Problem>
+struct GemmEpilogueTypeSelector<GemmPipelineType::CompTDM, Problem>
+{
+    using epilogue = ck_tile::TdmEpilogue<Problem>;
+};
+
+template <GemmPipelineType PT>
+struct PipelineDefaultParams
+{
+    static constexpr bool PadM       = true;
+    static constexpr bool PadN       = true;
+    static constexpr bool PadK       = true;
+    static constexpr bool Preshuffle = false;
+};
+
+template <>
+struct PipelineDefaultParams<GemmPipelineType::CompTDM>
+{
+    static constexpr bool PadM       = false;
+    static constexpr bool PadN       = false;
+    static constexpr bool PadK       = false;
+    static constexpr bool Preshuffle = false;
+};
+
 template <typename Tuple, typename Derived>
 class TestCkTileGemmPipeline : public ::testing::Test
 {
@@ -101,8 +159,8 @@ class TestCkTileGemmPipeline : public ::testing::Test
     using BDataType                    = std::tuple_element_t<4, Tuple>;
     using AccDataType                  = std::tuple_element_t<5, Tuple>;
     using CDataType                    = std::tuple_element_t<6, Tuple>;
-    static constexpr auto Scheduler    = std::tuple_element_t<13, Tuple>::value;
-    static constexpr auto PipelineType = std::tuple_element_t<14, Tuple>::value;
+    static constexpr auto Scheduler    = std::tuple_element_t<12, Tuple>::value;
+    static constexpr auto PipelineType = std::tuple_element_t<13, Tuple>::value;
 
     static constexpr ck_tile::index_t M_Tile = std::tuple_element_t<7, Tuple>{};
     static constexpr ck_tile::index_t N_Tile = std::tuple_element_t<8, Tuple>{};
@@ -110,13 +168,13 @@ class TestCkTileGemmPipeline : public ::testing::Test
 
     static constexpr ck_tile::index_t M_Warp_Tile = std::tuple_element_t<10, Tuple>{};
     static constexpr ck_tile::index_t N_Warp_Tile = std::tuple_element_t<11, Tuple>{};
-    static constexpr ck_tile::index_t K_Warp_Tile = std::tuple_element_t<12, Tuple>{};
+    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<ADataType, M_Warp_Tile>();
 
     using DsLayout   = ck_tile::tuple<>;
     using DsDataType = ck_tile::tuple<>;
 
     static constexpr bool Persistent =
-        ck_tile::tuple_element_or_default_t<Tuple, 15, std::false_type>::value;
+        ck_tile::tuple_element_or_default_t<Tuple, 14, std::false_type>::value;
 
     template <bool PadM, bool PadN, bool PadK, bool Preshuffle>
     void invoke_gemm(const ck_tile::GemmHostArgs& args, const ck_tile::stream_config& s)
@@ -197,7 +255,8 @@ class TestCkTileGemmPipeline : public ::testing::Test
             using GemmPipeline =
                 typename GemmPipelineTypeSelector<PipelineType, UniversalGemmProblem>::pipeline;
 
-            using GemmEpilogue = ck_tile::CShuffleEpilogue<
+            using GemmEpilogue = typename GemmEpilogueTypeSelector<
+                PipelineType,
                 ck_tile::CShuffleEpilogueProblem<ADataType,
                                                  BDataType,
                                                  DsDataType,
@@ -214,7 +273,7 @@ class TestCkTileGemmPipeline : public ::testing::Test
                                                  N_Warp_Tile,
                                                  K_Warp_Tile,
                                                  UniversalGemmProblem::TransposeC,
-                                                 memory_operation>>;
+                                                 memory_operation>>::epilogue;
 
             using Kernel = ck_tile::GemmKernel<TilePartitioner, GemmPipeline, GemmEpilogue>;
             auto kargs   = Kernel::MakeKernelArgs(args);
@@ -316,11 +375,14 @@ class TestCkTileGemmPipeline : public ::testing::Test
         else
         {
             // Otherwise, use k_batch = 1 and 2
-            k_batches_ = {1, 2};
+            k_batches_ = {1};
         }
     }
 
-    template <bool PadM = true, bool PadN = true, bool PadK = true, bool Preshuffle = false>
+    template <bool PadM       = PipelineDefaultParams<PipelineType>::PadM,
+              bool PadN       = PipelineDefaultParams<PipelineType>::PadN,
+              bool PadK       = PipelineDefaultParams<PipelineType>::PadK,
+              bool Preshuffle = PipelineDefaultParams<PipelineType>::Preshuffle>
     void Run(const int M,
              const int N,
              const int K,

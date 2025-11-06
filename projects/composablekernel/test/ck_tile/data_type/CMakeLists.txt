@@ -1,7 +1,7 @@
 if(GPU_TARGETS MATCHES "gfx9|gfx11|gfx12")
     add_gtest_executable(test_ck_tile_pk_int4 test_pk_int4.cpp)
 endif()
-if(GPU_TARGETS MATCHES "gfx95")
+if(GPU_TARGETS MATCHES "gfx95|gfx125")
     add_gtest_executable(test_ck_tile_pk_fp4 test_pk_fp4.cpp)
     add_gtest_executable(test_ck_tile_mx_scale test_mx_scale.cpp)
 endif()

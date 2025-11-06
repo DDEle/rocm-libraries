@@ -275,9 +275,12 @@ struct BlockwiseGemmWmmaops_pipeline_v1<BlockGemmPipelineScheduler::Intrawave,
                         constexpr index_t c_offset =
                             c_thread_desc_.CalculateOffset(make_tuple(m0, n0, I0));
 
+                        __builtin_amdgcn_sched_barrier(0);
                         wmma_gemm.Run(a_thread_vec.template AsType<wmma_input_type_a>(),
                                       b_thread_vec.template AsType<wmma_input_type_b>(),
                                       c_thread_buf.GetVectorTypeReference(Number<c_offset>{}));
+
+                        __builtin_amdgcn_sched_barrier(0);
                     });
                 });
             });

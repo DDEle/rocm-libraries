@@ -36,6 +36,7 @@
 #include <rocRoller/Assemblers/Assembler.hpp>
 #include <rocRoller/ExecutableKernel.hpp>
 #include <rocRoller/Utilities/HipUtils.hpp>
+#include <rocRoller/WorkgroupClusters_detail.hpp>
 
 namespace rocRoller
 {
@@ -179,20 +180,82 @@ namespace rocRoller
         if(timer)
             HIP_TIC(timer, iteration);
 
-        HIP_CHECK(hipExtModuleLaunchKernel(m_hipData->function,
-                                           invocation.workitemCount[0],
-                                           invocation.workitemCount[1],
-                                           invocation.workitemCount[2],
-                                           invocation.workgroupSize[0],
-                                           invocation.workgroupSize[1],
-                                           invocation.workgroupSize[2],
-                                           invocation.sharedMemBytes,
-                                           stream,
-                                           nullptr,
-                                           (void**)&hipLaunchParams,
-                                           nullptr, // event
-                                           nullptr // event
-                                           ));
+        if(invocation.workgroupClusterSize)
+        {
+            auto const workgroupClusterSize = *invocation.workgroupClusterSize;
+            auto const numWorkgroupsX = invocation.workitemCount[0] / invocation.workgroupSize[0];
+            auto const numWorkgroupsY = invocation.workitemCount[1] / invocation.workgroupSize[1];
+            auto const numWorkgroupsZ = invocation.workitemCount[2] / invocation.workgroupSize[2];
+
+            // TODO Can/should we validate earlier? (i.e. not immediately before launch)
+            AssertFatal(WorkgroupClustersDetail::IsValidWorkgroupClusterSize(
+                            workgroupClusterSize, {numWorkgroupsX, numWorkgroupsY, numWorkgroupsZ}),
+                        fmt::format("Invalid cluster size: [{},{},{}].\n"
+                                    "The number of workgroups [{},{},{}] in each dimension must "
+                                    "be divisible by the cluster size in that dimension.\n"
+                                    "Valid cluster sizes:{}",
+                                    workgroupClusterSize[0],
+                                    workgroupClusterSize[1],
+                                    workgroupClusterSize[2],
+                                    numWorkgroupsX,
+                                    numWorkgroupsY,
+                                    numWorkgroupsZ,
+                                    [=]() {
+                                        std::string s;
+                                        auto const  valid
+                                            = WorkgroupClustersDetail::ValidWorkgroupClusterSizes(
+                                                {numWorkgroupsX, numWorkgroupsY, numWorkgroupsZ});
+                                        for(const auto& v : valid)
+                                            s += fmt::format(" [{},{},{}]", v[0], v[1], v[2]);
+                                        return s;
+                                    }()));
+
+            hipLaunchAttribute attribute[1];
+            HIP_LAUNCH_CONFIG  config = {0};
+
+            config.gridDimX  = numWorkgroupsX;
+            config.gridDimY  = numWorkgroupsY;
+            config.gridDimZ  = numWorkgroupsZ;
+            config.blockDimX = invocation.workgroupSize[0];
+            config.blockDimY = invocation.workgroupSize[1];
+            config.blockDimZ = invocation.workgroupSize[2];
+
+            attribute[0].id               = hipLaunchAttributeClusterDimension;
+            attribute[0].val.clusterDim.x = workgroupClusterSize[0];
+            attribute[0].val.clusterDim.y = workgroupClusterSize[1];
+            attribute[0].val.clusterDim.z = workgroupClusterSize[2];
+            config.attrs                  = attribute;
+            config.numAttrs               = 1;
+            config.sharedMemBytes         = invocation.sharedMemBytes;
+
+            Log::debug("Launching kernel {} with Clusters: [{}, {}, {}]",
+                       m_kernelName,
+                       workgroupClusterSize[0],
+                       workgroupClusterSize[1],
+                       workgroupClusterSize[2]);
+
+            const HIP_LAUNCH_CONFIG* pConfig = &config;
+            HIP_CHECK(hipDrvLaunchKernelEx(
+                pConfig, m_hipData->function, nullptr, (void**)&hipLaunchParams));
+        }
+        else
+        {
+            HIP_CHECK(hipExtModuleLaunchKernel(m_hipData->function,
+                                               invocation.workitemCount[0],
+                                               invocation.workitemCount[1],
+                                               invocation.workitemCount[2],
+                                               invocation.workgroupSize[0],
+                                               invocation.workgroupSize[1],
+                                               invocation.workgroupSize[2],
+                                               invocation.sharedMemBytes,
+                                               stream,
+                                               nullptr,
+                                               (void**)&hipLaunchParams,
+                                               nullptr, // event
+                                               nullptr // event
+                                               ));
+        }
+
         if(timer)
             HIP_TOC(timer, iteration);
     }

@@ -27,7 +27,7 @@ struct GemmWarpConfig_Wmma
 {
     static constexpr ck_tile::index_t M_Warp_Tile = 16;
     static constexpr ck_tile::index_t N_Warp_Tile = 16;
-    static constexpr ck_tile::index_t K_Warp_Tile = 16;
+    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<ck_tile::fp16_t, M_Warp_Tile>();
 };
 
 template <typename InDataType, typename WeiDataType, typename AccDataType, typename OutDataType>

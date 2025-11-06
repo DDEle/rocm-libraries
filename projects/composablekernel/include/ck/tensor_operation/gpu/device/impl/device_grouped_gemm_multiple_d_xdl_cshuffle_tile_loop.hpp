@@ -698,7 +698,8 @@ struct DeviceGroupedGemmMultipleDXdlCShuffleTileLoop
             hip_check_error(hipOccupancyMaxActiveBlocksPerMultiprocessor(
                 &occ_num_blocks, kernel, BlockSize, dyn_shared_mem_per_blk));
 
-            int cu_count = getAvailableComputeUnitCount(stream_config);
+            occ_num_blocks = std::max(occ_num_blocks, 1);
+            int cu_count   = getAvailableComputeUnitCount(stream_config);
 
             if(stream_config.log_level_ > 0)
             {
@@ -893,7 +894,7 @@ struct DeviceGroupedGemmMultipleDXdlCShuffleTileLoop
                     hipOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, kernel, BlockSize, 0));
             }
         }
-        return occupancy;
+        return std::max(occupancy, 1);
     }
 
     static auto MakeArgument(std::vector<const void*>& p_As,

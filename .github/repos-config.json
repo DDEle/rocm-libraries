@@ -2,16 +2,16 @@
   "repositories": [
     {
       "name": "miopen",
-      "url": "ROCm/MIOpen",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/MIOpen",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "tensile",
-      "url": "ROCm/Tensile",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/Tensile",
+      "branch": "gfx1250",
       "category": "shared",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
@@ -26,152 +26,152 @@
     },
     {
       "name": "mxdatagenerator",
-      "url": "ROCm/mxDataGenerator",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/mxDataGenerator",
+      "branch": "gfx1250",
       "category": "shared",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "composablekernel",
-      "url": "ROCm/composable_kernel",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/composable_kernel",
+      "branch": "gfx1250",
       "category": "projects",
-      "auto_subtree_pull": true,
+      "auto_subtree_pull": false,
       "auto_subtree_push": false
     },
     {
       "name": "hipblas",
-      "url": "ROCm/hipBLAS",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/hipBLAS",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "hipblas-common",
-      "url": "ROCm/hipBLAS-common",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/hipBLAS-common",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "hipblaslt",
-      "url": "ROCm/hipBLASLt",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/hipBLASLt",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "hipcub",
-      "url": "ROCm/hipCUB",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/hipCUB",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "hipfft",
-      "url": "ROCm/hipFFT",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/hipFFT",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "hiprand",
-      "url": "ROCm/hipRAND",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/hipRAND",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "hipsolver",
-      "url": "ROCm/hipSOLVER",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/hipSOLVER",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "hipsparse",
-      "url": "ROCm/hipSPARSE",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/hipSPARSE",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "hipsparselt",
-      "url": "ROCm/hipSPARSELt",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/hipSPARSELt",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "rocblas",
-      "url": "ROCm/rocBLAS",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/rocBLAS",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "rocfft",
-      "url": "ROCm/rocFFT",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/rocFFT",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "rocprim",
-      "url": "ROCm/rocPRIM",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/rocPRIM",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "rocrand",
-      "url": "ROCm/rocRAND",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/rocRAND",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "rocroller",
-      "url": "ROCm/rocRoller",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/rocRoller",
+      "branch": "gfx1250",
       "category": "shared",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "rocsolver",
-      "url": "ROCm/rocSOLVER",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/rocSOLVER",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "rocsparse",
-      "url": "ROCm/rocSPARSE",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/rocSPARSE",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true
     },
     {
       "name": "rocthrust",
-      "url": "ROCm/rocThrust",
-      "branch": "develop",
+      "url": "AMD-ROCm-Internal/rocThrust",
+      "branch": "gfx1250",
       "category": "projects",
       "auto_subtree_pull": false,
       "auto_subtree_push": true

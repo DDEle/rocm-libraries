@@ -321,6 +321,7 @@ defaultInternalSupportParams = {
     "SupportCustomStaggerU": True,
     # Use GG as G's backend
     "UseUniversalArgs": True,
+    "UseSFC": False,
 }
 
 # same parameter for all solution b/c depends only on compiler
@@ -413,6 +414,7 @@ defaultBenchmarkCommonParameters = [
     {"StreamK": [0]},
     {"StreamKAtomic": [0]},
     {"StreamKXCCMapping": [0]},
+    {"StreamKFixupTreeReduction": [0]},
     {"DebugStreamK": [0]},
     {"ActivationFused": [True]},
     {"ActivationFuncCall": [True]},
@@ -423,7 +425,9 @@ defaultBenchmarkCommonParameters = [
     {"LDSTrInst": [False]},
     {"WaveSplitK": [ False ]},
     {"MbskPrefetchMethod": [0]},
-    {"UseCustomMainLoopSchedule": [1]}
+    {"UseCustomMainLoopSchedule": [1]},
+    {"SpaceFillingAlgo": [[]]},
+    {"SFCWGM": [[[1,1],[1,1]]]}
 ]
 
 # dictionary of defaults comprised of default option for each parameter

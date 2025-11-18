@@ -57,8 +57,8 @@ enum struct GemmPipelineType
     Mem,
     CompV3,
     CompV4,
-    CompAsync,
-    CompTDM
+    CompV6,
+    CompAsync
 };
 
 template <GemmPipelineType PT, typename Problem>
@@ -89,6 +89,15 @@ struct GemmPipelineTypeSelector<GemmPipelineType::CompV4, Problem>
     using pipeline      = ck_tile::GemmPipelineAgBgCrCompV4<Problem>;
 
     static constexpr auto GetName() { return "GemmPipelineAgBgCrCompV4"; }
+};
+
+template <typename Problem>
+struct GemmPipelineTypeSelector<GemmPipelineType::CompV6, Problem>
+{
+    using base_pipeline = ck_tile::BaseGemmPipelineAgBgCrCompV6<Problem>;
+    using pipeline      = ck_tile::GemmPipelineAgBgCrCompV6<Problem>;
+
+    static constexpr auto GetName() { return "GemmPipelineAgBgCrCompV6"; }
 };
 
 template <typename Problem>
@@ -179,12 +188,13 @@ class TestCkTileGemmPipeline : public ::testing::Test
         constexpr bool kPadK      = PadK;
         constexpr bool preshuffle = Preshuffle;
 
-        constexpr bool DoubleSmemBuffer = (PipelineType == GemmPipelineType::CompV4 ||
-                                           PipelineType == GemmPipelineType::CompAsync ||
-                                           PipelineType == GemmPipelineType::CompTDM);
+        constexpr bool DoubleSmemBuffer          = (PipelineType == GemmPipelineType::CompV4 ||
+                                           PipelineType == GemmPipelineType::CompAsync);
+        constexpr bool TransposeC                = false;
+        static constexpr bool StructuredSparsity = false;
+        static constexpr bool NumWaveGroup       = 1;
 
         // TODO: For now - but this should also be a test parameter
-        constexpr bool TransposeC = false;
 
         constexpr int kBlockPerCu                         = 1;
         constexpr ck_tile::index_t TileParitionerGroupNum = 8;
@@ -200,8 +210,6 @@ class TestCkTileGemmPipeline : public ::testing::Test
             GemmSpatiallyLocalTilePartitioner<GemmShape, TileParitionerGroupNum, TileParitionerM01>;
 
         using Traits = ck_tile::TileGemmTraits<kPadM, kPadN, kPadK, ALayout, BLayout, CLayout>;
-        static constexpr bool StructuredSparsity = false;
-        static constexpr bool NumWaveGroup       = 1;
 
         using GemmUniversalTraits = ck_tile::TileGemmUniversalTraits<kPadM,
                                                                      kPadN,

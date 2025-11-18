@@ -26,6 +26,7 @@
 
 #pragma once
 
+#ifdef ROCROLLER_USE_LLVM
 #include <rocRoller/Serialization/Base.hpp>
 #include <rocRoller/Serialization/HasTraits.hpp>
 
@@ -419,3 +420,4 @@ namespace llvm
 
     } // namespace yaml
 } // namespace llvm
+#endif

@@ -182,8 +182,8 @@
     !((defined(MIO_BN_GFX103X) && MIO_BN_GFX103X) || \
       (defined(MIO_BN_GFX110X) && MIO_BN_GFX110X) || \
       (defined(MIO_BN_GFX120X) && MIO_BN_GFX120X) || \
-      (defined(MIO_BN_GFX125X) && MIO_BN_GFX125X)    \
-     )
+      (defined(MIO_BN_GFX115X) && MIO_BN_GFX115X) || \
+      (defined(MIO_BN_GFX125X) && MIO_BN_GFX125X))
 // clang-format on
 #define MIOPEN_USE_AMDGCN 1
 #else
@@ -218,6 +218,10 @@
 
 #ifndef MIO_BN_GFX120X
 #define MIO_BN_GFX120X 0
+#endif
+
+#ifndef MIO_BN_GFX115X
+#define MIO_BN_GFX115X 0
 #endif
 
 #ifndef MIO_BN_GFX125X

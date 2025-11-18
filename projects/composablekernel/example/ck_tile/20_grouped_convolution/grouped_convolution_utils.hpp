@@ -11,33 +11,11 @@
 #include "ck_tile/ops/epilogue.hpp"
 #include "ck_tile/ops/gemm.hpp"
 #include "ck_tile/ops/grouped_convolution.hpp"
-
-template <typename PrecType, ck_tile::index_t M_Warp_Tile>
-constexpr ck_tile::index_t get_k_warp_tile()
-{
-    constexpr bool is_8bit_float =
-        std::is_same_v<PrecType, ck_tile::fp8_t> || std::is_same_v<PrecType, ck_tile::bf8_t>;
-#if defined(CK_TILE_USE_WMMA)
-#if defined(CK_USE_GFX1250)
-    return is_8bit_float ? 64 : 32;
-#else
-    return 16;
-#endif
-#else
-#if defined(CK_GFX950_SUPPORT)
-    if constexpr(M_Warp_Tile == 32)
-        return is_8bit_float ? 64 : 16;
-    else
-        return is_8bit_float ? 128 : 32;
-#else
-    if constexpr(M_Warp_Tile == 32)
-        return 16;
-    else
-        return 32;
-#endif
-#endif
-}
-
+#include "gemm_configs.hpp"
+using MemoryOpSet =
+    std::integral_constant<ck_tile::memory_operation_enum, ck_tile::memory_operation_enum::set>;
+using MemoryOpAtomicAdd = std::integral_constant<ck_tile::memory_operation_enum,
+                                                 ck_tile::memory_operation_enum::atomic_add>;
 struct GemmWarpConfig_Mfma
 {
     static constexpr ck_tile::index_t M_Warp_Tile = 32;

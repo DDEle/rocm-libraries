@@ -256,8 +256,12 @@ def runPerformanceCommand (platform, project)
                     cat ./performance_build_${platform.gpu}/performance_${platform.gpu}/**/*.log >> performance_${platform.gpu}_logs.txt
 
                     #Get Master Results
-                    wget ${masterURL}/lastSuccessfulBuild/artifact/*zip*/archive.zip
-                    unzip archive.zip
+                    ARTIFACT_URL_PREFIX="${masterURL}/lastSuccessfulBuild/artifact"
+                    if wget \${ARTIFACT_URL_PREFIX}/*zip*/archive.zip; then
+                      unzip archive.zip
+                    else
+                      echo "WARNING: No lastSuccessfulBuild found at \${ARTIFACT_URL_PREFIX}"
+                    fi
 
                     if [ -f archive/*/*/performance_${platform.gpu}_last.zip ]; then
 
@@ -348,6 +352,15 @@ def runPerformanceCommand (platform, project)
         {
             def ARCHIVE_LIMIT = "101"
 
+            // a parameter can block comparison to target branch
+            def masterCompare = false
+            if (params?."Build target branch for comparison" != null)
+            {
+                masterCompare = params."Build target branch for comparison"
+            }
+
+            String masterCompareString = masterCompare ? "1" : "0"
+
             def command = """#!/usr/bin/env bash
                         set -ex
                         cd ${project.paths.project_build_prefix}/
@@ -355,8 +368,17 @@ def runPerformanceCommand (platform, project)
                         ${sshBlock}
 
                         #Get Master Results
-                        wget ${masterURL}/lastSuccessfulBuild/artifact/*zip*/archive.zip
-                        unzip archive.zip
+                        ARTIFACT_URL_PREFIX="${masterURL}/lastSuccessfulBuild/artifact"
+                        if wget \${ARTIFACT_URL_PREFIX}/*zip*/archive.zip; then
+                          unzip archive.zip
+                        else
+                          if [ "${masterCompareString}" == "1" ]; then
+                            echo "ERROR: No lastSuccessfulBuild found at \${ARTIFACT_URL_PREFIX}"
+                            exit 1
+                          else
+                            echo "WARNING: No lastSuccessfulBuild found at \${ARTIFACT_URL_PREFIX}"
+                          fi
+                        fi
 
                         #Run Performance Test
                         export LD_LIBRARY_PATH="\${LD_LIBRARY_PATH}:${project.paths.project_build_prefix}/build/"

@@ -42,7 +42,7 @@ if (CK_USE_FNUZ_FP8)
   add_dependencies(test_fp8 test_bf8_fnuz)
 endif()
 
-if(GPU_TARGETS MATCHES "gfx950")
+if(GPU_TARGETS MATCHES "gfx950|gfx125")
   add_custom_target(test_mx_data_types)
 
   add_gtest_executable(test_fp4 test_fp4.cpp)

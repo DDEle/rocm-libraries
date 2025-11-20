@@ -87,7 +87,16 @@ namespace rocRoller
             HasWMMA_f32_16x16x16_f16,
             HasWMMA_f16_16x16x16_f16,
             HasWMMA_bf16_16x16x16_bf16,
+            HasWMMA_f16_16x16x32_f16,
+            HasWMMA_bf16_16x16x32_bf16,
+            HasWMMA_f32_16x16x32_f16,
             HasWMMA_f32_16x16x16_f8,
+            HasWMMA_f32_16x16x64_f8,
+            HasWMMA_f32_16x16x4_f32,
+
+            HasWMMA_f8f6f4,
+            HasWMMA_scale_f8f6f4,
+            HasWMMA_scale16_f8f6f4,
 
             HasAccumOffset,
             HasGlobalOffset,
@@ -126,6 +135,8 @@ namespace rocRoller
             MaxLgkmcnt,
             MaxExpcnt,
             HasExpcnt,
+            MaxTensorcnt,
+            HasTensorcnt,
             SupportedSource,
 
             Waitcnt0Disabled,
@@ -140,8 +151,11 @@ namespace rocRoller
             PackedWorkitemIDs,
 
             HasBlockScaling32,
+            HasBlockScaling16,
             DefaultScaleBlockSize,
             HasE8M0Scale,
+            HasE5M3Scale,
+            HasE4M3Scale,
 
             HasXnack,
 
@@ -162,6 +176,11 @@ namespace rocRoller
             ds_read_b96_tr_b6,
             ds_read_b64_tr_b4,
 
+            ds_load_tr16_b128,
+            ds_load_tr8_b64,
+            ds_load_tr6_b96,
+            ds_load_tr4_b64,
+
             DSReadTransposeB6PaddingBytes,
 
             HasPRNG,
@@ -171,9 +190,18 @@ namespace rocRoller
 
             WorkgroupIdxViaTTMP,
             HasBufferOutOfBoundsCheckOption,
+            HasBufferFormatSpecInSOffsetField,
 
             HasXCC,
             DefaultRemapXCCValue,
+
+            PartiallyActiveWaveSize,
+
+            HasVGPRIndexing,
+
+            HasWorkgroupClusters,
+
+            HasTDM,
 
             Count,
         };

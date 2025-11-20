@@ -7,6 +7,7 @@ set(BASE_ARCHITECTURES "")
 # All supported architectures including xnack variants - used for validation of GPU_TARGETS
 set(SUPPORTED_ARCHITECTURES "")
 
+<<<<<<< HEAD:projects/hipsparselt/cmake/hipsparselt_supported_architectures.cmake
 if(HIPSPARSELT_ENABLE_ASAN OR BUILD_ADDRESS_SANITIZER)
     # For address sanitizer builds, base and supported are the same
     list(APPEND BASE_ARCHITECTURES "gfx942:xnack+" "gfx950:xnack+")
@@ -18,6 +19,27 @@ else()
     list(APPEND SUPPORTED_ARCHITECTURES "gfx942:xnack+" "gfx942:xnack-" "gfx950:xnack+"
          "gfx950:xnack-"
     )
+=======
+if(NOT BUILD_ADDRESS_SANITIZER)
+    list(APPEND BASE_ARCHITECTURES
+        "gfx942"
+        "gfx950"
+        "gfx1250")
+
+    set(SUPPORTED_ARCHITECTURES ${BASE_ARCHITECTURES})
+    list(APPEND SUPPORTED_ARCHITECTURES
+        "gfx942:xnack+"
+        "gfx942:xnack-"
+        "gfx950:xnack+"
+        "gfx950:xnack-")
+else()
+    # For address sanitizer builds, base and supported are the same
+    list(APPEND BASE_ARCHITECTURES
+        "gfx942:xnack+"
+        "gfx950:xnack+"
+        "gfx1250:xnack+")
+    set(SUPPORTED_ARCHITECTURES ${BASE_ARCHITECTURES})
+>>>>>>> origin/gfx1250:projects/hipsparselt/cmake/hipSPARSELtSupportedArchitectures.cmake
 endif()
 
 # .rst: Validates that all specified GPU targets are supported.

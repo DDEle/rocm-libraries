@@ -19,6 +19,7 @@ target_sources(rocroller
         "${CMAKE_CURRENT_SOURCE_DIR}/LowerExponential.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/LowerPRNG.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/PositionalArgumentPropagation.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/PeriodizeWorkitemValues.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/RestoreCommandArguments.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Simplify.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/SplitBitfieldCombine.cpp"

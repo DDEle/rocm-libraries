@@ -29,8 +29,13 @@ using DeviceGemmV2Instance = ck::tensor_operation::device::DeviceGemm_Wmma_CShuf
     ADataType, BDataType, CDataType, AccDataType, CShuffleDataType,
     PassThrough, PassThrough, PassThrough, GemmDefault,
     128,
+<<<<<<< HEAD
     128, 64, 64,
     16, 16, // AK1, BK1
+=======
+    128, 64, 128,
+    8, 8,
+>>>>>>> origin/gfx1250
     16, 16,
     4, 2,
     S<4, 32, 1>, S<0, 2, 1>, S<0, 2, 1>,
@@ -42,7 +47,6 @@ using DeviceGemmV2Instance = ck::tensor_operation::device::DeviceGemm_Wmma_CShuf
     ComputeTypeA, ComputeTypeB>;
 // clang-format on
 
-using ReferenceComputeType  = ck::f8_t;
 using ReferenceGemmInstance = ck::tensor_operation::host::ReferenceGemm<ADataType,
                                                                         BDataType,
                                                                         CDataType,
@@ -50,8 +54,8 @@ using ReferenceGemmInstance = ck::tensor_operation::host::ReferenceGemm<ADataTyp
                                                                         AElementOp,
                                                                         BElementOp,
                                                                         CElementOp,
-                                                                        ReferenceComputeType,
-                                                                        ReferenceComputeType>;
+                                                                        ComputeTypeA,
+                                                                        ComputeTypeB>;
 
 #include "run_gemm_example_v2.inc"
 

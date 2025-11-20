@@ -20,7 +20,11 @@
 # ########################################################################
 
 # This is incremented when the ABI to the library changes
+<<<<<<< HEAD
 set( hipblas_SOVERSION 3.2 )
+=======
+set( hipblas_SOVERSION 3.0 )
+>>>>>>> origin/gfx1250
 
 list( APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake )
 

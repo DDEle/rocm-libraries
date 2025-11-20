@@ -398,9 +398,15 @@ namespace rocRoller
             auto waveY = graph.coordinates.addElement(Wavefront(1));
             auto wave  = graph.coordinates.addElement(Wavefront(-1));
 
-            uint numElements       = waveTile.elements();
-            uint activeLanesInWave = static_cast<uint>(wavefrontSize);
-            uint numGPR            = numElements / activeLanesInWave;
+            uint        numElements       = waveTile.elements();
+            uint        activeLanesInWave = static_cast<uint>(wavefrontSize);
+            const auto& arch              = context->targetArchitecture();
+            if(arch.HasCapability(GPUCapability::PartiallyActiveWaveSize) && isScaleType(dataType))
+            {
+                activeLanesInWave = arch.GetCapability(GPUCapability::PartiallyActiveWaveSize);
+            }
+
+            uint numGPR = numElements / activeLanesInWave;
 
             const MatrixMultiplySizes mi{.m = macTile.subTileSizes[0],
                                          .n = macTile.subTileSizes[1],
@@ -413,14 +419,40 @@ namespace rocRoller
             auto vgpr = graph.coordinates.addElement(VGPR(literal(numGPR), nullptr));
 
             graph.coordinates.addElement(Flatten(), {waveX, waveY}, {wave});
-            graph.coordinates.addElement(Flatten(), {wave, lane}, {workitem});
+
+            if(arch.HasCapability(GPUCapability::PartiallyActiveWaveSize) && isScaleType(dataType))
+            {
+                auto one        = literal(1);
+                auto wfsLiteral = literal(wavefrontSize);
+
+                auto newWorkitem       = graph.coordinates.addElement(Linear());
+                auto waveIndex         = graph.coordinates.addElement(Linear(one, one));
+                auto waveBlock_ignored = graph.coordinates.addElement(Linear(wfsLiteral, one));
+
+                auto activeLaneIndex
+                    = graph.coordinates.addElement(Linear(activeLanesInWaveLiteral, one));
+                auto activeLaneBlock_ignored = graph.coordinates.addElement(Linear(one, one));
+
+                // nWave = workitem // wavefrontSize
+                graph.coordinates.addElement(Flatten(), {waveIndex, waveBlock_ignored}, {workitem});
+                // maskedPeriodInWave = workitem % activeLanesInWave
+                graph.coordinates.addElement(
+                    Flatten(), {activeLaneBlock_ignored, activeLaneIndex}, {workitem});
+
+                // newWI = (workitem % activeLanesInWave) + (workitem // wavefrontSize) * activeLanesInWave
+                graph.coordinates.addElement(Tile(), {newWorkitem}, {waveIndex, activeLaneIndex});
+
+                graph.coordinates.addElement(Flatten(), {wave, lane}, {newWorkitem});
+            }
+            else
+            {
+                graph.coordinates.addElement(Flatten(), {wave, lane}, {workitem});
+            }
 
             connections.push_back(DC<Lane>(lane));
             connections.push_back(DC<VGPR>(vgpr));
 
             auto bitsPerElement = DataTypeInfo::Get(dataType).elementBits;
-
-            const auto& arch = context->targetArchitecture();
 
             bool isTransposeLayout = params->transposeMemoryAccess[waveTile.layout];
 

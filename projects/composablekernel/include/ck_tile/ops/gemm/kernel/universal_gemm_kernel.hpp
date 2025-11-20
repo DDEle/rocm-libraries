@@ -323,7 +323,7 @@ struct UniversalGemmKernel
 
     struct SplitKBatchOffset
     {
-        __device__ SplitKBatchOffset(const KernelArgs& kargs, const std::size_t k_id = blockIdx.z)
+        __device__ SplitKBatchOffset(const KernelArgs& kargs, const index_t k_id = blockIdx.z)
         {
             constexpr auto K1   = TilePartitioner::BlockGemmShape::WarpTile::at(number<2>{});
             const index_t K_t   = amd_wave_read_first_lane(kargs.k_batch * K1);
@@ -355,7 +355,7 @@ struct UniversalGemmKernel
                 }
             });
 
-            if(k_id < static_cast<uint32_t>(kargs.k_batch - 1))
+            if(k_id < (kargs.k_batch - 1))
             {
                 splitted_k = amd_wave_read_first_lane(KRead);
             }
@@ -370,8 +370,26 @@ struct UniversalGemmKernel
         index_t splitted_k;
     };
 
+    // for skipping validation of launch parameters especially for TDM where padding is unused
+    struct has_skip_check_valid_launch_params
+    {
+        template <typename T>
+        using has_skip_check_type = decltype(T::skipCheckValidLaunchParams);
+
+        static constexpr bool value = []() {
+            if constexpr(is_detected<has_skip_check_type, GemmPipeline>{})
+                return GemmPipeline::skipCheckValidLaunchParams;
+            else
+                return false;
+        }();
+    };
+
     CK_TILE_HOST static bool IsSupportedArgument(const KernelArgs& kargs)
     {
+        if constexpr(has_skip_check_valid_launch_params::value)
+        {
+            return true;
+        }
         if constexpr(EpiloguePipeline::GetVectorSizeC() % 2 != 0 &&
                      is_any_of<EDataType, fp16_t, bf16_t>::value)
         {

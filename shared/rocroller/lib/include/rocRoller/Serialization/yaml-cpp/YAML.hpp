@@ -224,6 +224,22 @@ namespace rocRoller
         }
 
         template <>
+        inline void EmitterOutput::output(E5M3& obj)
+        {
+            std::stringstream ss;
+            ss << obj;
+            *emitter << ss.str();
+        }
+
+        template <>
+        inline void EmitterOutput::output(E4M3& obj)
+        {
+            std::stringstream ss;
+            ss << obj;
+            *emitter << ss.str();
+        }
+
+        template <>
         struct IOTraits<EmitterOutput>
         {
             using IO = EmitterOutput;
@@ -624,6 +640,50 @@ namespace YAML
             }
 
             rhs.value = node[0].as<decltype(rhs.value)>();
+            return true;
+        }
+    };
+
+    template <>
+    struct convert<rocRoller::E5M3>
+    {
+        static Node encode(const rocRoller::E5M3& rhs)
+        {
+            Node node;
+            node.push_back(rhs.scale);
+            return node;
+        }
+
+        static bool decode(const Node& node, rocRoller::E5M3& rhs)
+        {
+            if(!node.IsSequence() || node.size() != 1)
+            {
+                return false;
+            }
+
+            rhs.scale = node[0].as<decltype(rhs.scale)>();
+            return true;
+        }
+    };
+
+    template <>
+    struct convert<rocRoller::E4M3>
+    {
+        static Node encode(const rocRoller::E4M3& rhs)
+        {
+            Node node;
+            node.push_back(rhs.scale);
+            return node;
+        }
+
+        static bool decode(const Node& node, rocRoller::E4M3& rhs)
+        {
+            if(!node.IsSequence() || node.size() != 1)
+            {
+                return false;
+            }
+
+            rhs.scale = node[0].as<decltype(rhs.scale)>();
             return true;
         }
     };

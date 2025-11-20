@@ -117,17 +117,47 @@ namespace GPUArchitectureGenerator
              {{"v_mfma_f32_32x32x16_bf16 a[0:15], v[32:35], v[36:39], a[0:15]"}, ""}},
 
             {rocRoller::GPUCapability::HasWMMA,
-             {{"v_wmma_f32_16x16x16_f16 v[0:7], v[32:35], v[36:39], v[0:7]"}, ""}},
+             {{"v_wmma_f32_16x16x16_f16 v[0:7], v[32:35], v[36:39], v[0:7]",
+               "v_wmma_f32_16x16x4_f32  v[0:7], v[32:33], v[40:41], v[0:7]"},
+              ""}},
             {rocRoller::GPUCapability::HasWMMA_F16_ACC,
-             {{"v_wmma_f16_16x16x16_f16 v[0:3], v[32:35], v[36:39], v[0:3]"}, ""}},
+             {{"v_wmma_f16_16x16x16_f16 v[0:3], v[32:35], v[36:39], v[0:3]",
+               "v_wmma_f16_16x16x32_f16 v[0:3], v[32:39], v[40:47], v[0:3]"},
+              ""}},
             {rocRoller::GPUCapability::HasWMMA_f32_16x16x16_f16,
              {{"v_wmma_f32_16x16x16_f16 v[0:7], v[32:35], v[36:39], v[0:7]"}, ""}},
             {rocRoller::GPUCapability::HasWMMA_f16_16x16x16_f16,
              {{"v_wmma_f16_16x16x16_f16 v[0:3], v[32:35], v[36:39], v[0:3]"}, ""}},
             {rocRoller::GPUCapability::HasWMMA_bf16_16x16x16_bf16,
              {{"v_wmma_bf16_16x16x16_bf16 v[0:3], v[32:35], v[36:39], v[0:3]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_f16_16x16x32_f16,
+             {{"v_wmma_f16_16x16x32_f16 v[0:3], v[32:39], v[40:47], v[0:3]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_bf16_16x16x32_bf16,
+             {{"v_wmma_bf16_16x16x32_bf16 v[0:3], v[32:39], v[40:47], v[0:3]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_f32_16x16x32_f16,
+             {{"v_wmma_f32_16x16x32_f16 v[0:7], v[32:39], v[40:47], v[0:7]"}, ""}},
             {rocRoller::GPUCapability::HasWMMA_f32_16x16x16_f8,
              {{"v_wmma_f32_16x16x16_fp8_fp8 v[0:7], v[32:33], v[34:35], v[0:7]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_f32_16x16x64_f8,
+             {{"v_wmma_f32_16x16x64_fp8_fp8 v[0:7], v[32:39], v[40:47], v[0:7]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_f32_16x16x4_f32,
+             {{"v_wmma_f32_16x16x4_f32 v[0:7], v[32:33], v[34:35], v[0:7]"}, ""}},
+
+            {rocRoller::GPUCapability::HasWMMA_f8f6f4,
+             {{"v_wmma_f32_16x16x128_f8f6f4 v[0:7], v[30:37], v[38:49], v[0:7] "
+               "matrix_a_fmt:MATRIX_FMT_FP4 matrix_b_fmt:MATRIX_FMT_FP6"},
+              ""}},
+            {rocRoller::GPUCapability::HasWMMA_scale_f8f6f4,
+             {{"v_wmma_scale_f32_16x16x128_f8f6f4 v[0:7], v[30:37], v[38:49], v[0:7], v8, v9 "
+               "matrix_a_fmt:MATRIX_FMT_FP4 matrix_b_fmt:MATRIX_FMT_FP6 "
+               "matrix_a_scale_fmt:MATRIX_SCALE_FMT_E8 matrix_b_scale_fmt:MATRIX_SCALE_FMT_E8"},
+              ""}},
+            {rocRoller::GPUCapability::HasWMMA_scale16_f8f6f4,
+             {{"v_wmma_scale16_f32_16x16x128_f8f6f4 v[0:7], v[30:37], v[38:49], v[0:7], v[8:9], "
+               "v[10:11] "
+               "matrix_a_fmt:MATRIX_FMT_FP4 matrix_b_fmt:MATRIX_FMT_FP6 "
+               "matrix_a_scale_fmt:MATRIX_SCALE_FMT_E8 matrix_b_scale_fmt:MATRIX_SCALE_FMT_E8"},
+              ""}},
 
             {rocRoller::GPUCapability::HasAccumOffset,
              {{".amdhsa_kernel hello_world\n  .amdhsa_next_free_vgpr .amdgcn.next_free_vgpr\n  "
@@ -171,6 +201,7 @@ namespace GPUArchitectureGenerator
             {rocRoller::GPUCapability::s_barrier_signal, {{"s_barrier_signal -1"}, ""}},
 
             {rocRoller::GPUCapability::HasExpcnt, {{"s_waitcnt expcnt(0)", "s_wait_expcnt 0"}, ""}},
+            {rocRoller::GPUCapability::HasTensorcnt, {{"s_wait_tensorcnt 0"}, ""}},
 
             {rocRoller::GPUCapability::HasAtomicAdd,
              {{"buffer_atomic_add_f32 v0, v1, s[0:3], 0 offen offset:0"}, ""}},
@@ -178,13 +209,17 @@ namespace GPUArchitectureGenerator
             {rocRoller::GPUCapability::UnalignedVGPRs, {{"v_add_f64 v[0:1], v[0:1], v[3:4]"}, ""}},
 
             {rocRoller::GPUCapability::HasDSReadTransposeB16,
-             {{"ds_read_b64_tr_b16 v[4:5], v1, offset:0"}, ""}},
+             {{"ds_read_b64_tr_b16 v[4:5], v1, offset:0", "ds_load_tr16_b128 v[4:7], v1, offset:0"},
+              ""}},
             {rocRoller::GPUCapability::HasDSReadTransposeB8,
-             {{"ds_read_b64_tr_b8  v[4:5], v1, offset:0"}, ""}},
+             {{"ds_read_b64_tr_b8  v[4:5], v1, offset:0", "ds_load_tr8_b64 v[4:5], v1, offset:0"},
+              ""}},
             {rocRoller::GPUCapability::HasDSReadTransposeB6,
-             {{"ds_read_b96_tr_b6  v[4:6], v1, offset:0"}, ""}},
+             {{"ds_read_b96_tr_b6  v[4:6], v1, offset:0", "ds_load_tr6_b96 v[4:6], v1, offset:0"},
+              ""}},
             {rocRoller::GPUCapability::HasDSReadTransposeB4,
-             {{"ds_read_b64_tr_b4  v[4:5], v1, offset:0"}, ""}},
+             {{"ds_read_b64_tr_b4  v[4:5], v1, offset:0", "ds_load_tr4_b64 v[4:5], v1, offset:0"},
+              ""}},
 
             {rocRoller::GPUCapability::ds_read_b64_tr_b16,
              {{"ds_read_b64_tr_b16 v[4:5], v1, offset:0"}, ""}},
@@ -195,6 +230,15 @@ namespace GPUArchitectureGenerator
             {rocRoller::GPUCapability::ds_read_b64_tr_b4,
              {{"ds_read_b64_tr_b4  v[4:5], v1, offset:0"}, ""}},
 
+            {rocRoller::GPUCapability::ds_load_tr16_b128,
+             {{"ds_load_tr16_b128 v[4:7], v1, offset:0"}, ""}},
+            {rocRoller::GPUCapability::ds_load_tr8_b64,
+             {{"ds_load_tr8_b64 v[4:5], v1, offset:0"}, ""}},
+            {rocRoller::GPUCapability::ds_load_tr6_b96,
+             {{"ds_load_tr6_b96 v[4:6], v1, offset:0"}, ""}},
+            {rocRoller::GPUCapability::ds_load_tr4_b64,
+             {{"ds_load_tr4_b64 v[4:5], v1, offset:0"}, ""}},
+
             {rocRoller::GPUCapability::HasPermLanes16, {{"v_permlane16_swap_b32 v4, v5"}, ""}},
             {rocRoller::GPUCapability::HasPermLanes32, {{"v_permlane32_swap_b32 v4, v5"}, ""}},
             {rocRoller::GPUCapability::UnalignedSGPRs,
@@ -202,6 +246,8 @@ namespace GPUArchitectureGenerator
             {rocRoller::GPUCapability::SeparateVscnt, {{"s_waitcnt_vscnt 0"}, ""}},
             {rocRoller::GPUCapability::HasSplitWaitCounters, {{"s_wait_kmcnt 0"}, ""}},
 
+            {rocRoller::GPUCapability::HasTDM,
+             {{"tensor_load_to_lds s[0:3], s[4:11], s[12:15], s[16:19]"}, ""}},
     };
 
     // GPUCapability -> <Vector of ISAs That Support It>
@@ -281,6 +327,7 @@ namespace GPUArchitectureGenerator
                                                  {.xnack = true}},
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950,
                                                  {.sramecc = true}},
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
             }},
            {rocRoller::GPUCapability::HasE8M0Scale,
             {
@@ -289,6 +336,15 @@ namespace GPUArchitectureGenerator
                                                  {.xnack = true}},
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950,
                                                  {.sramecc = true}},
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+            }},
+           {rocRoller::GPUCapability::HasE5M3Scale,
+            {
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+            }},
+           {rocRoller::GPUCapability::HasE4M3Scale,
+            {
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
             }},
            {rocRoller::GPUCapability::HasXCC,
             {
@@ -297,6 +353,19 @@ namespace GPUArchitectureGenerator
                                                  {.xnack = true}},
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950,
                                                  {.sramecc = true}},
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+            }},
+           {rocRoller::GPUCapability::HasBlockScaling16,
+            {
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+            }},
+           {rocRoller::GPUCapability::HasVGPRIndexing,
+            {
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+            }},
+           {rocRoller::GPUCapability::HasWorkgroupClusters,
+            {
+                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
             }}};
 
     inline std::vector<rocRoller::GPUArchitectureTarget> gfx908ISAs()
@@ -345,6 +414,17 @@ namespace GPUArchitectureGenerator
         return retval;
     }
 
+    inline std::vector<rocRoller::GPUArchitectureTarget> gfx125XISAs()
+    {
+        std::vector<rocRoller::GPUArchitectureTarget> retval;
+        std::copy_if(
+            rocRoller::SupportedArchitectures.begin(),
+            rocRoller::SupportedArchitectures.end(),
+            std::back_inserter(retval),
+            [](rocRoller::GPUArchitectureTarget const& x) -> bool { return x.isCDNA5GPU(); });
+        return retval;
+    }
+
     inline std::vector<rocRoller::GPUArchitectureTarget> gfx120XISAs()
     {
         std::vector<rocRoller::GPUArchitectureTarget> retval;
@@ -359,11 +439,12 @@ namespace GPUArchitectureGenerator
     inline std::vector<rocRoller::GPUArchitectureTarget> gfx12ISAs()
     {
         std::vector<rocRoller::GPUArchitectureTarget> retval;
-        std::copy_if(
-            rocRoller::SupportedArchitectures.begin(),
-            rocRoller::SupportedArchitectures.end(),
-            std::back_inserter(retval),
-            [](rocRoller::GPUArchitectureTarget const& x) -> bool { return x.isRDNA4GPU(); });
+        std::copy_if(rocRoller::SupportedArchitectures.begin(),
+                     rocRoller::SupportedArchitectures.end(),
+                     std::back_inserter(retval),
+                     [](rocRoller::GPUArchitectureTarget const& x) -> bool {
+                         return x.isRDNA4GPU() || x.isCDNA5GPU();
+                     });
         return retval;
     }
 
@@ -411,19 +492,24 @@ namespace GPUArchitectureGenerator
              [](rocRoller::GPUArchitectureTarget x) -> bool { return !x.isRDNAGPU(); }},
 
             {rocRoller::GPUCapability::HasWave32,
-             [](rocRoller::GPUArchitectureTarget x) -> bool { return x.isRDNAGPU(); }},
+             [](rocRoller::GPUArchitectureTarget x) -> bool {
+                 return x.isRDNAGPU() || x.isCDNA5GPU();
+             }},
 
             {rocRoller::GPUCapability::HasXnack,
              [](rocRoller::GPUArchitectureTarget x) -> bool { return x.features.xnack; }},
 
             {rocRoller::GPUCapability::PackedWorkitemIDs,
              [](rocRoller::GPUArchitectureTarget x) -> bool {
-                 return x.isCDNA2GPU() || x.isCDNA3GPU() || x.isCDNA35GPU() || x.isRDNA4GPU();
+                 return x.isCDNA2GPU() || x.isCDNA3GPU() || x.isCDNA35GPU() || x.isRDNA4GPU()
+                        || x.isCDNA5GPU();
              }},
             {rocRoller::GPUCapability::WorkgroupIdxViaTTMP,
              [](rocRoller::GPUArchitectureTarget x) -> bool { return x.isGFX12GPU(); }},
             {rocRoller::GPUCapability::HasBufferOutOfBoundsCheckOption,
              [](rocRoller::GPUArchitectureTarget x) -> bool { return x.isGFX12GPU(); }},
+            {rocRoller::GPUCapability::HasBufferFormatSpecInSOffsetField,
+             [](rocRoller::GPUArchitectureTarget x) -> bool { return x.isCDNA5GPU(); }},
 
     };
     // This is the way to add a set of instructions that have the same wait value and wait queues.
@@ -1078,6 +1164,83 @@ namespace GPUArchitectureGenerator
                  rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_bf8_fp8", 0, {}, 8),
                  rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_bf8_bf8", 0, {}, 8),
              }},
+            {gfx125XISAs(),
+             {
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x4_f32", 0, {}, 16),
+                 // V_WMMA_F32_16x16x32_{F16,BF16}
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x32_bf16", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x32_f16", 0, {}, 8),
+                 // V_WMMA_{F16,BF16}_16x16x32_{F16,BF16}
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x32_f16", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_bf16_16x16x32_bf16", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_bf16f32_16x16x32_bf16", 0, {}, 8),
+                 // V_WMMA_F32_16x16x64_{fp8,bf8}_{fp8,bf8}
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_bf8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_bf8_fp8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_fp8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_fp8_fp8", 0, {}, 8),
+                 // V_WMMA_F16_16x16x64_{fp8,bf8}_{fp8,bf8}
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_bf8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_bf8_fp8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_fp8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_fp8_fp8", 0, {}, 8),
+                 // V_WMMA_F32_*_F8F6F4
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x128_f8f6f4", 0, {}, 16),
+                 rocRoller::GPUInstructionInfo("v_wmma_scale16_f32_16x16x128_f8f6f4", 0, {}, 16),
+                 rocRoller::GPUInstructionInfo("v_wmma_scale_f32_16x16x128_f8f6f4", 0, {}, 16),
+                 // V_WMMA_I32_*_{IU4,IU8}
+                 rocRoller::GPUInstructionInfo("v_wmma_i32_16x16x64_iu8", 0, {}, 16),
+                 // DS_LOAD_TR16_B128, DS_LOAD_TR{8,4}_B64, and DS_LOAD_TR6_B96
+                 rocRoller::GPUInstructionInfo("ds_load_tr16_b128",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::DSQueue},
+                                               8,
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false,
+                                               (1 << 16) - 1),
+                 rocRoller::GPUInstructionInfo("ds_load_tr8_b64",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::DSQueue},
+                                               4,
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false,
+                                               (1 << 16) - 1),
+                 rocRoller::GPUInstructionInfo("ds_load_tr6_b96",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::DSQueue},
+                                               8,
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false,
+                                               (1 << 16) - 1),
+                 rocRoller::GPUInstructionInfo("ds_load_tr4_b64",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::DSQueue},
+                                               4,
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false,
+                                               (1 << 16) - 1),
+
+                 // Tensor Data Mover instructions
+                 rocRoller::GPUInstructionInfo("tensor_load_to_lds",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::TensorQueue},
+                                               0, // FIXME: latency is variable
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false),
+                 rocRoller::GPUInstructionInfo("tensor_store_from_lds",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::TensorQueue},
+                                               0, // FIXME: latency is variable
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false),
+             }},
+            // TODO: add support for gfx1251
+            // {{rocRoller::GPUArchitectureGFX::GFX1251},
+            //  {
+            //      rocRoller::GPUInstructionInfo("v_wmma_f64_16x16x4_f64", 0, {}, 32),
+            //      rocRoller::GPUInstructionInfo("v_wmma_f64_16x16x8_f64", 0, {}, 32),
+            //      rocRoller::GPUInstructionInfo("v_wmma_i32_16x16x128_iu4", 0, {}, 16),
+            //  }},
             {gfx9ISAs(),
              {
                  rocRoller::GPUInstructionInfo(

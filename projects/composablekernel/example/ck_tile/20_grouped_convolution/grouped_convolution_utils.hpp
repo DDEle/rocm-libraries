@@ -18,6 +18,22 @@ using MemoryOpSet =
     std::integral_constant<ck_tile::memory_operation_enum, ck_tile::memory_operation_enum::set>;
 using MemoryOpAtomicAdd = std::integral_constant<ck_tile::memory_operation_enum,
                                                  ck_tile::memory_operation_enum::atomic_add>;
+<<<<<<< HEAD
+=======
+struct GemmWarpConfig_Mfma
+{
+    static constexpr ck_tile::index_t M_Warp_Tile = 32;
+    static constexpr ck_tile::index_t N_Warp_Tile = 32;
+    static constexpr ck_tile::index_t K_Warp_Tile = 16;
+};
+
+struct GemmWarpConfig_Wmma
+{
+    static constexpr ck_tile::index_t M_Warp_Tile = 16;
+    static constexpr ck_tile::index_t N_Warp_Tile = 16;
+    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<ck_tile::fp16_t, M_Warp_Tile>();
+};
+>>>>>>> origin/gfx1250
 
 template <typename InDataType, typename WeiDataType, typename AccDataType, typename OutDataType>
 auto calculate_rtol_atol(const ck_tile::index_t GemmK,

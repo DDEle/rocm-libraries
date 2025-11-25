@@ -75,11 +75,7 @@ from .SolutionStructs import isPackedIndex
 from .AsmStoreState import StoreState, VectorDataTypes
 from .Activation import ActivationType
 from .CustomKernels import isCustomKernelConfig
-<<<<<<< HEAD
-from .Common import roundUp, log2, ceilDivide, choose_multiplier
-=======
-from .Common import roundUp, log2, ceilDivide, wmmaV3InputVgprLayout
->>>>>>> origin/gfx1250
+from .Common import roundUp, log2, ceilDivide, choose_multiplier, wmmaV3InputVgprLayout
 from Tensile.Common import print2, printExit, printWarning, INDEX_CHARS, DebugConfig, DataDirection
 from Tensile.Common.DataType import DataType
 from Tensile.Common.RegisterPool import RegisterPool, allocTmpGpr, allocTmpGprList
@@ -11990,14 +11986,13 @@ class KernelWriterAssembly(KernelWriter):
                   currentInstLength += countInstruction(checkIsEdge)
             betaModule.add(edgeModule, pos=0)
 
-<<<<<<< HEAD
           # FactorDim label
           betaModule.add(writeLabels[beta][factorDim]["Label"], pos=0)
           currentInstLength += 1
 
         # If module, checking factorDim is zero
         if len(factorDims) == 2:
-          isLongBranch = True if currentInstLength >= 16384 else False
+          isLongBranch = True if currentInstLength >= self.states.asmCaps["ShortBranchMaxLength"] else False
           with self.allocTmpSgpr(3) as tmpSgprInfo:
             checkIsFactorDimZero = betaModule.add(self.checkIsFactorDimZero(kernel, tmpSgprInfo, \
               writeLabels[beta][factorDims[1]]["Label"], isLongBranch=isLongBranch), pos=0)
@@ -12007,37 +12002,6 @@ class KernelWriterAssembly(KernelWriter):
         betaModule.add(writeLabels[beta]["Label"], pos=0)
         currentInstLength += 1
 
-=======
-            edge_mode_pos = 0
-            for idx2 in range(len(factorDims)):
-              edge_mode_pos, currentInstLength, activationTypeStr = \
-                  self.globalWriteElementBatch(kernel, tPA, tPB, activation,
-                                              applyAlpha, beta, edge, atomic,
-                                              vectorWidthsNew, elementsNew, activationLabelList,
-                                              tmpVgpr, cvtVgprStruct, activationSetPCStruct, activationEnumStrList,
-                                              actPCMaxTempSgpr, isInsertActFunctionCallAddrCalc, toActModuleList,
-                                              edgeModule, writeLabels, endLabel,
-                                              edge_mode_pos, currentInstLength,
-                                              idx0, idx1, idx2, idxMN, vectorDataTypes, factorDims)
-            if len(factorDims) == 2:
-              isLongBranch = True if currentInstLength >= self.states.asmCaps["ShortBranchMaxLength"] else False
-              with self.allocTmpSgpr(3) as tmpSgprInfo:
-                checkIsFactorDimZero = edgeModule.add(self.checkIsFactorDimZero(kernel, tmpSgprInfo, \
-                  writeLabels[beta][edge][factorDims[1]][idxMN], isLongBranch=isLongBranch), pos=edge_mode_pos)
-                currentInstLength += countInstruction(checkIsFactorDimZero)
-
-            betaModule.add(edgeModule, pos=mod_pos)
-
-        ########################################
-        # branch if Edge0 or Edge1
-        if False in edges and True in edges:
-          isLongBranch = True if currentInstLength >= self.states.asmCaps["ShortBranchMaxLength"] else False
-          with self.allocTmpSgpr(4) as tmpSgprInfo:
-            labelMT1 = writeLabels[beta][True][factorDims[0]][0] if len(writeLabels[beta][True][factorDims[0]]) == 1 else writeLabels[beta][True][factorDims[0]][1]
-            checkIsEdge = betaModule.add(self.checkIsEdge(kernel, tmpSgprInfo, \
-              writeLabels[beta][True][factorDims[0]][0], labelMT1, isLongBranch=isLongBranch), pos=mod_pos)
-            currentInstLength += countInstruction(checkIsEdge)
->>>>>>> origin/gfx1250
         betaModules.add(betaModule, pos=0)
 
       # Check if branch exceeds

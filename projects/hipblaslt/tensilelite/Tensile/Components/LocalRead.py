@@ -302,50 +302,8 @@ class LocalReadMFMA(LocalRead):
                     blockStride = elementsPerBlockSMFMA * threadGroups
                     blockOffsetSMFMA = blockStride - elementsPerBlockSMFMA
 
-<<<<<<< HEAD
-        maxLDSConstOffset = writer.states.regCaps["maxLDSConstOffset"]
-
-        subIterLoadCount = 0
-        valufIdx = 0
-        if enableLDSTr:
-            numberMTilesPerWave = kernel["MIWaveTile"][tile01]
-            numOffsetsPerLoad = 2
-            highBits = 0
-            totalLoads = numberMTilesPerWave * numOffsetsPerLoad
-            for tIdx in range(0, numberMTilesPerWave):
-                valuiIdx = int(valufIdx)
-                comment = "LDS Transpose"
-                LocalReadX = instruction.getInst(highBits)
-
-                offset_val = (tP["localReadOffset"]+MIWaveGroupShape[tile01]*tIdx) * tP["bpeDS"] + tP["localReadSwapByteOffset"]
-
-                def applyPad(offset_val):
-                    if (kernel["LdsBlockSizePerPad%s"%tc] != 0) and (kernel["LdsPad%s"%tc] != 0):
-                        offset_val = offset_val + (offset_val // kernel["LdsBlockSizePerPad%s"%tc]) * kernel["LdsPad%s"%tc] * tP["bpeDS"]
-                    return offset_val
-
-                for oIdx in range(0,numOffsetsPerLoad):
-
-                    offset, srcAddr = self.cal_offset_srcAddr(maxLDSConstOffset, tc, offset_val)
-                    offset = applyPad(offset)
-                    ds = DSModifiers(na=1, offset=offset)
-                    destVgpr = vgpr("Valu%s_X%u_I%u+%u+%u"%(tc,bufferIdx,iui, 4*tIdx, oIdx * 2), 2)
-                    localReadCode = Module("LocalRead%s Valu%u"%(tc,valuiIdx))
-                    localReadCode.add(LocalReadX(dst=destVgpr, src=srcAddr, ds=ds, comment=comment))
-                    if perpStride == 1:
-                        offset_val += UnrollStride*inputPerThread
-                    else:
-                        permBlock = kernel["MatrixInstK"]
-                        perpStrideInv = permBlock // perpStride
-                        inv4K = perpStrideInv * (4 % perpStride) + 4 // perpStride
-                        offset_val += inv4K * kernel["MacroTile%s"%tc] * tP["bpeDS"]
-                    if ((subTileIdx == 0 and subIterLoadCount < totalLoads // numSubTiles) \
-                        or (subTileIdx == 1 and subIterLoadCount >= totalLoads // numSubTiles) \
-                        or numSubTiles == 1) or writer.states.inTailLoop:
-                        imod.add(localReadCode)
-                    subIterLoadCount += 1
-=======
         maxLDSConstOffset = writer.states.regCaps["maxLDSConstOffset"]                    
+        subIterLoadCount = 0
         valufIdx = 0
         if enableLDSTr:
             numberMTilesPerWave = kernel["MIWaveTile"][tile01]
@@ -391,25 +349,42 @@ class LocalReadMFMA(LocalRead):
                 else:
                     assert False, f"Unhandled bpeDS: {tP['bpeDS']}"
             else:
+                numberMTilesPerWave = kernel["MIWaveTile"][tile01]
+                numOffsetsPerLoad = 2
                 highBits = 0
+                totalLoads = numberMTilesPerWave * numOffsetsPerLoad
                 for tIdx in range(0, numberMTilesPerWave):
-                    offset_val = (tP["localReadOffset"]+MIWaveGroupShape[tile01]*tIdx) * tP["bpeDS"]
-                    if (kernel["LdsBlockSizePerPad%s"%tc] != 0) and (kernel["LdsPad%s"%tc] != 0):
-                        offset_val = offset_val + (offset_val // kernel["LdsBlockSizePerPad%s"%tc]) * kernel["LdsPad%s"%tc] * tP["bpeDS"]
-                    offset, srcAddr = self.cal_offset_srcAddr(maxLDSConstOffset, tc, offset_val)
-                    ds = DSModifiers(na=1, offset=offset)
-                    LocalReadX = instruction.getInst(highBits)
-                    destVgpr = vgpr("Valu%s_X%u_I%u+%u+0"%(tc,bufferIdx,iui, 4*tIdx), 2)
-                    comment = "LDS Transpose"
                     valuiIdx = int(valufIdx)
-                    localReadCode = imod.add(Module("LocalRead%s Valu%u"%(tc,valuiIdx)))
-                    localReadCode.add(LocalReadX(dst=destVgpr, src=srcAddr, ds=ds, comment=comment))
-                    destVgpr = vgpr("Valu%s_X%u_I%u+%u+2"%(tc,bufferIdx,iui,4*tIdx), 2)
-                    offset_val += UnrollStride*inputPerThread;
-                    offset, srcAddr = self.cal_offset_srcAddr(maxLDSConstOffset, tc, offset_val)
-                    ds = DSModifiers(na=1, offset=offset)
-                    localReadCode.add(LocalReadX(dst=destVgpr, src=srcAddr, ds=ds, comment=comment))
->>>>>>> origin/gfx1250
+                    comment = "LDS Transpose"
+                    LocalReadX = instruction.getInst(highBits)
+
+                    offset_val = (tP["localReadOffset"]+MIWaveGroupShape[tile01]*tIdx) * tP["bpeDS"] + tP["localReadSwapByteOffset"]
+
+                    def applyPad(offset_val):
+                        if (kernel["LdsBlockSizePerPad%s"%tc] != 0) and (kernel["LdsPad%s"%tc] != 0):
+                            offset_val = offset_val + (offset_val // kernel["LdsBlockSizePerPad%s"%tc]) * kernel["LdsPad%s"%tc] * tP["bpeDS"]
+                        return offset_val
+
+                    for oIdx in range(0,numOffsetsPerLoad):
+
+                        offset, srcAddr = self.cal_offset_srcAddr(maxLDSConstOffset, tc, offset_val)
+                        offset = applyPad(offset)
+                        ds = DSModifiers(na=1, offset=offset)
+                        destVgpr = vgpr("Valu%s_X%u_I%u+%u+%u"%(tc,bufferIdx,iui, 4*tIdx, oIdx * 2), 2)
+                        localReadCode = Module("LocalRead%s Valu%u"%(tc,valuiIdx))
+                        localReadCode.add(LocalReadX(dst=destVgpr, src=srcAddr, ds=ds, comment=comment))
+                        if perpStride == 1:
+                            offset_val += UnrollStride*inputPerThread
+                        else:
+                            permBlock = kernel["MatrixInstK"]
+                            perpStrideInv = permBlock // perpStride
+                            inv4K = perpStrideInv * (4 % perpStride) + 4 // perpStride
+                            offset_val += inv4K * kernel["MacroTile%s"%tc] * tP["bpeDS"]
+                        if ((subTileIdx == 0 and subIterLoadCount < totalLoads // numSubTiles) \
+                            or (subTileIdx == 1 and subIterLoadCount >= totalLoads // numSubTiles) \
+                            or numSubTiles == 1) or writer.states.inTailLoop:
+                            imod.add(localReadCode)
+                        subIterLoadCount += 1
         else:
             totalLoads = numVectorsPerTile * numReadsPerVector * numReadsPerUnroll
             for vIdx in range(0, numVectorsPerTile):

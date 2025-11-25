@@ -8,12 +8,9 @@ set(TENSILELITE_ASM_DEBUG "" CACHE STRING "Keep debug information for built code
 set(TENSILELITE_LOGIC_FILTER "" CACHE STRING "Cutomsized logic filter, default is *, i.e. all logics.")
 set(TENSILELITE_NO_COMPRESS "" CACHE STRING "Do not compress device code object files.")
 set(TENSILELITE_EXPERIMENTAL "" CACHE STRING "Process experimental logic files.")
-<<<<<<< HEAD
 set(TENSILELITE_ENABLE_ASM_COMMENTS OFF CACHE STRING "Turn on asm comments when building gemm libraries.")
-=======
-option(HIPBLASLT_ENABLE_EXOPTS "" ON)
+option(HIPBLASLT_ENABLE_EXOPTS "" OFF)
 option(HIPBLASLT_ENABLE_TRANSFORM "" ON)
->>>>>>> origin/gfx1250
 
 set(HIPBLASLT_TENSILE_LIBPATH "${hipblaslt_BINARY_DIR}/Tensile" CACHE STRING "Path to output the device gemm libraries.")
 file(MAKE_DIRECTORY "${HIPBLASLT_TENSILE_LIBPATH}/library")

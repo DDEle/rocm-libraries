@@ -30,11 +30,8 @@ from rocisa.functions import vectorStaticRemainder, \
     vectorStaticMultiplyAdd
 
 from ..Component import LraTileAssignment, LraTileProperties
-<<<<<<< HEAD
 from ..Common import roundUp, log2, ceilDivide
-=======
 from ..Common.DataType import DataType
->>>>>>> origin/gfx1250
 from dataclasses import dataclass
 
 @dataclass
@@ -544,7 +541,6 @@ class LraTileAssignmentMFMA(LraTileAssignment):
         else:
            strideWave       = kernel["MatrixInstM"] * num1DBlocks * strideTile * vectorWidth
 
-<<<<<<< HEAD
         lsu              = kernel["LocalSplitU"]
 
         if isDTVAB:
@@ -570,8 +566,6 @@ class LraTileAssignmentMFMA(LraTileAssignment):
            writer.vgprPool.checkIn(reMap0)
            writer.vgprPool.checkIn(reMap1)
 
-=======
->>>>>>> origin/gfx1250
         with writer.allocTmpSgpr(1) as tmpSgprInfo:
             # tile offset
             module.add(vectorStaticRemainder(dummy, kReg, dividendReg, waveWidth, tmpVgprRes, tmpSgprInfo, \

@@ -174,7 +174,6 @@ namespace rocisa
             m_isainfo = data;
         }
 
-<<<<<<< HEAD
         void setOutputOptions(const OutputOptions& options)
         {
             std::thread::id id  = std::this_thread::get_id();
@@ -187,7 +186,8 @@ namespace rocisa
             if(m_outputOptions.find(id) == m_outputOptions.end())
                 m_outputOptions[id] = OutputOptions();
             return m_outputOptions[id];
-=======
+        }
+
         void setVgprIdx(const std::string& s, const int idx)
         {
             std::thread::id id = std::this_thread::get_id();
@@ -204,7 +204,6 @@ namespace rocisa
             m_mutex.lock();
             m_vgprmsb[id] = msb;
             m_mutex.unlock();
->>>>>>> origin/gfx1250
         }
 
     private:
@@ -213,13 +212,10 @@ namespace rocisa
         std::mutex                            m_mutex;
         std::map<std::thread::id, KernelInfo> m_threads;
         std::map<IsaVersion, IsaInfo>         m_isainfo;
-<<<<<<< HEAD
 
         std::map<std::thread::id, OutputOptions> m_outputOptions;
-=======
         std::map<std::thread::id, std::map<std::string, int>> m_vgpridx;
         std::map<std::thread::id, int>        m_vgprmsb;
->>>>>>> origin/gfx1250
     };
 
     struct Item

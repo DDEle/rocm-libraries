@@ -95,11 +95,19 @@ namespace rocRoller
     struct GPUArchitectureTarget
     {
     public:
-        GPUArchitectureGFX      gfx      = GPUArchitectureGFX::UNKNOWN;
-        GPUArchitectureFeatures features = {};
+        GPUArchitectureGFX      gfx            = GPUArchitectureGFX::UNKNOWN;
+        GPUArchitectureFeatures features       = {};
+        int                     asicRevisionId = -1;
 
-        static GPUArchitectureTarget fromString(std::string const& archStr);
-        std::string                  toString() const;
+        static GPUArchitectureTarget fromString(std::string const& archStr,
+                                                int                asicRevisionId = -1);
+        // Return a string representation of the architecture target.
+        // This includes the asic revision ID if it is non-negative so that
+        // targets with the same GFX ID but with different revisions can be differentiated.
+        std::string toString() const;
+        // Return a string that can be provided as input to the LLVM Assembler.
+        // It purposely omits the asic revision ID since LLVM does not use it.
+        std::string toAssemblerString() const;
 
         std::string name() const;
 
@@ -209,24 +217,29 @@ namespace rocRoller
         return target.name();
     }
 
-    constexpr std::array<rocRoller::GPUArchitectureTarget, 17> SupportedArchitectures
-        = {GPUArchitectureTarget{GPUArchitectureGFX::GFX908},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX908, {.xnack = true}},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX908, {.sramecc = true}},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX90A},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX90A, {.xnack = true}},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX90A, {.sramecc = true}},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX942},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX942, {.sramecc = true}},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX950},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX950, {.sramecc = true}},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX950, {.xnack = true}},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX1012},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX1012, {.xnack = true}},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX1030},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX1200},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX1201},
-           GPUArchitectureTarget{GPUArchitectureGFX::GFX1250}};
+    constexpr GPUArchitectureTarget GPUArchTargetGFX1250Rev0{GPUArchitectureGFX::GFX1250, {}, 0};
+    constexpr GPUArchitectureTarget GPUArchTargetGFX1250Rev1{GPUArchitectureGFX::GFX1250, {}, 1};
+
+    constexpr std::array<rocRoller::GPUArchitectureTarget, 18> SupportedArchitectures = {
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX908},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX908, {.xnack = true}},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX908, {.sramecc = true}},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX90A},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX90A, {.xnack = true}},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX90A, {.sramecc = true}},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX942},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX942, {.sramecc = true}},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX950},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX950, {.sramecc = true}},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX950, {.xnack = true}},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX1012},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX1012, {.xnack = true}},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX1030},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX1200},
+        GPUArchitectureTarget{GPUArchitectureGFX::GFX1201},
+        GPUArchTargetGFX1250Rev0,
+        GPUArchTargetGFX1250Rev1,
+    };
 }
 
 #include <rocRoller/GPUArchitecture/GPUArchitectureTarget_impl.hpp>

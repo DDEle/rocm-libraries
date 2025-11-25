@@ -27,6 +27,7 @@
 #include <rocRoller/CodeGen/Arithmetic/MatrixMultiply.hpp>
 #include <rocRoller/CodeGen/Arithmetic/Utility.hpp>
 #include <rocRoller/InstructionValues/Register.hpp>
+#include <rocRoller/KernelOptions_detail.hpp>
 #include <rocRoller/Utilities/Error.hpp>
 
 namespace rocRoller
@@ -178,18 +179,25 @@ namespace rocRoller
             if(arch.HasCapability(GPUCapability::HasWMMA))
             {
                 AssertFatal(
-                    (mi.m == 16) && (mi.n == 16)
+                    (mi.m == 16 || mi.m == 32) && (mi.n == 16)
                         && (mi.k == 4 || mi.k == 16 || mi.k == 32 || mi.k == 64 || mi.k == 128),
                     "Invalid inputs",
                     ShowValue(mi.m),
                     ShowValue(mi.n),
                     ShowValue(mi.k));
 
-                if(mi.m == 16 && mi.n == 16 && mi.k == 128
+                const auto favourF8F6F4
+                    = m_context->kernelOptions()->favourF8F6F4OverF8MatrixInstruction;
+
+                if(favourF8F6F4 && mi.m == 16 && mi.n == 16 && mi.k == 128
                    && (isF8(typeA) || isF6(typeA) || isF4(typeA))
                    && (isF8(typeB) || isF6(typeB) || isF4(typeB)))
                 {
                     inputType = "f8f6f4";
+                }
+                else if(isF4(typeA) && isF4(typeB) && mi.m == 32 && mi.n == 16 && mi.k == 128)
+                {
+                    inputType = "f4";
                 }
                 else if(isF8(typeA) && isF8(typeB))
                 {

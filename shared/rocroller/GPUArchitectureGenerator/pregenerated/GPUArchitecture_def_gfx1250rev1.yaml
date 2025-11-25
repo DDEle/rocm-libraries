@@ -1,5 +1,5 @@
 Architectures:
-  gfx1250:
+  gfx1250rev1:
     Capabilities:
       CMPXWritesSGPR: 0
       DefaultRemapXCCValue: 8
@@ -36,14 +36,20 @@ Architectures:
       HasTensorcnt: 0
       HasVGPRIndexing: 0
       HasWMMA: 0
+      HasWMMA_32x16x128_f4: 0
       HasWMMA_F16_ACC: 0
       HasWMMA_bf16_16x16x32_bf16: 0
+      HasWMMA_f16_16x16x128_f8: 0
       HasWMMA_f16_16x16x32_f16: 0
+      HasWMMA_f16_16x16x64_f8: 0
+      HasWMMA_f32_16x16x128_f8: 0
       HasWMMA_f32_16x16x32_f16: 0
       HasWMMA_f32_16x16x4_f32: 0
       HasWMMA_f32_16x16x64_f8: 0
       HasWMMA_f8f6f4: 0
+      HasWMMA_scale16_32x16x128_f4: 0
       HasWMMA_scale16_f8f6f4: 0
+      HasWMMA_scale_32x16x128_f4: 0
       HasWMMA_scale_f8f6f4: 0
       HasWave32: 0
       HasWave64: 0
@@ -73,6 +79,7 @@ Architectures:
       v_pk_fma_f16: 0
     ISAVersion:
       ArchString: gfx1250
+      AsicRevisionId: 1
       Sramecc: false
       Xnack: false
     InstructionInfos:
@@ -7772,9 +7779,8 @@ Architectures:
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
-        WaitCount: 1
-        WaitQueues:
-        - TensorQueue
+        WaitCount: -1
+        WaitQueues: []
       tensor_save:
         ImplicitAccess: false
         Instruction: tensor_save
@@ -7797,9 +7803,8 @@ Architectures:
         IsBranch: false
         Latency: 0
         MaxLiteral: 0
-        WaitCount: 1
-        WaitQueues:
-        - TensorQueue
+        WaitCount: -1
+        WaitQueues: []
       v_add3_nc_u32:
         ImplicitAccess: false
         Instruction: v_add3_nc_u32
@@ -13220,33 +13225,33 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f16_16x16x128_bf8_bf8
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_wmma_f16_16x16x128_bf8_fp8:
         ImplicitAccess: false
         Instruction: v_wmma_f16_16x16x128_bf8_fp8
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_wmma_f16_16x16x128_fp8_bf8:
         ImplicitAccess: false
         Instruction: v_wmma_f16_16x16x128_fp8_bf8
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_wmma_f16_16x16x128_fp8_fp8:
         ImplicitAccess: false
         Instruction: v_wmma_f16_16x16x128_fp8_fp8
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_wmma_f16_16x16x32_f16:
         ImplicitAccess: false
@@ -13260,7 +13265,7 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f16_16x16x64_bf8_bf8
         IsBranch: false
-        Latency: 8
+        Latency: 4
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
@@ -13268,7 +13273,7 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f16_16x16x64_bf8_fp8
         IsBranch: false
-        Latency: 8
+        Latency: 4
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
@@ -13276,7 +13281,7 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f16_16x16x64_fp8_bf8
         IsBranch: false
-        Latency: 8
+        Latency: 4
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
@@ -13284,7 +13289,7 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f16_16x16x64_fp8_fp8
         IsBranch: false
-        Latency: 8
+        Latency: 4
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
@@ -13292,17 +13297,17 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f32_16x16x128_bf8_bf8
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_wmma_f32_16x16x128_bf8_fp8:
         ImplicitAccess: false
         Instruction: v_wmma_f32_16x16x128_bf8_fp8
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_wmma_f32_16x16x128_f8f6f4:
         ImplicitAccess: false
@@ -13316,17 +13321,17 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f32_16x16x128_fp8_bf8
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_wmma_f32_16x16x128_fp8_fp8:
         ImplicitAccess: false
         Instruction: v_wmma_f32_16x16x128_fp8_fp8
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_wmma_f32_16x16x32_bf16:
         ImplicitAccess: false
@@ -13356,7 +13361,7 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f32_16x16x64_bf8_bf8
         IsBranch: false
-        Latency: 8
+        Latency: 4
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
@@ -13364,7 +13369,7 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f32_16x16x64_bf8_fp8
         IsBranch: false
-        Latency: 8
+        Latency: 4
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
@@ -13372,7 +13377,7 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f32_16x16x64_fp8_bf8
         IsBranch: false
-        Latency: 8
+        Latency: 4
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
@@ -13380,7 +13385,7 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f32_16x16x64_fp8_fp8
         IsBranch: false
-        Latency: 8
+        Latency: 4
         MaxLiteral: 0
         WaitCount: 0
         WaitQueues: []
@@ -13388,9 +13393,9 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_f32_32x16x128_f4
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_wmma_i32_16x16x64_iu8:
         ImplicitAccess: false
@@ -13412,9 +13417,9 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_scale16_f32_32x16x128_f4
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_wmma_scale_f32_16x16x128_f8f6f4:
         ImplicitAccess: false
@@ -13428,9 +13433,9 @@ Architectures:
         ImplicitAccess: false
         Instruction: v_wmma_scale_f32_32x16x128_f4
         IsBranch: false
-        Latency: 0
+        Latency: 8
         MaxLiteral: 0
-        WaitCount: -1
+        WaitCount: 0
         WaitQueues: []
       v_writelane_b32:
         ImplicitAccess: false

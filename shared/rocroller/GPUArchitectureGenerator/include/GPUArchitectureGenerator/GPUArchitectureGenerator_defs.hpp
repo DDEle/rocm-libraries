@@ -140,8 +140,15 @@ namespace GPUArchitectureGenerator
              {{"v_wmma_f32_16x16x16_fp8_fp8 v[0:7], v[32:33], v[34:35], v[0:7]"}, ""}},
             {rocRoller::GPUCapability::HasWMMA_f32_16x16x64_f8,
              {{"v_wmma_f32_16x16x64_fp8_fp8 v[0:7], v[32:39], v[40:47], v[0:7]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_f16_16x16x64_f8,
+             {{"v_wmma_f16_16x16x64_fp8_fp8 v[0:3], v[32:39], v[40:47], v[0:3]"}, ""}},
             {rocRoller::GPUCapability::HasWMMA_f32_16x16x4_f32,
              {{"v_wmma_f32_16x16x4_f32 v[0:7], v[32:33], v[34:35], v[0:7]"}, ""}},
+
+            {rocRoller::GPUCapability::HasWMMA_f32_16x16x128_f8,
+             {{"v_wmma_f32_16x16x128_fp8_fp8 v[0:7], v[32:47], v[48:63], v[0:7]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_f16_16x16x128_f8,
+             {{"v_wmma_f16_16x16x128_fp8_fp8 v[0:3], v[32:47], v[48:63], v[0:3]"}, ""}},
 
             {rocRoller::GPUCapability::HasWMMA_f8f6f4,
              {{"v_wmma_f32_16x16x128_f8f6f4 v[0:7], v[30:37], v[38:49], v[0:7] "
@@ -157,6 +164,17 @@ namespace GPUArchitectureGenerator
                "v[10:11] "
                "matrix_a_fmt:MATRIX_FMT_FP4 matrix_b_fmt:MATRIX_FMT_FP6 "
                "matrix_a_scale_fmt:MATRIX_SCALE_FMT_E8 matrix_b_scale_fmt:MATRIX_SCALE_FMT_E8"},
+              ""}},
+            {rocRoller::GPUCapability::HasWMMA_32x16x128_f4,
+             {{"v_wmma_f32_32x16x128_f4 v[0:15], v[30:45], v[46:53], v[0:15]"}, ""}},
+            {rocRoller::GPUCapability::HasWMMA_scale_32x16x128_f4,
+             {{"v_wmma_scale_f32_32x16x128_f4 v[0:15], v[30:45], v[46:53], v[0:15], v16, v17 "
+               "matrix_a_scale_fmt:MATRIX_SCALE_FMT_E8 matrix_b_scale_fmt:MATRIX_SCALE_FMT_E5M3"},
+              ""}},
+            {rocRoller::GPUCapability::HasWMMA_scale16_32x16x128_f4,
+             {{"v_wmma_scale16_f32_32x16x128_f4 v[0:15], v[30:45], v[46:53], v[0:15], v[16:17], "
+               "v[18:19] "
+               "matrix_a_scale_fmt:MATRIX_SCALE_FMT_E8 matrix_b_scale_fmt:MATRIX_SCALE_FMT_E5M3"},
               ""}},
 
             {rocRoller::GPUCapability::HasAccumOffset,
@@ -327,7 +345,8 @@ namespace GPUArchitectureGenerator
                                                  {.xnack = true}},
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950,
                                                  {.sramecc = true}},
-                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+                rocRoller::GPUArchTargetGFX1250Rev0,
+                rocRoller::GPUArchTargetGFX1250Rev1,
             }},
            {rocRoller::GPUCapability::HasE8M0Scale,
             {
@@ -336,15 +355,18 @@ namespace GPUArchitectureGenerator
                                                  {.xnack = true}},
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950,
                                                  {.sramecc = true}},
-                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+                rocRoller::GPUArchTargetGFX1250Rev0,
+                rocRoller::GPUArchTargetGFX1250Rev1,
             }},
            {rocRoller::GPUCapability::HasE5M3Scale,
             {
-                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+                rocRoller::GPUArchTargetGFX1250Rev0,
+                rocRoller::GPUArchTargetGFX1250Rev1,
             }},
            {rocRoller::GPUCapability::HasE4M3Scale,
             {
-                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+                rocRoller::GPUArchTargetGFX1250Rev0,
+                rocRoller::GPUArchTargetGFX1250Rev1,
             }},
            {rocRoller::GPUCapability::HasXCC,
             {
@@ -353,19 +375,23 @@ namespace GPUArchitectureGenerator
                                                  {.xnack = true}},
                 rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX950,
                                                  {.sramecc = true}},
-                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+                rocRoller::GPUArchTargetGFX1250Rev0,
+                rocRoller::GPUArchTargetGFX1250Rev1,
             }},
            {rocRoller::GPUCapability::HasBlockScaling16,
             {
-                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+                rocRoller::GPUArchTargetGFX1250Rev0,
+                rocRoller::GPUArchTargetGFX1250Rev1,
             }},
            {rocRoller::GPUCapability::HasVGPRIndexing,
             {
-                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+                rocRoller::GPUArchTargetGFX1250Rev0,
+                rocRoller::GPUArchTargetGFX1250Rev1,
             }},
            {rocRoller::GPUCapability::HasWorkgroupClusters,
             {
-                rocRoller::GPUArchitectureTarget{rocRoller::GPUArchitectureGFX::GFX1250},
+                rocRoller::GPUArchTargetGFX1250Rev0,
+                rocRoller::GPUArchTargetGFX1250Rev1,
             }}};
 
     inline std::vector<rocRoller::GPUArchitectureTarget> gfx908ISAs()
@@ -411,17 +437,6 @@ namespace GPUArchitectureGenerator
                          return x.isCDNA1GPU() || x.isCDNA2GPU() || x.isCDNA3GPU()
                                 || x.isCDNA35GPU();
                      });
-        return retval;
-    }
-
-    inline std::vector<rocRoller::GPUArchitectureTarget> gfx125XISAs()
-    {
-        std::vector<rocRoller::GPUArchitectureTarget> retval;
-        std::copy_if(
-            rocRoller::SupportedArchitectures.begin(),
-            rocRoller::SupportedArchitectures.end(),
-            std::back_inserter(retval),
-            [](rocRoller::GPUArchitectureTarget const& x) -> bool { return x.isCDNA5GPU(); });
         return retval;
     }
 
@@ -1164,7 +1179,7 @@ namespace GPUArchitectureGenerator
                  rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_bf8_fp8", 0, {}, 8),
                  rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x16_bf8_bf8", 0, {}, 8),
              }},
-            {gfx125XISAs(),
+            {{rocRoller::GPUArchTargetGFX1250Rev0},
              {
                  rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x4_f32", 0, {}, 16),
                  // V_WMMA_F32_16x16x32_{F16,BF16}
@@ -1233,6 +1248,77 @@ namespace GPUArchitectureGenerator
                                                0, // FIXME: latency is variable
                                                /*implicitAccess*/ false,
                                                /*branch*/ false),
+             }},
+            {{rocRoller::GPUArchTargetGFX1250Rev1},
+             {
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x4_f32", 0, {}, 16),
+                 // V_WMMA_F32_16x16x32_{F16,BF16}
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x32_bf16", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x32_f16", 0, {}, 8),
+                 // V_WMMA_{F16,BF16}_16x16x32_{F16,BF16}
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x32_f16", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_bf16_16x16x32_bf16", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_bf16f32_16x16x32_bf16", 0, {}, 8),
+                 // V_WMMA_F32_16x16x64_{fp8,bf8}_{fp8,bf8}
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_bf8_bf8", 0, {}, 4),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_bf8_fp8", 0, {}, 4),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_fp8_bf8", 0, {}, 4),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x64_fp8_fp8", 0, {}, 4),
+                 // V_WMMA_F16_16x16x64_{fp8,bf8}_{fp8,bf8}
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_bf8_bf8", 0, {}, 4),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_bf8_fp8", 0, {}, 4),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_fp8_bf8", 0, {}, 4),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x64_fp8_fp8", 0, {}, 4),
+                 // V_WMMA_F32_*_F8F6F4
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x128_f8f6f4", 0, {}, 16),
+                 rocRoller::GPUInstructionInfo("v_wmma_scale16_f32_16x16x128_f8f6f4", 0, {}, 16),
+                 rocRoller::GPUInstructionInfo("v_wmma_scale_f32_16x16x128_f8f6f4", 0, {}, 16),
+                 // V_WMMA_I32_*_{IU4,IU8}
+                 rocRoller::GPUInstructionInfo("v_wmma_i32_16x16x64_iu8", 0, {}, 16),
+                 // DS_LOAD_TR16_B128, DS_LOAD_TR{8,4}_B64, and DS_LOAD_TR6_B96
+                 rocRoller::GPUInstructionInfo("ds_load_tr16_b128",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::DSQueue},
+                                               8,
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false,
+                                               (1 << 16) - 1),
+                 rocRoller::GPUInstructionInfo("ds_load_tr8_b64",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::DSQueue},
+                                               4,
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false,
+                                               (1 << 16) - 1),
+                 rocRoller::GPUInstructionInfo("ds_load_tr6_b96",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::DSQueue},
+                                               8,
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false,
+                                               (1 << 16) - 1),
+                 rocRoller::GPUInstructionInfo("ds_load_tr4_b64",
+                                               1,
+                                               {rocRoller::GPUWaitQueueType::DSQueue},
+                                               4,
+                                               /*implicitAccess*/ false,
+                                               /*branch*/ false,
+                                               (1 << 16) - 1),
+
+                 // V_WMMA_F32_16x16x128_{fp8,bf8}_{fp8,bf8}
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x128_bf8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x128_bf8_fp8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x128_fp8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_16x16x128_fp8_fp8", 0, {}, 8),
+                 // V_WMMA_F16_16x16x128_{fp8,bf8}_{fp8,bf8}
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x128_bf8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x128_bf8_fp8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x128_fp8_bf8", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_f16_16x16x128_fp8_fp8", 0, {}, 8),
+
+                 rocRoller::GPUInstructionInfo("v_wmma_f32_32x16x128_f4", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_scale_f32_32x16x128_f4", 0, {}, 8),
+                 rocRoller::GPUInstructionInfo("v_wmma_scale16_f32_32x16x128_f4", 0, {}, 8),
              }},
             // TODO: add support for gfx1251
             // {{rocRoller::GPUArchitectureGFX::GFX1251},

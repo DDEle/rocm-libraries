@@ -47,10 +47,8 @@ namespace VGPRIndexingObserverTests
     class VGPRIndexingObserverTest : public TestContext
     {
     public:
-        VGPRIndexingObserverTest(GPUArchitectureGFX gfx)
-            : TestContext(TestContext::ForTarget({gfx})){};
-        VGPRIndexingObserverTest(GPUArchitectureGFX gfx, KernelOptions kernelOptions)
-            : TestContext(TestContext::ForTarget({gfx}, kernelOptions)){};
+        VGPRIndexingObserverTest(GPUArchitectureTarget target)
+            : TestContext(TestContext::ForTarget(target)){};
     };
 
     using namespace Register::RegisterAllocatorDetail;
@@ -61,7 +59,7 @@ namespace VGPRIndexingObserverTests
 
     TEST_CASE("VGPR Indexing - Test all bank combinations", "[codegen]")
     {
-        auto target = GENERATE(GPUArchitectureGFX::GFX1250);
+        auto target = GENERATE(GPUArchTargetGFX1250Rev0, GPUArchTargetGFX1250Rev1);
 
         VGPRIndexingObserverTest t{target};
 
@@ -132,7 +130,7 @@ namespace VGPRIndexingObserverTests
 
     TEST_CASE("VGPR Indexing - Test duplicate mode set", "[codegen]")
     {
-        auto                     target = GENERATE(GPUArchitectureGFX::GFX1250);
+        auto target = GENERATE(GPUArchTargetGFX1250Rev0, GPUArchTargetGFX1250Rev1);
         VGPRIndexingObserverTest t{target};
 
         auto vBase = t.createRegisters(
@@ -178,7 +176,7 @@ namespace VGPRIndexingObserverTests
 
     TEST_CASE("VGPR Indexing - Test MODE set skips non-vector operands", "[codegen]")
     {
-        auto                     target = GENERATE(GPUArchitectureGFX::GFX1250);
+        auto target = GENERATE(GPUArchTargetGFX1250Rev0, GPUArchTargetGFX1250Rev1);
         VGPRIndexingObserverTest t{target};
 
         auto vBase = t.createRegisters(

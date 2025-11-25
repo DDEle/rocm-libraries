@@ -185,12 +185,30 @@ namespace rocRoller
             }
             else if(arch.HasCapability(GPUCapability::HasWMMA_scale_f8f6f4))
             {
-                AssertFatal(miSizes.m == 16 && miSizes.n == 16 && miSizes.k == 128,
+                AssertFatal((miSizes.m == 16 && miSizes.n == 16 && miSizes.k == 128)
+                                || (miSizes.m == 32 && miSizes.n == 16 && miSizes.k == 128),
                             "Invalid wavetile {}x{}x{} for scaled WMMA instruction for {}.",
                             miSizes.m,
                             miSizes.n,
                             miSizes.k,
                             arch.target().toString());
+
+                std::string miSuffix = "_f8f6f4";
+
+                if(miSizes.m == 32 && miSizes.n == 16 && miSizes.k == 128)
+                {
+                    AssertFatal(
+                        isF4(typeA) && isF4(typeB),
+                        fmt::format(
+                            "Invalid types for A and B. Scaled {}x{}x{} WMMA instructions only "
+                            "support FP4.",
+                            miSizes.m,
+                            miSizes.n,
+                            miSizes.k),
+                        ShowValue(typeA),
+                        ShowValue(typeB));
+                    miSuffix = "_f4";
+                }
 
                 std::string mi;
 
@@ -210,7 +228,7 @@ namespace rocRoller
                                          miSizes.n,
                                          "x",
                                          miSizes.k,
-                                         "_f8f6f4");
+                                         miSuffix);
                     }
                     else if(scaleBlockSize == 16)
                     {
@@ -221,7 +239,7 @@ namespace rocRoller
                                          miSizes.n,
                                          "x",
                                          miSizes.k,
-                                         "_f8f6f4");
+                                         miSuffix);
                     }
                     else
                     {
@@ -234,7 +252,7 @@ namespace rocRoller
                 else
                 {
                     mi = concatenate(
-                        "v_wmma_scale_f32_", miSizes.m, "x", miSizes.n, "x", miSizes.k, "_f8f6f4");
+                        "v_wmma_scale_f32_", miSizes.m, "x", miSizes.n, "x", miSizes.k, miSuffix);
                 }
 
                 auto scaleAType = scaleA->variableType().dataType;
@@ -253,6 +271,13 @@ namespace rocRoller
                     = "matrix_a_scale_fmt:" + Arithmetic::getScaleTypeModifier(scaleAType);
                 auto bScaleFmt
                     = "matrix_b_scale_fmt:" + Arithmetic::getScaleTypeModifier(scaleBType);
+
+                if(miSuffix == "_f4")
+                {
+                    // _f4 only supports FP4 input types, so no need to specify formats
+                    aFmt = "";
+                    bFmt = "";
+                }
 
                 Instruction inst(mi,
                                  {dest},

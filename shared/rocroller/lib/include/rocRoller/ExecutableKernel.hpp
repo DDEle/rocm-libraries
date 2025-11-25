@@ -49,7 +49,7 @@ namespace rocRoller
     class ExecutableKernel
     {
     public:
-        ExecutableKernel();
+        explicit ExecutableKernel(ContextPtr context);
         ~ExecutableKernel() = default;
 
         /**
@@ -136,6 +136,8 @@ namespace rocRoller
         std::string              m_kernelName;
         bool                     m_kernelLoaded;
         std::shared_ptr<HIPData> m_hipData;
+
+        ContextPtr m_context;
 
         /**
          * @brief Execute a kernel on a GPU with optional timer and stream

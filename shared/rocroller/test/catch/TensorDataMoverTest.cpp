@@ -480,6 +480,9 @@ namespace TensorDataMoverTest
             std::tuple(512, 256, 1024, 512,  32, 256),
             std::tuple(512, 256, 1024, 512, 256,  32)
         );
+
+        auto kernelTarget = GENERATE(GPUArchTargetGFX1250Rev0, GPUArchTargetGFX1250Rev1);
+
         // clang-format on
         DYNAMIC_SECTION(
             "Test the following params: " << fmt::format("{} {}", toString(datatype), tdmParams))
@@ -497,7 +500,7 @@ namespace TensorDataMoverTest
                         ShowValue(tileDim0),
                         ShowValue(tileDim1));
 
-            auto context = TestContext::ForTarget({GPUArchitectureGFX::GFX1250},
+            auto context = TestContext::ForTarget(kernelTarget,
                                                   KernelOptions{},
                                                   datatype,
                                                   tensorX,
@@ -513,6 +516,20 @@ namespace TensorDataMoverTest
 
             if(runOnGPU)
             {
+                auto        currDeviceCtx  = TestContext::ForTestDevice();
+                const auto& currDeviceArch = currDeviceCtx->targetArchitecture();
+                if(!currDeviceArch.HasCapability(GPUCapability::HasTDM))
+                {
+                    SKIP(fmt::format("Target {} does not support TDM",
+                                     toString(currDeviceArch.target())));
+                }
+                if(kernelTarget != currDeviceCtx->targetArchitecture().target())
+                {
+                    SKIP(fmt::format("Cannot run kernel for {} on {} device",
+                                     toString(kernelTarget),
+                                     toString(currDeviceArch.target())));
+                }
+
                 tdmKernel.run<TestType>();
             }
             else
@@ -533,14 +550,6 @@ namespace TensorDataMoverTest
                        uint16_t,
                        uint8_t)
     {
-        auto testContext = TestContext::ForTestDevice();
-
-        const auto& arch = testContext->targetArchitecture();
-        if(!arch.HasCapability(GPUCapability::HasTDM))
-        {
-            SKIP(fmt::format("Target {} does not support TDM", toString(arch.target())));
-        }
-
         TensorDataMoverKernel::testBody<TestType>(/*runOnGPU*/ true);
     }
 

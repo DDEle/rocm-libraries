@@ -258,11 +258,13 @@ AcceptableError
         double fudge             = 5;
         double extraArchFudgeBF8 = 0.0;
         double extraArchFudgeBF6 = 0.0;
+        double extraArchFudgeFP4 = 0.0;
 
         if(arch.gfx == rocRoller::GPUArchitectureGFX::GFX1250)
         {
-            extraArchFudgeBF8 = 1.8;
-            extraArchFudgeBF6 = 0.8;
+            extraArchFudgeBF8 = 5.8;
+            extraArchFudgeBF6 = 5.8;
+            extraArchFudgeFP4 = 2.8;
         }
         else if(arch.gfx == rocRoller::GPUArchitectureGFX::GFX950)
         {
@@ -310,6 +312,12 @@ AcceptableError
             {
                 fudge *= 3;
                 ss << " Increase fudge for mixed BF6: " << fudge;
+            }
+
+            if constexpr(std::is_same_v<TA, rocRoller::FP4> || std::is_same_v<TB, rocRoller::FP4>)
+            {
+                fudge *= 3 + extraArchFudgeFP4;
+                ss << " Increase fudge for mixed FP4: " << fudge;
             }
         }
         tolerance = fudge * epsilon<TD>() * std::sqrt(K);

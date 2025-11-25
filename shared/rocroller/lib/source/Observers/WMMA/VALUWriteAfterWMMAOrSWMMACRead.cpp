@@ -49,7 +49,8 @@ namespace rocRoller
             {
                 coexecSlots = 4;
                 if(opCode.ends_with("_iu8") || opCode.ends_with("_iu4")
-                   || (opCode.ends_with("_f8f6f4") && (isF8(srcAType) || isF8(srcBType))))
+                   || (opCode.ends_with("_f8f6f4") && (isF8(srcAType) || isF8(srcBType)))
+                   || opCode.ends_with("_f4"))
                 {
                     coexecSlots = 8;
                 }
@@ -66,7 +67,7 @@ namespace rocRoller
                        || opCode.ends_with("_fp8_fp8") || opCode.ends_with("_fp8_bf8")
                        || opCode.ends_with("_bf8_fp8") || opCode.ends_with("_bf8_bf8")
                        || opCode.ends_with("_f8f6f4") || opCode.ends_with("_iu8")
-                       || opCode.ends_with("_iu4");
+                       || opCode.ends_with("_iu4") || opCode.ends_with("_f4");
             }
             return false;
         };

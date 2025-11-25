@@ -232,6 +232,7 @@ architecture:
   ArchString: gfxunknown
   Xnack: false
   Sramecc: false
+  AsicRevisionId: -1
 mac_m: 64
 mac_n: 64
 mac_k: 64
@@ -298,6 +299,7 @@ architecture:
   ArchString: gfx90a
   Xnack: false
   Sramecc: false
+  AsicRevisionId: -1
 mac_m: 64
 mac_n: 64
 mac_k: 64
@@ -363,6 +365,7 @@ architecture:
   ArchString: gfx1201
   Xnack: false
   Sramecc: false
+  AsicRevisionId: -1
 mac_m: 64
 mac_n: 64
 mac_k: 64

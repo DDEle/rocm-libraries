@@ -39,6 +39,7 @@
 #include <rocRoller/Expression.hpp>
 #include <rocRoller/ExpressionTransformations.hpp>
 #include <rocRoller/KernelGraph/KernelGraph.hpp>
+#include <rocRoller/KernelOptions_detail.hpp>
 #include <rocRoller/Operations/Command.hpp>
 #include <rocRoller/Parameters/Solution/StreamK.hpp>
 #include <rocRoller/Scheduling/Observers/FileWritingObserver.hpp>
@@ -107,7 +108,8 @@ namespace GEMMDriverTest
             {
                 REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasMFMA_fp8,
                                         GPUCapability::HasWMMA_f32_16x16x16_f8,
-                                        GPUCapability::HasWMMA_f32_16x16x64_f8);
+                                        GPUCapability::HasWMMA_f32_16x16x64_f8,
+                                        GPUCapability::HasWMMA_f32_16x16x128_f8);
             }
 
             if constexpr(isF6F4<TA> || isF6F4<TB>)
@@ -119,14 +121,17 @@ namespace GEMMDriverTest
             if((isF8<TA> || isF8<TB>)&&(gemm.waveK >= 64))
             {
                 REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasMFMA_f8f6f4,
-                                        GPUCapability::HasWMMA_f8f6f4);
+                                        GPUCapability::HasWMMA_f8f6f4,
+                                        GPUCapability::HasWMMA_32x16x128_f4);
             }
 
             if(gemm.scaleAMode != Operations::ScaleMode::None
                || gemm.scaleBMode != Operations::ScaleMode::None)
             {
                 REQUIRE_ANY_OF_ARCH_CAP(GPUCapability::HasMFMA_scale_f8f6f4,
-                                        GPUCapability::HasWMMA_scale_f8f6f4);
+                                        GPUCapability::HasWMMA_scale_f8f6f4,
+                                        GPUCapability::HasWMMA_scale_32x16x128_f4,
+                                        GPUCapability::HasWMMA_scale16_32x16x128_f4);
                 const auto  scaleType = gemm.scaleAMode != Operations::ScaleMode::None
                                             ? gemm.scaleTypeA
                                             : gemm.scaleTypeB;
@@ -998,6 +1003,23 @@ namespace GEMMDriverTest
     };
 
     class GEMMTestWMMAClustersGPU : public BaseGEMMContextFixture<std::array<unsigned int, 3>>
+    {
+    };
+
+    // Params are: A type, B type, scaleTypeA, scaleTypeB, (scaleAMode, scaleBMode, scaleBlockSize), (transA, transB)
+    class ScaledGEMMTestF4WMMAGPU
+        : public BaseGEMMContextFixture<std::tuple<
+              rocRoller::DataType,
+              rocRoller::DataType,
+              rocRoller::DataType,
+              rocRoller::DataType,
+              std::tuple<rocRoller::Operations::ScaleMode, rocRoller::Operations::ScaleMode, int>,
+              std::pair<std::string, std::string>>>
+    {
+    };
+
+    // Params are: (transA, transB)
+    class GEMMTestF4WMMAGPU : public BaseGEMMContextFixture<std::pair<std::string, std::string>>
     {
     };
 
@@ -4076,6 +4098,10 @@ namespace GEMMDriverTest
         REQUIRE_ARCH_CAP(GPUCapability::HasWMMA);
         auto [typeA, typeB, waveK, transOp] = std::get<1>(GetParam());
 
+        KernelOptions options{m_context->kernelOptions()};
+        options->favourF8F6F4OverF8MatrixInstruction = false;
+        setKernelOptions(options);
+
         switch(waveK)
         {
         case 16:
@@ -4083,6 +4109,10 @@ namespace GEMMDriverTest
             break;
         case 64:
             REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f32_16x16x64_f8);
+            break;
+        case 128:
+            REQUIRE_ARCH_REVISION_ID(1);
+            REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f32_16x16x128_f8);
             break;
         default:
             Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
@@ -4092,6 +4122,8 @@ namespace GEMMDriverTest
         gemm.waveM = 16;
         gemm.waveN = 16;
         gemm.waveK = waveK;
+        gemm.macK  = 2 * gemm.waveK;
+        gemm.k     = 4 * gemm.macK;
         gemm.wavefrontSize
             = m_context->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
         std::tie(gemm.transA, gemm.transB) = transOp;
@@ -4161,6 +4193,58 @@ namespace GEMMDriverTest
         std::tie(gemm.scaleAMode, gemm.scaleBMode, gemm.scaleBlockSize) = scaleModesAndSize;
 
         basicGEMMMixed(typeA, typeB, gemm);
+    }
+
+    TEST_P(ScaledGEMMTestF4WMMAGPU, GPU_ScaledBasicGEMM)
+    {
+        REQUIRE_ARCH_REVISION_ID(1);
+        REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_scale_32x16x128_f4);
+        auto [typeA, typeB, scaleTypeA, scaleTypeB, scaleModesAndSize, transOp]
+            = std::get<1>(GetParam());
+
+        auto gemm                          = setup_GEMMF8F6F4(32, 16, 128);
+        std::tie(gemm.transA, gemm.transB) = transOp;
+
+        gemm.wavefrontSize
+            = m_context->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
+        gemm.workgroupSizeX = 2 * gemm.wavefrontSize;
+        gemm.workgroupSizeY = 2;
+        gemm.scaleTypeA     = scaleTypeA;
+        gemm.scaleTypeB     = scaleTypeB;
+
+        std::tie(gemm.scaleAMode, gemm.scaleBMode, gemm.scaleBlockSize) = scaleModesAndSize;
+
+        if(gemm.scaleBlockSize == 32)
+        {
+            REQUIRE_ARCH_CAP(GPUCapability::HasBlockScaling32);
+        }
+        else if(gemm.scaleBlockSize == 16)
+        {
+            REQUIRE_ARCH_CAP(GPUCapability::HasBlockScaling16);
+        }
+        else
+        {
+            Throw<FatalError>(fmt::format("Unsupported scaleBlockSize: {}. (Allowed 16, 32)",
+                                          gemm.scaleBlockSize));
+        }
+
+        basicGEMMMixed(typeA, typeB, gemm);
+    }
+
+    TEST_P(GEMMTestF4WMMAGPU, GPU_BasicGEMM)
+    {
+        REQUIRE_ARCH_REVISION_ID(1);
+        REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_32x16x128_f4);
+        auto transOp = std::get<1>(GetParam());
+
+        GEMMProblem gemm = setup_GEMMF8F6F4(32, 16, 128);
+        gemm.wavefrontSize
+            = m_context->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
+        gemm.workgroupSizeX                = 2 * gemm.wavefrontSize;
+        gemm.workgroupSizeY                = 2;
+        std::tie(gemm.transA, gemm.transB) = transOp;
+
+        basicGEMM<FP4, FP4, float>(gemm);
     }
 
     TEST_P(GEMMTestLargeMacroTileGPU, DISABLED_GPU_BasicGEMM)
@@ -4414,7 +4498,7 @@ namespace GEMMDriverTest
             ::testing::Combine(
                 ::testing::Values(rocRoller::DataType::FP8, rocRoller::DataType::BF8),
                 ::testing::Values(rocRoller::DataType::FP8, rocRoller::DataType::BF8),
-                ::testing::Values(/*waveK*/ 64),
+                ::testing::Values(/*waveK*/ 64, /*waveK*/ 128),
                 ::testing::Values(std::pair<std::string, std::string>("N", "N"),
                                   std::pair<std::string, std::string>("N", "T"),
                                   std::pair<std::string, std::string>("T", "N"),
@@ -4490,4 +4574,52 @@ namespace GEMMDriverTest
                                       std::pair<std::string, std::string>("N", "T"),
                                       std::pair<std::string, std::string>("T", "N"),
                                       std::pair<std::string, std::string>("T", "T"))))));
+
+    INSTANTIATE_TEST_SUITE_P(
+        GEMMTestWMMA1250Rev1,
+        GEMMTestF4WMMAGPU,
+        ::testing::Combine(currentGPUISA(),
+                           ::testing::Values(
+                               // TODO: Adapt transpose from LDS coordinate
+                               // transform to work with _f4 layout
+                               // std::pair<std::string, std::string>("N", "N"),
+                               // std::pair<std::string, std::string>("N", "T"),
+                               std::pair<std::string, std::string>("T", "N")
+                               /*std::pair<std::string, std::string>("T", "T")*/)));
+
+    INSTANTIATE_TEST_SUITE_P(
+        ScaledGEMMTestWMMA1250Rev1,
+        ScaledGEMMTestF4WMMAGPU,
+        filterValidDataTypeScaleTypeParams<ScaledGEMMTestF4WMMAGPU::ParamType>(::testing::Combine(
+            currentGPUISA(),
+            ::testing::Combine(::testing::Values(rocRoller::DataType::FP4),
+                               ::testing::Values(rocRoller::DataType::FP4),
+                               ::testing::Values(rocRoller::DataType::E8M0,
+                                                 rocRoller::DataType::E5M3,
+                                                 rocRoller::DataType::E4M3),
+                               ::testing::Values(rocRoller::DataType::E8M0,
+                                                 rocRoller::DataType::E5M3,
+                                                 rocRoller::DataType::E4M3),
+                               ::testing::Values(/*scaleAMode, scaleBMode, scaleBlockSize*/
+                                                 std::make_tuple(Operations::ScaleMode::Separate,
+                                                                 Operations::ScaleMode::Separate,
+                                                                 32),
+                                                 std::make_tuple(Operations::ScaleMode::Separate,
+                                                                 Operations::ScaleMode::Separate,
+                                                                 16),
+                                                 std::make_tuple(Operations::ScaleMode::Separate,
+                                                                 Operations::ScaleMode::SingleScale,
+                                                                 32),
+                                                 std::make_tuple(Operations::ScaleMode::SingleScale,
+                                                                 Operations::ScaleMode::Separate,
+                                                                 32),
+                                                 std::make_tuple(Operations::ScaleMode::SingleScale,
+                                                                 Operations::ScaleMode::SingleScale,
+                                                                 32)),
+                               ::testing::Values(
+                                   //std::pair<std::string, std::string>("N", "N"),
+                                   //std::pair<std::string, std::string>("N", "T"),
+                                   std::pair<std::string, std::string>("T", "N")
+                                   //std::pair<std::string, std::string>("T", "T")
+                                   )))));
 }

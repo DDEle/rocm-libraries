@@ -110,7 +110,7 @@ namespace rocRoller
     Generator<Instruction> AssemblyKernel::preamble()
     {
         m_startedCodeGeneration = true;
-        auto archName           = m_context.lock()->targetArchitecture().target().toString();
+        auto archName = m_context.lock()->targetArchitecture().target().toAssemblerString();
 
         co_yield Instruction::Directive(".amdgcn_target \"amdgcn-amd-amdhsa--" + archName + "\"");
         co_yield Instruction::Directive(".set .amdgcn.next_free_vgpr, 0");

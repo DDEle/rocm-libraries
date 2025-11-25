@@ -46,8 +46,8 @@ namespace WMMAObserverTests
     public:
         WMMAObserverTest(GPUArchitectureGFX gfx)
             : TestContext(TestContext::ForTarget({gfx})){};
-        WMMAObserverTest(GPUArchitectureGFX gfx, KernelOptions kernelOptions)
-            : TestContext(TestContext::ForTarget({gfx}, kernelOptions)){};
+        WMMAObserverTest(GPUArchitectureTarget target, KernelOptions kernelOptions)
+            : TestContext(TestContext::ForTarget(target, kernelOptions)){};
         void peekAndSchedule(Instruction& inst, uint expectedNops = 0)
         {
             auto peeked = m_context->observer()->peek(inst);
@@ -228,7 +228,7 @@ namespace WMMAObserverTests
 
     TEST_CASE("RAW hazards on GFX1250", "[codegen]")
     {
-        const auto target             = GPUArchitectureGFX::GFX1250;
+        const auto target = GENERATE(GPUArchTargetGFX1250Rev0, GPUArchTargetGFX1250Rev1);
         const auto coexecutionEnabled = GENERATE(true, false);
 
         KernelOptions kernelOptions{};
@@ -262,25 +262,28 @@ namespace WMMAObserverTests
         SECTION("Expect 1 + coexecSlots V_NOP(s) if second WMMA's A is first WMMA's D and A"
                 "*IS* F8")
         {
-            const auto wmmaInst = GENERATE(
-                as<std::string>{}, "v_wmma_f32_16x16x128_f8f6f4", "v_wmma_i32_16x16x64_iu8");
+            const auto [wmmaInst, types, regCounts] = GENERATE(
+                std::make_tuple(std::string{"v_wmma_f32_16x16x128_f8f6f4"},
+                                std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8),
+                                std::make_tuple(8, 16, 8)),
+                std::make_tuple(std::string{"v_wmma_i32_16x16x64_iu8"},
+                                std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32),
+                                std::make_tuple(8, 8, 8)),
+                std::make_tuple(std::string{"v_wmma_f32_32x16x128_f4"},
+                                std::make_tuple(DataType::Float, DataType::FP4x8, DataType::FP4x8),
+                                std::make_tuple(16, 16, 8)));
 
-            const auto [v0_dt, vA_dt, vB_dt]
-                = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
-                      ? std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8)
-                      : std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32);
+            const auto [v0_dt, vA_dt, vB_dt]          = types;
+            const auto [v0_count, vA_count, vB_count] = regCounts;
 
-            auto [vA_count, vB_count] = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
-                                            ? std::make_pair(16, 16)
-                                            : std::make_pair(8, 8);
-
-            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, 8, FC);
+            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, v0_count, FC);
             const auto vA = t.createRegisters(Register::Type::Vector, vA_dt, 2, vA_count, FC);
             const auto vB = t.createRegisters(Register::Type::Vector, vB_dt, 2, vB_count, FC);
             // coexecSlots = 8, if first WMMA is:
             //  - v_wmma*_iu8; or
             //  - v_wmma*_iu4; or
-            //  - v_wmma*f8f6f4 && A or B is F8
+            //  - v_wmma*f8f6f4 && A or B is F8;
+            //  - v_wmma*_f4
             const auto               expectedVNops = 1 + (coexecutionEnabled ? 8 : 0);
             std::vector<Instruction> insts
                 = {Instruction(wmmaInst, {v0[0]}, {vA[0], vB[0], v0[1]}, {}, ""),
@@ -321,19 +324,21 @@ namespace WMMAObserverTests
 
         SECTION("Expect 0 + coexecSlots V_NOP(s) if VALU reads D after WMMA and A *IS* F8")
         {
-            const auto wmmaInst = GENERATE(
-                as<std::string>{}, "v_wmma_f32_16x16x128_f8f6f4", "v_wmma_i32_16x16x64_iu8");
+            const auto [wmmaInst, types, regCounts] = GENERATE(
+                std::make_tuple(std::string{"v_wmma_f32_16x16x128_f8f6f4"},
+                                std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8),
+                                std::make_tuple(8, 16, 8)),
+                std::make_tuple(std::string{"v_wmma_i32_16x16x64_iu8"},
+                                std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32),
+                                std::make_tuple(8, 8, 8)),
+                std::make_tuple(std::string{"v_wmma_f32_32x16x128_f4"},
+                                std::make_tuple(DataType::Float, DataType::FP4x8, DataType::FP4x8),
+                                std::make_tuple(16, 16, 8)));
 
-            const auto [v0_dt, vA_dt, vB_dt]
-                = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
-                      ? std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8)
-                      : std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32);
+            const auto [v0_dt, vA_dt, vB_dt]          = types;
+            const auto [v0_count, vA_count, vB_count] = regCounts;
 
-            auto [vA_count, vB_count] = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
-                                            ? std::make_pair(16, 16)
-                                            : std::make_pair(8, 8);
-
-            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, 8, FC);
+            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, v0_count, FC);
             const auto vA = t.createRegisters(Register::Type::Vector, vA_dt, 1, vA_count, FC);
             const auto vB = t.createRegisters(Register::Type::Vector, vB_dt, 1, vB_count, FC);
             // coexecSlots = 8, if first WMMA is:
@@ -360,7 +365,7 @@ namespace WMMAObserverTests
 
     TEST_CASE("WAR/WAW hazards on GFX1250", "[codegen]")
     {
-        const auto target             = GPUArchitectureGFX::GFX1250;
+        const auto target = GENERATE(GPUArchTargetGFX1250Rev0, GPUArchTargetGFX1250Rev1);
         const auto coexecutionEnabled = GENERATE(true, false);
 
         KernelOptions kernelOptions{};
@@ -396,19 +401,27 @@ namespace WMMAObserverTests
 
         SECTION("Expect 0 + coexecSlots V_NOP(s) if VALU writes A after WMMA and A *IS* F8")
         {
-            const auto wmmaInst = GENERATE(
-                as<std::string>{}, "v_wmma_f32_16x16x128_f8f6f4", "v_wmma_i32_16x16x64_iu8");
+            const auto [wmmaInst, types, regCounts] = GENERATE(
+                std::make_tuple(std::string{"v_wmma_f32_16x16x128_f8f6f4"},
+                                std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8),
+                                std::make_tuple(8, 16, 8)),
+                std::make_tuple(std::string{"v_wmma_i32_16x16x64_iu8"},
+                                std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32),
+                                std::make_tuple(8, 8, 8)),
+                std::make_tuple(std::string{"v_wmma_f32_32x16x128_f4"},
+                                std::make_tuple(DataType::Float, DataType::FP4x8, DataType::FP4x8),
+                                std::make_tuple(16, 16, 8)));
 
-            const auto [v0_dt, vA_dt, vB_dt]
-                = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
-                      ? std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8)
-                      : std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32);
+            if(wmmaInst == "v_wmma_f32_32x16x128_f4" && target.asicRevisionId != 1)
+            {
+                SKIP(fmt::format(
+                    "Instruction {} is not supported on target {}\n", wmmaInst, toString(target)));
+            }
 
-            auto [vA_count, vB_count] = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
-                                            ? std::make_pair(16, 16)
-                                            : std::make_pair(8, 8);
+            const auto [v0_dt, vA_dt, vB_dt]          = types;
+            const auto [v0_count, vA_count, vB_count] = regCounts;
 
-            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, 8, FC);
+            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, v0_count, FC);
             const auto vA = t.createRegisters(Register::Type::Vector, vA_dt, 1, vA_count, FC);
             const auto vB = t.createRegisters(Register::Type::Vector, vB_dt, 1, vB_count, FC);
             // coexecSlots = 8, if first WMMA is:
@@ -459,19 +472,27 @@ namespace WMMAObserverTests
 
         SECTION("Expect 0 + coexecSlots V_NOP(s) if VALU writes D after WMMA and A *IS* F8")
         {
-            const auto wmmaInst = GENERATE(
-                as<std::string>{}, "v_wmma_f32_16x16x128_f8f6f4", "v_wmma_i32_16x16x64_iu8");
+            const auto [wmmaInst, types, regCounts] = GENERATE(
+                std::make_tuple(std::string{"v_wmma_f32_16x16x128_f8f6f4"},
+                                std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8),
+                                std::make_tuple(8, 16, 8)),
+                std::make_tuple(std::string{"v_wmma_i32_16x16x64_iu8"},
+                                std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32),
+                                std::make_tuple(8, 8, 8)),
+                std::make_tuple(std::string{"v_wmma_f32_32x16x128_f4"},
+                                std::make_tuple(DataType::Float, DataType::FP4x8, DataType::FP4x8),
+                                std::make_tuple(16, 16, 8)));
 
-            const auto [v0_dt, vA_dt, vB_dt]
-                = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
-                      ? std::make_tuple(DataType::Float, DataType::FP8x4, DataType::FP4x8)
-                      : std::make_tuple(DataType::Int32, DataType::Int32, DataType::Int32);
+            if(wmmaInst == "v_wmma_f32_32x16x128_f4" && target.asicRevisionId != 1)
+            {
+                SKIP(fmt::format(
+                    "Instruction {} is not supported on target {}\n", wmmaInst, toString(target)));
+            }
 
-            auto [vA_count, vB_count] = (wmmaInst == "v_wmma_f32_16x16x128_f8f6f4")
-                                            ? std::make_pair(16, 16)
-                                            : std::make_pair(8, 8);
+            const auto [v0_dt, vA_dt, vB_dt]          = types;
+            const auto [v0_count, vA_count, vB_count] = regCounts;
 
-            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, 8, FC);
+            const auto v0 = t.createRegisters(Register::Type::Vector, v0_dt, 3, v0_count, FC);
             const auto vA = t.createRegisters(Register::Type::Vector, vA_dt, 1, vA_count, FC);
             const auto vB = t.createRegisters(Register::Type::Vector, vB_dt, 1, vB_count, FC);
             // coexecSlots = 8, if first WMMA is:

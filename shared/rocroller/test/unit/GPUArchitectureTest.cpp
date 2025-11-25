@@ -181,11 +181,17 @@ TEST_F(GPUArchitectureTest, WaveFrontSize)
                   {GPUArchitectureGFX::GFX1201}, GPUCapability::DefaultWavefrontSize),
               32);
 
-    EXPECT_EQ(GPUArchitectureLibrary::getInstance()->HasCapability({GPUArchitectureGFX::GFX1250},
-                                                                   GPUCapability::HasWave32),
+    EXPECT_EQ(GPUArchitectureLibrary::getInstance()->HasCapability(
+                  rocRoller::GPUArchTargetGFX1250Rev0, GPUCapability::HasWave32),
+              true);
+    EXPECT_EQ(GPUArchitectureLibrary::getInstance()->HasCapability(
+                  rocRoller::GPUArchTargetGFX1250Rev1, GPUCapability::HasWave32),
               true);
     EXPECT_EQ(GPUArchitectureLibrary::getInstance()->GetCapability(
-                  {GPUArchitectureGFX::GFX1250}, GPUCapability::DefaultWavefrontSize),
+                  rocRoller::GPUArchTargetGFX1250Rev0, GPUCapability::DefaultWavefrontSize),
+              32);
+    EXPECT_EQ(GPUArchitectureLibrary::getInstance()->GetCapability(
+                  rocRoller::GPUArchTargetGFX1250Rev1, GPUCapability::DefaultWavefrontSize),
               32);
 }
 

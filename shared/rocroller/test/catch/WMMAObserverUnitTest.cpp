@@ -42,8 +42,8 @@ namespace WMMAObserverUnitTests
     public:
         WMMAObserverUnitTest(GPUArchitectureGFX gfx)
             : TestContext(TestContext::ForTarget({gfx})){};
-        WMMAObserverUnitTest(GPUArchitectureGFX gfx, KernelOptions kernelOptions)
-            : TestContext(TestContext::ForTarget({gfx}, kernelOptions)){};
+        WMMAObserverUnitTest(GPUArchitectureTarget target, KernelOptions kernelOptions)
+            : TestContext(TestContext::ForTarget(target, kernelOptions)){};
     };
 
     TEST_CASE("Unit test observer regarding WMMA hazards on GFX1200/1201", "[observer]")
@@ -116,7 +116,7 @@ namespace WMMAObserverUnitTests
 
     TEST_CASE("Unit test observer regarding WMMA hazards on GFX1250", "[observer]")
     {
-        auto          target             = GPUArchitectureGFX::GFX1250;
+        auto          target = GENERATE(GPUArchTargetGFX1250Rev0, GPUArchTargetGFX1250Rev1);
         auto          coexecutionEnabled = GENERATE(true, false);
         KernelOptions kernelOptions{};
         kernelOptions->coexecutionEnabled = coexecutionEnabled;

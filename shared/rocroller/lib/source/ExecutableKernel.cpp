@@ -34,6 +34,7 @@
 #include <rocRoller/Utilities/Error.hpp>
 
 #include <rocRoller/Assemblers/Assembler.hpp>
+#include <rocRoller/Context.hpp>
 #include <rocRoller/ExecutableKernel.hpp>
 #include <rocRoller/Utilities/HipUtils.hpp>
 #include <rocRoller/WorkgroupClusters_detail.hpp>
@@ -64,9 +65,10 @@ namespace rocRoller
         }
     };
 
-    ExecutableKernel::ExecutableKernel()
+    ExecutableKernel::ExecutableKernel(ContextPtr context)
         : m_kernelLoaded(false)
         , m_hipData(std::make_shared<HIPData>())
+        , m_context(context)
     {
     }
 
@@ -177,6 +179,27 @@ namespace rocRoller
                                    &argsSize,
                                    HIP_LAUNCH_PARAM_END};
 
+        const auto& arch = m_context->targetArchitecture();
+        int         idx = -1, currDeviceAsicRevisionId = -1;
+        HIP_CHECK(hipGetDevice(&idx));
+        HIP_CHECK(
+            hipDeviceGetAttribute(&currDeviceAsicRevisionId, hipDeviceAttributeAsicRevision, idx));
+        if(arch.target().gfx == GPUArchitectureGFX::GFX1250)
+        {
+            if(currDeviceAsicRevisionId == 2)
+            {
+                int newRevId = Settings::Get(Settings::GFX1250AsicRevisionId);
+                Log::warn("Overriding current device asic revision id from {} to {}",
+                          currDeviceAsicRevisionId,
+                          newRevId);
+                currDeviceAsicRevisionId = newRevId;
+            }
+            AssertFatal(arch.target().asicRevisionId == currDeviceAsicRevisionId,
+                        "The kernel and current device must have the same target revision id.",
+                        ShowValue(arch.target().asicRevisionId),
+                        ShowValue(currDeviceAsicRevisionId));
+        }
+
         if(timer)
             HIP_TIC(timer, iteration);
 
@@ -259,5 +282,4 @@ namespace rocRoller
         if(timer)
             HIP_TOC(timer, iteration);
     }
-
 }

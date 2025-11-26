@@ -2819,7 +2819,7 @@ class Solution(collections.abc.Mapping):
 
       offsetBlk = state["LdsOffsetB"] + ldsNumBytesAlignedB
 
-      state["StoreSwapAddr"] = (state["1LDSBuffer"] != 1) and \
+      state["StoreSwapAddr"] = offsetBlk > 0 and (state["1LDSBuffer"] != 1) and \
         (offsetBlk + int(2**(math.ceil(math.log(offsetBlk, 2)))) > state["MaxLDS"])
 
       if offsetBlk > 0 and not state["StoreSwapAddr"]:

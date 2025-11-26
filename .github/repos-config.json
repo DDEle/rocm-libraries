@@ -41,14 +41,9 @@
       "url": "AMD-ROCm-Internal/composable_kernel",
       "branch": "gfx1250",
       "category": "projects",
-<<<<<<< HEAD
-      "auto_subtree_pull": true,
+      "auto_subtree_pull": false,
       "auto_subtree_push": false,
       "monorepo_source_of_truth": false
-=======
-      "auto_subtree_pull": false,
-      "auto_subtree_push": false
->>>>>>> origin/gfx1250
     },
     {
       "name": "hipblas",

@@ -224,6 +224,17 @@ namespace rocRoller::Client::GEMMClient
         }
 
         size_t rotatingSize = benchmarkParams.rotatingBuffSize;
+        int    idx = -1, currDeviceAsicRevisionId = -1;
+        HIP_CHECK(hipGetDevice(&idx));
+        HIP_CHECK(
+            hipDeviceGetAttribute(&currDeviceAsicRevisionId, hipDeviceAttributeAsicRevision, idx));
+        if(arch.target().isCDNA5GPU() && currDeviceAsicRevisionId == 2)
+        {
+            Log::warn("Disabling rotating buffers for arch {} revision {}",
+                      toString(arch.target()),
+                      currDeviceAsicRevisionId);
+            rotatingSize = 0;
+        }
 
         RotatingBuffer<PackedTypeA> rotatingA(hostA, rotatingSize);
         RotatingBuffer<PackedTypeB> rotatingB(hostB, rotatingSize);
@@ -1906,8 +1917,19 @@ int main(int argc, const char* argv[])
         if(solution.waveB == -1)
             solution.waveB = 1;
 
-        if((typeA == DataType::Half && typeB == DataType::Half)
-           || (typeA == DataType::BFloat16 && typeB == DataType::BFloat16))
+        if(typeA == DataType::Float && typeB == DataType::Float)
+        {
+            if(solution.macK == -1)
+                solution.macK = 64;
+
+            if(arch.HasCapability(GPUCapability::HasWMMA_f32_16x16x4_f32))
+            {
+                if(solution.waveK == -1)
+                    solution.waveK = 4;
+            }
+        }
+        else if((typeA == DataType::Half && typeB == DataType::Half)
+                || (typeA == DataType::BFloat16 && typeB == DataType::BFloat16))
         {
             if(solution.macK == -1)
                 solution.macK = 64;
@@ -1917,9 +1939,15 @@ int main(int argc, const char* argv[])
                 if(solution.waveK == -1)
                     solution.waveK = 16;
             }
+            else if(arch.HasCapability(GPUCapability::HasWMMA_f32_16x16x32_f16))
+            {
+                if(solution.waveK == -1)
+                    solution.waveK = 32;
+            }
         }
-        else if(isUnpackedF8(fromString<DataType>(solution.types.typeA))
-                && isUnpackedF8(fromString<DataType>(solution.types.typeB)))
+        else if(isUnpackedF8(typeA) && isUnpackedF8(typeB)
+                && types.scaleA == Operations::ScaleMode::None
+                && types.scaleB == Operations::ScaleMode::None)
         {
             if(solution.macK == -1)
                 solution.macK = 64;
@@ -1928,6 +1956,22 @@ int main(int argc, const char* argv[])
             {
                 if(solution.waveK == -1)
                     solution.waveK = 16;
+            }
+            else if(arch.HasCapability(GPUCapability::HasWMMA_f32_16x16x64_f8))
+            {
+                if(solution.waveK == -1)
+                    solution.waveK = 64;
+            }
+        }
+        else if(isUnpackedF8F6F4(typeA) && isUnpackedF8F6F4(typeB))
+        {
+            if(solution.macK == -1)
+                solution.macK = 128;
+
+            if(arch.HasCapability(GPUCapability::HasWMMA_f8f6f4))
+            {
+                if(solution.waveK == -1)
+                    solution.waveK = 128;
             }
         }
     }
@@ -1959,6 +2003,19 @@ int main(int argc, const char* argv[])
         {
             std::cout << "Warning: disabling prefetching for RDNA4." << std::endl;
             solution.prefetch = false;
+        }
+    }
+
+    if(arch.target().isCDNA5GPU())
+    {
+        // TODO: Remove these default sizes
+        if(problem.m * problem.n + problem.m * problem.k + problem.k * problem.n > 512 * 512 * 3)
+        {
+            std::cout << "Warning: M, N, K sizes have been overridden to 512 for CDNA5."
+                      << std::endl;
+            problem.m = 512;
+            problem.n = 512;
+            problem.k = 512;
         }
     }
 

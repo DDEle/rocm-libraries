@@ -41,6 +41,18 @@ Tests:
   bias_vector: [0, 1]
   unit_check: 1
 
+- name: matmul_bias_sigmoid_smoke
+  category: smoke
+  function:
+    matmul: *real_precisions
+  matrix_size: *smoke_matrix_size_range
+  transA_transB: *transA_transB_range
+  alpha: 1
+  beta: [ 0.0, 2.0 ]
+  activation_type: sigmoid
+  bias_vector: [0, 1]
+  unit_check: 1
+
 - name: matmul_bias_gelu_smoke
   category: smoke
   function:
@@ -359,7 +371,7 @@ Tests:
   alpha: 1
   beta: [ 0, 2 ]
   scaleAlpha_vector: [0, 1]
-  activation_type: relu
+  activation_type: [relu, sigmoid]
   unit_check: 1
   gpu_arch: '942'
 
@@ -373,7 +385,7 @@ Tests:
   alpha: 1
   beta: [ 0, 2 ]
   scaleAlpha_vector: [0, 1]
-  activation_type: relu
+  activation_type: [relu, sigmoid]
   unit_check: 1
   gpu_arch: '1[1-2]\d{2}'
 
@@ -387,7 +399,7 @@ Tests:
   alpha: 1
   beta: [ 0, 2 ]
   scaleAlpha_vector: [0, 1]
-  activation_type: relu
+  activation_type: [relu, sigmoid]
   unit_check: 1
   gpu_arch: '1[1-2]\d{2}'
 ...

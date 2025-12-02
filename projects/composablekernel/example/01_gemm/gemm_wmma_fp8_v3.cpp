@@ -13,7 +13,7 @@ using CDataType        = ck::bhalf_t;
 using ComputeTypeA     = ck::f8_t;
 using ComputeTypeB     = ck::f8_t;
 
-using ALayout = Row;
+using ALayout = Col;
 using BLayout = Col;
 using CLayout = Row;
 
@@ -29,14 +29,19 @@ using DeviceGemmV2Instance = ck::tensor_operation::device::DeviceGemm_Wmma_CShuf
     ADataType, BDataType, CDataType, AccDataType, CShuffleDataType,
     PassThrough, PassThrough, PassThrough, GemmDefault,
     128,
+<<<<<<< HEAD
+    128, 64, 64,
+    16, 16, // AK1, BK1
+=======
     128, 64, 128,
     8, 8,
+>>>>>>> origin/gfx1250
     16, 16,
     4, 2,
+    S<4, 32, 1>, S<0, 2, 1>, S<0, 2, 1>,
+    1, 4, 16, 0,
     S<4, 32, 1>, S<1, 0, 2>, S<1, 0, 2>,
-    2, 8, 8, 0,
-    S<4, 32, 1>, S<1, 0, 2>, S<1, 0, 2>,
-    2, 8, 8, 0,
+    2, 16, 16, 0,
     1, 1, S<1, 32, 1, 4>, 8,
     ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v1,
     ComputeTypeA, ComputeTypeB>;

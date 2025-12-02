@@ -56,6 +56,11 @@ namespace rocisa
         }
     };
 
+    struct OutputOptions
+    {
+        bool outputNoComment = false;
+    };
+
     struct IsaInfo
     {
         std::map<std::string, int>  asm_caps;
@@ -169,6 +174,20 @@ namespace rocisa
             m_isainfo = data;
         }
 
+        void setOutputOptions(const OutputOptions& options)
+        {
+            std::thread::id id  = std::this_thread::get_id();
+            m_outputOptions[id] = options;
+        }
+
+        OutputOptions getOutputOptions()
+        {
+            std::thread::id id = std::this_thread::get_id();
+            if(m_outputOptions.find(id) == m_outputOptions.end())
+                m_outputOptions[id] = OutputOptions();
+            return m_outputOptions[id];
+        }
+
         void setVgprIdx(const std::string& s, const int idx)
         {
             std::thread::id id = std::this_thread::get_id();
@@ -193,6 +212,8 @@ namespace rocisa
         std::mutex                            m_mutex;
         std::map<std::thread::id, KernelInfo> m_threads;
         std::map<IsaVersion, IsaInfo>         m_isainfo;
+
+        std::map<std::thread::id, OutputOptions> m_outputOptions;
         std::map<std::thread::id, std::map<std::string, int>> m_vgpridx;
         std::map<std::thread::id, int>        m_vgprmsb;
     };
@@ -291,6 +312,6 @@ namespace rocisa
 
     std::string isaToGfx(const nb::tuple& arch);
     std::string isaToGfx(const IsaVersion& arch);
-    std::string getGlcBitName(bool hasGLCModifier);
-    std::string getSlcBitName(bool hasGLCModifier);
+    std::string getGlcBitName();
+    std::string getSlcBitName();
 } // namespace rocisa

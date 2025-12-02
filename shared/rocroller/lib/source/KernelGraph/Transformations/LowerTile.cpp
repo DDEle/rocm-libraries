@@ -757,7 +757,7 @@ namespace rocRoller
                                  std::array<unsigned int, 3> const& workgroupSizes,
                                  std::vector<unsigned int> const&   jammedTiles,
                                  bool                               useSwappedAccess,
-                                 bool                               isDirect2LDS)
+                                 bool                               isGlobalToLDS)
         {
             auto macTile = graph.coordinates.getNode<MacroTile>(macTileTag);
             auto thrTile = ThreadTile(macTile);
@@ -837,14 +837,14 @@ namespace rocRoller
                 auto jammedWavetileX = graph.coordinates.addElement(
                     JammedWaveTileNumber(0, literal(jammedTiles[0]), literal(1)));
                 connections.push_back(DC<JammedWaveTileNumber>(jammedWavetileX, 0));
-                if(useSwappedAccess && isDirect2LDS)
+                if(useSwappedAccess && isGlobalToLDS)
                     graph.coordinates.addElement(Tile(), {iMacX}, {jammedWavetileX, iThrX, nThrX});
                 else
                     graph.coordinates.addElement(Tile(), {iMacX}, {jammedWavetileX, nThrX, iThrX});
             }
             else
             {
-                if(useSwappedAccess && isDirect2LDS)
+                if(useSwappedAccess && isGlobalToLDS)
                     graph.coordinates.addElement(Tile(), {iMacX}, {iThrX, nThrX});
                 else
                     graph.coordinates.addElement(Tile(), {iMacX}, {nThrX, iThrX});
@@ -855,7 +855,7 @@ namespace rocRoller
                 auto jammedWavetileY = graph.coordinates.addElement(
                     JammedWaveTileNumber(1, literal(jammedTiles[1]), literal(1)));
                 connections.push_back(DC<JammedWaveTileNumber>(jammedWavetileY, 1));
-                if(isDirect2LDS)
+                if(isGlobalToLDS)
                 {
                     if(useSwappedAccess)
                         graph.coordinates.addElement(
@@ -869,7 +869,7 @@ namespace rocRoller
             }
             else
             {
-                if(isDirect2LDS)
+                if(isGlobalToLDS)
                 {
                     if(useSwappedAccess)
                         graph.coordinates.addElement(Tile(), {iMacY}, {nThrY, iThrY});
@@ -1204,7 +1204,7 @@ namespace rocRoller
                                   std::array<unsigned int, 3> const& workgroupSizes,
                                   std::vector<unsigned int> const&   jammedTiles,
                                   bool                               useSwappedAccess,
-                                  bool                               isDirect2LDS)
+                                  bool                               isGlobalToLDS)
         {
             auto macTile = graph.coordinates.getNode<MacroTile>(macTileTag);
 
@@ -1288,7 +1288,7 @@ namespace rocRoller
                 auto jammedWavetileX = graph.coordinates.addElement(
                     JammedWaveTileNumber(0, literal(jammedTiles[0]), literal(1)));
                 connections.push_back(DC<JammedWaveTileNumber>(jammedWavetileX, 0));
-                if(useSwappedAccess && isDirect2LDS)
+                if(useSwappedAccess && isGlobalToLDS)
                     graph.coordinates.addElement(
                         Flatten(), {jammedWavetileX, iThrX, nThrX}, {iMacX});
                 else
@@ -1297,7 +1297,7 @@ namespace rocRoller
             }
             else
             {
-                if(useSwappedAccess && isDirect2LDS)
+                if(useSwappedAccess && isGlobalToLDS)
                     graph.coordinates.addElement(Flatten(), {iThrX, nThrX}, {iMacX});
                 else
                     graph.coordinates.addElement(Flatten(), {nThrX, iThrX}, {iMacX});
@@ -1308,7 +1308,7 @@ namespace rocRoller
                 auto jammedWavetileY = graph.coordinates.addElement(
                     JammedWaveTileNumber(1, literal(jammedTiles[1]), literal(1)));
                 connections.push_back(DC<JammedWaveTileNumber>(jammedWavetileY, 1));
-                if(isDirect2LDS)
+                if(isGlobalToLDS)
                 {
                     if(useSwappedAccess)
                         graph.coordinates.addElement(
@@ -1323,7 +1323,7 @@ namespace rocRoller
             }
             else
             {
-                if(isDirect2LDS)
+                if(isGlobalToLDS)
                 {
                     if(useSwappedAccess)
                         graph.coordinates.addElement(Flatten(), {nThrY, iThrY}, {iMacY});
@@ -1428,7 +1428,13 @@ namespace rocRoller
             if(!useSwappedAccess)
                 std::swap(thrTileM, thrTileN);
 
-            auto internalTile       = MacroTile(sizes, MemoryType::VGPR, {thrTileM, thrTileN});
+            auto memoryType{MemoryType::VGPR};
+            if(macTile.memoryType == MemoryType::WAVE_Direct2LDS)
+            {
+                memoryType = macTile.memoryType;
+            }
+
+            auto internalTile       = MacroTile(sizes, memoryType, {thrTileM, thrTileN});
             internalTile.layoutType = macTile.layoutType;
             if(splitStore)
                 internalTile.memoryType = MemoryType::WAVE_SPLIT;
@@ -1460,7 +1466,7 @@ namespace rocRoller
                                 std::vector<unsigned int> const& jammedTiles,
                                 CommandParametersPtr             params,
                                 ContextPtr                       context,
-                                bool                             isDirect2LDS)
+                                bool                             isGlobalToLDS)
         {
             auto workgroupSizes = context->kernel()->workgroupSize();
 
@@ -1478,7 +1484,7 @@ namespace rocRoller
                                 workgroupSizes,
                                 jammedTiles,
                                 useSwappedAccess,
-                                isDirect2LDS);
+                                isGlobalToLDS);
 
             graph.coordinates.addElement(DataFlow(), {userTag}, {macTileTag});
         }
@@ -1812,10 +1818,6 @@ namespace rocRoller
                 copyOperation(graph, original, reindexer, tag);
 
                 auto tile = graph.coordinates.getNode<MacroTile>(tileTag);
-
-                auto load         = original.control.get<LoadTiled>(tag).value();
-                auto isDirect2LDS = load.isDirect2LDS;
-
                 AssertFatal(tile.rank == 2, "Rank /= 2 not implemented yet.");
 
                 logger->debug("  User({}), MacroTile({}), Size: {}", userTag, tileTag, tile.sizes);
@@ -1828,15 +1830,8 @@ namespace rocRoller
                 switch(tile.memoryType)
                 {
                 case MemoryType::VGPR:
-                    loadMacroTile_VGPR(graph,
-                                       connections,
-                                       userTag,
-                                       tileTag,
-                                       sdims,
-                                       {1, 1},
-                                       m_params,
-                                       m_context,
-                                       isDirect2LDS);
+                    loadMacroTile_VGPR(
+                        graph, connections, userTag, tileTag, sdims, {1, 1}, m_params, m_context);
                     break;
                 case MemoryType::WAVE:
                     loadMacroTile_WAVE(graph,
@@ -1860,6 +1855,17 @@ namespace rocRoller
                                           wavetilesPerWavefront,
                                           m_params,
                                           m_context);
+                    break;
+                case MemoryType::WAVE_Direct2LDS:
+                    loadMacroTile_VGPR(graph,
+                                       connections,
+                                       userTag,
+                                       tileTag,
+                                       sdims,
+                                       {1, 1},
+                                       m_params,
+                                       m_context,
+                                       /*isGlobalToLDS=*/true);
                     break;
                 default:
                     Throw<FatalError>("LoadTiled: MacroTile memory type not supported yet.",
@@ -2060,11 +2066,10 @@ namespace rocRoller
 
                 copyOperation(graph, original, reindexer, tag);
 
-                auto ldsTag       = reindexer.coordinates.at(originalLDSTag);
-                auto tileTag      = reindexer.coordinates.at(originalTileTag);
-                auto tile         = graph.coordinates.getNode<MacroTile>(tileTag);
-                auto ldsTile      = graph.coordinates.getNode<LDS>(ldsTag);
-                auto isDirect2LDS = ldsTile.isDirect2LDS;
+                auto ldsTag  = reindexer.coordinates.at(originalLDSTag);
+                auto tileTag = reindexer.coordinates.at(originalTileTag);
+                auto tile    = graph.coordinates.getNode<MacroTile>(tileTag);
+                auto ldsTile = graph.coordinates.getNode<LDS>(ldsTag);
                 AssertFatal(tile.rank == 2, "Rank /= 2 not implemented yet.");
 
                 auto workgroupSizes        = m_context->kernel()->workgroupSize();
@@ -2102,8 +2107,21 @@ namespace rocRoller
                                          iMacY,
                                          workgroupSizes,
                                          jammedTiles,
+                                         useSwappedAccess);
+                }
+                else if(tile.memoryType == MemoryType::WAVE_Direct2LDS)
+                {
+                    // We are storing entire workgroup tiles
+                    std::vector<uint> jammedTiles = {1, 1};
+                    addStoreThreadTileCT(graph,
+                                         connections,
+                                         tileTag,
+                                         iMacX,
+                                         iMacY,
+                                         workgroupSizes,
+                                         jammedTiles,
                                          useSwappedAccess,
-                                         isDirect2LDS);
+                                         /*isGlobalToLDS=*/true);
                 }
                 else
                 {

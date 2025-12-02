@@ -8,6 +8,7 @@ set(TENSILELITE_ASM_DEBUG "" CACHE STRING "Keep debug information for built code
 set(TENSILELITE_LOGIC_FILTER "" CACHE STRING "Cutomsized logic filter, default is *, i.e. all logics.")
 set(TENSILELITE_NO_COMPRESS "" CACHE STRING "Do not compress device code object files.")
 set(TENSILELITE_EXPERIMENTAL "" CACHE STRING "Process experimental logic files.")
+set(TENSILELITE_ENABLE_ASM_COMMENTS OFF CACHE STRING "Turn on asm comments when building gemm libraries.")
 option(HIPBLASLT_ENABLE_EXOPTS "" ON)
 option(HIPBLASLT_ENABLE_TRANSFORM "" ON)
 
@@ -44,6 +45,9 @@ if(TENSILELITE_EXPERIMENTAL)
 endif()
 if(NOT HIPBLASLT_ENABLE_LAZY_LOAD)
     set(TENSILELITE_BUILD_OPTS ${TENSILELITE_BUILD_OPTS} "--no-lazy-library-loading")
+endif()
+if(NOT TENSILELITE_ENABLE_ASM_COMMENTS)
+    set(TENSILELITE_BUILD_OPTS ${TENSILELITE_BUILD_OPTS} "--disable-asm-comments")
 endif()
 
 if(NOT HIPBLASLT_LIBLOGIC_PATH)

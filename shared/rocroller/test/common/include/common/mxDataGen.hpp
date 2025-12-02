@@ -36,7 +36,7 @@ namespace rocRoller
                     const float           min,
                     const float           max,
                     int                   blockScaling,
-                    const DataPattern     pattern);
+                    const DataInitMode    initMode);
 
     template <typename T, DataType S = DataType::None>
     struct rrDT2DGenDT
@@ -112,18 +112,18 @@ namespace rocRoller
 
     template <typename rrDT, DataType rrScaleDT = DataType::None>
     DGen::DataGenerator<typename rrDT2DGenDT<rrDT, rrScaleDT>::type>
-        getDataGenerator(TensorDescriptor& desc,
-                         const float       min,
-                         const float       max,
-                         const uint32_t    seed,
-                         const index_t     blockScaling = 1,
-                         const DataPattern pattern      = Bounded)
+        getDataGenerator(TensorDescriptor&  desc,
+                         const float        min,
+                         const float        max,
+                         const uint32_t     seed,
+                         const index_t      blockScaling = 1,
+                         const DataInitMode initMode     = DataInitMode(Bounded{}))
     {
         auto sizes   = desc.sizes();
         auto strides = desc.strides();
 
         DataGeneratorOptions opts;
-        setOptions(opts, min, max, blockScaling, pattern);
+        setOptions(opts, min, max, blockScaling, initMode);
         using DGenDT = typename rrDT2DGenDT<rrDT, rrScaleDT>::type;
         DGen::DataGenerator<DGenDT> dgen;
         dgen.setSeed(seed);
@@ -177,17 +177,18 @@ namespace rocRoller
     }
 
     template <typename rrDT>
-    std::vector<typename PackedTypeOf<rrDT>::type> DGenVector(TensorDescriptor& desc,
-                                                              const float       min  = -1.f,
-                                                              const float       max  = 1.f,
-                                                              const uint32_t    seed = 1713573849,
-                                                              bool              hasScale = false,
-                                                              const int         blockScaling = 1,
-                                                              const DataPattern pattern = Bounded)
+    std::vector<typename PackedTypeOf<rrDT>::type> DGenVector(TensorDescriptor&  desc,
+                                                              const float        min  = -1.f,
+                                                              const float        max  = 1.f,
+                                                              const uint32_t     seed = 1713573849,
+                                                              bool               hasScale = false,
+                                                              const int          blockScaling = 1,
+                                                              const DataInitMode initMode
+                                                              = DataInitMode(Bounded{}))
     {
         if(hasScale)
             AssertFatal(blockScaling == 32, "Invalid scale block size: ", ShowValue(blockScaling));
-        auto dgen = getDataGenerator<rrDT>(desc, min, max, seed, blockScaling, pattern);
+        auto dgen = getDataGenerator<rrDT>(desc, min, max, seed, blockScaling, initMode);
         return getRandomVector<rrDT>(dgen, hasScale);
     }
 
@@ -208,7 +209,10 @@ namespace rocRoller
                    std::vector<uint8_t>& hostScaleB,
                    float                 min            = -1.f,
                    float                 max            = 1.f,
-                   const uint            scaleBlockSize = 32)
+                   const uint            scaleBlockSize = 32,
+                   DataInitMode          initModeA      = DataInitMode(Bounded{}),
+                   DataInitMode          initModeB      = DataInitMode(Bounded{}),
+                   DataInitMode          initModeC      = DataInitMode(Bounded{}))
     {
         bool hasScaleA = isScaleType(TAScale);
         bool hasScaleB = isScaleType(TBScale);
@@ -220,21 +224,23 @@ namespace rocRoller
         auto blockScalingB = (hasScaleB) ? scaleBlockSize : 1;
 
         {
-            auto dgenA = getDataGenerator<STA, TAScale>(descA, min, max, seed + 1, blockScalingA);
-            hostA      = getRandomVector<STA, TAScale>(dgenA, hasScaleA);
+            auto dgenA = getDataGenerator<STA, TAScale>(
+                descA, min, max, seed + 1, blockScalingA, initModeA);
+            hostA = getRandomVector<STA, TAScale>(dgenA, hasScaleA);
             if(hasScaleA)
                 hostScaleA = dgenA.getScaleBytes();
         }
 
         {
-            auto dgenB = getDataGenerator<STB, TBScale>(descB, min, max, seed + 2, blockScalingB);
-            hostB      = getRandomVector<STB, TBScale>(dgenB, hasScaleB);
+            auto dgenB = getDataGenerator<STB, TBScale>(
+                descB, min, max, seed + 2, blockScalingB, initModeB);
+            hostB = getRandomVector<STB, TBScale>(dgenB, hasScaleB);
             if(hasScaleB)
                 hostScaleB = dgenB.getScaleBytes();
         }
 
         {
-            auto dgenC = getDataGenerator<TC>(descC, min, max, seed);
+            auto dgenC = getDataGenerator<TC>(descC, min, max, seed, 1, initModeC);
             hostC      = getRandomVector<TC>(dgenC, false);
         }
     }
@@ -247,22 +253,29 @@ namespace rocRoller
                    TensorDescriptor& descB,
                    std::vector<TC>&  hostC,
                    TensorDescriptor& descC,
-                   float             min = -1.f,
-                   float             max = 1.f)
+                   float             min       = -1.f,
+                   float             max       = 1.f,
+                   DataInitMode      initModeA = DataInitMode(Bounded{}),
+                   DataInitMode      initModeB = DataInitMode(Bounded{}),
+                   DataInitMode      initModeC = DataInitMode(Bounded{}))
     {
         std::vector<uint8_t> defaultHostScaleA;
         std::vector<uint8_t> defaultHostScaleB;
-        DGenInput(seed,
-                  hostA,
-                  descA,
-                  hostB,
-                  descB,
-                  hostC,
-                  descC,
-                  defaultHostScaleA,
-                  defaultHostScaleB,
-                  min,
-                  max);
+        DGenInput<TA, TB, TC, DataType::None, DataType::None>(seed,
+                                                              hostA,
+                                                              descA,
+                                                              hostB,
+                                                              descB,
+                                                              hostC,
+                                                              descC,
+                                                              defaultHostScaleA,
+                                                              defaultHostScaleB,
+                                                              min,
+                                                              max,
+                                                              32,
+                                                              initModeA,
+                                                              initModeB,
+                                                              initModeC);
     }
 
     template <typename TA, typename TB, typename TC, DataType TAScale>
@@ -278,7 +291,12 @@ namespace rocRoller
                    const DataType&       scaleBType,
                    float                 min            = -1.f,
                    float                 max            = 1.f,
-                   const uint            scaleBlockSize = 32)
+                   const uint            scaleBlockSize = 32,
+                   DataInitMode          initModeA      = DataInitMode(Bounded{}),
+                   DataInitMode          initModeB      = DataInitMode(Bounded{}),
+                   DataInitMode          initModeC      = DataInitMode(Bounded{})
+
+    )
     {
         if(isE8M0(scaleBType))
             DGenInput<TA, TB, TC, TAScale, DataType::E8M0>(seed,
@@ -292,7 +310,10 @@ namespace rocRoller
                                                            hostScaleB,
                                                            min,
                                                            max,
-                                                           scaleBlockSize);
+                                                           scaleBlockSize,
+                                                           initModeA,
+                                                           initModeB,
+                                                           initModeC);
         else if(isE5M3(scaleBType))
             DGenInput<TA, TB, TC, TAScale, DataType::E5M3>(seed,
                                                            hostA,
@@ -305,7 +326,10 @@ namespace rocRoller
                                                            hostScaleB,
                                                            min,
                                                            max,
-                                                           scaleBlockSize);
+                                                           scaleBlockSize,
+                                                           initModeA,
+                                                           initModeB,
+                                                           initModeC);
         else if(isE4M3(scaleBType))
             DGenInput<TA, TB, TC, TAScale, DataType::E4M3>(seed,
                                                            hostA,
@@ -318,7 +342,10 @@ namespace rocRoller
                                                            hostScaleB,
                                                            min,
                                                            max,
-                                                           scaleBlockSize);
+                                                           scaleBlockSize,
+                                                           initModeA,
+                                                           initModeB,
+                                                           initModeC);
         else if(scaleBType == DataType::None)
             DGenInput<TA, TB, TC, TAScale, DataType::None>(seed,
                                                            hostA,
@@ -331,7 +358,10 @@ namespace rocRoller
                                                            hostScaleB,
                                                            min,
                                                            max,
-                                                           scaleBlockSize);
+                                                           scaleBlockSize,
+                                                           initModeA,
+                                                           initModeB,
+                                                           initModeC);
         else
             Throw<FatalError>(concatenate("Unsupported scale data type: ", ShowValue(scaleBType)));
     }
@@ -350,7 +380,10 @@ namespace rocRoller
                    const DataType&       scaleBType,
                    float                 min            = -1.f,
                    float                 max            = 1.f,
-                   const uint            scaleBlockSize = 32)
+                   const uint            scaleBlockSize = 32,
+                   DataInitMode          initModeA      = DataInitMode(Bounded{}),
+                   DataInitMode          initModeB      = DataInitMode(Bounded{}),
+                   DataInitMode          initModeC      = DataInitMode(Bounded{}))
     {
         if(isE8M0(scaleAType))
             DGenInput<TA, TB, TC, DataType::E8M0>(seed,
@@ -365,7 +398,10 @@ namespace rocRoller
                                                   scaleBType,
                                                   min,
                                                   max,
-                                                  scaleBlockSize);
+                                                  scaleBlockSize,
+                                                  initModeA,
+                                                  initModeB,
+                                                  initModeC);
         else if(isE5M3(scaleAType))
             DGenInput<TA, TB, TC, DataType::E5M3>(seed,
                                                   hostA,
@@ -379,7 +415,10 @@ namespace rocRoller
                                                   scaleBType,
                                                   min,
                                                   max,
-                                                  scaleBlockSize);
+                                                  scaleBlockSize,
+                                                  initModeA,
+                                                  initModeB,
+                                                  initModeC);
         else if(isE4M3(scaleAType))
             DGenInput<TA, TB, TC, DataType::E4M3>(seed,
                                                   hostA,
@@ -393,7 +432,10 @@ namespace rocRoller
                                                   scaleBType,
                                                   min,
                                                   max,
-                                                  scaleBlockSize);
+                                                  scaleBlockSize,
+                                                  initModeA,
+                                                  initModeB,
+                                                  initModeC);
         else if(scaleAType == DataType::None)
             DGenInput<TA, TB, TC, DataType::None>(seed,
                                                   hostA,
@@ -407,7 +449,10 @@ namespace rocRoller
                                                   scaleBType,
                                                   min,
                                                   max,
-                                                  scaleBlockSize);
+                                                  scaleBlockSize,
+                                                  initModeA,
+                                                  initModeB,
+                                                  initModeC);
         else
             Throw<FatalError>(concatenate("Unsupported scale data type: ", ShowValue(scaleAType)));
     }

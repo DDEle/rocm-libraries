@@ -149,11 +149,12 @@ namespace rocRoller
                 RegisterExpressionAttributes      rowStrideAttributes;
                 Register::ValuePtr                colStrideReg = nullptr;
                 RegisterExpressionAttributes      colStrideAttributes;
-                Register::ValuePtr                offset           = nullptr;
-                std::shared_ptr<BufferDescriptor> bufDesc          = nullptr;
-                BufferInstructionOptions          bufOpts          = {};
-                bool                              isTransposedTile = false;
-                bool                              isPadded         = false;
+                Register::ValuePtr                offset               = nullptr;
+                std::shared_ptr<BufferDescriptor> bufDesc              = nullptr;
+                BufferInstructionOptions          bufOpts              = {};
+                bool                              isTransposedTile     = false;
+                bool                              isPadded             = false;
+                bool                              isMacroTileRowStride = false;
             };
 
         private:

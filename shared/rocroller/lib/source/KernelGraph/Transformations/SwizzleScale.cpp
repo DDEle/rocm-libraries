@@ -866,7 +866,7 @@ namespace rocRoller
                     {
                         std::string missingUnrolls = "{";
                         for(auto const [unroll, _] : remainingReindexes)
-                            missingUnrolls + std::to_string(unroll) + " ";
+                            missingUnrolls += std::to_string(unroll) + " ";
 
                         AssertFatal(maybeSetCoordinate,
                                     "Cannot reindex, SetCoordinate not found for unroll(s):",

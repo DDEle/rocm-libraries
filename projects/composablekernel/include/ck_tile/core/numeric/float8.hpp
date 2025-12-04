@@ -790,6 +790,16 @@ CK_TILE_HOST_DEVICE float fp8_to_float(fp8_t x) { return fp8_to_float_raw(bit_ca
 
 CK_TILE_HOST_DEVICE float bf8_to_float(bf8_t x) { return bf8_to_float_raw(bit_cast<bf8_raw_t>(x)); }
 
+CK_TILE_HOST_DEVICE float fp8_to_fp16(fp8_raw_t x)
+{
+    return impl::run_cast_from_f8<fp8_t, half_t>(bit_cast<fp8_t>(x));
+}
+
+CK_TILE_HOST_DEVICE float bf8_to_fp16(bf8_raw_t x)
+{
+    return impl::run_cast_from_f8<bf8_t, half_t>(bit_cast<bf8_t>(x));
+}
+
 template <class T>
 struct numeric;
 

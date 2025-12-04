@@ -55,6 +55,7 @@ namespace rocRoller
                                         int                                        iWaveY,
                                         int                                        lane,
                                         int                                        element,
+                                        LayoutType                                 layout,
                                         InstructionGenerators::MatrixMultiplySizes mi,
                                         uint                                       bitsPerElement,
                                         int                                        wavefrontSize);

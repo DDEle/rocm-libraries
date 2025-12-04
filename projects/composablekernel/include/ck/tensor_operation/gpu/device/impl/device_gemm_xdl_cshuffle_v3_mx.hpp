@@ -445,7 +445,8 @@ struct DeviceGemmMX_Xdl_CShuffleV3 : public DeviceGemmMX<ALayout,
             return false;
         }
 
-        if(ck::get_device_name() != "gfx950")
+        // Only gfx950 and gfx1250 architectures support MX GEMMs
+        if(ck::get_device_name() != "gfx950" && !is_gfx125_supported())
         {
             return false;
         }

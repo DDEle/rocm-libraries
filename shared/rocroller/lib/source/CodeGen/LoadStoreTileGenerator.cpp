@@ -624,7 +624,25 @@ namespace rocRoller
                                 info.bufOpts);
                         }
                     }
-                    offsetValue += rowStride;
+
+                    if(i < info.m - 1)
+                    {
+                        if(info.isMacroTileRowStride)
+                        {
+                            const auto rowElementBlockStride
+                                = info.rowStrideAttributes.elementBlockStride;
+                            AssertFatal(Expression::evaluationTimes(
+                                            rowElementBlockStride)[EvaluationTime::Translate],
+                                        "Could not determine "
+                                        "rowStrideAttributes.ElementBlockStride at translate-time.",
+                                        ShowValue(rowElementBlockStride));
+                            offsetValue += getUnsignedInt(evaluate(rowElementBlockStride));
+                        }
+                        else
+                        {
+                            offsetValue += rowStride;
+                        }
+                    }
                 }
             }
             else if(info.isTransposedTile)
@@ -646,6 +664,8 @@ namespace rocRoller
                     = getUnsignedInt(evaluate(info.colStrideAttributes.elementBlockStride));
                 const auto trLoadPairStride
                     = getUnsignedInt(evaluate(info.colStrideAttributes.trLoadPairStride));
+
+                const auto wfs = arch.GetCapability(GPUCapability::DefaultWavefrontSize);
 
                 AssertFatal((info.n * info.packedAmount) % elementsPerTrLoad == 0,
                             "WaveTileN must be multiple of the number of elements loaded by each "
@@ -691,7 +711,9 @@ namespace rocRoller
                         auto start = (i * numTrLoads + (j + 0)) * numVGPRBlocks;
                         auto stop  = (i * numTrLoads + (j + 1)) * numVGPRBlocks;
                         auto trLoadOffset
-                            = (j % 2) * trLoadPairStride + (j / 2) * elementBlockStride;
+                            = (wfs == 32 && isF16(info.data->variableType().dataType))
+                                  ? j * trLoadPairStride
+                                  : (j % 2) * trLoadPairStride + (j / 2) * elementBlockStride;
                         co_yield m_context->mem()->transposeLoadLocal(
                             info.data->element(Generated(iota(start, stop))),
                             info.rowOffsetReg,
@@ -947,12 +969,26 @@ namespace rocRoller
                 auto allocOptions = Register::AllocationOptions::FullyContiguous();
 
                 auto elementBits = DataTypeInfo::Get(varTypeInfo.segmentVariableType).elementBits;
-                if(elementBits == 6 && info.isPadded && !info.isTransposedTile)
+                const auto& arch = m_context->targetArchitecture();
+                auto        macTile = m_graph->coordinates.getNode<MacroTile>(macTileTag);
+                if(macTile.memoryType == MemoryType::VGPR && elementBits == 6
+                   && (!arch.HasCapability(GPUCapability::DSReadTransposeB6PaddingBytes)
+                       || info.isPadded)
+                   && !info.isTransposedTile)
                 {
-                    auto registerCount = varTypeInfo.registerCount;
+                    // FIXME: fix contiguousChunkWidth calculation
+                    auto registerCount = arch.target().gfx == GPUArchitectureGFX::GFX1250
+                                             ? info.n * varTypeInfo.registerCount
+                                             : varTypeInfo.registerCount;
                     allocOptions = {.contiguousChunkWidth = int(registerCount), .alignment = 2};
                     co_yield Instruction::Comment(
                         concatenate("Allocation options: ", allocOptions));
+                }
+
+                if(arch.HasCapability(GPUCapability::HasVGPRIndexing)
+                   and isScaleType(varTypeInfo.variableType.dataType))
+                {
+                    allocOptions.forceReservedRegion = true;
                 }
 
                 auto tmpl = Register::Value::Placeholder(
@@ -1205,6 +1241,19 @@ namespace rocRoller
                 .map(MemoryInstructions::addExtraDst(ldsAllocation));
         }
 
+        static std::optional<uint> getVGPRBlockSetDimSize(KernelGraph const& graph, int tag)
+        {
+            auto coord = graph.mapper.get(tag, Connections::TypeAndSubDimension{"VGPRBlockSet", 0});
+            if(coord == -1)
+                return {};
+
+            auto [_, vgprBlockSet] = graph.getDimension<VGPRBlockSet>(tag);
+            AssertFatal(Expression::evaluationTimes(vgprBlockSet.size)[EvaluationTime::Translate],
+                        "Could not determine VGPRBlockSet size at translate-time.",
+                        ShowValue(vgprBlockSet));
+            return getUnsignedInt(evaluate(vgprBlockSet.size));
+        }
+
         Generator<Instruction> LoadStoreTileGenerator::loadMacroTileWAVELDS(int                tag,
                                                                             LoadLDSTile const& load,
                                                                             Transformer coords)
@@ -1228,7 +1277,9 @@ namespace rocRoller
 
             auto ldsOffset = Register::Value::Literal(ldsAllocation->getLDSAllocation()->offset());
 
-            uint numElements       = waveTile.sizes[0] * waveTile.sizes[1];
+            uint numVGPRBlockSets = getVGPRBlockSetDimSize(*m_graph, tag).value_or(1);
+
+            uint numElements       = waveTile.sizes[0] * waveTile.sizes[1] / numVGPRBlockSets;
             auto [_, lane]         = m_graph->getDimension<Lane>(tag);
             auto activeLanesInWave = getUnsignedInt(evaluate(lane.size));
 
@@ -1241,14 +1292,15 @@ namespace rocRoller
             uint numVgpr = numElements / (activeLanesInWave * packing);
             AssertFatal(numVgpr > 0, "Invalid load dimensions.");
 
-            LoadStoreTileInfo info{.tag              = tag,
-                                   .kind             = MemoryInstructions::MemoryKind::Local,
-                                   .m                = 1,
-                                   .n                = numVgpr,
-                                   .data             = nullptr,
-                                   .varType          = load.varType,
-                                   .offset           = ldsOffset,
-                                   .isTransposedTile = load.isTransposedTile};
+            LoadStoreTileInfo info{.tag                  = tag,
+                                   .kind                 = MemoryInstructions::MemoryKind::Local,
+                                   .m                    = numVGPRBlockSets,
+                                   .n                    = numVgpr,
+                                   .data                 = nullptr,
+                                   .varType              = load.varType,
+                                   .offset               = ldsOffset,
+                                   .isTransposedTile     = load.isTransposedTile,
+                                   .isMacroTileRowStride = numVGPRBlockSets > 1};
             co_yield moveTile<MemoryInstructions::MemoryDirection::Load>(info, coords)
                 .map(MemoryInstructions::addExtraSrc(ldsAllocation));
         }

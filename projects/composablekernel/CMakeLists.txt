@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.14) 
 if(POLICY CMP0140)
   # policies CMP0140 not known to CMake until 3.25
   cmake_policy(SET CMP0140 NEW)
@@ -200,7 +200,7 @@ if(NOT ENABLE_ASAN_PACKAGING)
     elseif(NOT WIN32 AND ${hip_VERSION_FLAT} GREATER_EQUAL 600400000 AND ${hip_VERSION_FLAT} LESS 600443483)
         set(CK_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201;gfx950")
     elseif(NOT WIN32 AND ${hip_VERSION_FLAT} GREATER_EQUAL 600443483)
-        set(CK_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx950;gfx10-3-generic;gfx11-generic;gfx12-generic")
+        set(CK_GPU_TARGETS "gfx1250")
     endif()
 else()
     #build CK only for xnack-supported targets when using ASAN
@@ -239,13 +239,12 @@ if (SUPPORTED_GPU_TARGETS MATCHES "gfx94" OR SUPPORTED_GPU_TARGETS MATCHES "gfx9
     add_definitions(-DCK_USE_GFX94)
     set(CK_USE_GFX94 "ON")
 endif()
-
-# new macro CK_TILE_USE_WMMA in order to separately compile examples for MFMA/WMMA
-set(CK_TILE_USE_WMMA 0)
-
 if (SUPPORTED_GPU_TARGETS MATCHES "gfx10")
     add_definitions(-DCK_GFX1030_SUPPORT)
 endif()
+
+# new macro CK_TILE_USE_WMMA in order to separately compile examples for MFMA/WMMA
+set(CK_TILE_USE_WMMA 0)
 
 if (SUPPORTED_GPU_TARGETS MATCHES "gfx11" OR SUPPORTED_GPU_TARGETS MATCHES "gfx12")
     message(STATUS "Enabling WMMA instances")
@@ -275,6 +274,11 @@ if (SUPPORTED_GPU_TARGETS MATCHES "gfx950")
     set(CK_USE_NATIVE_MX_SUPPORT "ON")
     add_definitions(-DCK_GFX950_SUPPORT)
     set(CK_GFX950_SUPPORT "ON")
+endif()
+if (SUPPORTED_GPU_TARGETS MATCHES "gfx1250")
+    add_definitions(-DCK_USE_GFX1250)
+    add_definitions(-DCK_USE_NATIVE_MX_SUPPORT)
+    set(CK_USE_NATIVE_MX_SUPPORT "ON")
 endif()
 
 option(CK_USE_FP8_ON_UNSUPPORTED_ARCH "Enable FP8 GEMM instances on older architectures" OFF)

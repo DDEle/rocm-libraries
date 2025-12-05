@@ -15,6 +15,20 @@
 #include "ck_tile/host.hpp"
 #include "batched_gemm.hpp"
 
+#if CK_TILE_USE_WMMA
+template <typename PrecType>
+constexpr ck_tile::index_t get_k_warp_tile()
+{
+#if defined(CK_USE_GFX1250)
+    constexpr bool is_8bit_float =
+        std::is_same_v<PrecType, ck_tile::fp8_t> || std::is_same_v<PrecType, ck_tile::bf8_t>;
+    return is_8bit_float ? 64 : 32;
+#else
+    return 16;
+#endif
+}
+#endif
+
 template <typename GemmConfig,
           typename ADataType,
           typename BDataType,
@@ -38,8 +52,11 @@ float batched_gemm(const ck_tile::BatchedGemmHostArgs& args, const ck_tile::stre
 
     constexpr ck_tile::index_t M_Warp_Tile = GemmConfig::M_Warp_Tile;
     constexpr ck_tile::index_t N_Warp_Tile = GemmConfig::N_Warp_Tile;
+#if CK_TILE_USE_WMMA
+    constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<ADataType>();
+#else
     constexpr ck_tile::index_t K_Warp_Tile = GemmConfig::K_Warp_Tile;
-
+#endif
     constexpr bool DoubleSmemBuffer = GemmConfig::DoubleSmemBuffer;
 
     constexpr bool kPadM = false;

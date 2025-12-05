@@ -89,6 +89,27 @@ namespace rocRoller
             }
         }
 
+        std::string getScaleTypeModifier(DataType dtype)
+        {
+            AssertFatal(isScaleType(dtype));
+
+            switch(dtype)
+            {
+            case DataType::E8M0:
+            case DataType::E8M0x4:
+                return "MATRIX_SCALE_FMT_E8";
+            case DataType::E5M3:
+            case DataType::E5M3x4:
+                return "MATRIX_SCALE_FMT_E5M3";
+            case DataType::E4M3:
+            case DataType::E4M3x4:
+                return "MATRIX_SCALE_FMT_E4M3";
+            default:
+                Throw<FatalError>("Unable to determine MI scale modifier: unhandled data type.",
+                                  ShowValue(dtype));
+            };
+        }
+
         std::tuple<std::string, std::string> getOpselModifiers2xByte(uint lhsByte, uint rhsByte)
         {
             AssertFatal(lhsByte < 4, ShowValue(lhsByte));

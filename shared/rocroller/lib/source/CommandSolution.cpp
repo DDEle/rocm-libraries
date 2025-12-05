@@ -137,9 +137,20 @@ namespace rocRoller
         m_workgroupSize = v;
     }
 
+    void CommandParameters::setManualWorkgroupClusterSize(std::array<unsigned int, 3> const& v)
+    {
+        m_workgroupClusterSize = v;
+    }
+
     std::optional<std::array<unsigned int, 3>> CommandParameters::getManualWorkgroupSize() const
     {
         return m_workgroupSize;
+    }
+
+    std::optional<std::array<unsigned int, 3>>
+        CommandParameters::getManualWorkgroupClusterSize() const
+    {
+        return m_workgroupClusterSize;
     }
 
     void CommandParameters::setManualWavefrontCount(std::pair<uint, uint> wavefrontCounts)
@@ -238,6 +249,8 @@ namespace rocRoller
         if(sharedMem)
             rv.sharedMemBytes = getUnsignedInt(evaluate(sharedMem, args));
 
+        rv.workgroupClusterSize = m_context->kernel()->workgroupClusterSize();
+
         return rv;
     }
 
@@ -319,6 +332,12 @@ namespace rocRoller
             unsigned int wfs = m_context->targetArchitecture().GetCapability(
                 GPUCapability::DefaultWavefrontSize);
             m_context->kernel()->setWorkgroupSize({wfs, 1, 1});
+        }
+
+        if(m_commandParameters->getManualWorkgroupClusterSize())
+        {
+            m_context->kernel()->setWorkgroupClusterSize(
+                *m_commandParameters->getManualWorkgroupClusterSize());
         }
 
         auto zero = std::make_shared<Expression::Expression>(0u);
@@ -422,7 +441,7 @@ namespace rocRoller
             std::make_shared<KernelGraph::UpdateWavefrontParameters>(m_commandParameters));
         transforms.push_back(std::make_shared<KernelGraph::AddComputeIndex>());
         transforms.push_back(std::make_shared<KernelGraph::LoadPacked>(m_context));
-        transforms.push_back(std::make_shared<KernelGraph::AddConvert>());
+        transforms.push_back(std::make_shared<KernelGraph::AddConvert>(m_context));
 
         //
         // TODO: Turn on this transformation by default when SGPR issue gets resolved
@@ -616,7 +635,7 @@ namespace rocRoller
         AssertFatal(m_context);
         AssertFatal(m_context->kernel());
 
-        m_executableKernel = std::make_shared<ExecutableKernel>();
+        m_executableKernel = std::make_shared<ExecutableKernel>(m_context);
         m_executableKernel->loadKernelFromFile(
             fileName, kernelName, m_context->targetArchitecture().target());
     }
@@ -626,7 +645,7 @@ namespace rocRoller
     {
         AssertFatal(m_context);
 
-        m_executableKernel = std::make_shared<ExecutableKernel>();
+        m_executableKernel = std::make_shared<ExecutableKernel>(m_context);
         m_executableKernel->loadKernelFromCodeObjectFile(
             fileName, kernelName, m_context->targetArchitecture().target());
 

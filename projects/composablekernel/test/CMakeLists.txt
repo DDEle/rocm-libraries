@@ -46,7 +46,7 @@ set(REGRESSION_TESTS
     test_ck_tile_fmha_fwd_bf16
     test_ck_tile_fmha_fwd_fp16
     test_ck_tile_fmha_fwd_fp8
-    test_ck_tile_streamk_reboot_extended
+    test_ck_tile_streamk_extended
 )
 
 function(add_test_executable TEST_NAME)
@@ -116,13 +116,9 @@ function(add_test_executable TEST_NAME)
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx1030 gfx10-3-generic)
         elseif(source_name_list MATCHES "_wmma")
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx908:xnack+ gfx908:xnack- gfx90a:xnack+ gfx90a:xnack- gfx908 gfx90a gfx942 gfx1030 gfx950)
-<<<<<<< HEAD
-        elseif(source_name_list MATCHES "_smfmac")
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx1030 gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx908 gfx90a gfx1200 gfx1201 gfx10-3-generic gfx11-generic gfx12-generic)
-=======
         elseif(ARGN MATCHES "_smfmac")
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx1030 gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx908 gfx90a gfx1200 gfx1201 gfx10-3-generic gfx11-generic gfx12-generic gfx1250 gfx1251)
->>>>>>> origin/gfx1250
         endif()
         set_source_files_properties(${ARGN} PROPERTIES LANGUAGE HIP)
         add_executable(${TEST_NAME} ${ARGN})
@@ -192,14 +188,6 @@ function(add_gtest_executable TEST_NAME)
             message(DEBUG "removing xdl test ${source} ")
             list(REMOVE_ITEM ARGN "${source}")
         endif()
-<<<<<<< HEAD
-        if(NOT TEST_TARGETS MATCHES "gfx95" AND source_name MATCHES "mx_")
-            message(DEBUG "removing microscaling test ${source} ")
-            list(REMOVE_ITEM ARGN "${source}")
-        endif()
-        if(NOT TEST_TARGETS MATCHES "gfx11|gfx12" AND source_name MATCHES "wmma")
-            message(DEBUG "removing wmma test ${source} ")
-=======
     endforeach()
 
     foreach(source IN LISTS ARGN)
@@ -212,7 +200,6 @@ function(add_gtest_executable TEST_NAME)
     foreach(source IN LISTS ARGN)
 	if(NOT TEST_TARGETS MATCHES "gfx11" AND NOT TEST_TARGETS MATCHES "gfx12" AND source MATCHES "wmma")
              message(DEBUG "removing wmma test ${source} ")
->>>>>>> origin/gfx1250
             list(REMOVE_ITEM ARGN "${source}")
         endif()
     endforeach()
@@ -235,17 +222,11 @@ function(add_gtest_executable TEST_NAME)
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx1030 gfx10-3-generic)
         elseif(source_name_list MATCHES "_wmma")
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx908:xnack+ gfx908:xnack- gfx90a:xnack+ gfx90a:xnack- gfx908 gfx90a gfx942 gfx1030 gfx950)
-<<<<<<< HEAD
-        elseif(source_name_list MATCHES "_smfmac")
-             list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx1030 gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx908 gfx90a gfx1200 gfx1201 gfx10-3-generic gfx11-generic gfx12-generic)
-        elseif(source_name_list MATCHES "_mx") #only build mx example for gfx950
-=======
         elseif(ARGN MATCHES "monitor_mwait" OR ARGN MATCHES "async_lds_load_store") #only build sync tests for gfx1250+
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx908:xnack+ gfx908:xnack- gfx90a:xnack+ gfx90a:xnack- gfx908 gfx90a gfx942 gfx1030 gfx950 gfx1200 gfx1201 gfx10-3-generic gfx11-generic gfx12-generic)
         elseif(ARGN MATCHES "_smfmac")
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx1030 gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx908 gfx90a gfx1200 gfx1201 gfx10-3-generic gfx11-generic gfx12-generic gfx1250 gfx1251)
         elseif(ARGN MATCHES "_mx") #only build mx example for gfx950 and gfx125x
->>>>>>> origin/gfx1250
              list(REMOVE_ITEM TEST_TARGETS gfx900 gfx906 gfx906:xnack- gfx908:xnack+ gfx908:xnack- gfx90a:xnack+ gfx90a:xnack- gfx908 gfx90a gfx942 gfx1030 gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152 gfx1200 gfx1201 gfx10-3-generic gfx11-generic gfx12-generic)
         endif()
         set_source_files_properties(${ARGN} PROPERTIES LANGUAGE HIP)
@@ -330,6 +311,9 @@ endif()
 if(SUPPORTED_GPU_TARGETS MATCHES "gfx950") 
     add_subdirectory(mx_mfma_op)
     add_subdirectory(gemm_mx)
+endif()
+if(SUPPORTED_GPU_TARGETS MATCHES "gfx12")
+    add_subdirectory(s_prefetch_op)
 endif()
 add_subdirectory(position_embedding)
 add_subdirectory(scatter_gather)

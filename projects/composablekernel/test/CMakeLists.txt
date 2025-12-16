@@ -1,3 +1,6 @@
+# Copyright (c) Advanced Micro Devices, Inc., or its affiliates.
+# SPDX-License-Identifier: MIT
+
 include_directories(BEFORE
     ${PROJECT_SOURCE_DIR}/
     ${PROJECT_SOURCE_DIR}/profiler/include
@@ -317,4 +320,3 @@ if(SUPPORTED_GPU_TARGETS MATCHES "gfx12")
 endif()
 add_subdirectory(position_embedding)
 add_subdirectory(scatter_gather)
-add_subdirectory(synchronization)

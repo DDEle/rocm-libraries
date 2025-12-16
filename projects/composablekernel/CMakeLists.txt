@@ -1,4 +1,7 @@
-cmake_minimum_required(VERSION 3.14) 
+# Copyright (c) Advanced Micro Devices, Inc., or its affiliates.
+# SPDX-License-Identifier: MIT
+
+cmake_minimum_required(VERSION 3.14)
 if(POLICY CMP0140)
   # policies CMP0140 not known to CMake until 3.25
   cmake_policy(SET CMP0140 NEW)
@@ -39,6 +42,8 @@ option(ENABLE_CLANG_CPP_CHECKS "Enables clang tidy, cppcheck" ON)
 option(MIOPEN_REQ_LIBS_ONLY "Build only the MIOpen required libraries" OFF)
 option(CK_EXPERIMENTAL_BUILDER "Enable experimental builder" OFF)
 option(BUILD_MHA_LIB "Build the static library for flash attention" OFF)
+option(FORCE_DISABLE_XDL "Skip compiling XDL specific instances (even if supported GPUs are included in GPU_TARGETS)" OFF)
+option(FORCE_DISABLE_WMMA "Skip compiling WMMA specific instances (even if supported GPUs are included in GPU_TARGETS)" OFF)
 
 if(CK_EXPERIMENTAL_BUILDER)
     add_definitions(-DCK_EXPERIMENTAL_BUILDER)
@@ -200,7 +205,7 @@ if(NOT ENABLE_ASAN_PACKAGING)
     elseif(NOT WIN32 AND ${hip_VERSION_FLAT} GREATER_EQUAL 600400000 AND ${hip_VERSION_FLAT} LESS 600443483)
         set(CK_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201;gfx950")
     elseif(NOT WIN32 AND ${hip_VERSION_FLAT} GREATER_EQUAL 600443483)
-        set(CK_GPU_TARGETS "gfx1250")
+        set(CK_GPU_TARGETS "gfx908;gfx90a;gfx942;gfx950;gfx10-3-generic;gfx11-generic;gfx12-generic")
     endif()
 else()
     #build CK only for xnack-supported targets when using ASAN
@@ -229,24 +234,25 @@ message(STATUS "Building CK for the following targets: ${SUPPORTED_GPU_TARGETS}"
 # Cache SUPPORTED_GPU_TARGETS for debug
 set(SUPPORTED_GPU_TARGETS "${SUPPORTED_GPU_TARGETS}" CACHE STRING "List of supported GPU targets")
 
-if (SUPPORTED_GPU_TARGETS MATCHES "gfx9|gfx11|gfx12")
+if (SUPPORTED_GPU_TARGETS MATCHES "gfx9|gfx11|gfx12" AND NOT FORCE_DISABLE_XDL)
     message(STATUS "Enabling XDL instances")
     add_definitions(-DCK_USE_XDL)
     set(CK_USE_XDL "ON")
 endif()
-if (SUPPORTED_GPU_TARGETS MATCHES "gfx94" OR SUPPORTED_GPU_TARGETS MATCHES "gfx95")
+if ((SUPPORTED_GPU_TARGETS MATCHES "gfx94" OR SUPPORTED_GPU_TARGETS MATCHES "gfx95") AND NOT FORCE_DISABLE_XDL)
     message(STATUS "Enabling XDL FP8 gemms on native architectures")
     add_definitions(-DCK_USE_GFX94)
     set(CK_USE_GFX94 "ON")
-endif()
-if (SUPPORTED_GPU_TARGETS MATCHES "gfx10")
-    add_definitions(-DCK_GFX1030_SUPPORT)
 endif()
 
 # new macro CK_TILE_USE_WMMA in order to separately compile examples for MFMA/WMMA
 set(CK_TILE_USE_WMMA 0)
 
-if (SUPPORTED_GPU_TARGETS MATCHES "gfx11" OR SUPPORTED_GPU_TARGETS MATCHES "gfx12")
+if (SUPPORTED_GPU_TARGETS MATCHES "gfx10")
+    add_definitions(-DCK_GFX1030_SUPPORT)
+endif()
+
+if ((SUPPORTED_GPU_TARGETS MATCHES "gfx11" OR SUPPORTED_GPU_TARGETS MATCHES "gfx12") AND NOT FORCE_DISABLE_WMMA)
     message(STATUS "Enabling WMMA instances")
     add_definitions(-DCK_USE_WMMA)
     set(CK_USE_WMMA "ON")
@@ -256,7 +262,7 @@ endif()
 # define the macro with the current value (0 or 1)
 add_definitions(-DCK_TILE_USE_WMMA=${CK_TILE_USE_WMMA})
 
-if (SUPPORTED_GPU_TARGETS MATCHES "gfx12")
+if (SUPPORTED_GPU_TARGETS MATCHES "gfx12" AND NOT FORCE_DISABLE_WMMA)
     message(STATUS "Enabling WMMA FP8 gemms on native architectures")
     add_definitions(-DCK_USE_WMMA_FP8)
     set(CK_USE_WMMA_FP8 "ON")
@@ -274,11 +280,6 @@ if (SUPPORTED_GPU_TARGETS MATCHES "gfx950")
     set(CK_USE_NATIVE_MX_SUPPORT "ON")
     add_definitions(-DCK_GFX950_SUPPORT)
     set(CK_GFX950_SUPPORT "ON")
-endif()
-if (SUPPORTED_GPU_TARGETS MATCHES "gfx1250")
-    add_definitions(-DCK_USE_GFX1250)
-    add_definitions(-DCK_USE_NATIVE_MX_SUPPORT)
-    set(CK_USE_NATIVE_MX_SUPPORT "ON")
 endif()
 
 option(CK_USE_FP8_ON_UNSUPPORTED_ARCH "Enable FP8 GEMM instances on older architectures" OFF)

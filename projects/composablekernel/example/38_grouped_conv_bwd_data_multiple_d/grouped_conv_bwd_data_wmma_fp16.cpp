@@ -35,7 +35,7 @@ using DeviceConvInstance = ck::tensor_operation::device::DeviceGroupedConvBwdDat
 
 int main(int argc, char* argv[])
 {
-    bool is_supported = ck::is_gfx11_supported() || ck::is_gfx125_supported();
+    bool is_supported = ck::is_gfx11_supported();
     if(!is_supported)
     {
         std::cout << "WARNING: wmma example not supported on the platform " << ck::get_device_name()

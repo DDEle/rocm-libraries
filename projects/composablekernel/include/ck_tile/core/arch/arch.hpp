@@ -1030,6 +1030,14 @@ CK_TILE_DEVICE void block_sync_lds()
     s_waitcnt_barrier<waitcnt_arg::kMaxVmCnt, waitcnt_arg::kMaxExpCnt, lgkmcnt>();
 }
 
+template <index_t tensorcnt = 0>
+CK_TILE_DEVICE void s_wait_tensorcnt()
+{
+#if CK_TILE_ENABLE_TDM_FEATURE
+    __builtin_amdgcn_s_wait_tensorcnt(tensorcnt);
+#endif
+}
+
 template <index_t vmcnt = 0>
 CK_TILE_DEVICE void block_sync_lds_direct_load()
 {
@@ -1111,7 +1119,14 @@ struct gfx11_t
 struct gfx12_t
 {
 };
+<<<<<<< HEAD
 struct gfx_invalid_t
+=======
+struct gfx120_t
+{
+};
+struct gfx125_t
+>>>>>>> origin/gfx1250
 {
 };
 
@@ -1121,8 +1136,15 @@ CK_TILE_DEVICE static constexpr auto get_device_arch()
 // FIXME(1): during the host compilation pass it returns gfx12_t
 #if defined(__gfx11__)
     return gfx11_t{};
+<<<<<<< HEAD
 #else
     return gfx12_t{};
+=======
+#elif defined(__gfx125__)
+    return gfx125_t{};
+#else // if defined(__gfx120__)
+    return gfx120_t{};
+>>>>>>> origin/gfx1250
 #endif
 }
 

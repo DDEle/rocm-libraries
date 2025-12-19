@@ -297,6 +297,29 @@ struct BlockwiseGemmWmmaops_pipeline_v1<BlockGemmPipelineScheduler::Intrawave,
                                           b_thread_vec.template AsType<wmma_input_type_b>(),
                                           c_thread_buf.GetVectorTypeReference(Number<c_offset>{}));
                         });
+<<<<<<< HEAD
+=======
+                        static_for<0, KPack / B_KRow, 1>{}([&](auto ik) {
+                            b_thread_vec.template AsType<ComputeTypeB>()(ik) =
+                                b_thread_buf[Number<b_thread_desc_.CalculateOffset(make_tuple(
+                                    Number<ik / B_K1>{}, n0, I0, I0, I0, Number<ik % B_K1>{}))>{}];
+                        });
+
+                        using wmma_input_type_a =
+                            typename vector_type<ComputeTypeA, WmmaK / A_KRow>::type;
+                        using wmma_input_type_b =
+                            typename vector_type<ComputeTypeB, WmmaK / B_KRow>::type;
+
+                        constexpr index_t c_offset =
+                            c_thread_desc_.CalculateOffset(make_tuple(m0, n0, I0));
+
+                        __builtin_amdgcn_sched_barrier(0);
+                        wmma_gemm.Run(a_thread_vec.template AsType<wmma_input_type_a>(),
+                                      b_thread_vec.template AsType<wmma_input_type_b>(),
+                                      c_thread_buf.GetVectorTypeReference(Number<c_offset>{}));
+
+                        __builtin_amdgcn_sched_barrier(0);
+>>>>>>> origin/gfx1250
                     });
                 });
             });

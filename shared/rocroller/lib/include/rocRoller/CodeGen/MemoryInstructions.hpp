@@ -24,46 +24,46 @@
  *
  *******************************************************************************/
 
- #pragma once
+#pragma once
 
- #include <rocRoller/CodeGen/Buffer.hpp>
- #include <rocRoller/CodeGen/BufferInstructionOptions.hpp>
- #include <rocRoller/CodeGen/CopyGenerator.hpp>
- #include <rocRoller/CodeGen/Instruction.hpp>
- #include <rocRoller/CodeGen/TensorDataMover.hpp>
- #include <rocRoller/Context.hpp>
- #include <rocRoller/Utilities/Generator.hpp>
- 
- namespace rocRoller
- {
- 
-     class MemoryInstructions
-     {
-     public:
-         MemoryInstructions(ContextPtr context);
- 
-         MemoryInstructions(MemoryInstructions const& rhs) = default;
-         MemoryInstructions(MemoryInstructions&& rhs)      = default;
-         ~MemoryInstructions()                             = default;
- 
-         enum class MemoryKind
-         {
-             Global,
-             Scalar,
-             Local,
-             Buffer,
-             Buffer2LDS,
-             Count,
-         };
- 
-         enum class MemoryDirection : int
-         {
-             Load = 0,
-             Store,
-             Count,
-         };
- 
-         /**
+#include <rocRoller/CodeGen/Buffer.hpp>
+#include <rocRoller/CodeGen/BufferInstructionOptions.hpp>
+#include <rocRoller/CodeGen/CopyGenerator.hpp>
+#include <rocRoller/CodeGen/Instruction.hpp>
+#include <rocRoller/CodeGen/TensorDataMover.hpp>
+#include <rocRoller/Context.hpp>
+#include <rocRoller/Utilities/Generator.hpp>
+
+namespace rocRoller
+{
+
+    class MemoryInstructions
+    {
+    public:
+        MemoryInstructions(ContextPtr context);
+
+        MemoryInstructions(MemoryInstructions const& rhs) = default;
+        MemoryInstructions(MemoryInstructions&& rhs)      = default;
+        ~MemoryInstructions()                             = default;
+
+        enum class MemoryKind
+        {
+            Global,
+            Scalar,
+            Local,
+            Buffer,
+            Buffer2LDS,
+            Count,
+        };
+
+        enum class MemoryDirection : int
+        {
+            Load = 0,
+            Store,
+            Count,
+        };
+
+        /**
           * @brief Generate the instructions required to perform a load.
           *
           *
@@ -77,17 +77,17 @@
           * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
           * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
           */
-         Generator<Instruction> load(MemoryKind               kind,
-                                     Register::ValuePtr       dest,
-                                     Register::ValuePtr       addr,
-                                     Register::ValuePtr       offset,
-                                     int                      numBytes,
-                                     std::string              comment  = "",
-                                     bool                     high     = false,
-                                     Register::ValuePtr       buffDesc = nullptr,
-                                     BufferInstructionOptions buffOpts = BufferInstructionOptions());
- 
-         /**
+        Generator<Instruction> load(MemoryKind               kind,
+                                    Register::ValuePtr       dest,
+                                    Register::ValuePtr       addr,
+                                    Register::ValuePtr       offset,
+                                    int                      numBytes,
+                                    std::string              comment  = "",
+                                    bool                     high     = false,
+                                    Register::ValuePtr       buffDesc = nullptr,
+                                    BufferInstructionOptions buffOpts = BufferInstructionOptions());
+
+        /**
           * @brief Generate the instructions required to perform a store.
           *
           *
@@ -101,18 +101,18 @@
           * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
           * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
           */
-         Generator<Instruction> store(MemoryKind               kind,
-                                      Register::ValuePtr       addr,
-                                      Register::ValuePtr       data,
-                                      Register::ValuePtr       offset,
-                                      int                      numBytes,
-                                      std::string const        comment  = "",
-                                      bool                     high     = false,
-                                      Register::ValuePtr       buffDesc = nullptr,
-                                      BufferInstructionOptions buffOpts
-                                      = BufferInstructionOptions());
- 
-         /**
+        Generator<Instruction> store(MemoryKind               kind,
+                                     Register::ValuePtr       addr,
+                                     Register::ValuePtr       data,
+                                     Register::ValuePtr       offset,
+                                     int                      numBytes,
+                                     std::string const        comment  = "",
+                                     bool                     high     = false,
+                                     Register::ValuePtr       buffDesc = nullptr,
+                                     BufferInstructionOptions buffOpts
+                                     = BufferInstructionOptions());
+
+        /**
           * @brief Generate the instructions required to perform a load or store.
           *
           * @tparam Dir Whether to load or store data
@@ -126,19 +126,19 @@
           * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
           * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
           */
-         template <MemoryDirection Dir>
-         Generator<Instruction> moveData(MemoryKind               kind,
-                                         Register::ValuePtr       addr,
-                                         Register::ValuePtr       data,
-                                         Register::ValuePtr       offset,
-                                         int                      numBytes,
-                                         std::string const        comment  = "",
-                                         bool                     high     = false,
-                                         Register::ValuePtr       buffDesc = nullptr,
-                                         BufferInstructionOptions buffOpts
-                                         = BufferInstructionOptions());
- 
-         /**
+        template <MemoryDirection Dir>
+        Generator<Instruction> moveData(MemoryKind               kind,
+                                        Register::ValuePtr       addr,
+                                        Register::ValuePtr       data,
+                                        Register::ValuePtr       offset,
+                                        int                      numBytes,
+                                        std::string const        comment  = "",
+                                        bool                     high     = false,
+                                        Register::ValuePtr       buffDesc = nullptr,
+                                        BufferInstructionOptions buffOpts
+                                        = BufferInstructionOptions());
+
+        /**
           * @brief Generate instructions that will load two 16bit values and pack them into
           *        a single register.
           *
@@ -152,18 +152,18 @@
           * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
           * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
           */
-         Generator<Instruction> loadAndPack(MemoryKind               kind,
-                                            Register::ValuePtr       dest,
-                                            Register::ValuePtr       addr1,
-                                            Register::ValuePtr       offset1,
-                                            Register::ValuePtr       addr2,
-                                            Register::ValuePtr       offset2,
-                                            std::string const        comment  = "",
-                                            Register::ValuePtr       buffDesc = nullptr,
-                                            BufferInstructionOptions buffOpts
-                                            = BufferInstructionOptions());
- 
-         /**
+        Generator<Instruction> loadAndPack(MemoryKind               kind,
+                                           Register::ValuePtr       dest,
+                                           Register::ValuePtr       addr1,
+                                           Register::ValuePtr       offset1,
+                                           Register::ValuePtr       addr2,
+                                           Register::ValuePtr       offset2,
+                                           std::string const        comment  = "",
+                                           Register::ValuePtr       buffDesc = nullptr,
+                                           BufferInstructionOptions buffOpts
+                                           = BufferInstructionOptions());
+
+        /**
           * @brief Generate instructions that will pack 2 16bit values into a single 32bit register and store the value
           *        to memmory.
           *
@@ -174,14 +174,14 @@
           * @param offset Register containing an offset to be added to addr.
           * @param comment Comment that will be generated along with the instructions. (Default = "")
           */
-         Generator<Instruction> packAndStore(MemoryKind         kind,
-                                             Register::ValuePtr addr,
-                                             Register::ValuePtr data1,
-                                             Register::ValuePtr data2,
-                                             Register::ValuePtr offset,
-                                             std::string const  comment = "");
- 
-         /**
+        Generator<Instruction> packAndStore(MemoryKind         kind,
+                                            Register::ValuePtr addr,
+                                            Register::ValuePtr data1,
+                                            Register::ValuePtr data2,
+                                            Register::ValuePtr offset,
+                                            std::string const  comment = "");
+
+        /**
           * @brief Generate the instructions required to perform a global load.
           *
           *
@@ -191,13 +191,13 @@
           * @param numBytes The number of bytes to load.
           * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
           */
-         Generator<Instruction> loadGlobal(Register::ValuePtr dest,
-                                           Register::ValuePtr addr,
-                                           int                offset,
-                                           int                numBytes,
-                                           bool               high = false);
- 
-         /**
+        Generator<Instruction> loadGlobal(Register::ValuePtr dest,
+                                          Register::ValuePtr addr,
+                                          int                offset,
+                                          int                numBytes,
+                                          bool               high = false);
+
+        /**
           * @brief Generate the instructions required to perform a global store.
           *
           *
@@ -207,13 +207,13 @@
           * @param numBytes The number of bytes to load.
           * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
           */
-         Generator<Instruction> storeGlobal(Register::ValuePtr addr,
-                                            Register::ValuePtr data,
-                                            int                offset,
-                                            int                numBytes,
-                                            bool               high = false);
- 
-         /**
+        Generator<Instruction> storeGlobal(Register::ValuePtr addr,
+                                           Register::ValuePtr data,
+                                           int                offset,
+                                           int                numBytes,
+                                           bool               high = false);
+
+        /**
           * @brief Generate the instructions required to load scalar data into a register from memory.
           *
           *
@@ -223,13 +223,13 @@
           * @param numBytes The total number of bytes to load.
           * @param glc Globally Coherent modifier, controls L1 cache policy: false=hit_lru, true=miss_evict. (Default=false)
           */
-         Generator<Instruction> loadScalar(Register::ValuePtr dest,
-                                           Register::ValuePtr base,
-                                           int                offset,
-                                           int                numBytes,
-                                           bool               glc = false);
- 
-         /**
+        Generator<Instruction> loadScalar(Register::ValuePtr dest,
+                                          Register::ValuePtr base,
+                                          int                offset,
+                                          int                numBytes,
+                                          bool               glc = false);
+
+        /**
           * @brief Generate the instructions required to perform a scalar store.
           *
           *
@@ -239,13 +239,13 @@
           * @param numBytes The number of bytes to load.
           * @param glc Globally Coherent modifier, controls L1 cache bypass: false=write-combine, true=write-thru. (Default=true)
           */
-         Generator<Instruction> storeScalar(Register::ValuePtr addr,
-                                            Register::ValuePtr data,
-                                            int                offset,
-                                            int                numBytes,
-                                            bool               glc = true);
- 
-         /**
+        Generator<Instruction> storeScalar(Register::ValuePtr addr,
+                                           Register::ValuePtr data,
+                                           int                offset,
+                                           int                numBytes,
+                                           bool               glc = true);
+
+        /**
           * @brief Generate the instructions required to perform an LDS load.
           *
           *
@@ -256,14 +256,14 @@
           * @param comment Comment that will be generated along with the instructions. (Default = "")
           * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
           */
-         Generator<Instruction> loadLocal(Register::ValuePtr dest,
-                                          Register::ValuePtr addr,
-                                          int                offset,
-                                          int                numBytes,
-                                          std::string const  comment = "",
-                                          bool               high    = false);
- 
-         /**
+        Generator<Instruction> loadLocal(Register::ValuePtr dest,
+                                         Register::ValuePtr addr,
+                                         int                offset,
+                                         int                numBytes,
+                                         std::string const  comment = "",
+                                         bool               high    = false);
+
+        /**
           * @brief Generate the instructions required to perform a transpose load from LDS.
           *
           *
@@ -274,14 +274,14 @@
           * @param elementBits number of bits of variable type to load.
           * @param comment Comment that will be generated along with the instructions. (Default = "")
           */
-         Generator<Instruction> transposeLoadLocal(Register::ValuePtr dest,
-                                                   Register::ValuePtr addr,
-                                                   int                offset,
-                                                   int                numBytes,
-                                                   uint               elementBits,
-                                                   std::string const  comment = "");
- 
-         /**
+        Generator<Instruction> transposeLoadLocal(Register::ValuePtr dest,
+                                                  Register::ValuePtr addr,
+                                                  int                offset,
+                                                  int                numBytes,
+                                                  uint               elementBits,
+                                                  std::string const  comment = "");
+
+        /**
           * @brief Generate the instructions required to perform an LDS store.
           *
           *
@@ -292,14 +292,14 @@
           * @param comment Comment that will be generated along with the instructions. (Default = "")
           * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
           */
-         Generator<Instruction> storeLocal(Register::ValuePtr addr,
-                                           Register::ValuePtr data,
-                                           int                offset,
-                                           int                numBytes,
-                                           std::string const  comment = "",
-                                           bool               high    = false);
- 
-         /**
+        Generator<Instruction> storeLocal(Register::ValuePtr addr,
+                                          Register::ValuePtr data,
+                                          int                offset,
+                                          int                numBytes,
+                                          std::string const  comment = "",
+                                          bool               high    = false);
+
+        /**
           * @brief Generate the instructions required to perform a buffer load.
           *
           *
@@ -311,15 +311,15 @@
           * @param numBytes The number of bytes to load.
           * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
           */
-         Generator<Instruction> loadBuffer(Register::ValuePtr       dest,
-                                           Register::ValuePtr       addr,
-                                           int                      offset,
-                                           Register::ValuePtr       buffDesc,
-                                           BufferInstructionOptions buffOpts,
-                                           int                      numBytes,
-                                           bool                     high = false);
- 
-         /**
+        Generator<Instruction> loadBuffer(Register::ValuePtr       dest,
+                                          Register::ValuePtr       addr,
+                                          int                      offset,
+                                          Register::ValuePtr       buffDesc,
+                                          BufferInstructionOptions buffOpts,
+                                          int                      numBytes,
+                                          bool                     high = false);
+
+        /**
           * @brief Generate the instructions required to perform a buffer store.
           *
           *
@@ -331,15 +331,15 @@
           * @param numBytes The number of bytes to load.
           * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
           */
-         Generator<Instruction> storeBuffer(Register::ValuePtr       data,
-                                            Register::ValuePtr       addr,
-                                            int                      offset,
-                                            Register::ValuePtr       buffDesc,
-                                            BufferInstructionOptions buffOpts,
-                                            int                      numBytes,
-                                            bool                     high = false);
- 
-         /**
+        Generator<Instruction> storeBuffer(Register::ValuePtr       data,
+                                           Register::ValuePtr       addr,
+                                           int                      offset,
+                                           Register::ValuePtr       buffDesc,
+                                           BufferInstructionOptions buffOpts,
+                                           int                      numBytes,
+                                           bool                     high = false);
+
+        /**
           * @brief Generate the instructions required to perform a direct global to lds buffer load.
           *
           *
@@ -349,34 +349,34 @@
           * @param buffOpts Buffer options
           * @param numBytes The number of bytes to load.
           */
-         Generator<Instruction> bufferLoad2LDS(Register::ValuePtr       data,
-                                               Register::ValuePtr       buffDesc,
-                                               BufferInstructionOptions buffOpts,
-                                               int                      numBytes,
-                                               Register::ValuePtr       soffset);
-         /**
+        Generator<Instruction> bufferLoad2LDS(Register::ValuePtr       data,
+                                              Register::ValuePtr       buffDesc,
+                                              BufferInstructionOptions buffOpts,
+                                              int                      numBytes,
+                                              Register::ValuePtr       soffset);
+        /**
           * @brief Generate the instructions required to perform Global into LDS loads using TDM.
           */
-         Generator<Instruction>
-             loadTensorToLDS(std::shared_ptr<TensorDataMover::TDMDescriptor> tdmDesc);
- 
-         /**
+        Generator<Instruction>
+            loadTensorToLDS(std::shared_ptr<TensorDataMover::TDMDescriptor> tdmDesc);
+
+        /**
           * @brief Generate the instructions required to perform LDS into Global stores using TDM.
           */
-         Generator<Instruction>
-             storeTensorFromLDS(std::shared_ptr<TensorDataMover::TDMDescriptor> tdmDesc);
- 
-         /**
+        Generator<Instruction>
+            storeTensorFromLDS(std::shared_ptr<TensorDataMover::TDMDescriptor> tdmDesc);
+
+        /**
           * @brief Generate the instructions required to add a wave synchronization barrier.
           *
           * @return Generator<Instruction>
           */
-         Generator<Instruction> barrier(CForwardRangeOf<Register::ValuePtr> auto srcs,
-                                        std::string                              comment = "");
-         Generator<Instruction> barrier(std::initializer_list<Register::ValuePtr> srcs,
-                                        std::string                               comment = "");
- 
-         /**
+        Generator<Instruction> barrier(CForwardRangeOf<Register::ValuePtr> auto srcs,
+                                       std::string                              comment = "");
+        Generator<Instruction> barrier(std::initializer_list<Register::ValuePtr> srcs,
+                                       std::string                               comment = "");
+
+        /**
           * @brief Add the offset to a new register if the offset is greater than maxOffset allowed by the
           *        instruction.
           *
@@ -385,39 +385,39 @@
           * @param addr The register containing the address to store the data.
           * @param inst The instruction to be queried for maxOffset
           */
-         Generator<Instruction>
-             addLargerOffset2Addr(int& offset, Register::ValuePtr& addr, std::string inst);
- 
-         /**
+        Generator<Instruction>
+            addLargerOffset2Addr(int& offset, Register::ValuePtr& addr, std::string inst);
+
+        /**
       * Returns a function which can be used with Generator<Instruction>::map() to add `dst` as an extra destination operand to all memory instructions that are yielded by that generator.
       */
-         static auto addExtraDst(Register::ValuePtr dst);
- 
-         /**
+        static auto addExtraDst(Register::ValuePtr dst);
+
+        /**
       * Returns a function which can be used with Generator<Instruction>::map() to add `src` as an extra source operand to all memory instructions that are yielded by that generator.
       */
-         static auto addExtraSrc(Register::ValuePtr src);
- 
-     private:
-         const int m_wordSize = 4; // in bytes
- 
-         Generator<Instruction> barrierImpl(CForwardRangeOf<Register::ValuePtr> auto srcs,
-                                            std::string                              comment);
- 
-         std::weak_ptr<Context> m_context;
- 
-         int chooseWidth(int numWords, const std::vector<int>& potentialWidths, int maxWidth) const;
-         std::string            genOffsetModifier(int) const;
-         Generator<Instruction> genLocalAddr(Register::ValuePtr& addr) const;
-         Generator<Instruction> packForStore(Register::ValuePtr& result,
-                                             Register::ValuePtr  toPack) const;
-     };
- 
-     std::string   toString(MemoryInstructions::MemoryDirection const& d);
-     std::ostream& operator<<(std::ostream& stream, MemoryInstructions::MemoryDirection n);
- 
-     std::string   toString(MemoryInstructions::MemoryKind const& k);
-     std::ostream& operator<<(std::ostream& stream, MemoryInstructions::MemoryKind k);
- }
- 
- #include <rocRoller/CodeGen/MemoryInstructions_impl.hpp>
+        static auto addExtraSrc(Register::ValuePtr src);
+
+    private:
+        const int m_wordSize = 4; // in bytes
+
+        Generator<Instruction> barrierImpl(CForwardRangeOf<Register::ValuePtr> auto srcs,
+                                           std::string                              comment);
+
+        std::weak_ptr<Context> m_context;
+
+        int chooseWidth(int numWords, const std::vector<int>& potentialWidths, int maxWidth) const;
+        std::string            genOffsetModifier(int) const;
+        Generator<Instruction> genLocalAddr(Register::ValuePtr& addr) const;
+        Generator<Instruction> packForStore(Register::ValuePtr& result,
+                                            Register::ValuePtr  toPack) const;
+    };
+
+    std::string   toString(MemoryInstructions::MemoryDirection const& d);
+    std::ostream& operator<<(std::ostream& stream, MemoryInstructions::MemoryDirection n);
+
+    std::string   toString(MemoryInstructions::MemoryKind const& k);
+    std::ostream& operator<<(std::ostream& stream, MemoryInstructions::MemoryKind k);
+}
+
+#include <rocRoller/CodeGen/MemoryInstructions_impl.hpp>

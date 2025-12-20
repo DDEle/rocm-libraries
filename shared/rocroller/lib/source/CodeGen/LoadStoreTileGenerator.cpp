@@ -454,6 +454,7 @@ namespace rocRoller
                     auto bufferReg = tagger->getRegister(
                         buffer, Register::Type::Scalar, {DataType::None, PointerType::Buffer}, 1);
                     bufferReg->setName(concatenate("Buffer", buffer));
+                    bufferReg->allocateNow();
                     if(bufferReg->allocationState() == Register::AllocationState::Unallocated)
                     {
                         Register::ValuePtr basePointer;
@@ -464,11 +465,12 @@ namespace rocRoller
                         {
                             base = base + user->offset;
                         }
-                        bufferExpr = BufferDescriptor::SetBasePointer(bufferExpr, base);
+                        bufferExpr = BufferDescriptor::SetBasePointer(bufferExpr, base, m_context);
                         bufferExpr = BufferDescriptor::SetOptions(
                             bufferExpr, BufferDescriptor::GetDefaultOptions(m_context));
                         // TODO: Handle sizes larger than 32 bits
-                        bufferExpr = BufferDescriptor::SetSize(bufferExpr, toBytes(user->size));
+                        bufferExpr
+                            = BufferDescriptor::SetSize(bufferExpr, toBytes(user->size), m_context);
                         co_yield Expression::generate(bufferReg, bufferExpr, m_context);
                     }
                     scope->addRegister(buffer);

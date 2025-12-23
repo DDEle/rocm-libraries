@@ -37,7 +37,8 @@ namespace rocRoller
         Expression::ExpressionPtr SetBasePointer(Expression::ExpressionPtr bufferExpr,
                                                  Expression::ExpressionPtr ptrExpr,
                                                  ContextPtr                ctx);
-        Expression::ExpressionPtr GetBasePointer(Expression::ExpressionPtr bufferExpr);
+        Expression::ExpressionPtr GetBasePointer(Expression::ExpressionPtr bufferExpr,
+                                                 ContextPtr                ctx);
         Expression::ExpressionPtr IncrementBasePointer(Expression::ExpressionPtr bufferExpr,
                                                        Expression::ExpressionPtr offsetExpr,
                                                        ContextPtr                ctx);

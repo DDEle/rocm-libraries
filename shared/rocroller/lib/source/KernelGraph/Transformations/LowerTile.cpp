@@ -1498,8 +1498,10 @@ namespace rocRoller
                                           GPUCapability::HasWiderDirectToLds);
 
             // Enable the use of longer word instructions if possible
-            if(params->enableLongDwordInstructions && (packed || packFactor <= 1)
-               && (!direct2LDS || useWiderDirect2LDS))
+            auto update = params->enableLongDwordInstructions;
+            update      = update && (packed || packFactor <= 1);
+            update      = update && (!direct2LDS || useWiderDirect2LDS);
+            if(update)
             {
                 auto maxWidth = std::min(context->kernelOptions()->storeGlobalWidth,
                                          context->kernelOptions()->loadLocalWidth);
@@ -1510,8 +1512,13 @@ namespace rocRoller
 
                 auto macTileFastMovingDimSize = !useSwappedAccess ? macTileM : macTileN;
 
-                updateThreadTileForLongDwords(
-                    thrTileM, thrTileN, maxWidth, macTileFastMovingDimSize, numDwordsPerElement);
+                auto avoidDWordX2 = direct2LDS;
+                updateThreadTileForLongDwords(thrTileM,
+                                              thrTileN,
+                                              maxWidth,
+                                              macTileFastMovingDimSize,
+                                              numDwordsPerElement,
+                                              avoidDWordX2);
             }
 
             if(!useSwappedAccess)

@@ -59,7 +59,7 @@ bool ConvAsm5x10u2v2b1::IsApplicable(const ExecutionContext& ctx,
         return false;
 
     const auto& target = ctx.GetStream().GetTargetProperties();
-    if(target.isXnackEnabled())
+    if(target.Xnack() && *target.Xnack())
         return false;
 
     const std::string name = ctx.GetStream().GetDeviceName();

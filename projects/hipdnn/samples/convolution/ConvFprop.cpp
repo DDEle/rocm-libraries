@@ -6,11 +6,11 @@
 #include <unordered_map>
 
 #include <hipdnn_frontend.hpp>
+#include <hipdnn_sdk/test_utilities/CpuFpReferenceConvolution.hpp>
+#include <hipdnn_sdk/test_utilities/CpuFpReferenceValidation.hpp>
+#include <hipdnn_sdk/test_utilities/TestTolerances.hpp>
 #include <hipdnn_sdk/utilities/Tensor.hpp>
 #include <hipdnn_sdk/utilities/Workspace.hpp>
-#include <hipdnn_test_sdk/utilities/CpuFpReferenceConvolution.hpp>
-#include <hipdnn_test_sdk/utilities/CpuFpReferenceValidation.hpp>
-#include <hipdnn_test_sdk/utilities/TestTolerances.hpp>
 
 #include "../utils/Helpers.hpp"
 
@@ -109,13 +109,12 @@ void SampleRunner::operator()(const TensorLayout& layout)
 
         utilities::Tensor<InputType> yRefTensor(yAttr->get_dim(), layout);
 
-        hipdnn_test_sdk::utilities::CpuFpReferenceConvolution::fprop(
+        test_utilities::CpuFpReferenceConvolution::fprop(
             xTensor, wTensor, yRefTensor, {u, v}, {dilH, dilW}, {padH, padW});
 
-        auto tolerance = hipdnn_test_sdk::utilities::conv::getToleranceFwd<InputType>();
+        auto tolerance = test_utilities::conv::getToleranceFwd<InputType>();
 
-        auto yValidator
-            = hipdnn_test_sdk::utilities::CpuFpReferenceValidation<InputType>(tolerance, tolerance);
+        auto yValidator = test_utilities::CpuFpReferenceValidation<InputType>(tolerance, tolerance);
 
         bool yValid = yValidator.allClose(yRefTensor, yTensor);
 

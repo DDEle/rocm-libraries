@@ -132,10 +132,10 @@ struct AnySolver
     std::string GenericSearch(const ExecutionContext& ctx,
                               const miopen::conv::ProblemDescription& problem,
                               const miopen::AnyInvokeParams& invoke_ctx,
-                              std::vector<miopen::solver::SolutionPerf>* perf_solsp = nullptr) const
+                              std::vector<miopen::solver::SolutionPerf>* perf_sols = nullptr) const
     {
         assert(ptr_value != nullptr);
-        return ptr_value->GenericSearch(ctx, problem, invoke_ctx, perf_solsp);
+        return ptr_value->GenericSearch(ctx, problem, invoke_ctx, perf_sols);
     }
 
     InvokerFactory GetInvokeFactory(const ExecutionContext& ctx,
@@ -213,7 +213,7 @@ struct AnySolver
         GenericSearch(const ExecutionContext& ctx,
                       const miopen::conv::ProblemDescription& problem,
                       const miopen::AnyInvokeParams& invoke_ctx,
-                      std::vector<miopen::solver::SolutionPerf>* perf_solsp) const             = 0;
+                      std::vector<miopen::solver::SolutionPerf>* perf_sols) const              = 0;
         virtual InvokerFactory GetInvokeFactory(const ExecutionContext& ctx,
                                                 const miopen::conv::ProblemDescription& problem,
                                                 const std::string& perf_cfg) const             = 0;
@@ -457,12 +457,11 @@ struct AnySolver
         std::string GenericSearch(const ExecutionContext& ctx,
                                   const miopen::conv::ProblemDescription& problem,
                                   const miopen::AnyInvokeParams& invoke_ctx,
-                                  std::vector<miopen::solver::SolutionPerf>* perf_solsp,
+                                  std::vector<miopen::solver::SolutionPerf>* perf_sols,
                                   std::true_type,
                                   std::false_type) const
         {
-            auto config =
-                miopen::solver::GenericSearch(value, ctx, problem, invoke_ctx, perf_solsp);
+            auto config = miopen::solver::GenericSearch(value, ctx, problem, invoke_ctx, perf_sols);
             return config.ToString();
         }
 
@@ -491,12 +490,12 @@ struct AnySolver
         GenericSearch(const ExecutionContext& ctx,
                       const miopen::conv::ProblemDescription& problem,
                       const miopen::AnyInvokeParams& invoke_ctx,
-                      std::vector<miopen::solver::SolutionPerf>* perf_solsp) const override
+                      std::vector<miopen::solver::SolutionPerf>* perf_sols) const override
         {
             return GenericSearch(ctx,
                                  problem,
                                  invoke_ctx,
-                                 perf_solsp,
+                                 perf_sols,
                                  std::integral_constant<bool, TunableSolver::Is>(),
                                  std::integral_constant<bool, LegacySolver::Is>());
         }

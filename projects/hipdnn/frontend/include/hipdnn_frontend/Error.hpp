@@ -119,16 +119,4 @@ typedef Error error_t; // NOLINT(readability-identifier-naming)
     {                                                    \
         return {error_status, message};                  \
     }
-
-#define HIPDNN_RETURN_IF_GE(x, y, error_status, message) \
-    if(x >= y)                                           \
-    {                                                    \
-        return {error_status, message};                  \
-    }
-
-#define HIPDNN_RETURN_IF_LE(x, y, error_status, message) \
-    if(x <= y)                                           \
-    {                                                    \
-        return {error_status, message};                  \
-    }
 }

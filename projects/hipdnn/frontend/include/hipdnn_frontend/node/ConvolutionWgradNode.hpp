@@ -146,18 +146,8 @@ public:
                 int64_t kernelDim = dwDims[spatialIdx];
 
                 int64_t kernelSize = (dilation[i] * (kernelDim - 1)) + 1;
-                auto numerator = xDim + prePadding[i] + postPadding[i] - kernelSize;
-
-                HIPDNN_RETURN_IF_LT(numerator,
-                                    0,
-                                    ErrorCode::INVALID_VALUE,
-                                    "ConvolutionWgradNode: Input spatial dimension at index "
-                                        + std::to_string(i) + " (" + std::to_string(xDim)
-                                        + ") is too small for the kernel size ("
-                                        + std::to_string(kernelDim) + ") and dilation ("
-                                        + std::to_string(dilation[i]) + ")");
-
-                int64_t expectedDyDim = (numerator / stride[i]) + 1;
+                int64_t expectedDyDim
+                    = ((xDim + prePadding[i] + postPadding[i] - kernelSize) / stride[i]) + 1;
 
                 // Verifying dy implicitly verifies dw and x
                 HIPDNN_RETURN_IF_NE(
@@ -326,20 +316,13 @@ public:
                     ErrorCode::INVALID_VALUE,
                     "ConvolutionWgradNode: Invalid spatial dimensions for kernel size inference");
 
-                // Calculate the remainder of pixels that are "dropped" at the end of the convolution
-                // We want to find the smallest remainder r such that (numerator - r) is divisible by dilation
-                // and r < stride.
-                // r = numerator % dilation satisfies the divisibility.
-                // We check if it satisfies the stride constraint.
-                auto remainder = numerator % dilationVal;
-
-                HIPDNN_RETURN_IF_GE(remainder,
-                                    strideVal,
+                HIPDNN_RETURN_IF_NE(numerator % dilationVal,
+                                    0,
                                     ErrorCode::INVALID_VALUE,
                                     "ConvolutionWgradNode: Spatial dimensions incompatible with "
-                                    "dilation and stride parameters for kernel size inference");
+                                    "dilation parameter");
 
-                dwDims[i] = ((numerator - remainder) / dilationVal) + 1;
+                dwDims[i] = (numerator / dilationVal) + 1;
             }
 
             dw->set_dim(dwDims);

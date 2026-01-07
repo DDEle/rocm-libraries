@@ -49,8 +49,8 @@ namespace rocRollerTest
         const size_t numFP4PerElement = 8;
 
         /*
-          * buffer_load into FP4x8 to GPU, buffer_store to CPU
-          */
+         * buffer_load into FP4x8 to GPU, buffer_store to CPU
+         */
         void genFP4x8BufferLoadAndStore(int num_fp4)
         {
             AssertFatal(num_fp4 % numFP4PerElement == 0,
@@ -88,29 +88,18 @@ namespace rocRollerTest
 
                 co_yield v_a->allocate();
 
-                Expression::ExpressionPtr bufferExpr = Expression::literal(Buffer{0, 0, 0, 0});
-                bufferExpr = BufferDescriptor::SetDefaults(bufferExpr, m_context);
-                bufferExpr
-                    = BufferDescriptor::SetBasePointer(bufferExpr, s_a->expression(), m_context);
-                bufferExpr
-                    = BufferDescriptor::SetSize(bufferExpr, Expression::literal(N), m_context);
-                bufferExpr = BufferDescriptor::SetOptions(bufferExpr,
-                                                          Expression::literal(131072)); //0x00020000
-
-                auto bufferRegs = Register::Value::Placeholder(
-                    m_context, Register::Type::Scalar, {DataType::None, PointerType::Buffer}, 1);
-                co_yield Expression::generate(bufferRegs, bufferExpr, m_context);
-                bufferExpr = bufferRegs->expression();
+                auto bufDesc = std::make_shared<rocRoller::BufferDescriptor>(m_context);
+                co_yield bufDesc->setup();
+                co_yield bufDesc->setBasePointer(s_a);
+                co_yield bufDesc->setSize(Register::Value::Literal(N));
+                co_yield bufDesc->setOptions(Register::Value::Literal(131072)); //0x00020000
 
                 auto bufInstOpts = rocRoller::BufferInstructionOptions();
 
-                co_yield m_context->mem()->loadBuffer(
-                    v_a, vgprSerial, 0, bufferRegs, bufInstOpts, N);
-                bufferExpr = BufferDescriptor::SetBasePointer(
-                    bufferExpr, s_result->expression(), m_context);
-                co_yield Expression::generate(bufferRegs, bufferExpr, m_context);
-                co_yield m_context->mem()->storeBuffer(
-                    v_a, vgprSerial, 0, bufferRegs, bufInstOpts, N);
+                co_yield m_context->mem()->loadBuffer(v_a, vgprSerial, 0, bufDesc, bufInstOpts, N);
+                co_yield bufDesc->setBasePointer(s_result);
+                co_yield bufDesc->setSize(Register::Value::Literal(N));
+                co_yield m_context->mem()->storeBuffer(v_a, vgprSerial, 0, bufDesc, bufInstOpts, N);
             };
 
             m_context->schedule(kb());
@@ -119,8 +108,8 @@ namespace rocRollerTest
         }
 
         /*
-          * global_load into FP4x8 to GPU, global_store to CPU
-          */
+         * global_load into FP4x8 to GPU, global_store to CPU
+         */
         void genFP4x8GlobalLoadAndStore(int num_fp4)
         {
             AssertFatal(num_fp4 % numFP4PerElement == 0,

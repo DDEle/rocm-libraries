@@ -31,7 +31,6 @@ using TGemmMulMulF8F8F16Instances =
                                                                      PassThrough,
                                                                      MultiplyMultiply>>>;
 
-#ifdef CK_USE_XDL
 void add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_f16_mk_mfma_mn_compute_default_instances_p1(
     TGemmMulMulF8F8F16Instances& instances);
 
@@ -87,21 +86,6 @@ void add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_f16_mk_mfma16
     TGemmMulMulF8F8F16Instances& instances);
 #endif
 
-#ifdef CK_USE_WMMA
-void add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_f16_mk_wmma_mn_default_instances_p1(
-    TGemmMulMulF8F8F16Instances& instances);
-
-void add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_f16_mk_wmma_mn_default_instances_p2(
-    TGemmMulMulF8F8F16Instances& instances);
-
-void add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_f16_mk_wmma_mn_default_instances_p3(
-    TGemmMulMulF8F8F16Instances& instances);
-
-void add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_f16_mk_wmma_mn_default_instances_p4(
-    TGemmMulMulF8F8F16Instances& instances);
-#endif
-#endif
-
 #if(defined(CK_ENABLE_BF16) || defined(CK_ENABLE_FP8))
 using TGemmMulMulF8F8BF16Instances =
     std::vector<std::unique_ptr<DeviceGemmMultipleDSplitKBPreShuffle<Row,
@@ -116,7 +100,6 @@ using TGemmMulMulF8F8BF16Instances =
                                                                      PassThrough,
                                                                      MultiplyMultiply>>>;
 
-#ifdef CK_USE_XDL
 void add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_bf16_mk_mfma_mn_compute_default_instances_p1(
     TGemmMulMulF8F8BF16Instances& instances);
 
@@ -170,21 +153,7 @@ void add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_bf16_mk_mfma1
 
 void add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_bf16_mk_mfma16x16_mn_compute_default_instances_p6(
     TGemmMulMulF8F8BF16Instances& instances);
-#endif
 
-#ifdef CK_USE_WMMA
-void add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_bf16_mk_wmma_mn_default_instances_p1(
-    TGemmMulMulF8F8BF16Instances& instances);
-
-void add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_bf16_mk_wmma_mn_default_instances_p2(
-    TGemmMulMulF8F8BF16Instances& instances);
-
-void add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_bf16_mk_wmma_mn_default_instances_p3(
-    TGemmMulMulF8F8BF16Instances& instances);
-
-void add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_bf16_mk_wmma_mn_default_instances_p4(
-    TGemmMulMulF8F8BF16Instances& instances);
-#endif
 #endif
 
 template <typename ADataType,
@@ -231,7 +200,6 @@ struct DeviceOperationInstanceFactory<
             if constexpr(is_same_v<ALayout, Row> && is_same_v<BLayout, Col> &&
                          is_same_v<CLayout, Row>)
             {
-#ifdef CK_USE_XDL
                 add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_f16_mk_mfma16x16_mn_compute_default_instances_p1(
                     op_ptrs);
                 add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_f16_mk_mfma16x16_mn_compute_default_instances_p2(
@@ -269,17 +237,6 @@ struct DeviceOperationInstanceFactory<
                     op_ptrs);
                 add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_f16_mk_mfma_mn_p5_default_instances_v2(
                     op_ptrs);
-#endif
-#ifdef CK_USE_WMMA
-                add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_f16_mk_wmma_mn_default_instances_p1(
-                    op_ptrs);
-                add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_f16_mk_wmma_mn_default_instances_p2(
-                    op_ptrs);
-                add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_f16_mk_wmma_mn_default_instances_p3(
-                    op_ptrs);
-                add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_f16_mk_wmma_mn_default_instances_p4(
-                    op_ptrs);
-#endif
             }
         }
 #endif
@@ -291,7 +248,6 @@ struct DeviceOperationInstanceFactory<
             if constexpr(is_same_v<ALayout, Row> && is_same_v<BLayout, Col> &&
                          is_same_v<CLayout, Row>)
             {
-#ifdef CK_USE_XDL
                 add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_bf16_mk_mfma16x16_mn_compute_default_instances_p1(
                     op_ptrs);
                 add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_bf16_mk_mfma16x16_mn_compute_default_instances_p2(
@@ -329,17 +285,6 @@ struct DeviceOperationInstanceFactory<
                     op_ptrs);
                 add_device_gemm_multiply_multiply_weight_preshuffle_xdl_f8_f8_bf16_mk_mfma_mn_p5_default_instances_v2(
                     op_ptrs);
-#endif
-#ifdef CK_USE_WMMA
-                add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_bf16_mk_wmma_mn_default_instances_p1(
-                    op_ptrs);
-                add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_bf16_mk_wmma_mn_default_instances_p2(
-                    op_ptrs);
-                add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_bf16_mk_wmma_mn_default_instances_p3(
-                    op_ptrs);
-                add_device_gemm_multiply_multiply_weight_preshuffle_wmma_f8_f8_bf16_mk_wmma_mn_default_instances_p4(
-                    op_ptrs);
-#endif
             }
         }
 #endif

@@ -45,6 +45,10 @@ namespace GEMMTests
     {
     };
 
+    class GEMMF8TestGPU : public BaseGEMMContextFixture<>
+    {
+    };
+
     // This test is to ensure each scheduler properly yields insts for a basic GEMM
     TEST_P(GEMMTestGPU, GPU_BasicGEMM_Schedulers)
     {
@@ -291,10 +295,10 @@ namespace GEMMTests
         gemm.workgroupSizeX = 1 * gemm.wavefrontSize;
         gemm.workgroupSizeY = 4;
 
-        gemm.loadPathA      = SolutionParams::LoadPath::BufferToLDSViaVGPR;
-        gemm.loadPathB      = SolutionParams::LoadPath::BufferToLDSViaVGPR;
-        gemm.loadScalePathA = SolutionParams::LoadPath::BufferToVGPR;
-        gemm.loadScalePathB = SolutionParams::LoadPath::BufferToVGPR;
+        gemm.loadPathA     = SolutionParams::LoadPath::BufferToLDSViaVGPR;
+        gemm.loadPathB     = SolutionParams::LoadPath::BufferToLDSViaVGPR;
+        gemm.loadLDSScaleA = false;
+        gemm.loadLDSScaleB = false;
 
         gemm.unrollK           = 2;
         gemm.prefetch          = true;
@@ -606,10 +610,10 @@ namespace GEMMTests
         gemm.workgroupSizeX = 1 * gemm.wavefrontSize;
         gemm.workgroupSizeY = 4;
 
-        gemm.loadPathA      = SolutionParams::LoadPath::BufferToVGPR;
-        gemm.loadPathB      = SolutionParams::LoadPath::BufferToVGPR;
-        gemm.loadScalePathA = SolutionParams::LoadPath::BufferToLDSViaVGPR;
-        gemm.loadScalePathB = SolutionParams::LoadPath::BufferToLDSViaVGPR;
+        gemm.loadPathA     = SolutionParams::LoadPath::BufferToVGPR;
+        gemm.loadPathB     = SolutionParams::LoadPath::BufferToVGPR;
+        gemm.loadLDSScaleA = true;
+        gemm.loadLDSScaleB = true;
 
         gemm.scaleAMode = Operations::ScaleMode::Separate;
         gemm.scaleBMode = Operations::ScaleMode::Separate;

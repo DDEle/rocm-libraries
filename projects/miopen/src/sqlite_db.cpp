@@ -36,6 +36,8 @@
 #include <miopen_data.hpp>
 #endif
 #include <boost/date_time/posix_time/posix_time_types.hpp>
+#include <boost/none.hpp>
+#include <boost/optional.hpp>
 
 #include <memory>
 #include <algorithm>

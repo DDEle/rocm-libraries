@@ -22,7 +22,6 @@
 #define EXAMPLEKERNELS_H
 
 #include "../../../shared/data_gen_device.h"
-#include "../../../shared/device_properties.h"
 #include <hip/hip_complex.h>
 #include <hip/hip_runtime.h>
 #include <iostream>
@@ -199,7 +198,7 @@ void initcomplex_cm(const std::vector<size_t>& length_cm,
 // stride.  The device buffer is assumed to have been allocated.
 void initreal_cm(const std::vector<size_t>& length_cm,
                  const std::vector<size_t>& stride_cm,
-                 double*                    gpu_in)
+                 void*                      gpu_in)
 {
     size_t     blockSize = DATA_GEN_THREADS;
     const dim3 blockdim(blockSize);
@@ -209,7 +208,8 @@ void initreal_cm(const std::vector<size_t>& length_cm,
     case 1:
     {
         const dim3 griddim(ceildiv(length_cm[0], blockdim.x));
-        hipLaunchKernelGGL(initrdata1, griddim, blockdim, 0, 0, gpu_in, length_cm[0], stride_cm[0]);
+        hipLaunchKernelGGL(
+            initrdata1, griddim, blockdim, 0, 0, (double*)gpu_in, length_cm[0], stride_cm[0]);
         break;
     }
     case 2:
@@ -220,7 +220,7 @@ void initreal_cm(const std::vector<size_t>& length_cm,
                            blockdim,
                            0,
                            0,
-                           gpu_in,
+                           (double*)gpu_in,
                            length_cm[0],
                            length_cm[1],
                            stride_cm[0],
@@ -237,7 +237,7 @@ void initreal_cm(const std::vector<size_t>& length_cm,
                            blockdim,
                            0,
                            0,
-                           gpu_in,
+                           (double*)gpu_in,
                            length_cm[0],
                            length_cm[1],
                            length_cm[2],
@@ -262,16 +262,93 @@ void initreal_cm(const std::vector<size_t>& length_cm,
 void impose_hermitian_symmetry_cm(const std::vector<size_t>& length,
                                   const std::vector<size_t>& ilength,
                                   const std::vector<size_t>& stride,
-                                  hipDoubleComplex*          gpu_in)
+                                  void*                      gpu_in)
 {
-    auto deviceProp = get_curr_device_prop();
+    size_t batch     = 1;
+    size_t dist      = 1;
+    size_t blockSize = DATA_GEN_THREADS;
+    auto   inputDim  = length.size();
 
-    // convert to row-major
-    std::vector<size_t> length_rm(length.rbegin(), length.rend());
-    std::vector<size_t> ilength_rm(ilength.rbegin(), ilength.rend());
-    std::vector<size_t> stride_rm(stride.rbegin(), stride.rend());
-    impose_hermitian_symmetry_interleaved(
-        length_rm, ilength_rm, stride_rm, 0, 1, gpu_in, deviceProp);
+    // Launch impose_hermitian_symmetry kernels.
+    // NOTE: input parameters must be in row-major
+    //       ordering for these kernels.
+    switch(inputDim)
+    {
+    case 1:
+    {
+        const auto gridDim  = dim3(DivRoundingUp<size_t>(batch, blockSize));
+        const auto blockDim = dim3(blockSize);
+        hipLaunchKernelGGL(impose_hermitian_symmetry_interleaved_1D_kernel<hipDoubleComplex>,
+                           gridDim,
+                           blockDim,
+                           0,
+                           0,
+                           (hipDoubleComplex*)gpu_in,
+                           length[0],
+                           stride[0],
+                           dist,
+                           batch,
+                           length[0] % 2 == 0);
+        break;
+    }
+    case 2:
+    {
+        const auto gridDim  = dim3(DivRoundingUp<size_t>(batch, blockSize),
+                                  DivRoundingUp<size_t>((length[1] + 1) / 2 - 1, blockSize));
+        const auto blockDim = dim3(blockSize, blockSize);
+        hipLaunchKernelGGL(impose_hermitian_symmetry_interleaved_2D_kernel<hipDoubleComplex>,
+                           gridDim,
+                           blockDim,
+                           0,
+                           0,
+                           (hipDoubleComplex*)gpu_in,
+                           length[1],
+                           length[0],
+                           stride[1],
+                           stride[0],
+                           dist,
+                           batch,
+                           (ilength[1] + 1) / 2 - 1,
+                           length[1] % 2 == 0,
+                           length[0] % 2 == 0);
+        break;
+    }
+    case 3:
+    {
+        const auto gridDim  = dim3(DivRoundingUp<size_t>(batch, blockSize),
+                                  DivRoundingUp<size_t>((length[2] + 1) / 2 - 1, blockSize),
+                                  DivRoundingUp<size_t>(length[1] - 1, blockSize));
+        const auto blockDim = dim3(blockSize, blockSize, blockSize);
+        hipLaunchKernelGGL(impose_hermitian_symmetry_interleaved_3D_kernel<hipDoubleComplex>,
+                           gridDim,
+                           blockDim,
+                           0,
+                           0,
+                           (hipDoubleComplex*)gpu_in,
+                           length[2],
+                           length[1],
+                           length[0],
+                           stride[2],
+                           stride[1],
+                           stride[0],
+                           dist,
+                           batch,
+                           (ilength[2] + 1) / 2 - 1,
+                           ilength[1] - 1,
+                           (ilength[1] + 1) / 2 - 1,
+                           length[2] % 2 == 0,
+                           length[1] % 2 == 0,
+                           length[0] % 2 == 0);
+        break;
+    }
+    default:
+        throw std::runtime_error("Invalid dimension");
+    }
+
+    auto err = hipGetLastError();
+    if(err != hipSuccess)
+        throw std::runtime_error("impose_hermitian_symmetry_interleaved kernel launch failure: "
+                                 + std::string(hipGetErrorName(err)));
 }
 
 // Initialize the Hermitian complex input buffer where the data has lengths given in length, the
@@ -280,7 +357,7 @@ void impose_hermitian_symmetry_cm(const std::vector<size_t>& length,
 void init_hermitiancomplex_cm(const std::vector<size_t>& length,
                               const std::vector<size_t>& ilength,
                               const std::vector<size_t>& stride,
-                              hipDoubleComplex*          gpu_in)
+                              void*                      gpu_in)
 {
     size_t     blockSize = 256;
     const dim3 blockdim(blockSize);
@@ -290,7 +367,8 @@ void init_hermitiancomplex_cm(const std::vector<size_t>& length,
     case 1:
     {
         const dim3 griddim(ceildiv(ilength[0], blockSize));
-        hipLaunchKernelGGL(initcdata1, griddim, blockdim, 0, 0, gpu_in, ilength[0], stride[0]);
+        hipLaunchKernelGGL(
+            initcdata1, griddim, blockdim, 0, 0, (hipDoubleComplex*)gpu_in, ilength[0], stride[0]);
         break;
     }
     case 2:
@@ -301,7 +379,7 @@ void init_hermitiancomplex_cm(const std::vector<size_t>& length,
                            blockdim,
                            0,
                            0,
-                           gpu_in,
+                           (hipDoubleComplex*)gpu_in,
                            ilength[0],
                            ilength[1],
                            stride[0],
@@ -318,7 +396,7 @@ void init_hermitiancomplex_cm(const std::vector<size_t>& length,
                            blockdim,
                            0,
                            0,
-                           gpu_in,
+                           (hipDoubleComplex*)gpu_in,
                            ilength[0],
                            ilength[1],
                            ilength[2],

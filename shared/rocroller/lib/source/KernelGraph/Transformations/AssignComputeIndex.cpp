@@ -46,13 +46,14 @@ namespace rocRoller
             return Expression::literal(x);
         }
 
-        std::pair<uint, uint>
+        static std::pair<uint, uint>
             getElementBlockValues(KernelGraph const& graph, int target, const bool isTransposed)
         {
             namespace CT            = rocRoller::KernelGraph::CoordinateGraph;
             uint elementBlockNumber = 0;
             uint elementBlockIndex  = 0;
 
+            std::unordered_set<int> tileTags;
             using OpsAndTilesType
                 = std::tuple<std::pair<int, Operation>, std::pair<int, MacroTile>, DataType>;
             std::vector<OpsAndTilesType> targetOpsAndTiles;
@@ -92,36 +93,11 @@ namespace rocRoller
                         macTile    = *graph.coordinates.get<MacroTile>(macTileTag);
                     }
 
-                    targetOpsAndTiles.push_back({{opTag, op}, {macTileTag, macTile}, dataType});
-                }
-            }
-
-            // If we get here and targetOpsAndTiles is empty, it is
-            // because: we are using Direct2LDS to load scaling data
-            // that will be swizzled (or is already pre-swizzled): no
-            // remaining operations are directly connected to the LDS
-            // target.
-            //
-            // Most of this code should be moved to AddComputeIndex;
-            // and we should make it easier to get at the
-            // blocknumbers.
-            if(targetOpsAndTiles.empty())
-            {
-                // Just look upstream of target
-                auto [required, path]
-                    = findRequiredCoordinates(target, Graph::Direction::Upstream, graph);
-                for(auto coordTag : required)
-                {
-                    auto maybeElementNumber = graph.coordinates.get<ElementNumber>(coordTag);
-                    if(maybeElementNumber)
+                    if(!tileTags.count(macTileTag))
                     {
-                        if(maybeElementNumber->dim == 0)
-                            elementBlockNumber = getUnsignedInt(evaluate(maybeElementNumber->size));
-                        else if(maybeElementNumber->dim == 1)
-                            elementBlockIndex = getUnsignedInt(evaluate(maybeElementNumber->size));
+                        targetOpsAndTiles.push_back({{opTag, op}, {macTileTag, macTile}, dataType});
                     }
                 }
-                return {elementBlockNumber, elementBlockIndex};
             }
 
             auto [tagAndOp, tagAndTile, dataType] = [](auto opsAndTiles) -> OpsAndTilesType {
@@ -135,7 +111,6 @@ namespace rocRoller
                 }
                 return opsAndTiles[0];
             }(targetOpsAndTiles);
-
             auto [opTag, op]           = tagAndOp;
             auto [macTileTag, macTile] = tagAndTile;
 

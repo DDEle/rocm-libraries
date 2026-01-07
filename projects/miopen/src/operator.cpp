@@ -23,9 +23,7 @@
  * SOFTWARE.
  *
  *******************************************************************************/
-#include <any>
 #include <cassert>
-
 #include <miopen/fusion.hpp>
 #include <miopen/logger.hpp>
 
@@ -44,25 +42,25 @@ std::ostream& operator<<(std::ostream& stream, const FusionOpDescriptor& x)
     return stream;
 }
 
-std::ostream& operator<<(std::ostream& stream, const std::any& a)
+std::ostream& operator<<(std::ostream& stream, const boost::any& a)
 {
     // NOLINTBEGIN(*-braces-around-statements)
     if(a.type() == typeid(std::string))
-        stream << std::any_cast<std::string>(a);
+        stream << boost::any_cast<std::string>(a);
     else if(a.type() == typeid(int))
-        stream << std::any_cast<int>(a);
+        stream << boost::any_cast<int>(a);
     else if(a.type() == typeid(miopenConvolutionMode_t))
-        stream << std::any_cast<miopenConvolutionMode_t>(a);
+        stream << boost::any_cast<miopenConvolutionMode_t>(a);
     else if(a.type() == typeid(miopenPaddingMode_t))
-        stream << std::any_cast<miopenPaddingMode_t>(a);
+        stream << boost::any_cast<miopenPaddingMode_t>(a);
     else if(a.type() == typeid(size_t))
-        stream << std::any_cast<size_t>(a);
+        stream << boost::any_cast<size_t>(a);
     else if(a.type() == typeid(miopenBatchNormMode_t))
-        stream << std::any_cast<miopenBatchNormMode_t>(a);
+        stream << boost::any_cast<miopenBatchNormMode_t>(a);
     else if(a.type() == typeid(miopenActivationMode_t))
-        stream << std::any_cast<miopenActivationMode_t>(a);
+        stream << boost::any_cast<miopenActivationMode_t>(a);
     else if(a.type() == typeid(miopenDataType_t))
-        stream << std::any_cast<miopenDataType_t>(a);
+        stream << boost::any_cast<miopenDataType_t>(a);
     else
         stream << "Unsupported any type: " << a.type().name();
     // NOLINTEND(*-braces-around-statements)

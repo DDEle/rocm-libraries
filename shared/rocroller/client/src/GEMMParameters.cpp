@@ -28,8 +28,6 @@
 
 #include "client/GEMMParameters.hpp"
 
-#include <functional>
-
 namespace rocRoller
 {
     namespace Client
@@ -40,11 +38,7 @@ namespace rocRoller
             {
                 std::ostringstream rv;
 
-                // TODO: Use abbreviated type names.  Currently the
-                // types are strings.  If we change them to DataType
-                // we can use shorter names.
-
-                rv << toString(transA) << toString(transB);
+                rv << "GEMM_" << toString(transA) << toString(transB);
 
                 if(scaleA != rocRoller::Operations::ScaleMode::None)
                 {
@@ -75,86 +69,73 @@ namespace rocRoller
 
                 if(scaleSkipPermlane)
                 {
-                    rv << "_PreSW";
+                    rv << "_PreSW_AB";
                 }
 
                 return rv.str();
             }
 
-            KernelNames SolutionParameters::generateKernelName() const
+            std::string SolutionParameters::generateKernelName() const
             {
-                auto constexpr maxLength = 196;
+                std::ostringstream rv;
+                rv << types.kernelNamePart();
 
-                std::ostringstream fullName;
+                rv << "_MT";
+                rocRoller::streamJoin(rv, std::vector{macM, macN, macK}, "x");
 
-                fullName << "RRGEMM_";
-                fullName << types.kernelNamePart();
-                fullName << "_WGTS";
-                rocRoller::streamJoin(fullName, std::vector{macM, macN, macK}, "x");
-                fullName << "_WGS";
-                rocRoller::streamJoin(fullName, std::vector{workgroupSizeX, workgroupSizeY}, "x");
+                rv << "_WG";
+                rocRoller::streamJoin(rv, std::vector{workgroupSizeX, workgroupSizeY}, "x");
 
                 if(workgroupMappingDim != -1)
                 {
-                    fullName << "_WGM" << workgroupMappingDim;
+                    rv << "_WGM" << workgroupMappingDim;
                 }
 
-                fullName << "_WGMXCC";
-                rocRoller::streamJoin(fullName, std::vector{workgroupRemapXCC}, "");
+                rv << "_WGMXCC";
+                rocRoller::streamJoin(rv, std::vector{workgroupRemapXCC}, "");
                 if(workgroupRemapXCC && workgroupRemapXCCValue > 0)
                 {
-                    rocRoller::streamJoin(fullName, std::vector{workgroupRemapXCCValue}, "");
+                    rocRoller::streamJoin(rv, std::vector{workgroupRemapXCCValue}, "");
                 }
 
-                fullName << "_LA" << loadPathA;
-                fullName << "_LB" << loadPathB;
+                rv << "_LA" << loadPathA;
+                rv << "_LB" << loadPathB;
 
-                fullName << "_SD" << storeLDSD;
+                rv << "_SD" << storeLDSD;
 
-                fullName << "_LSA" << loadPathAScale;
-                fullName << "_LSB" << loadPathBScale;
+                rv << "_SLDS";
+                rocRoller::streamJoin(rv, std::vector{loadLDSScaleA, loadLDSScaleB}, "");
 
-                fullName << "_UNROLL";
-                rocRoller::streamJoin(fullName, std::vector{unrollX, unrollY}, "x");
+                rv << "_UNROLL";
+                rocRoller::streamJoin(rv, std::vector{unrollX, unrollY}, "x");
 
-                fullName << "_SwizzleScale" << swizzleScale << prefetchScale;
-                fullName << "_SwizzleTileSize" << swizzleTileSize;
+                rv << "_SwizzleScale" << swizzleScale << prefetchScale;
+                rv << "_SwizzleTileSize" << swizzleTileSize;
 
                 if(prefetch)
                 {
-                    fullName << "_PF";
+                    rv << "_PF";
                     rocRoller::streamJoin(
-                        fullName, std::vector{prefetchInFlight, prefetchLDSFactor}, "x");
-                    fullName << "m" << prefetchMixMemOps;
+                        rv, std::vector{prefetchInFlight, prefetchLDSFactor}, "x");
+                    rv << "m" << prefetchMixMemOps;
                 }
 
-                fullName << "_MI";
+                rv << "_MI";
                 rocRoller::streamJoin(
-                    fullName, std::vector{waveM, waveN, waveK, (waveB < 0 ? -waveB : waveB)}, "x");
+                    rv, std::vector{waveM, waveN, waveK, (waveB < 0 ? -waveB : waveB)}, "x");
 
-                fullName << "_" << scheduler;
+                rv << "_" << scheduler;
 
                 if(streamK)
                 {
-                    fullName << "_SK";
+                    rv << "_SK";
                     if(streamKTwoTileDPFirst)
-                        fullName << "2TDPFirst";
+                        rv << "2TDPFirst";
                     else if(streamKTwoTile)
-                        fullName << "2T";
+                        rv << "2T";
                 }
 
-                auto fullNameStr  = fullName.str();
-                auto shortNameStr = fullNameStr;
-
-                // Truncate and append hash if necessary
-                if(shortNameStr.length() > maxLength)
-                {
-                    auto hashedValue = std::hash<std::string>{}(fullNameStr);
-                    shortNameStr     = fmt::format(
-                        "{}_{:08x}", shortNameStr.substr(0, maxLength - 9), hashedValue);
-                }
-
-                return KernelNames{fullNameStr, shortNameStr};
+                return rv.str();
             }
 
             std::string toString(TransposeType trans)
@@ -259,8 +240,7 @@ namespace rocRoller
                 s << "Load A:          " << x.loadPathA << std::endl;
                 s << "Load B:          " << x.loadPathB << std::endl;
                 s << "Store D LDS:     " << x.storeLDSD << std::endl;
-                s << "Load AScale:     " << x.loadPathAScale << std::endl;
-                s << "Load BScale:     " << x.loadPathBScale << std::endl;
+                s << "LSDScale:        " << x.loadLDSScaleA << x.loadLDSScaleB << std::endl;
                 s << "Prefetch:        "
                   << "enabled:" << x.prefetch << " inflight:" << x.prefetchInFlight
                   << " LDS:" << x.prefetchLDSFactor << " mixMemOps: " << x.prefetchMixMemOps

@@ -48,7 +48,7 @@ CK_TILE_DEVICE void load_int4_tile(WarpTile& dst, const WarpWindow& src)
     }
     else
     {
-        load_tile(dst, src);
+        dst = load_tile(src);
     }
 }
 

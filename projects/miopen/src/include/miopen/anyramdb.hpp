@@ -29,10 +29,11 @@
 #include <miopen/db_record.hpp>
 #include <miopen/lock_file.hpp>
 
-#include <any>
+#include <boost/optional.hpp>
+#include <boost/any.hpp>
+
 #include <chrono>
 #include <map>
-#include <optional>
 #include <string>
 #include <sstream>
 
@@ -42,7 +43,7 @@ class LockFile;
 
 struct MIOPEN_INTERNALS_EXPORT AnyRamDb
 {
-    using TRecord = std::vector<std::any>;
+    using TRecord = std::vector<boost::any>;
 
 public:
     AnyRamDb(const fs::path& filename_)
@@ -55,12 +56,12 @@ public:
 
     static AnyRamDb& GetCached(const fs::path& path);
 
-    std::optional<AnyRamDb::TRecord> FindRecord(const std::string& problem);
+    boost::optional<AnyRamDb::TRecord> FindRecord(const std::string& problem);
     bool RemoveRecord(const std::string& key);
     bool StoreRecord(const std::string& problem, TRecord& record);
 
     template <class TProblem>
-    std::optional<TRecord> FindRecord(const TProblem& problem)
+    boost::optional<TRecord> FindRecord(const TProblem& problem)
     {
         std::stringstream ss;
         problem.Serialize(ss);
@@ -86,10 +87,10 @@ public:
     }
 
 private:
-    std::map<std::string, std::vector<std::any>> cache;
+    std::map<std::string, std::vector<boost::any>> cache;
     fs::path filename;
     LockFile& lock_file;
-    std::optional<TRecord> FindRecordUnsafe(const std::string& problem);
+    boost::optional<TRecord> FindRecordUnsafe(const std::string& problem);
     void UpdateCacheEntryUnsafe(const std::string& key, const TRecord& value);
 };
 

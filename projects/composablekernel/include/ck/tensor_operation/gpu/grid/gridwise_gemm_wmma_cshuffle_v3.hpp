@@ -176,7 +176,6 @@ template <typename ALayout,
           typename ComputeTypeB,
           bool PermuteA,
           bool PermuteB,
-          bool IsBPreShuffled          = false,
           bool ForceThreadTileTransfer = false>
 struct GridwiseGemm_wmma_cshuffle_v3
     : GridwiseGemm_wmma_cshuffle_v3_base<
@@ -230,7 +229,6 @@ struct GridwiseGemm_wmma_cshuffle_v3
           ComputeTypeB,
           PermuteA,
           PermuteB,
-          IsBPreShuffled,
           ForceThreadTileTransfer>
 {
     using Base = GridwiseGemm_wmma_cshuffle_v3_base<
@@ -284,7 +282,6 @@ struct GridwiseGemm_wmma_cshuffle_v3
         ComputeTypeB,
         PermuteA,
         PermuteB,
-        IsBPreShuffled,
         ForceThreadTileTransfer>;
 
     using Base::I0;
@@ -356,8 +353,7 @@ struct GridwiseGemm_wmma_cshuffle_v3
               AK0{CalculateAK0Padded(K_, KBatch_)},
               BK0{CalculateBK0Padded(K_, KBatch_)},
               MBlock{CalculateMBlock(M_)},
-              NBlock{CalculateNBlock(N_)},
-              Kt{K_}
+              NBlock{CalculateNBlock(N_)}
         {
         }
 
@@ -403,7 +399,6 @@ struct GridwiseGemm_wmma_cshuffle_v3
         index_t BK0;
         index_t MBlock;
         index_t NBlock;
-        index_t Kt;
     };
 
     // Argument
@@ -504,31 +499,23 @@ struct GridwiseGemm_wmma_cshuffle_v3
                     [&](auto i) { a_k_split_offset[i] = k_id * karg.KRead * karg.StrideAs[i]; });
             }
 
-            if constexpr(IsBPreShuffled)
+            if constexpr(is_same_v<tensor_layout::gemm::RowMajor, BLayout>)
             {
-                static_for<0, NumBTensor, 1>{}([&](auto i) { b_k_split_offset[i] = 0; });
+                static_for<0, NumBTensor, 1>{}(
+                    [&](auto i) { b_k_split_offset[i] = k_id * karg.KRead * karg.StrideBs[i]; });
             }
-            else
+            else if constexpr(is_same_v<tensor_layout::gemm::ColumnMajor, BLayout>)
             {
-                if constexpr(is_same_v<tensor_layout::gemm::RowMajor, BLayout>)
+                if constexpr(!PermuteB)
                 {
-                    static_for<0, NumBTensor, 1>{}([&](auto i) {
-                        b_k_split_offset[i] = k_id * karg.KRead * karg.StrideBs[i];
-                    });
+                    static_for<0, NumBTensor, 1>{}(
+                        [&](auto i) { b_k_split_offset[i] = k_id * karg.KRead / BPackedSize; });
                 }
-                else if constexpr(is_same_v<tensor_layout::gemm::ColumnMajor, BLayout>)
+                else
                 {
-                    if constexpr(!PermuteB)
-                    {
-                        static_for<0, NumBTensor, 1>{}(
-                            [&](auto i) { b_k_split_offset[i] = k_id * karg.KRead / BPackedSize; });
-                    }
-                    else
-                    {
-                        const int k0_offset = karg.KRead * karg.N;
-                        static_for<0, NumBTensor, 1>{}(
-                            [&](auto i) { b_k_split_offset[i] = k_id * k0_offset / BPackedSize; });
-                    }
+                    const int k0_offset = karg.KRead * karg.N;
+                    static_for<0, NumBTensor, 1>{}(
+                        [&](auto i) { b_k_split_offset[i] = k_id * k0_offset / BPackedSize; });
                 }
             }
 
@@ -582,14 +569,12 @@ struct GridwiseGemm_wmma_cshuffle_v3
                                AElementwiseOperation a_element_op,
                                BElementwiseOperation b_element_op,
                                CDEElementwiseOperation cde_element_op,
-                               EpilogueArgument& epilogue_args,
-                               const index_t k_id = 0)
+                               EpilogueArgument& epilogue_args)
     {
         const auto as_grid_desc_ak0_m_ak1 = MakeAsGridDescriptor_AK0_M_AK1(
             problem.M, problem.MPadded, problem.K, problem.KPadded, problem.StrideAs, problem.AK0);
-        const index_t K_b                 = IsBPreShuffled ? problem.Kt : problem.K;
         const auto bs_grid_desc_bk0_n_bk1 = MakeBsGridDescriptor_BK0_N_BK1(
-            K_b, problem.KPadded, problem.N, problem.NPadded, problem.StrideBs, problem.BK0);
+            problem.K, problem.KPadded, problem.N, problem.NPadded, problem.StrideBs, problem.BK0);
         const auto ds_grid_desc_m_n = MakeDsGridDescriptor_M_N(
             problem.M, problem.MPadded, problem.N, problem.NPadded, problem.StrideDs);
         const auto e_grid_desc_m_n = Base::template MakeDEGridDescriptor_M_N<ELayout>(
@@ -647,8 +632,7 @@ struct GridwiseGemm_wmma_cshuffle_v3
                                     block_n_id,
                                     num_k_block_per_scale,
                                     b_scale_struct,
-                                    epilogue_args,
-                                    k_id);
+                                    epilogue_args);
     }
 
     template <bool HasMainKBlockLoop,
@@ -696,8 +680,7 @@ struct GridwiseGemm_wmma_cshuffle_v3
                                const SplitKBatchOffset& splitk_batch_offset,
                                Argument& karg,
                                const Block2CTileMap& block_2_ctile_map,
-                               EpilogueArgument& epilogue_args,
-                               const index_t k_id = 0)
+                               EpilogueArgument& epilogue_args)
     {
         // shift A matrices pointer for splitk
         AsGridPointer p_as_grid_splitk;
@@ -731,8 +714,7 @@ struct GridwiseGemm_wmma_cshuffle_v3
                                  karg.a_element_op,
                                  karg.b_element_op,
                                  karg.cde_element_op,
-                                 epilogue_args,
-                                 k_id);
+                                 epilogue_args);
     }
 
     // Wrapper function to have __global__ function in common
@@ -744,15 +726,14 @@ struct GridwiseGemm_wmma_cshuffle_v3
     __device__ static void Run(void* p_shared,
                                const SplitKBatchOffset& splitk_batch_offset,
                                Argument& karg,
-                               EpilogueArgument& epilogue_args,
-                               const index_t k_id = 0)
+                               EpilogueArgument& epilogue_args)
     {
         Run<HasMainKBlockLoop,
             EGlobalMemoryDataOperation,
             TailNum,
             Block2CTileMap,
             EpilogueArgument>(
-            p_shared, splitk_batch_offset, karg, DefaultBlock2CTileMap(karg), epilogue_args, k_id);
+            p_shared, splitk_batch_offset, karg, DefaultBlock2CTileMap(karg), epilogue_args);
     }
 
     __device__ static auto DefaultBlock2CTileMap(const Problem& problem)

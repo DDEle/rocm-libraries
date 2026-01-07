@@ -343,9 +343,8 @@ bool ConvAsmImplicitGemmV4R1DynamicWrw::IsApplicable(const ExecutionContext& ctx
         return false;
 
     const auto& target = ctx.GetStream().GetTargetProperties();
-    if(target.isXnackEnabled())
+    if(target.Xnack() && *target.Xnack())
         return false;
-
     std::string kernel_name;
     int block_size;
     int grid_size;

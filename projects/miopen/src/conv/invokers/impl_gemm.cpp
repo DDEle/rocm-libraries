@@ -8,6 +8,8 @@
 #include <miopen/handle.hpp>
 #include <miopen/tensor_ops.hpp>
 
+#include <boost/any.hpp>
+
 namespace miopen {
 namespace conv {
 

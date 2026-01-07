@@ -574,14 +574,11 @@ namespace GEMMTests
                             fmt::format("waveK: {} must be a multiple of the scale block size: {}",
                                         gemm.waveK,
                                         gemm.scaleBlockSize));
-                AssertFatal(gemm.loadScalePathA != SolutionParams::LoadPath::BufferToLDS
-                                || gemm.swizzleScale,
-                            "If loadScalePathA is BufferToLDS, swizzleScale must be enabled");
                 auto macTileAScale = KernelGraph::CoordinateGraph::MacroTile(
                     {gemm.macM, gemm.macK / gemm.scaleBlockSize},
                     LayoutType::MATRIX_A,
                     {gemm.waveM, gemm.waveN, gemm.waveK / gemm.scaleBlockSize, gemm.waveB},
-                    GetMemoryType(gemm.loadScalePathA),
+                    gemm.loadLDSScaleA ? MemoryType::LDS : MemoryType::WAVE,
                     {gemm.waveM, gemm.waveN, gemm.waveK / gemm.scaleBlockSize, gemm.waveB},
                     {gemm.swizzleM, gemm.swizzleN, gemm.swizzleK, gemm.swizzleB});
                 params->setDimensionInfo(*tagLoadScaleA, macTileAScale);
@@ -602,14 +599,11 @@ namespace GEMMTests
                             fmt::format("waveK: {} must be a multiple of the scale block size: {}",
                                         gemm.waveK,
                                         gemm.scaleBlockSize));
-                AssertFatal(gemm.loadScalePathB != SolutionParams::LoadPath::BufferToLDS
-                                || gemm.swizzleScale,
-                            "If loadScalePathB is BufferToLDS, swizzleScale must be enabled");
                 auto macTileBScale = KernelGraph::CoordinateGraph::MacroTile(
                     {gemm.macK / gemm.scaleBlockSize, gemm.macN},
                     LayoutType::MATRIX_B,
                     {gemm.waveM, gemm.waveN, gemm.waveK / gemm.scaleBlockSize, gemm.waveB},
-                    GetMemoryType(gemm.loadScalePathB),
+                    gemm.loadLDSScaleB ? MemoryType::LDS : MemoryType::WAVE,
                     {gemm.waveM, gemm.waveN, gemm.waveK / gemm.scaleBlockSize, gemm.waveB},
                     {gemm.swizzleM, gemm.swizzleN, gemm.swizzleK, gemm.swizzleB});
                 params->setDimensionInfo(*tagLoadScaleB, macTileBScale);

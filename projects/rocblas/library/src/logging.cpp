@@ -41,9 +41,8 @@ std::string
     T host;
     if(value && handle->pointer_mode == rocblas_pointer_mode_device)
     {
-        THROW_IF_HIP_ERROR(hipMemcpyAsync(
-            &host, value, sizeof(host), hipMemcpyDeviceToHost, handle->get_stream()));
-        THROW_IF_HIP_ERROR(hipStreamSynchronize(handle->get_stream()));
+        hipMemcpyAsync(&host, value, sizeof(host), hipMemcpyDeviceToHost, handle->get_stream());
+        hipStreamSynchronize(handle->get_stream());
         value = &host;
     }
     return rocblas_internal_log_bench_scalar_value(name, value);
@@ -101,9 +100,8 @@ std::string rocblas_internal_log_trace_scalar_value(rocblas_handle handle, const
     T host;
     if(value && handle->pointer_mode == rocblas_pointer_mode_device)
     {
-        THROW_IF_HIP_ERROR(hipMemcpyAsync(
-            &host, value, sizeof(host), hipMemcpyDeviceToHost, handle->get_stream()));
-        THROW_IF_HIP_ERROR(hipStreamSynchronize(handle->get_stream()));
+        hipMemcpyAsync(&host, value, sizeof(host), hipMemcpyDeviceToHost, handle->get_stream());
+        hipStreamSynchronize(handle->get_stream());
         value = &host;
     }
     os << rocblas_internal_log_trace_scalar_value(value);

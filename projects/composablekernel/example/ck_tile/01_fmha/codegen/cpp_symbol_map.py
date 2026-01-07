@@ -30,22 +30,14 @@ _MASK_MAP = {
 }
 
 
-def get_mask_map(mask_impl: str):
-    if mask_impl == "generic":
+def get_mask_map(mask: str):
+    if mask == "generic":
         return _MASK_MAP
-    elif mask_impl == "simplified":
+    elif mask == "simplified":
         return _MASK_SIMPLIFIED_MAP
     else:
         assert False
         return None
-
-
-def get_mask_impl(mask: str) -> str:
-    return "simplified" if mask.startswith("s_") else "generic"
-
-
-def get_mask_cpp_type(mask: str) -> str:
-    return get_mask_map(get_mask_impl(mask))[mask]
 
 
 _MASK_CHECK_MAP = {
@@ -68,10 +60,6 @@ def get_mask_check_map(mask: str):
     else:
         assert False
         return None
-
-
-def get_mask_cpp_check_expr(mask: str) -> str:
-    return get_mask_check_map(get_mask_impl(mask))[mask]
 
 
 QSCALE_MAP = {
@@ -134,7 +122,6 @@ PIPELINE_MAP = {
     "qr_async": "ck_tile::BlockFmhaPipelineQRKSVSAsync",
     "qs": "ck_tile::BlockFmhaPipelineQSKSVS",
     "qr_async_trload": "ck_tile::BlockFmhaPipelineQRKSVSAsyncTrload",
-    "qr_async_trload_v3": "ck_tile::BlockFmhaFwdV3Pipeline",
 }
 
 PIPELINE_ENUM_MAP = {
@@ -144,7 +131,6 @@ PIPELINE_ENUM_MAP = {
     "qs": "ck_tile::BlockFmhaPipelineEnum::QSKSVS",
     "qr_pagedkv": "ck_tile::BlockFmhaPipelineEnum::QRKSVS",
     "qr_async_trload": "ck_tile::BlockFmhaPipelineEnum::QRKSVS_ASYNC_TRLOAD",
-    "qr_async_trload_v3": "ck_tile::BlockFmhaPipelineEnum::QRKSVS_ASYNC_TRLOAD_V3",
 }
 
 BOOL_MAP = {

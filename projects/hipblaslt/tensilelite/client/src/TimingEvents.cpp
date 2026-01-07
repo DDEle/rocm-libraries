@@ -54,12 +54,7 @@ namespace TensileLite
                 {
                     if(event)
                     {
-                        HIP_CHECK_PRINT(hipEventDestroy(event),
-                            [&](hipError_t error) {
-                                std::cerr << "hipEventDestroy failed: " << std::endl
-                                        << " error: " << hipGetErrorString(error) << std::endl;
-                            }
-                        );
+                        HIP_CHECK_PRINT(hipEventDestroy(event));
                         event = nullptr;
                     }
                 }

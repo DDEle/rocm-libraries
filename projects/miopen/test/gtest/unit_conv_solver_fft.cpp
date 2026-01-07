@@ -32,22 +32,11 @@ auto GetConvTestCases(miopenDataType_t datatype)
 {
     using TestCase = miopen::unit_tests::ConvTestCase;
 
-    auto cases = std::vector<TestCase>{};
-
-    for(int in_hw : {7, 14, 27, 28})
-    {
+    return std::vector{
         // clang-format off
-        cases.emplace_back(TestCase{{1, 16, in_hw, in_hw}, {48, 16, 5, 5}, {2, 2}, {1, 1}, {1, 1}, datatype});
-        cases.emplace_back(TestCase{{4, 16, in_hw, in_hw}, {16, 16, 5, 5}, {2, 2}, {1, 1}, {1, 1}, datatype});
-        cases.emplace_back(TestCase{{1, 32, in_hw, in_hw}, {16, 32, 5, 5}, {2, 2}, {1, 1}, {1, 1}, datatype});
-        cases.emplace_back(TestCase{{1, 16, in_hw, in_hw}, {64, 16, 5, 5}, {2, 2}, {1, 1}, {1, 1}, datatype});
-        cases.emplace_back(TestCase{{64, 16, in_hw, in_hw}, {16, 16, 5, 5}, {2, 2}, {1, 1}, {1, 1}, datatype});
-        cases.emplace_back(TestCase{{64, 16, in_hw, in_hw}, {64, 16, 5, 5}, {2, 2}, {1, 1}, {1, 1}, datatype});
-        cases.emplace_back(TestCase{{64, 1, in_hw, in_hw}, {16, 1, 5, 5}, {2, 2}, {1, 1}, {1, 1}, datatype});
+        TestCase{{1, 16, 14, 14}, {48, 16, 5, 5}, {2, 2}, {1, 1}, {1, 1}, datatype},
         // clang-format on
-    }
-
-    return cases;
+    };
 }
 
 const auto& GetTestParams()

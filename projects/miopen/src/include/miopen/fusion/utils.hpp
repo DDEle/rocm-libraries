@@ -92,9 +92,8 @@ inline bool WinoCommonIsApplicable(const FusionContext& context, const FusionDes
         return false;
     if(!conv_problem.IsDirectionForward())
         return false;
-
     const auto& target = conv_ctx.GetStream().GetTargetProperties();
-    if(target.isXnackEnabled())
+    if(target.Xnack() && *target.Xnack())
         return false;
 
     return true;

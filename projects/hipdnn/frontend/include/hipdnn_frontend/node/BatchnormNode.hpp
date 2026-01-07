@@ -47,10 +47,6 @@ public:
                     "BatchnormNode missing epsilon for pre-validation"};
         }
 
-        // Validate training spatial dimension constraints
-        HIPDNN_CHECK_ERROR(
-            validateBatchNormTrainingSpatialDimensions(attributes.get_x(), attributes.get_scale()));
-
         return {};
     }
 

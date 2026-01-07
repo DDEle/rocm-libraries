@@ -800,7 +800,7 @@ namespace rocRoller::Client::GEMMClient
         if(io.doSaveAsm)
         {
             if(io.saveAsmPath.empty())
-                io.saveAsmPath = solution.generateKernelName().shortName + ".s";
+                io.saveAsmPath = solution.generateKernelName() + ".s";
 
             Settings::getInstance()->set(Settings::SaveAssembly, true);
             Settings::getInstance()->set(Settings::AssemblyFile, std::string(io.saveAsmPath));
@@ -839,7 +839,7 @@ namespace rocRoller::Client::GEMMClient
 
         auto context
             = Context::ForTarget(arch,
-                                 solution.generateKernelName().shortName,
+                                 solution.generateKernelName(),
                                  {{.scaleSkipPermlane = solution.types.scaleSkipPermlane}});
 
         bool willRunOnGPU = doValidate || doBenchmark;
@@ -870,8 +870,7 @@ namespace rocRoller::Client::GEMMClient
             std::cout << "Solution:" << std::endl;
             std::cout << solution << std::endl;
 
-            std::cout << "Generating: " << solution.generateKernelName().shortName << "..."
-                      << std::endl;
+            std::cout << "Generating: " << solution.generateKernelName() << "..." << std::endl;
 
             int reason;
             std::tie(gemm, reason) = createGEMMSolution(context, solution);
@@ -953,15 +952,15 @@ namespace rocRoller::Client::GEMMClient
                 commandKernel = std::make_shared<CommandKernel>();
                 commandKernel->setContext(context);
                 auto kernel = commandKernel->loadKernelFromCodeObject(
-                    codeObjectPath, solution.generateKernelName().shortName);
+                    codeObjectPath, solution.generateKernelName());
                 command = kernel->command();
 
                 std::cout << "Loading kernel from: " << io.loadAsmPath << std::endl;
-                commandKernel = std::make_shared<CommandKernel>(
-                    command, solution.generateKernelName().shortName);
+                commandKernel
+                    = std::make_shared<CommandKernel>(command, solution.generateKernelName());
                 commandKernel->setContext(context);
                 commandKernel->loadKernelFromAssembly(io.loadAsmPath,
-                                                      solution.generateKernelName().shortName);
+                                                      solution.generateKernelName());
             }
             else if(!io.loadCOPath.empty())
             {
@@ -970,7 +969,7 @@ namespace rocRoller::Client::GEMMClient
                 commandKernel = std::make_shared<CommandKernel>();
                 commandKernel->setContext(context);
                 auto kernel = commandKernel->loadKernelFromCodeObject(
-                    io.loadCOPath, solution.generateKernelName().shortName);
+                    io.loadCOPath, solution.generateKernelName());
 
                 command = kernel->command();
             }
@@ -1096,8 +1095,8 @@ namespace rocRoller::Client::GEMMClient::CLI
         std::make_pair("--workgroupMappingDim", &SolutionParameters::workgroupMappingDim),
         std::make_pair("--workgroupRemapXCC", &SolutionParameters::workgroupRemapXCC),
         std::make_pair("--workgroupRemapXCCValue", &SolutionParameters::workgroupRemapXCCValue),
-        std::make_pair("--loadScale_A", &SolutionParameters::loadPathAScale),
-        std::make_pair("--loadScale_B", &SolutionParameters::loadPathBScale),
+        std::make_pair("--loadLDSScale_A", &SolutionParameters::loadLDSScaleA),
+        std::make_pair("--loadLDSScale_B", &SolutionParameters::loadLDSScaleB),
         std::make_pair("--swizzleScale", &SolutionParameters::swizzleScale),
         std::make_pair("--sts", &SolutionParameters::swizzleTileSize),
         std::make_pair("--prefetchScale", &SolutionParameters::prefetchScale),
@@ -1260,34 +1259,24 @@ namespace rocRoller::Client::GEMMClient::CLI
                 solution.loadPathB = SolutionParams::LoadPath::BufferToLDS;
         }
 
-        update(SN(&SP::loadPathAScale), solution.loadPathAScale);
-        update(SN(&SP::loadPathBScale), solution.loadPathBScale);
+        update(SN(&SP::loadPathA), solution.loadPathA);
+        update(SN(&SP::loadPathB), solution.loadPathB);
 
         if(app.get_option("--mxlds")->count())
         {
             auto arg = app.get_option("--mxlds")->as<std::string>();
 
-            solution.loadPathAScale = SolutionParams::LoadPath::BufferToVGPR;
+            solution.loadLDSScaleA = false;
             if(arg.find('A') != std::string::npos)
-                solution.loadPathAScale = SolutionParams::LoadPath::BufferToLDSViaVGPR;
+                solution.loadLDSScaleA = true;
 
-            solution.loadPathBScale = SolutionParams::LoadPath::BufferToVGPR;
+            solution.loadLDSScaleB = false;
             if(arg.find('B') != std::string::npos)
-                solution.loadPathBScale = SolutionParams::LoadPath::BufferToLDSViaVGPR;
+                solution.loadLDSScaleB = true;
         }
 
-        if(app.get_option("--mxd2lds")->count())
-        {
-            auto arg = app.get_option("--mxd2lds")->as<std::string>();
-
-            solution.loadPathAScale = SolutionParams::LoadPath::BufferToVGPR;
-            if(arg.find('A') != std::string::npos)
-                solution.loadPathAScale = SolutionParams::LoadPath::BufferToLDS;
-
-            solution.loadPathBScale = SolutionParams::LoadPath::BufferToVGPR;
-            if(arg.find('B') != std::string::npos)
-                solution.loadPathBScale = SolutionParams::LoadPath::BufferToLDS;
-        }
+        update(SN(&SP::loadLDSScaleA), solution.loadLDSScaleA);
+        update(SN(&SP::loadLDSScaleB), solution.loadLDSScaleB);
 
         // Swizzling
 
@@ -1361,8 +1350,8 @@ int main(int argc, const char* argv[])
 
                   .scaleBlockSize = -1},
 
-        .loadPathAScale = SolutionParams::LoadPath::BufferToVGPR,
-        .loadPathBScale = SolutionParams::LoadPath::BufferToVGPR,
+        .loadLDSScaleA = false,
+        .loadLDSScaleB = false,
 
         .swizzleScale  = false,
         .prefetchScale = false,
@@ -1582,10 +1571,12 @@ int main(int argc, const char* argv[])
 
     app.add_option(
         SN(&SP::loadPathA),
+        solution.loadPathA,
         "How to load A (BufferToVGPR, BufferToLDSViaVGPR, BufferToLDS). Default: BufferToLDS");
     app.add_option(
         SN(&SP::loadPathB),
-        "How to load B (BufferToVGPR, BufferToLDSViaVGPR, BufferToLDS). Default: BufferToLDS");
+        solution.loadPathB,
+        "How to load A (BufferToVGPR, BufferToLDSViaVGPR, BufferToLDS). Default: BufferToLDS");
     app.add_flag(SN(&SP::storeLDSD), "Use LDS when storing D.");
     app.add_option("--lds", "Use LDS for A/B/D.");
     app.add_option("--d2lds", "Use direct-to-LDS for A/B.");
@@ -1607,14 +1598,9 @@ int main(int argc, const char* argv[])
     app.add_flag(SN(&SP::streamKTwoTileDPFirst),
                  "Execute data-parallel loop first in the two-tile StreamK algorithm.");
 
-    app.add_option(SN(&SP::loadPathAScale),
-                   "How to load AScale (BufferToVGPR, BufferToLDSViaVGPR, BufferToLDS). Default: "
-                   "BufferToLDSViaVGPR");
-    app.add_option(SN(&SP::loadPathBScale),
-                   "How to load BScale (BufferToVGPR, BufferToLDSViaVGPR, BufferToLDS). Default: "
-                   "BufferToLDSViaVGPR");
+    app.add_flag(SN(&SP::loadLDSScaleA), "Use LDS when loading A scale.");
+    app.add_flag(SN(&SP::loadLDSScaleB), "Use LDS when loading B scale.");
     app.add_option("--mxlds", "Use LDS for A/B scales.");
-    app.add_option("--mxd2lds", "Use direct-to-LDS for A/B scales.");
 
     app.add_flag(SN(&SP::swizzleScale), "Use Swizzle when loading A and B scale.");
     app.add_option(SN(&SP::swizzleTileSize),
@@ -2089,6 +2075,25 @@ int main(int argc, const char* argv[])
 
     problem.types  = types;
     solution.types = types;
+
+    // Set default prefetchMixMemOps
+    if(app.get_option("--prefetchMixMemOps")->count() == 0)
+    {
+        solution.prefetchMixMemOps = false;
+        if(solution.prefetchLDSFactor != 0)
+            solution.prefetchMixMemOps = true;
+
+        if(types.scaleB == Operations::ScaleMode::Separate && !solution.loadLDSScaleB)
+            solution.prefetchMixMemOps = false;
+
+        if(types.scaleA == Operations::ScaleMode::Separate && !solution.loadLDSScaleA)
+            solution.prefetchMixMemOps = false;
+
+        // TODO: enable (prefetchMixMemOps == true && prefetchLDSFactor == 2 && direct2LDSA/B = true)
+        if(solution.prefetchLDSFactor == 2
+           && (IsBufferToLDS(solution.loadPathA) || IsBufferToLDS(solution.loadPathB)))
+            solution.prefetchMixMemOps = false;
+    }
 
     //
     // Run!

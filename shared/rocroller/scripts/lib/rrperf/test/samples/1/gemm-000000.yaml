@@ -74,8 +74,8 @@ types:
     []
   scaleShuffleTileB:
     []
-loadScale_A: BufferToVGPR
-loadScale_B: BufferToVGPR
+loadLDSScale_A: false
+loadLDSScale_B: false
 swizzleScale: true
 swizzleTileSize:
   m: 64

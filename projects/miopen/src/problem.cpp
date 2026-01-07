@@ -533,18 +533,11 @@ std::vector<Solution> Problem::FindSolutionsImpl(const Handle& handle,
             const auto conv_solution =
                 result.GetSolver().GetSolver().FindSolution(ctx, conv_problem, db, invoke_ctx);
 
-            if(conv_solution.invoker_factory.has_value())
-            {
-                std::vector<Program> programs;
-                auto invoker = handle.PrepareInvoker(*conv_solution.invoker_factory,
-                                                     conv_solution.construction_params,
-                                                     options.attach_binaries ? &programs : nullptr);
-                result.SetInvoker(std::move(invoker), programs, conv_solution.construction_params);
-            }
-            else
-            {
-                MIOPEN_LOG_E("Error: solution without invoker factory.");
-            }
+            std::vector<Program> programs;
+            auto invoker = handle.PrepareInvoker(*conv_solution.invoker_factory,
+                                                 conv_solution.construction_params,
+                                                 options.attach_binaries ? &programs : nullptr);
+            result.SetInvoker(std::move(invoker), programs, conv_solution.construction_params);
         }
     }
     return results;

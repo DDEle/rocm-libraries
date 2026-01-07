@@ -176,32 +176,23 @@ void Solution::RunImpl(const Handle& handle,
     const auto problem_ =
         conv_desc.mode == miopenTranspose ? Transpose(problem_casted, &x, w, &y) : problem_casted;
 
-    if(!x.descriptor.has_value() || !y.descriptor.has_value() || !w.descriptor.has_value())
-    {
-        MIOPEN_THROW(miopenStatusBadParm);
-    }
-
     if(problem_.GetDirection() == miopenProblemDirectionBackward &&
        y.descriptor->GetLengths()[1] != w.descriptor->GetLengths()[0])
     {
         MIOPEN_THROW(miopenStatusBadParm);
     }
 
-    auto& x_d       = x.descriptor.value();
-    auto& y_d       = y.descriptor.value();
-    const auto& w_d = w.descriptor.value();
-
     if(miopen::CheckNumericsEnabled())
     {
         if(problem_.GetDirection() != miopenProblemDirectionBackward)
-            miopen::checkNumericsInput(handle, x_d, x.buffer);
+            miopen::checkNumericsInput(handle, *x.descriptor, x.buffer);
         if(problem_.GetDirection() != miopenProblemDirectionBackwardWeights)
-            miopen::checkNumericsInput(handle, w_d, w.buffer);
+            miopen::checkNumericsInput(handle, *w.descriptor, w.buffer);
         if(problem_.GetDirection() != miopenProblemDirectionForward)
-            miopen::checkNumericsInput(handle, y_d, y.buffer);
+            miopen::checkNumericsInput(handle, *y.descriptor, y.buffer);
     }
 
-    Problem::ValidateGroupCount(x_d, w_d, conv_desc);
+    Problem::ValidateGroupCount(*x.descriptor, *w.descriptor, conv_desc);
 
     const auto invoke_ctx =
         MakeInvokeParams(problem_, conv_desc, x, w, y, workspace, workspace_size);
@@ -210,11 +201,11 @@ void Solution::RunImpl(const Handle& handle,
         if(miopen::CheckNumericsEnabled())
         {
             if(problem_.GetDirection() == miopenProblemDirectionBackward)
-                miopen::checkNumericsOutput(handle, x_d, x.buffer);
+                miopen::checkNumericsOutput(handle, *x.descriptor, x.buffer);
             if(problem_.GetDirection() == miopenProblemDirectionBackwardWeights)
-                miopen::checkNumericsOutput(handle, w_d, w.buffer);
+                miopen::checkNumericsOutput(handle, *w.descriptor, w.buffer);
             if(problem_.GetDirection() == miopenProblemDirectionForward)
-                miopen::checkNumericsOutput(handle, y_d, y.buffer);
+                miopen::checkNumericsOutput(handle, *y.descriptor, y.buffer);
         }
     };
 
@@ -259,18 +250,11 @@ void Solution::RunImpl(const Handle& handle,
     const auto conv_solution = GetSolver().GetSolver().FindSolution(
         conv_ctx, conv_problem, db, invoke_ctx, perf_cfg.value_or(""));
 
-    if(conv_solution.invoker_factory.has_value())
-    {
-        invoker = handle.PrepareInvoker(*conv_solution.invoker_factory,
-                                        conv_solution.construction_params);
-        handle.RegisterInvoker(*invoker, net_cfg, GetSolver().ToString());
-        (*invoker)(handle, invoke_ctx);
-        checkNumericsOutput_();
-    }
-    else
-    {
-        MIOPEN_LOG_E("Error: solution without invoker factory.");
-    }
+    invoker =
+        handle.PrepareInvoker(*conv_solution.invoker_factory, conv_solution.construction_params);
+    handle.RegisterInvoker(*invoker, net_cfg, GetSolver().ToString());
+    (*invoker)(handle, invoke_ctx);
+    checkNumericsOutput_();
 }
 
 void Solution::RunImpl(const Handle& handle,
@@ -427,16 +411,8 @@ void Solution::RunImpl(const Handle& handle,
                                       : mhaBackward.GetSolution(ctx, problem_description);
         auto kernel_handles     = std::vector<Kernel>{std::begin(kernels), std::end(kernels)};
 
-        if(mha_solution.invoker_factory.has_value())
-        {
-            invoker = (*mha_solution.invoker_factory)(kernel_handles);
-            (*invoker)(handle, invoke_ctx);
-        }
-        else
-        {
-            MIOPEN_LOG_E("Error: solution without invoker factory.");
-        }
-
+        invoker = (*mha_solution.invoker_factory)(kernel_handles);
+        (*invoker)(handle, invoke_ctx);
         return;
     }
 
@@ -455,17 +431,10 @@ void Solution::RunImpl(const Handle& handle,
                                   ? mhaForward.GetSolution(ctx, problem_description)
                                   : mhaBackward.GetSolution(ctx, problem_description);
 
-    if(mha_solution.invoker_factory.has_value())
-    {
-        invoker =
-            handle.PrepareInvoker(*mha_solution.invoker_factory, mha_solution.construction_params);
-        handle.RegisterInvoker(*invoker, net_cfg, GetSolver().ToString());
-        (*invoker)(handle, invoke_ctx);
-    }
-    else
-    {
-        MIOPEN_LOG_E("Error: solution without invoker factory.");
-    }
+    invoker =
+        handle.PrepareInvoker(*mha_solution.invoker_factory, mha_solution.construction_params);
+    handle.RegisterInvoker(*invoker, net_cfg, GetSolver().ToString());
+    (*invoker)(handle, invoke_ctx);
 }
 
 void Solution::RunImpl(const Handle& handle,
@@ -545,16 +514,8 @@ void Solution::RunImpl(const Handle& handle,
                                           : attnSoftmax.GetSolution(ctx, problem_description);
         auto kernel_handles         = std::vector<Kernel>{std::begin(kernels), std::end(kernels)};
 
-        if(softmax_solution.invoker_factory.has_value())
-        {
-            invoker = (*softmax_solution.invoker_factory)(kernel_handles);
-            (*invoker)(handle, invoke_ctx);
-        }
-        else
-        {
-            MIOPEN_LOG_E("Error: solution without invoker factory.");
-        }
-
+        invoker = (*softmax_solution.invoker_factory)(kernel_handles);
+        (*invoker)(handle, invoke_ctx);
         return;
     }
 
@@ -573,17 +534,10 @@ void Solution::RunImpl(const Handle& handle,
                                       ? regularSoftmax.GetSolution(ctx, problem_description)
                                       : attnSoftmax.GetSolution(ctx, problem_description);
 
-    if(softmax_solution.invoker_factory.has_value())
-    {
-        invoker = handle.PrepareInvoker(*softmax_solution.invoker_factory,
-                                        softmax_solution.construction_params);
-        handle.RegisterInvoker(*invoker, net_cfg, GetSolver().ToString());
-        (*invoker)(handle, invoke_ctx);
-    }
-    else
-    {
-        MIOPEN_LOG_E("Error: solution without invoker factory.");
-    }
+    invoker = handle.PrepareInvoker(*softmax_solution.invoker_factory,
+                                    softmax_solution.construction_params);
+    handle.RegisterInvoker(*invoker, net_cfg, GetSolver().ToString());
+    (*invoker)(handle, invoke_ctx);
 }
 
 void Solution::RunImpl(const Handle& handle,
@@ -622,16 +576,8 @@ void Solution::RunImpl(const Handle& handle,
             MakeFusedSolution(ctx, solver, perf_cfg, fusion_problem, invoke_params);
         auto kernel_handles = std::vector<Kernel>{std::begin(kernels), std::end(kernels)};
 
-        if(solution.invoker_factory.has_value())
-        {
-            invoker = (*solution.invoker_factory)(kernel_handles);
-            (*invoker)(handle, invoke_params);
-        }
-        else
-        {
-            MIOPEN_LOG_E("Error: solution without invoker factory.");
-        }
-
+        invoker = (*solution.invoker_factory)(kernel_handles);
+        (*invoker)(handle, invoke_params);
         return;
     }
 
@@ -646,17 +592,9 @@ void Solution::RunImpl(const Handle& handle,
 
     const auto ctx      = FusionContext{handle};
     const auto solution = MakeFusedSolution(ctx, solver, perf_cfg, fusion_problem, invoke_params);
-
-    if(solution.invoker_factory.has_value())
-    {
-        invoker = handle.PrepareInvoker(*solution.invoker_factory, solution.construction_params);
-        handle.RegisterInvoker(*invoker, net_cfg, GetSolver().ToString());
-        (*invoker)(handle, invoke_params);
-    }
-    else
-    {
-        MIOPEN_LOG_E("Error: solution without invoker factory.");
-    }
+    invoker = handle.PrepareInvoker(*solution.invoker_factory, solution.construction_params);
+    handle.RegisterInvoker(*invoker, net_cfg, GetSolver().ToString());
+    (*invoker)(handle, invoke_params);
 }
 
 AnyInvokeParams Solution::MakeInvokeParams(const Problem& problem_,
@@ -667,33 +605,26 @@ AnyInvokeParams Solution::MakeInvokeParams(const Problem& problem_,
                                            Data_t workspace,
                                            size_t workspace_size)
 {
-    if(!x.descriptor.has_value() || !y.descriptor.has_value() || !w.descriptor.has_value())
-    {
-        MIOPEN_LOG_E("Error: incorrect parameters.");
-        MIOPEN_THROW(miopenStatusBadParm);
-    }
-
-    const auto& x_d = x.descriptor.value();
-    const auto& y_d = y.descriptor.value();
-    const auto& w_d = w.descriptor.value();
-
     switch(problem_.GetDirection())
     {
     case miopenProblemDirectionForward:
-        return conv::DataInvokeParams({x_d, x.buffer, w_d, w.buffer, y_d, y.buffer},
-                                      workspace,
-                                      workspace_size,
-                                      conv_desc.attribute.gfx90aFp16alt.GetFwd());
+        return conv::DataInvokeParams(
+            {*x.descriptor, x.buffer, *w.descriptor, w.buffer, *y.descriptor, y.buffer},
+            workspace,
+            workspace_size,
+            conv_desc.attribute.gfx90aFp16alt.GetFwd());
     case miopenProblemDirectionBackward:
-        return conv::DataInvokeParams({y_d, y.buffer, w_d, w.buffer, x_d, x.buffer},
-                                      workspace,
-                                      workspace_size,
-                                      conv_desc.attribute.gfx90aFp16alt.GetBwd());
+        return conv::DataInvokeParams(
+            {*y.descriptor, y.buffer, *w.descriptor, w.buffer, *x.descriptor, x.buffer},
+            workspace,
+            workspace_size,
+            conv_desc.attribute.gfx90aFp16alt.GetBwd());
     case miopenProblemDirectionBackwardWeights:
-        return conv::WrWInvokeParams{{y_d, y.buffer, x_d, x.buffer, w_d, w.buffer},
-                                     workspace,
-                                     workspace_size,
-                                     conv_desc.attribute.gfx90aFp16alt.GetWrW()};
+        return conv::WrWInvokeParams{
+            {*y.descriptor, y.buffer, *x.descriptor, x.buffer, *w.descriptor, w.buffer},
+            workspace,
+            workspace_size,
+            conv_desc.attribute.gfx90aFp16alt.GetWrW()};
     default: MIOPEN_THROW(miopenStatusNotImplemented);
     }
 }

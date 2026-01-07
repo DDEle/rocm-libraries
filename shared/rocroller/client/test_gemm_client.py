@@ -173,7 +173,7 @@ class Scale:
 
     argument: str  # A or B
     mode: str  # Separate, SingleScale, etc
-    path: bool  # load through LDS
+    lds: bool  # load through LDS
     value: float  # for SingleScale, the value
     blockSize: int  # for scale block size
     scaleType: str  # data type of the scale values
@@ -184,8 +184,8 @@ class Scale:
             params.extend(["--scale_" + self.argument, self.mode])
             if self.value is not None:
                 params.extend(["--scaleValue_" + self.argument, str(self.value)])
-            if self.path is not None:
-                params.extend(["--loadScale_" + self.argument, self.path])
+            if self.lds:
+                params.append("--loadLDSScale_" + self.argument)
 
             if self.mode == "Separate" or self.mode == "SingleScale":
                 if self.scaleType is not None:
@@ -280,8 +280,8 @@ streamK: false
 streamKTwoTile: false
 streamKTwoTileDPFirst: false
 matchMemoryAccess: true
-loadScale_A: BufferToVGPR
-loadScale_B: BufferToVGPR
+loadLDSScale_A: false
+loadLDSScale_B: false
 swizzleScale: false
 swizzleTileSize:
   m: 0
@@ -344,8 +344,8 @@ types:
   scaleShuffleTileA: []
   scaleShuffleTileB: []
   scaleSkipPermlane: false
-loadScale_A: BufferToVGPR
-loadScale_B: BufferToVGPR
+loadLDSScale_A: false
+loadLDSScale_B: false
 swizzleScale: false
 swizzleTileSize:
   m: 0
@@ -410,8 +410,8 @@ types:
   scaleShuffleTileA: []
   scaleShuffleTileB: []
   scaleSkipPermlane: false
-loadScale_A: BufferToVGPR
-loadScale_B: BufferToVGPR
+loadLDSScale_A: false
+loadLDSScale_B: false
 swizzleScale: false
 swizzleTileSize:
   m: 0
@@ -437,7 +437,7 @@ def type_configurations():
 def scale_configurations(argument):
     """Return list of MX scale modes to test for each of A and B."""
     modes = [None, "None", "Separate", "SingleScale"]
-    paths = ["BufferToVGPR", "BufferToLDSViaVGPR"]
+    ldss = [True, False]
     values = [0.5, 1.0]
     blockSize = 32
     scaleType = "E8M0"
@@ -446,20 +446,17 @@ def scale_configurations(argument):
     for mode in modes:
         if mode is not None and mode == "Separate":
             rv.extend(
-                [
-                    Scale(argument, mode, path, None, blockSize, scaleType)
-                    for path in paths
-                ]
+                [Scale(argument, mode, lds, None, blockSize, scaleType) for lds in ldss]
             )
         elif mode is not None and mode == "SingleScale":
             rv.extend(
                 [
-                    Scale(argument, mode, None, value, None, scaleType)
+                    Scale(argument, mode, False, value, None, scaleType)
                     for value in values
                 ]
             )
         else:
-            rv.append(Scale(argument, mode, None, None, None, None))
+            rv.append(Scale(argument, mode, False, None, None, None))
     return rv
 
 
@@ -715,20 +712,14 @@ def test_gemm_options(tmp_path):
     post = run_and_load_example_yaml(
         [gemm, "example", example, "--arch=gfx950", "--mxlds=AB"]
     )
-    assert post["loadScale_A"] == "BufferToLDSViaVGPR"
-    assert post["loadScale_B"] == "BufferToLDSViaVGPR"
+    assert post["loadLDSScale_A"]
+    assert post["loadLDSScale_B"]
 
     post = run_and_load_example_yaml(
         [gemm, "example", example, "--arch=gfx950", "--mxlds=B"]
     )
-    assert post["loadScale_A"] == "BufferToVGPR"
-    assert post["loadScale_B"] == "BufferToLDSViaVGPR"
-
-    post = run_and_load_example_yaml(
-        [gemm, "example", example, "--arch=gfx950", "--mxd2lds=AB"]
-    )
-    assert post["loadScale_A"] == "BufferToLDS"
-    assert post["loadScale_B"] == "BufferToLDS"
+    assert not post["loadLDSScale_A"]
+    assert post["loadLDSScale_B"]
 
     # setting swizzle tile size
     post = run_and_load_example_yaml(

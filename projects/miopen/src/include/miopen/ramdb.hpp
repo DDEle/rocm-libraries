@@ -28,9 +28,10 @@
 #include <miopen/db.hpp>
 #include <miopen/db_record.hpp>
 
+#include <boost/optional.hpp>
+
 #include <chrono>
 #include <map>
-#include <optional>
 #include <string>
 #include <sstream>
 
@@ -75,10 +76,10 @@ public:
         return GetCached(db_kind_, path, is_system);
     }
 
-    std::optional<DbRecord> FindRecord(const std::string& problem);
+    boost::optional<DbRecord> FindRecord(const std::string& problem);
 
     template <class TProblem>
-    std::optional<DbRecord> FindRecord(const TProblem& problem)
+    boost::optional<DbRecord> FindRecord(const TProblem& problem)
     {
         const auto key = DbRecord::SerializeKey(db_kind, problem);
         return FindRecord(key);
@@ -113,7 +114,7 @@ public:
     }
 
     template <class T, class V>
-    inline std::optional<DbRecord>
+    inline boost::optional<DbRecord>
     Update(const T& problem_config, const std::string& id, const V& values)
     {
         DbRecord record(db_kind, problem_config);
@@ -122,7 +123,7 @@ public:
         if(ok)
             return record;
         else
-            return {};
+            return boost::none;
     }
 
 private:
@@ -135,7 +136,7 @@ private:
     ramdb_clock::time_point file_read_time;
     std::map<std::string, CacheItem> cache;
 
-    std::optional<miopen::DbRecord> FindRecordUnsafe(const std::string& problem);
+    boost::optional<miopen::DbRecord> FindRecordUnsafe(const std::string& problem);
 
     bool ValidateUnsafe();
     void Prefetch();

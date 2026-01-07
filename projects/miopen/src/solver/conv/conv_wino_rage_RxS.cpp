@@ -84,8 +84,8 @@ bool ConvWinoRageRxSCommon<Winodata, Winofilter>::IsApplicable(const ExecutionCo
     if(!(devName == "gfx942"))
         return false;
 
-    const auto& target = ctx.GetStream().GetTargetProperties();
-    if(target.isXnackEnabled())
+    const auto& targetProperties = ctx.GetStream().GetTargetProperties();
+    if(targetProperties.Xnack() && *targetProperties.Xnack())
         return false;
 
     if(!(problem.GetKernelStrideH() == 1 && problem.GetKernelStrideW() == 1))

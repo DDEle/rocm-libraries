@@ -28,12 +28,10 @@
 #include <miopen/conv/wrw_invoke_params.hpp>
 #include <miopen/errors.hpp>
 #include <miopen/generic_search.hpp>
-#include <miopen/any_solver.hpp>
 
 #include "unit_conv_solver.hpp"
 
 #include "get_handle.hpp"
-#include "../gpu_conv.hpp"
 #include "conv_common.hpp"
 #include "conv_tensor_gen.hpp"
 #include "tensor_holder.hpp"
@@ -270,15 +268,12 @@ UnitTestConvSolverParams::UnitTestConvSolverParams() : UnitTestConvSolverParams(
 UnitTestConvSolverParams::UnitTestConvSolverParams(Gpu supported_devs_)
     : supported_devs(supported_devs_),
       use_cpu_ref(false),
-      use_gpu_ref(false),
       tunable(false),
       check_xnack_disabled(false)
 {
 }
 
 void UnitTestConvSolverParams::UseCpuRef() { use_cpu_ref = true; }
-
-void UnitTestConvSolverParams::UseGpuRef() { use_gpu_ref = true; }
 
 void UnitTestConvSolverParams::Tunable(std::size_t iterations_max_)
 {
@@ -479,14 +474,6 @@ void RunSolverFwd(const miopen::solver::conv::ConvSolverInterface& solv,
                                 conv_desc.GetConvDilations(),
                                 conv_desc.GetGroupCount());
     }
-    else if(params.use_gpu_ref)
-    {
-        const bool gpu_ref_used = gpu_ref_convolution_fwd(input, weights, ref_out, conv_desc);
-        if(!gpu_ref_used)
-        {
-            throw std::runtime_error("GPU reference not available for this configuration");
-        }
-    }
     else
     {
         ref_out = ref_conv_fwd(input, weights, ref_out, conv_desc);
@@ -600,14 +587,6 @@ void RunSolverBwd(const miopen::solver::conv::ConvSolverInterface& solv,
                                       conv_desc.GetConvDilations(),
                                       conv_desc.GetGroupCount());
     }
-    else if(params.use_gpu_ref)
-    {
-        const bool gpu_ref_used = gpu_ref_convolution_bwd(ref_in, weights, output, conv_desc);
-        if(!gpu_ref_used)
-        {
-            throw std::runtime_error("GPU reference not available for this configuration");
-        }
-    }
     else
     {
         ref_in = ref_conv_bwd(ref_in, weights, output, conv_desc);
@@ -685,7 +664,7 @@ void RunSolverWrw(const miopen::solver::conv::ConvSolverInterface& solv,
     {
         // Do not put GTEST_SKIP here.
         // The usage of non-applicable config should be considered as a bug in the test.
-        GTEST_FAIL() << "IsApplicable failed!";
+        GTEST_FAIL();
     }
 
     Workspace wspace;
@@ -720,14 +699,6 @@ void RunSolverWrw(const miopen::solver::conv::ConvSolverInterface& solv,
                                         conv_desc.GetConvStrides(),
                                         conv_desc.GetConvDilations(),
                                         conv_desc.GetGroupCount());
-    }
-    else if(params.use_gpu_ref)
-    {
-        const bool gpu_ref_used = gpu_ref_convolution_wrw(input, ref_weights, output, conv_desc);
-        if(!gpu_ref_used)
-        {
-            throw std::runtime_error("GPU reference not available for this configuration");
-        }
     }
     else
     {

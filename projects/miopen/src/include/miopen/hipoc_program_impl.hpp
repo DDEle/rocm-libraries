@@ -31,8 +31,9 @@
 #include <miopen/manage_ptr.hpp>
 #include <miopen/tmp_dir.hpp>
 #include <miopen/filesystem.hpp>
+#include <boost/optional.hpp>
+#include <hip/hip_runtime_api.h>
 
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -57,7 +58,7 @@ struct HIPOCProgramImpl
     TargetProperties target;
     fs::path hsaco_file;
     hipModulePtr module;
-    std::optional<TmpDir> dir;
+    boost::optional<TmpDir> dir;
     std::vector<char> binary;
 
 #if !MIOPEN_USE_COMGR

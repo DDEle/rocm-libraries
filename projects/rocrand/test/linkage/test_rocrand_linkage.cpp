@@ -32,6 +32,5 @@
 TEST(rocrand_linkage_tests, get_version_test)
 {
     EXPECT_EQ(rocrand_get_version(NULL), ROCRAND_STATUS_OUT_OF_RANGE);
-    // The library version may be newer in backward compatibility test
-    EXPECT_GE(get_rocrand_version(), ROCRAND_VERSION);
+    EXPECT_EQ(get_rocrand_version(), ROCRAND_VERSION);
 }

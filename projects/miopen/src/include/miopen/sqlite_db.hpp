@@ -40,11 +40,13 @@
 #include <miopen/env.hpp>
 
 #include <boost/core/explicit_operator_bool.hpp>
+#include <boost/none.hpp>
+#include <boost/optional/optional.hpp>
 #include "sqlite3.h"
 #include <mutex>
 
 #include <string>
-#include <optional>
+#include <chrono>
 #include <unordered_map>
 
 MIOPEN_DECLARE_ENV_VAR_BOOL(MIOPEN_DEBUG_DISABLE_SQL_WAL)
@@ -435,10 +437,10 @@ public:
         }
     }
     template <typename T>
-    inline std::optional<DbRecord> FindRecordUnsafe(const T& problem_config)
+    inline boost::optional<DbRecord> FindRecordUnsafe(const T& problem_config)
     {
         if(dbInvalid)
-            return {};
+            return boost::none;
 
         const auto& pdb_ovr = env::value(MIOPEN_DEBUG_PERFDB_OVERRIDE);
         if(!pdb_ovr.empty())
@@ -494,7 +496,7 @@ public:
             }
         }
         if(rec.GetSize() == 0)
-            return {};
+            return boost::none;
         else
             return {rec};
     }
@@ -536,11 +538,11 @@ public:
     /// Updates record under key PROBLEM_CONFIG with data ID:VALUES in database.
     /// Returns updated record or boost::none if insertion failed
     template <class T, class V>
-    inline std::optional<DbRecord>
+    inline boost::optional<DbRecord>
     UpdateUnsafe(const T& problem_config, const std::string& id, const V& values)
     {
         if(dbInvalid)
-            return {};
+            return boost::none;
         // UPSERT the value
         {
             std::string clause;
@@ -581,7 +583,7 @@ public:
             {
                 MIOPEN_LOG_E("Failed to insert performance record in the database: " +
                              sql.ErrorMessage());
-                return {};
+                return boost::none;
             }
         }
         DbRecord record;

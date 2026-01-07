@@ -33,8 +33,7 @@ template <BlockGemmPipelineScheduler BlkGemmPipelineVer,
           index_t NRepeat,
           index_t KPack,
           index_t KInner,
-          bool TransposeC = false,
-          bool BSkipLDS   = false>
+          bool TransposeC = false>
 struct BlockwiseGemmWmmaops_pipeline_v3
 {
 };
@@ -79,8 +78,7 @@ struct BlockwiseGemmWmmaops_pipeline_v3<BlockGemmPipelineScheduler::Intrawave,
                                         NRepeat,
                                         KPack,
                                         KInner,
-                                        TransposeC,
-                                        false>
+                                        TransposeC>
     : BlockwiseGemmWmmaops_pipeline_base<BlockSize,
                                          ADataType,
                                          BDataType,

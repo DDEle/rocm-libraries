@@ -72,6 +72,36 @@ struct GroupedConvolutionForwardInvoker
             GroupedConvTraitsTypeDefault::FixedGemmParams::Persistent,
             ConvConfig::NumWaveGroups>;
 
+        using GemmPipelineProblem = ck_tile::GemmPipelineProblem<
+            InDataType,
+            WeiDataType,
+            AccDataType,
+            GemmShape,
+            typename GroupedConvTraitsTypeDefault::template GroupedConvImplicitGemmTraitsFwd<
+                ConvConfig::NumWaveGroups>,
+            ck_tile::element_wise::PassThrough,
+            ck_tile::element_wise::PassThrough,
+            OutDataType,
+            GroupedConvTraitsTypeDefault::FixedGemmParams::FixedVectorSize,
+            GroupedConvTraitsTypeDefault::VectorSizeA,
+            GroupedConvTraitsTypeDefault::VectorSizeB>;
+
+        using BaseGemmPipeline = typename PipelineTypeTraits<
+            ConvConfig::Pipeline>::template UniversalGemmPipeline<GemmPipelineProblem>;
+
+        const ck_tile::index_t gemm_k =
+            args.C_ * std::accumulate(args.filter_spatial_lengths_.begin(),
+                                      args.filter_spatial_lengths_.end(),
+                                      1,
+                                      std::multiplies<ck_tile::index_t>());
+
+        // Split-K parameters
+        const ck_tile::index_t k_grain     = args.k_batch * ConvConfig::K_Tile;
+        const ck_tile::index_t K_split     = (gemm_k + k_grain - 1) / k_grain * ConvConfig::K_Tile;
+        const ck_tile::index_t num_loop    = TilePartitioner::GetLoopNum(K_split);
+        const bool has_hot_loop            = BaseGemmPipeline::BlockHasHotloop(num_loop);
+        const ck_tile::TailNumber tail_num = BaseGemmPipeline::GetBlockLoopTailNum(num_loop);
+
         using TransformType =
             ck_tile::TransformConvFwdToGemm<NDimSpatial,
                                             ck_tile::ConvolutionSpecialization::Default,
@@ -208,12 +238,16 @@ struct GroupedConvolutionForwardInvoker
             }
         }
 
-        constexpr auto scheduler = ConvConfig::Scheduler;
-
         // =====================================================================
         // Kernel launch lambda: Uses EnableSplitImage based on layout support
         // =====================================================================
-        const auto Run = [&](const auto memory_operation_, const auto enable_split_image_) {
+        const auto Run = [&](const auto has_hot_loop_,
+                             const auto tail_number_,
+                             const auto memory_operation_,
+                             const auto enable_split_image_) {
+            constexpr bool has_hot_loop_v   = has_hot_loop_.value;
+            constexpr auto tail_number_v    = tail_number_.value;
+            constexpr auto scheduler        = ConvConfig::Scheduler;
             constexpr auto memory_operation = memory_operation_.value;
             constexpr bool EnableSplitImage = enable_split_image_.value;
 
@@ -228,6 +262,8 @@ struct GroupedConvolutionForwardInvoker
                 GemmShape,
                 GemmUniversalTraits,
                 scheduler,
+                has_hot_loop_v,
+                tail_number_v,
                 ck_tile::element_wise::PassThrough,
                 ck_tile::element_wise::PassThrough,
                 OutDataType,
@@ -332,17 +368,33 @@ struct GroupedConvolutionForwardInvoker
         // =====================================================================
         if(use_split_image)
         {
-            if(args.k_batch == 1)
-                return Run(MemoryOpSet{}, ck_tile::bool_constant<true>{});
-            else
-                return Run(MemoryOpAtomicAdd{}, ck_tile::bool_constant<true>{});
+            const auto RunSplitImage = [&](const auto has_hot_loop_, const auto tail_number_) {
+                if(args.k_batch == 1)
+                    return Run(
+                        has_hot_loop_, tail_number_, MemoryOpSet{}, ck_tile::bool_constant<true>{});
+                else
+                    return Run(has_hot_loop_,
+                               tail_number_,
+                               MemoryOpAtomicAdd{},
+                               ck_tile::bool_constant<true>{});
+            };
+            return BaseGemmPipeline::TailHandler(RunSplitImage, has_hot_loop, tail_num);
         }
         else
         {
-            if(args.k_batch == 1)
-                return Run(MemoryOpSet{}, ck_tile::bool_constant<false>{});
-            else
-                return Run(MemoryOpAtomicAdd{}, ck_tile::bool_constant<false>{});
+            const auto RunRegular = [&](const auto has_hot_loop_, const auto tail_number_) {
+                if(args.k_batch == 1)
+                    return Run(has_hot_loop_,
+                               tail_number_,
+                               MemoryOpSet{},
+                               ck_tile::bool_constant<false>{});
+                else
+                    return Run(has_hot_loop_,
+                               tail_number_,
+                               MemoryOpAtomicAdd{},
+                               ck_tile::bool_constant<false>{});
+            };
+            return BaseGemmPipeline::TailHandler(RunRegular, has_hot_loop, tail_num);
         }
     }
 };

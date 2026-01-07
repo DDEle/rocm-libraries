@@ -106,7 +106,7 @@ bool IsTestSupportedForDevice(const miopen::Handle& handle)
 {
     const auto& target  = handle.GetTargetProperties();
     std::string devName = handle.GetDeviceName();
-    if(target.isXnackEnabled())
+    if(target.Xnack() && *target.Xnack())
         return false;
     if(devName == "gfx908" || devName == "gfx90a" || devName == "gfx942")
         return true;

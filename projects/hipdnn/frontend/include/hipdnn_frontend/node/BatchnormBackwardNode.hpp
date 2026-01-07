@@ -58,10 +58,6 @@ public:
                     "BatchnormBackwardNode missing dbias for pre-validation"};
         }
 
-        // Validate backward spatial dimension constraints
-        HIPDNN_CHECK_ERROR(validateBatchNormTrainingSpatialDimensions(
-            attributes.get_x(), attributes.get_scale(), "Batch normalization backward"));
-
         return {};
     }
 

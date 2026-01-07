@@ -80,9 +80,6 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
     static constexpr auto TailNum    = Problem::TailNum;
     static constexpr auto Scheduler  = Problem::Scheduler;
 
-    static constexpr auto is_a_load_tr_v = bool_constant<PipelineImplBase::is_a_load_tr>{};
-    static constexpr auto is_b_load_tr_v = bool_constant<PipelineImplBase::is_b_load_tr>{};
-
     using Base::PrefetchStages;
 
     [[nodiscard]] CK_TILE_HOST static const std::string GetName()
@@ -168,19 +165,6 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
     {
         using Base = PipelineImplBase;
 
-        template <typename ADramWindow, typename ABlockTile_, typename DramTileWindowStep>
-        CK_TILE_DEVICE static void
-        LoadAndConvertATile(ABlockTile_& a_block_tile,
-                            ADramWindow& a_dram_window,
-                            const DramTileWindowStep& dram_tile_window_step)
-        {
-            using DestDataType            = typename ABlockTile_::DataType;
-            using SrcDataType             = typename ADramWindow::Base::TileWindowBase::DataType;
-            constexpr index_t UnaryOpSize = 8;
-            load_int4_tile<SrcDataType, DestDataType, UnaryOpSize>(a_block_tile, a_dram_window);
-            move_tile_window(a_dram_window, dram_tile_window_step);
-        }
-
         template <bool HasHotLoop,
                   TailNumber TailNum,
                   typename ADramBlockWindowTmp,
@@ -193,10 +177,11 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
                                        const BDramBlockWindowTmp& b_dram_block_window_tmp,
                                        const BElementFunction& b_element_func,
                                        const AQDramBlockWindowTmp& aq_dram_block_window_tmp,
-                                       [[maybe_unused]] index_t m,
+                                       index_t m,
                                        index_t num_loop,
                                        void* p_smem) const
         {
+            (void)m; // unused variable
             static_assert(
                 std::is_same_v<ADataType, remove_cvref_t<typename ADramBlockWindowTmp::DataType>> &&
                     std::is_same_v<BDataType,
@@ -212,7 +197,11 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
                 std::is_same_v<AQLayout, tensor_layout::gemm::ColumnMajor>;
             constexpr bool is_b_row_major = std::is_same_v<BLayout, tensor_layout::gemm::RowMajor>;
 
+            static_assert(!is_aq_col_major, "Aq must be row major (col major not supported yet)");
             static_assert(!PreshuffleQuant, "Memory pipeline does not support PreshuffleQuant!");
+            static_assert(MPerBlock == AQDramBlockWindowTmp{}.get_window_lengths()[I0{}] &&
+                              KPerBlockAQ == AQDramBlockWindowTmp{}.get_window_lengths()[I1{}],
+                          "Aq block window has incorrect lengths for defined AqLayout!");
 
             static_assert(is_a_col_major
                               ? (KPerBlock == ADramBlockWindowTmp{}.get_window_lengths()[I0{}] &&
@@ -228,7 +217,7 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
                           "B block window has incorrect lengths for defined BLayout!");
 
             // A/B tiles in LDS - using the same approach as regular gemm pipeline
-            auto ab_lds_blocks = Base::template GetABLdsTensorViews<BDataType, BDataType>(p_smem);
+            auto ab_lds_blocks = Base::GetABLdsTensorViews(p_smem);
             auto& a_lds_block  = ab_lds_blocks.at(I0{});
             auto& b_lds_block  = ab_lds_blocks.at(I1{});
 
@@ -260,7 +249,7 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
             using AQBlockTileDistr = decltype(aq_copy_dram_window.get_tile_distribution());
 
             using ABlockTile =
-                decltype(make_static_distributed_tensor<BDataType>(ABlockTileDistr{}));
+                decltype(make_static_distributed_tensor<ADataType>(ABlockTileDistr{}));
             using BBlockTile =
                 decltype(make_static_distributed_tensor<BDataType>(BBlockTileDistr{}));
             using AQBlockTile =
@@ -283,7 +272,7 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
                 is_aq_col_major ? make_array(KPerBlockAQ, 0) : make_array(0, KPerBlockAQ);
 
             // Global prefetch initialization - DRAM to VGPRs
-            LoadAndConvertATile(
+            Base::GlobalPrefetch(
                 a_block_tiles.get(I0{}), a_copy_dram_window, a_dram_tile_window_step);
             Base::GlobalPrefetch(
                 b_block_tiles.get(I0{}), b_copy_dram_window, b_dram_tile_window_step);
@@ -293,10 +282,10 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
             tile_elementwise_inout([](auto& c) { c = 0; }, c_block_tile);
 
             // LDS prefill - VGPRs to LDS
-            if constexpr(is_a_col_major && !is_a_load_tr_v())
+            if constexpr(is_a_col_major)
             {
-                auto a_shuffle_tmp = make_static_distributed_tensor<BDataType>(
-                    Policy::template MakeShuffledARegTileDistribution<Problem>());
+                auto a_shuffle_tmp = make_static_distributed_tensor<ADataType>(
+                    Policy::template MakeShuffled2DStaticTileDistribution<Problem>());
                 transpose_tile2d(a_shuffle_tmp, a_block_tiles.get(I0{}));
                 Base::LocalPrefill(a_copy_lds_window, a_shuffle_tmp, a_element_func);
             }
@@ -304,10 +293,10 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
             {
                 Base::LocalPrefill(a_copy_lds_window, a_block_tiles.get(I0{}), a_element_func);
             }
-            if constexpr(is_b_row_major && !is_b_load_tr_v())
+            if constexpr(is_b_row_major)
             {
                 auto b_shuffle_tmp = make_static_distributed_tensor<BDataType>(
-                    Policy::template MakeShuffledBRegTileDistribution<Problem>());
+                    Policy::template MakeShuffled2DStaticTileDistribution<Problem>());
                 transpose_tile2d(b_shuffle_tmp, b_block_tiles.get(I0{}));
                 Base::LocalPrefill(b_copy_lds_window, b_shuffle_tmp, b_element_func);
             }
@@ -317,9 +306,9 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
             }
             // Additional prefetching for memory pipeline - DRAM to VGPRs
             static_for<1, PrefetchStages, 1>{}([&](auto prefetch_idx) {
-                LoadAndConvertATile(a_block_tiles.get(number<prefetch_idx>{}),
-                                    a_copy_dram_window,
-                                    a_dram_tile_window_step);
+                Base::GlobalPrefetch(a_block_tiles.get(number<prefetch_idx>{}),
+                                     a_copy_dram_window,
+                                     a_dram_tile_window_step);
                 Base::GlobalPrefetch(b_block_tiles.get(number<prefetch_idx>{}),
                                      b_copy_dram_window,
                                      b_dram_tile_window_step);
@@ -336,17 +325,16 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
                 {
                     static_for<0, PrefetchStages, 1>{}([&](auto prefetch_idx) {
                         block_sync_lds();
-                        block_gemm.LocalPrefetch(
-                            a_lds_gemm_window, b_lds_gemm_window, is_a_load_tr_v, is_b_load_tr_v);
+                        block_gemm.LocalPrefetch(a_lds_gemm_window, b_lds_gemm_window);
                         block_gemm(c_block_tile,
                                    aq_block_tiles.get(number<prefetch_idx>{}),
                                    a_lds_gemm_window,
                                    b_lds_gemm_window);
                         block_sync_lds();
                         // Prepare next iteration data
-                        if constexpr(is_a_col_major && !is_a_load_tr_v())
+                        if constexpr(is_a_col_major)
                         {
-                            auto a_shuffle_tmp = make_static_distributed_tensor<BDataType>(
+                            auto a_shuffle_tmp = make_static_distributed_tensor<ADataType>(
                                 Policy::template MakeShuffledARegTileDistribution<Problem>());
                             transpose_tile2d(
                                 a_shuffle_tmp,
@@ -360,7 +348,7 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
                                 a_block_tiles.get(number<(prefetch_idx + 1) % PrefetchStages>{}),
                                 a_element_func);
                         }
-                        if constexpr(is_b_row_major && !is_b_load_tr_v())
+                        if constexpr(is_b_row_major)
                         {
                             auto b_shuffle_tmp = make_static_distributed_tensor<BDataType>(
                                 Policy::template MakeShuffledBRegTileDistribution<Problem>());
@@ -377,9 +365,9 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
                                 b_element_func);
                         }
 
-                        LoadAndConvertATile(a_block_tiles.get(number<prefetch_idx>{}),
-                                            a_copy_dram_window,
-                                            a_dram_tile_window_step);
+                        Base::GlobalPrefetch(a_block_tiles.get(number<prefetch_idx>{}),
+                                             a_copy_dram_window,
+                                             a_dram_tile_window_step);
                         Base::GlobalPrefetch(b_block_tiles.get(number<prefetch_idx>{}),
                                              b_copy_dram_window,
                                              b_dram_tile_window_step);
@@ -393,89 +381,20 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
             }
 
             // Tail handling
-            auto HotLoopTail = [&](auto tail_num) {
-                static_for<0, tail_num - 1, 1>{}([&](auto prefetch_idx) {
-                    block_sync_lds();
-                    block_gemm.LocalPrefetch(
-                        a_lds_gemm_window, b_lds_gemm_window, is_a_load_tr_v, is_b_load_tr_v);
-                    block_gemm(c_block_tile,
-                               aq_block_tiles.get(number<prefetch_idx>{}),
-                               a_lds_gemm_window,
-                               b_lds_gemm_window);
-                    // no second block_sync_lds because it's interwave
+            block_sync_lds();
+            block_gemm.LocalPrefetch(a_lds_gemm_window, b_lds_gemm_window);
+            block_gemm(
+                c_block_tile, aq_block_tiles.get(I0{}), a_lds_gemm_window, b_lds_gemm_window);
 
-                    if constexpr(is_a_col_major && !is_a_load_tr_v())
-                    {
-                        auto a_shuffle_tmp = make_static_distributed_tensor<BDataType>(
-                            Policy::template MakeShuffledARegTileDistribution<Problem>());
-                        transpose_tile2d(a_shuffle_tmp,
-                                         a_block_tiles.get(number<prefetch_idx + 1>{}));
-                        Base::LocalPrefill(a_copy_lds_window, a_shuffle_tmp);
-                    }
-                    else
-                    {
-                        Base::LocalPrefill(a_copy_lds_window,
-                                           a_block_tiles.get(number<prefetch_idx + 1>{}));
-                    }
-                    if constexpr(is_b_row_major && !is_b_load_tr_v())
-                    {
-                        auto b_shuffle_tmp = make_static_distributed_tensor<BDataType>(
-                            Policy::template MakeShuffledBRegTileDistribution<Problem>());
-                        transpose_tile2d(b_shuffle_tmp,
-                                         b_block_tiles.get(number<prefetch_idx + 1>{}));
-                        Base::LocalPrefill(b_copy_lds_window, b_shuffle_tmp);
-                    }
-                    else
-                    {
-                        Base::LocalPrefill(b_copy_lds_window,
-                                           b_block_tiles.get(number<prefetch_idx + 1>{}));
-                    }
-                });
-
-                block_sync_lds();
-                block_gemm.LocalPrefetch(
-                    a_lds_gemm_window, b_lds_gemm_window, is_a_load_tr_v, is_b_load_tr_v);
-                block_gemm(c_block_tile,
-                           aq_block_tiles.get(number<tail_num - 1>{}),
-                           a_lds_gemm_window,
-                           b_lds_gemm_window);
-            };
-
-            if constexpr(TailNum == TailNumber::One)
+            if constexpr(TailNum == TailNumber::Even)
             {
+
+                Base::LocalPrefill(a_copy_lds_window, a_block_tiles.get(I1{}), a_element_func);
+                Base::LocalPrefill(b_copy_lds_window, b_block_tiles.get(I1{}), b_element_func);
                 block_sync_lds();
-                block_gemm.LocalPrefetch(
-                    a_lds_gemm_window, b_lds_gemm_window, is_a_load_tr_v, is_b_load_tr_v);
+                block_gemm.LocalPrefetch(a_lds_gemm_window, b_lds_gemm_window);
                 block_gemm(
-                    c_block_tile, aq_block_tiles.get(I0{}), a_lds_gemm_window, b_lds_gemm_window);
-            }
-            else if constexpr(TailNum == TailNumber::Two)
-            {
-                HotLoopTail(number<2>{});
-            }
-            else if constexpr(TailNum == TailNumber::Three)
-            {
-                HotLoopTail(number<3>{});
-            }
-            else if constexpr(TailNum == TailNumber::Four)
-            {
-                HotLoopTail(number<4>{});
-            }
-            else if constexpr(TailNum == TailNumber::Five)
-            {
-                HotLoopTail(number<5>{});
-            }
-            else if constexpr(TailNum == TailNumber::Six)
-            {
-                HotLoopTail(number<6>{});
-            }
-            else if constexpr(TailNum == TailNumber::Seven)
-            {
-                HotLoopTail(number<7>{});
-            }
-            else if constexpr(TailNum == TailNumber::Full)
-            {
-                HotLoopTail(number<PrefetchStages>{});
+                    c_block_tile, aq_block_tiles.get(I1{}), a_lds_gemm_window, b_lds_gemm_window);
             }
             return c_block_tile;
         }
@@ -494,7 +413,7 @@ struct AQuantGemmPipelineAgBgCrMem : public BaseGemmPipelineAgBgCrMem<Problem>
         return PipelineImpl<GemmPipelineScheduler::Interwave>{}
             .template operator()<HasHotLoop, TailNum>(
                 a_dram_block_window_tmp,
-                [](const BDataType& a) { return a; },
+                [](const ADataType& a) { return a; },
                 b_dram_block_window_tmp,
                 [](const BDataType& b) { return b; },
                 aq_dram_block_window_tmp,

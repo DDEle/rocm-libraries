@@ -1909,7 +1909,7 @@ namespace TensileLite
                                        std::ostream&                 stream) const override
                 {
                     bool rv = (*this)(problem);
-                    stream << "Searching " << this->type() << " Library..." << std::endl;
+                    stream << rv << ": " << this->type() << std::endl;
                     return rv;
                 }
             };
@@ -1939,7 +1939,7 @@ namespace TensileLite
                                        std::ostream&                 stream) const override
                 {
                     bool rv = (*this)(problem);
-                    stream << "Searching " << this->type() << " Library..." << std::endl;
+                    stream << rv << ": " << this->type() << std::endl;
                     return rv;
                 }
             };
@@ -1970,7 +1970,7 @@ namespace TensileLite
                                        std::ostream&                 stream) const override
                 {
                     bool rv = (*this)(problem);
-                    stream << "Searching " << this->type() << " Library..." << std::endl;
+                    stream << rv << ": " << this->type() << std::endl;
                     return rv;
                 }
             };

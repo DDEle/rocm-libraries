@@ -789,7 +789,8 @@ namespace rocRoller
         {
             std::unordered_set<int> required;
 
-            auto [target, direction]    = getOperationTarget(tag, graph);
+            auto [target, direction] = getOperationTarget(tag, graph);
+            Log::debug("{} target: {}", tag, target);
             auto [targetRequired, path] = findRequiredCoordinates(target, direction, graph);
 
             std::copy(targetRequired.cbegin(),
@@ -927,14 +928,11 @@ namespace rocRoller
                                            int& t_n,
                                            int  maxWidth,
                                            uint macTileFastMovingDimSize,
-                                           int  numDwordsPerElement,
-                                           bool avoidDWordX2)
+                                           int  numDwordsPerElement)
         {
             auto numDwordsPerWorkitem = t_m * numDwordsPerElement;
 
             std::vector<int> potentialFactors = {4, 3, 2, 1};
-            if(avoidDWordX2)
-                potentialFactors = {4, 3, 1};
 
             auto start = potentialFactors.begin();
             auto end   = potentialFactors.end();
@@ -1483,37 +1481,6 @@ namespace rocRoller
         bool isGlobalToLDSOp(KernelGraph const& graph, int op)
         {
             return graph.control.get<ControlGraph::LoadTileDirect2LDS>(op).has_value();
-        }
-
-        std::optional<int>
-            getExchangeForMultiply(KernelGraph const& graph, int multiplyTag, NaryArgument arg)
-        {
-            namespace CT = rocRoller::KernelGraph::CoordinateGraph;
-            namespace CF = rocRoller::KernelGraph::ControlGraph;
-
-            auto coordPredicate = [](auto const& edge) {
-                return CT::isEdge<CT::Segment>(edge) || CT::isEdge<CT::Index>(edge);
-            };
-
-            auto isExchangePredicate = [&graph](int operation) -> bool {
-                return graph.control.get<CF::Exchange>(operation).has_value();
-            };
-
-            int scale
-                = graph.mapper.get(multiplyTag, Connections::typeArgument<CT::MacroTile>(arg));
-            if(scale == -1)
-                return {};
-
-            auto tileTag = only(graph.coordinates.getOutputNodeIndices(scale, coordPredicate));
-            if(not tileTag)
-                return {};
-
-            auto connections = graph.mapper.getCoordinateConnections(tileTag.value());
-            for(auto connection : connections)
-                if(isExchangePredicate(connection.control))
-                    return connection.control;
-
-            return {};
         }
     }
 }

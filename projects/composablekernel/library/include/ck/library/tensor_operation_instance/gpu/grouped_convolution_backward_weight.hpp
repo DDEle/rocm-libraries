@@ -347,12 +347,12 @@ struct DeviceOperationInstanceFactory<ck::tensor_operation::device::DeviceGroupe
             if constexpr(is_same_v<InLayout, NHWGC> && is_same_v<WeiLayout, GKYXC> &&
                          is_same_v<OutLayout, NHWGK>)
             {
+#ifdef CK_ENABLE_FP32
                 if constexpr(is_same_v<InDataType, float> && is_same_v<WeiDataType, float> &&
                              is_same_v<OutDataType, float>)
                 {
                     static_assert(is_same_v<ComputeTypeA, ComputeTypeB>,
                                   "Error: ComputeTypeA and ComputeTypeB should be the same");
-#ifdef CK_ENABLE_FP32
                     if constexpr(is_same_v<ComputeTypeA, float>)
                     {
                         add_device_grouped_conv2d_bwd_weight_xdl_nhwgc_gkyxc_nhwgk_f32_instances(
@@ -367,9 +367,7 @@ struct DeviceOperationInstanceFactory<ck::tensor_operation::device::DeviceGroupe
                         add_device_grouped_conv2d_bwd_weight_xdl_nhwgc_gkyxc_nhwgk_f32_pad0_pipev5_instances(
                             op_ptrs);
                     }
-#endif
-#ifdef CK_ENABLE_TF32
-                    if constexpr(is_same_v<ComputeTypeA, TF32>)
+                    else if constexpr(is_same_v<ComputeTypeA, TF32>)
                     {
                         add_device_grouped_conv2d_bwd_weight_xdl_nhwgc_gkyxc_nhwgk_f32_tf32_instances(
                             op_ptrs);
@@ -382,8 +380,8 @@ struct DeviceOperationInstanceFactory<ck::tensor_operation::device::DeviceGroupe
                         add_device_grouped_conv2d_bwd_weight_xdl_nhwgc_gkyxc_nhwgk_f32_tf32_pad0_pipev5_instances(
                             op_ptrs);
                     }
-#endif
                 }
+#endif
 #ifdef CK_ENABLE_FP16
                 if constexpr(is_same_v<InDataType, half_t> && is_same_v<WeiDataType, half_t> &&
                              is_same_v<OutDataType, half_t> && is_same_v<ComputeTypeA, half_t> &&
@@ -612,12 +610,12 @@ struct DeviceOperationInstanceFactory<ck::tensor_operation::device::DeviceGroupe
             if constexpr(is_same_v<InLayout, NDHWGC> && is_same_v<WeiLayout, GKZYXC> &&
                          is_same_v<OutLayout, NDHWGK>)
             {
+#ifdef CK_ENABLE_FP32
                 if constexpr(is_same_v<InDataType, float> && is_same_v<WeiDataType, float> &&
                              is_same_v<OutDataType, float>)
                 {
                     static_assert(is_same_v<ComputeTypeA, ComputeTypeB>,
                                   "Error: ComputeTypeA and ComputeTypeB should be the same");
-#ifdef CK_ENABLE_FP32
                     if constexpr(is_same_v<ComputeTypeA, float>)
                     {
                         add_device_grouped_conv3d_bwd_weight_xdl_ndhwgc_gkzyxc_ndhwgk_f32_instances(
@@ -631,9 +629,7 @@ struct DeviceOperationInstanceFactory<ck::tensor_operation::device::DeviceGroupe
                         add_device_grouped_conv3d_bwd_weight_xdl_ndhwgc_gkzyxc_ndhwgk_f32_pad0_pipev5_instances(
                             op_ptrs);
                     }
-#endif
-#ifdef CK_ENABLE_TF32
-                    if constexpr(is_same_v<ComputeTypeA, TF32>)
+                    else if constexpr(is_same_v<ComputeTypeA, TF32>)
                     {
                         add_device_grouped_conv3d_bwd_weight_xdl_ndhwgc_gkzyxc_ndhwgk_f32_tf32_instances(
                             op_ptrs);
@@ -646,8 +642,8 @@ struct DeviceOperationInstanceFactory<ck::tensor_operation::device::DeviceGroupe
                         add_device_grouped_conv3d_bwd_weight_xdl_ndhwgc_gkzyxc_ndhwgk_f32_tf32_pad0_pipev5_instances(
                             op_ptrs);
                     }
-#endif
                 }
+#endif
 #ifdef CK_ENABLE_FP16
                 if constexpr(is_same_v<InDataType, half_t> && is_same_v<WeiDataType, half_t> &&
                              is_same_v<OutDataType, half_t> && is_same_v<ComputeTypeA, half_t> &&

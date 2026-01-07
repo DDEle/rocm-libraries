@@ -90,9 +90,24 @@ float batched_contraction_impl(const ck_tile::BatchedContractionHostArgs<DsDataT
     using GemmPipelineProblem =
         ck_tile::GemmPipelineProblem<ADataType, BDataType, AccDataType, GemmShape, Traits>;
 
-    constexpr auto scheduler = GEMM_PIPELINE_SCHEDULER;
+    using BaseGemmPipeline = UNIVERSAL_GEMM_PIPELINE<GemmPipelineProblem>;
 
-    const auto Run = [&]() {
+    ck_tile::index_t K_total = 1;
+    for(ck_tile::index_t i = NumDimG + NumDimM; i < NumDimG + NumDimM + NumDimK; ++i)
+    {
+        K_total *= args.A_dims[i];
+    }
+
+    const ck_tile::index_t num_loop    = TilePartitioner::GetLoopNum(K_total);
+    const bool has_hot_loop            = BaseGemmPipeline::BlockHasHotloop(num_loop);
+    const ck_tile::TailNumber tail_num = BaseGemmPipeline::GetBlockLoopTailNum(num_loop);
+
+    float ave_time{0};
+
+    const auto Run = [&](const auto has_hot_loop_, const auto tail_number_) {
+        constexpr bool has_hot_loop_v = has_hot_loop_.value;
+        constexpr auto tail_number_v  = tail_number_.value;
+        constexpr auto scheduler      = GEMM_PIPELINE_SCHEDULER;
         constexpr auto memory_operation =
             ck_tile::memory_operation_enum::set; // Always set (no atomic_add)
 
@@ -101,7 +116,9 @@ float batched_contraction_impl(const ck_tile::BatchedContractionHostArgs<DsDataT
                                                                            AccDataType,
                                                                            GemmShape,
                                                                            GemmUniversalTraits,
-                                                                           scheduler>;
+                                                                           scheduler,
+                                                                           has_hot_loop_v,
+                                                                           tail_number_v>;
 
         using GemmPipeline = GEMM_PIPELINE<UniversalGemmProblem>;
 
@@ -149,10 +166,14 @@ float batched_contraction_impl(const ck_tile::BatchedContractionHostArgs<DsDataT
 
         auto kernel = ck_tile::make_kernel<kBlockPerCu>(Kernel{}, grids, blocks, 0, kargs);
 
-        return ck_tile::launch_kernel(s, kernel);
+        ave_time = ck_tile::launch_kernel(s, kernel);
+
+        return ave_time;
     };
 
-    return Run();
+    BaseGemmPipeline::TailHandler(Run, has_hot_loop, tail_num);
+
+    return ave_time;
 }
 
 #define HANDLE_CASE(G, M, N, K)                                                  \
@@ -198,7 +219,9 @@ float batched_contraction(const ck_tile::BatchedContractionHostArgs<DsDataType::
     HANDLE_CASE(2, 1, 1, 1);
     HANDLE_CASE(2, 2, 2, 1);
     HANDLE_CASE(1, 2, 1, 1);
+    HANDLE_CASE(1, 1, 1, 2);
     HANDLE_CASE(2, 2, 2, 2);
+    HANDLE_CASE(4, 4, 4, 4);
 
     throw std::runtime_error(
         "Unsupported dimension combination: G=" + std::to_string(num_g_dims) +

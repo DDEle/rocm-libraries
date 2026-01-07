@@ -69,15 +69,10 @@ include( ROCMInstallTargets )
 set( bench_list rocfft-bench dyna-rocfft-bench )
 foreach( bench ${bench_list})
   if(${bench} STREQUAL "rocfft-bench")
-    set( bench_main bench.cpp )
+    add_executable( ${bench} ../../shared/array_validator.cpp bench.cpp bench.h )
   else()
-    set( bench_main dyna-bench.cpp )
+    add_executable( ${bench} ../../shared/array_validator.cpp dyna-bench.cpp bench.h )
   endif()
-  add_executable( ${bench}
-    ../../shared/array_validator.cpp
-    ../../shared/data_gen_device.cpp
-    ${bench_main}
-    bench.h )
 
   target_compile_options( ${bench} PRIVATE ${WARNING_FLAGS} -Wno-cpp )
 

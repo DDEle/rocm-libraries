@@ -6,11 +6,11 @@
 #include <unordered_map>
 
 #include <hipdnn_frontend.hpp>
+#include <hipdnn_sdk/test_utilities/CpuFpReferenceBatchnorm.hpp>
+#include <hipdnn_sdk/test_utilities/CpuFpReferenceValidation.hpp>
+#include <hipdnn_sdk/test_utilities/TestTolerances.hpp>
 #include <hipdnn_sdk/utilities/Constants.hpp>
 #include <hipdnn_sdk/utilities/Tensor.hpp>
-#include <hipdnn_test_sdk/utilities/CpuFpReferenceBatchnorm.hpp>
-#include <hipdnn_test_sdk/utilities/CpuFpReferenceValidation.hpp>
-#include <hipdnn_test_sdk/utilities/TestTolerances.hpp>
 
 #include "../utils/Helpers.hpp"
 
@@ -101,14 +101,13 @@ void SampleRunner::operator()(const TensorLayout& layout)
 
         utilities::Tensor<InputType> yRefTensor(y->get_dim(), layout);
 
-        auto tolerance = hipdnn_test_sdk::utilities::batchnorm::getToleranceInference<InputType>();
+        auto tolerance = test_utilities::batchnorm::getToleranceInference<InputType>();
         double epsilon = utilities::BATCHNORM_DEFAULT_EPSILON;
 
-        hipdnn_test_sdk::utilities::CpuFpReferenceBatchnorm::fwdInference(
+        test_utilities::CpuFpReferenceBatchnorm::fwdInference(
             xTensor, scaleTensor, biasTensor, meanTensor, invVarianceTensor, yRefTensor);
 
-        auto validator
-            = hipdnn_test_sdk::utilities::CpuFpReferenceValidation<InputType>(tolerance, tolerance);
+        auto validator = test_utilities::CpuFpReferenceValidation<InputType>(tolerance, tolerance);
 
         bool yValid = validator.allClose(yRefTensor, yTensor);
 

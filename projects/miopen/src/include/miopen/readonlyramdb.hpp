@@ -29,10 +29,11 @@
 #include <miopen/db_record.hpp>
 #include <miopen/filesystem.hpp>
 
-#include <optional>
+#include <boost/optional.hpp>
+
+#include <unordered_map>
 #include <string>
 #include <sstream>
-#include <unordered_map>
 
 namespace miopen {
 
@@ -48,13 +49,13 @@ public:
     static ReadonlyRamDb&
     GetCached(DbKinds db_kind_, const fs::path& path, bool warn_if_unreadable);
 
-    std::optional<DbRecord> FindRecord(const std::string& problem) const
+    boost::optional<DbRecord> FindRecord(const std::string& problem) const
     {
         MIOPEN_LOG_I2("Looking for key " << problem << " in file " << db_path);
         const auto it = cache.find(problem);
 
         if(it == cache.end())
-            return {};
+            return boost::none;
 
         auto record = DbRecord{problem};
 
@@ -66,14 +67,14 @@ public:
             MIOPEN_LOG_E("Error parsing payload under the key: "
                          << problem << " form file " << db_path << "#" << it->second.line);
             MIOPEN_LOG_E("Contents: " << it->second.content);
-            return {};
+            return boost::none;
         }
 
         return record;
     }
 
     template <class TProblem>
-    std::optional<DbRecord> FindRecord(const TProblem& problem) const
+    boost::optional<DbRecord> FindRecord(const TProblem& problem) const
     {
         const auto key = DbRecord::SerializeKey(db_kind, problem);
         return FindRecord(key);

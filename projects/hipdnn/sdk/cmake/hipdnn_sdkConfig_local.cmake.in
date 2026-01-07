@@ -3,9 +3,6 @@
 
 @PACKAGE_INIT@
 
-# Find required dependencies
-find_package(Threads REQUIRED)
-
 # Subdirectory path for hipDNN engine plugins (relative to lib)
 set(HIPDNN_PLUGIN_ENGINE_SUBDIR "@HIPDNN_PLUGIN_ENGINE_SUBDIR@")
 

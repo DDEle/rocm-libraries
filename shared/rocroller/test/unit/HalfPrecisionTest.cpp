@@ -650,8 +650,7 @@ namespace rocRollerTest
         auto addr
             = Register::Value::Placeholder(m_context, Register::Type::Vector, DataType::Int64, 1);
 
-        auto bufferRegs = Register::Value::Placeholder(
-            m_context, Register::Type::Scalar, {DataType::None, PointerType::Buffer}, 1);
+        auto buff_desc = std::make_shared<BufferDescriptor>(m_context);
         auto buff_opts = BufferInstructionOptions();
 
         // copy
@@ -680,7 +679,7 @@ namespace rocRollerTest
                                                        addr,
                                                        addr,
                                                        "",
-                                                       bufferRegs)),
+                                                       buff_desc)),
                      FatalError);
     }
 

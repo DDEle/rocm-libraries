@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <boost/any.hpp>
 #include <miopen/conv_algo_name.hpp>
 #include <miopen/names.hpp>
 #include <miopen/scalar.hpp>

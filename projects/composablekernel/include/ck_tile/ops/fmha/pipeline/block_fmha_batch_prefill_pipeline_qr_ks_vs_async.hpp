@@ -87,8 +87,6 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
     static constexpr index_t kAlignmentO = Policy::template GetAlignmentO<Problem>();
     static constexpr index_t kAlignmentBias =
         kPadSeqLenK ? 1 : Policy::template GetAlignmentBias<Problem>();
-    static constexpr index_t kAlignmentRandVal =
-        kPadSeqLenK ? 1 : Policy::template GetAlignmentRandVal<Problem>();
 
 #if CK_TILE_FMHA_FWD_FAST_EXP2
     static constexpr auto R_LOG2E = 1.0 / log2e_v<SaccDataType>;

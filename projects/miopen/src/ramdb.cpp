@@ -35,6 +35,7 @@
 #include <chrono>
 #include <ctime>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -115,7 +116,7 @@ RamDb& RamDb::GetCached(DbKinds db_kind_, const fs::path& path, bool is_system)
     return instance;
 }
 
-std::optional<DbRecord> RamDb::FindRecord(const std::string& problem)
+boost::optional<DbRecord> RamDb::FindRecord(const std::string& problem)
 {
     const auto lock = exclusive_lock(GetLockFile(), GetLockTimeout());
     MIOPEN_VALIDATE_LOCK(lock);
@@ -253,13 +254,13 @@ bool RamDb::Remove(const std::string& key, const std::string& id)
     return true;
 }
 
-std::optional<miopen::DbRecord> RamDb::FindRecordUnsafe(const std::string& problem)
+boost::optional<miopen::DbRecord> RamDb::FindRecordUnsafe(const std::string& problem)
 {
     MIOPEN_LOG_I2("Looking for key " << problem << " in cache for file " << GetFileName());
     const auto it = cache.find(problem);
 
     if(it == cache.end())
-        return {};
+        return boost::none;
 
     auto record = DbRecord{problem};
 
@@ -268,7 +269,7 @@ std::optional<miopen::DbRecord> RamDb::FindRecordUnsafe(const std::string& probl
         MIOPEN_LOG_E("Error parsing payload under the key: "
                      << problem << " form file " << GetFileName() << "#" << it->second.line);
         MIOPEN_LOG_E("Contents: " << it->second.content);
-        return {};
+        return boost::none;
     }
 
     return record;

@@ -65,6 +65,10 @@ namespace rocRoller
 #define ShowReg(reg)                                              \
     (reg ? concatenate("\t" #reg " = ", reg->description(), "\n") \
          : concatenate("\t" #reg " = (nullptr)\n"))
+#define ShowBuf(buf)                                                              \
+    (buf && buf->allRegisters()                                                   \
+         ? concatenate("\t" #buf " = ", buf->allRegisters()->description(), "\n") \
+         : concatenate("\t" #buf " = (nullptr)\n"))
 
             return concatenate("LSTInfo {\n",
                                ShowValue(info.kind),
@@ -80,7 +84,7 @@ namespace rocRoller
                                ShowReg(info.colStrideReg),
                                ShowValue(info.colStrideAttributes),
                                ShowReg(info.offset),
-                               ShowReg(info.bufDesc),
+                               ShowBuf(info.bufDesc),
                                ShowValue(info.bufOpts),
                                ShowValue(info.isTransposedTile),
                                "}");
@@ -107,11 +111,11 @@ namespace rocRoller
             return Expression::literal(x);
         }
 
-        inline Register::ValuePtr LoadStoreTileGenerator::getBufferDesc(int tag)
+        inline std::shared_ptr<BufferDescriptor> LoadStoreTileGenerator::getBufferDesc(int tag)
         {
             auto bufferTag = m_graph->mapper.get<Buffer>(tag);
             auto bufferSrd = m_context->registerTagManager()->getRegister(bufferTag);
-            return bufferSrd;
+            return std::make_shared<BufferDescriptor>(bufferSrd, m_context);
         }
 
         /**
@@ -457,21 +461,29 @@ namespace rocRoller
                     if(bufferReg->allocationState() == Register::AllocationState::Unallocated)
                     {
                         Register::ValuePtr basePointer;
-                        auto               bufferExpr = bufferReg->expression();
+                        auto               bufDesc = BufferDescriptor(bufferReg, m_context);
                         co_yield m_context->argLoader()->getValue(user->argumentName, basePointer);
-                        ExpressionPtr base = basePointer->expression();
-                        if(user->offset)
+                        if(user->offset && !Expression::canEvaluateTo(0u, user->offset))
                         {
-                            base = base + user->offset;
+                            Register::ValuePtr tmpRegister;
+                            co_yield generate(tmpRegister,
+                                              simplify(basePointer->expression() + user->offset));
+                            co_yield bufDesc.setBasePointer(tmpRegister);
                         }
-                        bufferExpr = BufferDescriptor::SetBasePointer(bufferExpr, base, m_context);
-                        bufferExpr = BufferDescriptor::SetOptions(
-                            bufferExpr, BufferDescriptor::GetDefaultOptions(m_context));
+                        else
+                        {
+                            co_yield bufDesc.setBasePointer(basePointer);
+                        }
+
+                        co_yield bufDesc.setDefaultOpts();
+                        Register::ValuePtr limitValue;
+                        co_yield generate(limitValue, toBytes(user->size));
                         // TODO: Handle sizes larger than 32 bits
-                        bufferExpr
-                            = BufferDescriptor::SetSize(bufferExpr, toBytes(user->size), m_context);
-                        bufferReg->allocateNow();
-                        co_yield Expression::generate(bufferReg, bufferExpr, m_context);
+                        auto limit = (limitValue->regType() == Register::Type::Literal)
+                                         ? limitValue
+                                         : limitValue->subset({0});
+                        limit->setVariableType(DataType::UInt32);
+                        co_yield bufDesc.setSize(limit);
                     }
                     scope->addRegister(buffer);
                 }

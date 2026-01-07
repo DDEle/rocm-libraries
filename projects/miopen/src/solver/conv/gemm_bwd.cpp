@@ -36,6 +36,7 @@
 #include <miopen/conv/data_invoke_params.hpp>
 #include <miopen/solver/gemm_common.hpp>
 
+#include <boost/any.hpp>
 #include <boost/range/adaptors.hpp>
 
 namespace miopen {
@@ -89,9 +90,6 @@ bool GemmBwdBase::IsApplicable(const ExecutionContext& ctx, const ProblemDescrip
         MIOPEN_LOG_I2("GEMM not applicable for F8 on this GPU architecture");
         return false;
     }
-    if(problem.HasNonPackedTensors())
-        return false;
-
     return problem.IsDirectionBackwardData() && problem.IsLayoutDefault() &&
            !(gemm::IsAnyBufferBf16(dxDesc, dyDesc, wDesc) && !gemm::IsBf16Supported) &&
            !(gemm::IsAnyBufferFp16(dxDesc, dyDesc, wDesc) && !gemm::IsFp16Supported);
@@ -181,10 +179,10 @@ size_t GemmBwd1x1_stride2::GetWorkspaceSize(const ExecutionContext& context,
     const auto dy_t_size  = dyDesc.GetElementSize() * GetTypeSize(dyDesc.GetType());
     const auto gemm_trans = dx_t_size + dy_t_size;
 
-    if(gemm_trans > handle.GetMaxMemoryAllocSize())
+    if(gemm_trans > gemm::MaxMemAllocSz(handle, problem))
     {
         MIOPEN_LOG_I2("GemmBwd1x1_stride2: " << gemm_trans << " > "
-                                             << handle.GetMaxMemoryAllocSize());
+                                             << gemm::MaxMemAllocSz(handle, problem));
         return 0;
     }
     return gemm_trans;
@@ -568,9 +566,10 @@ size_t GemmBwdRest::GetWorkspaceSize(const ExecutionContext& context,
                                            std::multiplies<std::size_t>()) *
                            GetTypeSize(dyDesc.GetType()) * conv.group_count;
 
-    if(gemm_size > handle.GetMaxMemoryAllocSize())
+    if(gemm_size > gemm::MaxMemAllocSz(handle, problem, true))
     {
-        MIOPEN_LOG_I2("GemmBwdRest: " << gemm_size << " > " << handle.GetMaxMemoryAllocSize());
+        MIOPEN_LOG_I2("GemmBwdRest: " << gemm_size << " > "
+                                      << gemm::MaxMemAllocSz(handle, problem, true));
         return 0;
     }
     return gemm_size;

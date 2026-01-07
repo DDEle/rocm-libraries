@@ -14,8 +14,6 @@
 #include "ck_tile/ops/grouped_convolution/utils/transform_conv_bwd_weight_to_gemm.hpp"
 #include "ck_tile/ops/grouped_convolution/utils/grouped_convolution_utils.hpp"
 
-#include "ck_tile/ops/grouped_convolution/utils/split_k_utils.hpp"
-
 #ifdef CK_EXPERIMENTAL_BUILDER
 #include "ck_tile/builder/reflect/instance_traits_tile_grouped_convolution_backward_weight.hpp"
 #endif
@@ -64,6 +62,8 @@ struct GroupedConvBwdWeightKernelArgs
         input_left_pads       = {static_cast<index_t>(args.input_left_pads_[0])};
         input_right_pads      = {static_cast<index_t>(args.input_right_pads_[0])};
 
+        k_batch = args.k_batch;
+
         in_ptr  = args.in_ptr;
         wei_ptr = args.wei_ptr;
         for(index_t d = 0; d < NumDTensor; d++)
@@ -104,14 +104,11 @@ struct GroupedConvBwdWeightKernelArgs
         GemmK     = a_grid_desc_k_m.get_length(number<0>{});
         GemmBatch = integer_divide_ceil(args.G_, NumGroupsPerBatch);
 
-        k_batch = args.k_batch;
-
         if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
         {
             std::cout << "GemmM: " << GemmM << ", GemmN: " << GemmN << ", GemmK: " << GemmK
                       << ", GemmBatch: " << GemmBatch
-                      << ", NumGroupsPerBatch: " << NumGroupsPerBatch << ", k_batch: " << k_batch
-                      << std::endl;
+                      << ", NumGroupsPerBatch: " << NumGroupsPerBatch << std::endl;
         }
     }
 
@@ -149,6 +146,8 @@ struct GroupedConvBwdWeightKernelArgs
                                  static_cast<index_t>(args.input_left_pads_[1])};
         input_right_pads      = {static_cast<index_t>(args.input_right_pads_[0]),
                                  static_cast<index_t>(args.input_right_pads_[1])};
+
+        k_batch = args.k_batch;
 
         in_ptr  = args.in_ptr;
         wei_ptr = args.wei_ptr;
@@ -190,14 +189,11 @@ struct GroupedConvBwdWeightKernelArgs
         GemmK     = a_grid_desc_k_m.get_length(number<0>{});
         GemmBatch = integer_divide_ceil(args.G_, NumGroupsPerBatch);
 
-        k_batch = args.k_batch;
-
         if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
         {
             std::cout << "GemmM: " << GemmM << ", GemmN: " << GemmN << ", GemmK: " << GemmK
                       << ", GemmBatch: " << GemmBatch
-                      << ", NumGroupsPerBatch: " << NumGroupsPerBatch << ", k_batch: " << k_batch
-                      << std::endl;
+                      << ", NumGroupsPerBatch: " << NumGroupsPerBatch << std::endl;
         }
     }
 
@@ -243,6 +239,8 @@ struct GroupedConvBwdWeightKernelArgs
                                  static_cast<index_t>(args.input_right_pads_[1]),
                                  static_cast<index_t>(args.input_right_pads_[2])};
 
+        k_batch = args.k_batch;
+
         in_ptr  = args.in_ptr;
         wei_ptr = args.wei_ptr;
         for(index_t d = 0; d < NumDTensor; d++)
@@ -283,14 +281,11 @@ struct GroupedConvBwdWeightKernelArgs
         GemmK     = a_grid_desc_k_m.get_length(number<0>{});
         GemmBatch = integer_divide_ceil(args.G_, NumGroupsPerBatch);
 
-        k_batch = args.k_batch;
-
         if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
         {
             std::cout << "GemmM: " << GemmM << ", GemmN: " << GemmN << ", GemmK: " << GemmK
                       << ", GemmBatch: " << GemmBatch
-                      << ", NumGroupsPerBatch: " << NumGroupsPerBatch << ", k_batch: " << k_batch
-                      << std::endl;
+                      << ", NumGroupsPerBatch: " << NumGroupsPerBatch << std::endl;
         }
     }
 
@@ -403,6 +398,7 @@ struct GroupedConvolutionBackwardWeightKernel
     using GroupedConvBwdWeightKernelArgsSpecialized =
         GroupedConvBwdWeightKernelArgs<GroupedConvTraitsType_>;
 
+    // TODO: Enable this
     static constexpr bool IsSplitKSupported = true;
 
     static constexpr auto I0 = number<0>();
@@ -421,30 +417,25 @@ struct GroupedConvolutionBackwardWeightKernel
 
     [[nodiscard]] CK_TILE_HOST static const std::string GetName()
     {
-        static constexpr bool EnableSplitImage = GroupedConvTraitsType_::EnableSplitImage;
-        constexpr auto NumGroupsToMerge        = GroupedConvTraitsType_::NumGroupsToMerge;
+        constexpr auto NumGroupsToMerge = GroupedConvTraitsType_::NumGroupsToMerge;
         // clang-format off
-        return concat('_', "grouped_convolution_backward_weight", 
-            gemm_prec_str<InDataType, WeiDataType>(), 
-            InLayout::name,
-            WeiLayout::name,
-            OutLayout::name,
-            "gemm",
-            GemmPipeline::GetName(),
-            "epilogue",
-            EpiloguePipeline::GetName(),
-            getConvSpecializationString(ConvSpecialization),
-            "MergedGroups",
-            NumGroupsToMerge,
-            "SplitImage",
-            EnableSplitImage,
-            "ExplicitGemm",
-            GroupedConvTraitsType_::ExplicitGemm
-        );
+        if (NumGroupsToMerge > 1) {
+            return concat('_', "grouped_convolution_backward_weight", 
+                gemm_prec_str<InDataType, WeiDataType>(),
+                "gemm",
+                GemmPipeline::GetName(),
+                "epilogue",
+                EpiloguePipeline::GetName());
+        } else {
+            return concat('_', "grouped_convolution_backward_weight", 
+                gemm_prec_str<InDataType, WeiDataType>(),
+                "gemm",
+                GemmPipeline::GetName(),
+                "epilogue",
+                EpiloguePipeline::GetName(), "merge", NumGroupsToMerge);
+        }
         // clang-format on
     }
-
-    [[nodiscard]] CK_TILE_HOST static const std::string GetTypeString() { return GetName(); }
 
 #ifdef CK_EXPERIMENTAL_BUILDER
     CK_TILE_HOST std::string GetInstanceString() const
@@ -480,24 +471,7 @@ struct GroupedConvolutionBackwardWeightKernel
             std::cout << "NPerBlock: " << number<TilePartitioner::NPerBlock>{} << std::endl;
             std::cout << "KPerBlock: " << number<TilePartitioner::KPerBlock>{} << std::endl;
         }
-
-        auto kernel_args = GroupedConvBwdWeightKernelArgsSpecialized(hostArgs);
-
-        using KernelImpl = GroupedConvolutionBackwardWeightKernel<GroupedConvTraitsType_,
-                                                                  TilePartitioner_,
-                                                                  GemmPipeline_,
-                                                                  EpiloguePipeline_>;
-
-        // Negative k_batch value: split-K autodeduction.
-        if(kernel_args.k_batch < 0)
-        {
-            const auto optimal_split_k =
-                calculate_optimal_k_batch<GemmPipeline_::BlockSize, KernelImpl, TilePartitioner_>(
-                    kernel_args);
-            kernel_args.k_batch = optimal_split_k;
-        }
-
-        return kernel_args;
+        return GroupedConvBwdWeightKernelArgsSpecialized(hostArgs);
     }
 
     CK_TILE_HOST_DEVICE static constexpr index_t GetSmemSize()
@@ -535,54 +509,15 @@ struct GroupedConvolutionBackwardWeightKernel
     CK_TILE_HOST static bool
     IsSupportedArgument(const GroupedConvBwdWeightKernelArgsSpecialized& kargs)
     {
-        if(kargs.k_batch < 1)
-        {
-            if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
-            {
-                CK_TILE_ERROR(
-                    "k_batch must be at least one. Ensure argument is created via MakeKernelArgs.");
-            }
-            return false;
-        }
-
-        if constexpr(EpiloguePipeline_::MemoryOperation == memory_operation_enum::atomic_add)
-        {
-            if(kargs.k_batch == 1)
-            {
-                if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
-                {
-                    CK_TILE_ERROR("Atomic add epilogue only supports k_batch > 1.");
-                }
-                return false;
-            }
-        }
-
-        if constexpr(!std::is_same_v<typename EpiloguePipeline::ODataType, float> &&
-                     !std::is_same_v<typename EpiloguePipeline::ODataType, double>)
-        {
-            // The epilogue performs atomic add related to split-K using the ODataType.
-            // If the type is less accurate than float, large split-K values may lead to
-            // accuracy issues. Hence, we limit the maximum split-K value to 128 in such cases.
-            if(kargs.k_batch > 128)
-            {
-                if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
-                {
-                    CK_TILE_ERROR(
-                        "For epilogue output data type that is not float/double, we must have "
-                        "k_batch <= 128.");
-                }
-                return false;
-            }
-        }
-
         if constexpr((GroupedConvTraitsType_::VectorSizeC % 2 != 0 &&
-                      is_any_of<WeiDataType, fp16_t, bf16_t>::value))
+                      is_any_of<WeiDataType, fp16_t, bf16_t>::value) ||
+                     !IsSplitKSupported)
         {
             if(kargs.k_batch != 1)
             {
                 if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
                 {
-                    CK_TILE_ERROR("Conditions not met for K_batch > 1!");
+                    CK_TILE_ERROR("Conditions not met for Kbatch >1 !");
                 }
                 return false;
             }
@@ -708,6 +643,8 @@ struct GroupedConvolutionBackwardWeightKernel
                 CK_TILE_ERROR("ConvG must be a multiple of NumGroupsToMerge!");
                 return false;
             }
+
+            // TODO: Should we also check that GemmM <= MPerBlock and GemmN <= NPerBlock?
         }
 
         return true;

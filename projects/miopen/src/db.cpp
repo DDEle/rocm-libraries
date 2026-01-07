@@ -31,6 +31,8 @@
 #include <miopen/filesystem.hpp>
 
 #include <boost/date_time/posix_time/posix_time_types.hpp>
+#include <boost/none.hpp>
+#include <boost/optional.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -39,7 +41,6 @@
 #include <fstream>
 #include <ios>
 #include <mutex>
-#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <vector>
@@ -83,7 +84,7 @@ static std::chrono::seconds GetLockTimeout() { return std::chrono::seconds{60}; 
 using exclusive_lock = std::unique_lock<LockFile>;
 using shared_lock    = std::shared_lock<LockFile>;
 
-std::optional<DbRecord> PlainTextDb::FindRecord(const std::string& key)
+boost::optional<DbRecord> PlainTextDb::FindRecord(const std::string& key)
 {
     if(DisableUserDbFileIO)
         return {};
@@ -134,7 +135,8 @@ bool PlainTextDb::Remove(const std::string& key, const std::string& id)
     return StoreRecordUnsafe(*record);
 }
 
-std::optional<DbRecord> PlainTextDb::FindRecordUnsafe(const std::string& key, RecordPositions* pos)
+boost::optional<DbRecord> PlainTextDb::FindRecordUnsafe(const std::string& key,
+                                                        RecordPositions* pos)
 {
     if(pos != nullptr)
     {
@@ -152,7 +154,7 @@ std::optional<DbRecord> PlainTextDb::FindRecordUnsafe(const std::string& key, Re
                                    ? LoggingLevel::Warning
                                    : LoggingLevel::Info2;
         MIOPEN_LOG(log_level, "File is unreadable: " << filename);
-        return {};
+        return boost::none;
     }
 
     int n_line = 0;
@@ -210,7 +212,7 @@ std::optional<DbRecord> PlainTextDb::FindRecordUnsafe(const std::string& key, Re
         return record;
     }
     // Record was not found
-    return {};
+    return boost::none;
 }
 
 static void Copy(std::istream& from, std::ostream& to, std::streamoff count)

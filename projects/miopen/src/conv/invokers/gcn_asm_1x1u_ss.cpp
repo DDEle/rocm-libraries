@@ -2,7 +2,7 @@
  *
  * MIT License
  *
- * Copyright (c) 2025 Advanced Micro Devices, Inc.
+ * Copyright (c) 2019 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -35,41 +35,12 @@
 namespace miopen {
 namespace conv {
 
-void RunSubSampleKernel(const solver::KernelInfo& ss_kernel_info,
-                        const Handle& handle,
-                        const ConvDataTensors& tensors,
-                        Data_t workSpace)
-{
-
-    auto&& kernels = handle.GetKernels(ss_kernel_info.kernel_name, ss_kernel_info.comp_options);
-    if(!kernels.empty())
-    {
-        auto kernel = kernels.front();
-        kernel(tensors.in, workSpace);
-    }
-    else
-    {
-        handle.AddKernel(ss_kernel_info.kernel_name,
-                         ss_kernel_info.comp_options,
-                         ss_kernel_info.kernel_file,
-                         ss_kernel_info.kernel_name,
-                         ss_kernel_info.l_wk,
-                         ss_kernel_info.g_wk,
-                         ss_kernel_info.comp_options)(tensors.in, workSpace);
-    }
-}
-
-InvokerFactory MakeGcnAsm1x1USSInvokerFactory(const solver::KernelInfo& ss_kernel_info,
-                                              int N,
-                                              int C,
-                                              int K,
-                                              int n_groups,
-                                              int out_H,
-                                              int out_W,
-                                              std::size_t workspace_sz)
+InvokerFactory MakeGcnAsm1x1USSInvokerFactory(
+    int N, int C, int K, int n_groups, int out_H, int out_W, std::size_t workspace_sz)
 {
     return [=](const std::vector<Kernel>& kernels) {
-        const auto kernel = kernels[0];
+        const auto ss_kernel = kernels[0];
+        const auto kernel    = kernels[1];
 
         return [=](const Handle& handle, const AnyInvokeParams& primitive_parameters) {
             const auto& params        = primitive_parameters.CastTo<DataInvokeParams>();
@@ -87,7 +58,7 @@ InvokerFactory MakeGcnAsm1x1USSInvokerFactory(const solver::KernelInfo& ss_kerne
 
             if(params.type != InvokeType::AutoTune)
             {
-                RunSubSampleKernel(ss_kernel_info, handle, tensors, workSpace);
+                handle.Run(ss_kernel)(tensors.in, workSpace);
                 if(handle.IsProfilingEnabled())
                     elapsed += handle.GetKernelTime();
             }

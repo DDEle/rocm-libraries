@@ -178,8 +178,6 @@
 // the compiler lacks the support of BF16 literals.
 #define CVT_FP32_2FLOAT(x) (CVT_ACCUM2FLOAT(x))
 #define CVT_FP32_2ACCUM(x) (x)
-#define CVT_FLOAT2FP32(x) (CVT_FLOAT2ACCUM(x))
-#define CVT_ACCUM2FP32(x) (x)
 #endif // MIOPEN_USE_FP16
 
 #if MIOPEN_USE_FP32 == 1
@@ -201,8 +199,6 @@
 #endif
 #define CVT_FP32_2FLOAT(x) (CVT_ACCUM2FLOAT(x))
 #define CVT_FP32_2ACCUM(x) (x)
-#define CVT_FLOAT2FP32(x) (CVT_FLOAT2ACCUM(x))
-#define CVT_ACCUM2FP32(x) (x)
 #endif // MIOPEN_USE_FP32
 
 #if MIOPEN_USE_BFP16 == 1
@@ -212,16 +208,12 @@
 #define CVT_INTEGRAL2ACCUM(x) (static_cast<FLOAT_ACCUM>(x))
 #define CVT_FP32_2FLOAT(x) (CVT_ACCUM2FLOAT(x))
 #define CVT_FP32_2ACCUM(x) (x)
-#define CVT_FLOAT2FP32(x) (CVT_FLOAT2ACCUM(x))
-#define CVT_ACCUM2FP32(x) (x)
 #else
 #define CVT_FLOAT2ACCUM(x) (bfloat16_to_float(x))
 #define CVT_ACCUM2FLOAT(x) (float_to_bfloat16(x))
 #define CVT_INTEGRAL2ACCUM(x) ((_FLOAT_ACCUM)(x))
 #define CVT_FP32_2FLOAT(x) (CVT_ACCUM2FLOAT(x))
 #define CVT_FP32_2ACCUM(x) (x)
-#define CVT_FLOAT2FP32(x) (CVT_FLOAT2ACCUM(x))
-#define CVT_ACCUM2FP32(x) (x)
 #endif
 #endif
 
@@ -257,8 +249,6 @@
 #define CVT_ACCUM2FLOAT(x) (x)
 #undef CVT_FP32_2ACCUM
 #define CVT_FP32_2ACCUM(x) (CVT_FP32_2FLOAT(x))
-#undef CVT_ACCUM2FP32
-#define CVT_ACCUM2FP32(x) (CVT_FLOAT2FP32(x))
 
 #undef CVT_INTEGRAL2ACCUM
 #ifdef __HIP_PLATFORM_AMD__

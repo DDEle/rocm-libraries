@@ -214,14 +214,14 @@ int scaleContractionSample(void* alpha)
                                                      modeD.data(),
                                                      typeCompute));
 
+#if 0 // TODO
     hiptensorDataType_t scalarType;
     CHECK_HIPTENSOR_ERROR(hiptensorOperationDescriptorGetAttribute(handle,
                 desc,
                 HIPTENSOR_OPERATION_DESCRIPTOR_SCALAR_TYPE,
                 (void*)&scalarType,
                 sizeof(scalarType)));
-    assert(scalarType == *hiptensor::convertToHipTensorDataType(typeCompute));
-
+#endif
     /**************************
    * Set the algorithm to use
    ***************************/

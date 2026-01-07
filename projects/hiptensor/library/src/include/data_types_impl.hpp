@@ -29,7 +29,6 @@
 #include <iostream>
 
 #include "data_types.hpp"
-#include <iostream>
 
 namespace hiptensor
 {

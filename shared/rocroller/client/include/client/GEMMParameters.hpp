@@ -71,6 +71,12 @@ namespace rocRoller
                 int m, k, n, l;
             };
 
+            struct KernelNames
+            {
+                std::string fullName;
+                std::string shortName;
+            };
+
             std::string toString(TransposeType trans);
 
             struct TypeParameters
@@ -160,8 +166,10 @@ namespace rocRoller
                 // Datatype of inputs and outputs
                 TypeParameters types;
 
-                bool loadLDSScaleA = false;
-                bool loadLDSScaleB = false;
+                Parameters::Solution::LoadPath loadPathAScale{
+                    Parameters::Solution::LoadPath::BufferToLDSViaVGPR};
+                Parameters::Solution::LoadPath loadPathBScale{
+                    Parameters::Solution::LoadPath::BufferToLDSViaVGPR};
 
                 bool      swizzleScale    = false;
                 MKNLTuple swizzleTileSize = {0, 0, 0, 0};
@@ -195,7 +203,7 @@ namespace rocRoller
 
                 std::string version;
 
-                std::string generateKernelName() const;
+                KernelNames generateKernelName() const;
             };
 
             struct Result

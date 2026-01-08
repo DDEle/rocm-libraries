@@ -94,9 +94,7 @@
 #define CK_USE_AMD_V_FMAC_F32
 #define CK_USE_AMD_V_DOT2_F32_F16
 #define CK_USE_AMD_V_DOT4_I32_I8
-#elif defined(__gfx803__) || defined(__gfx900__) || defined(__gfx101__)
-#define CK_USE_AMD_V_MAC_F32
-#elif defined(__gfx11__) || defined(__gfx12__)
+#elif defined(__gfx11__) || defined(__gfx120__)
 #define CK_USE_AMD_V_FMAC_F32
 #define CK_USE_AMD_V_DOT2_F32_F16
 #define CK_USE_AMD_V_DOT4_I32_I8_GFX11

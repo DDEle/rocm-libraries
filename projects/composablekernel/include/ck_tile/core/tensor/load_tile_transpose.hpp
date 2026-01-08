@@ -53,6 +53,7 @@ struct DefaultTranspose
     template <index_t LaneGroupSize>
     struct Quad16
     {
+#if defined(__gfx950__)
         static_assert(LaneGroupSize == 64 || LaneGroupSize == 32 || LaneGroupSize == 16,
                       "LaneGroupSize must be 64, 32, or 16");
         using InputEncoding =
@@ -70,11 +71,32 @@ struct DefaultTranspose
                                        tuple<sequence<0>>,
                                        sequence<2>,
                                        sequence<0>>;
+
+#else // now this branch just for gfx1250
+        static_assert(LaneGroupSize == 16, "LaneGroupSize must be 16");
+
+        using InputEncoding =
+            tile_distribution_encoding<sequence<>,
+                                       tuple<sequence<8>, sequence<LaneGroupSize / 16, 2, 8>>,
+                                       tuple<sequence<2, 2, 1>>,
+                                       tuple<sequence<0, 1, 0>>,
+                                       sequence<2>,
+                                       sequence<2>>;
+
+        using OutputEncoding =
+            tile_distribution_encoding<sequence<>,
+                                       tuple<sequence<LaneGroupSize>, sequence<8>>,
+                                       tuple<sequence<1>>,
+                                       tuple<sequence<0>>,
+                                       sequence<2>,
+                                       sequence<0>>;
+#endif
     };
 
     template <index_t LaneGroupSize>
     struct Quad8
     {
+#if defined(__gfx950__)
         static_assert(LaneGroupSize == 64 || LaneGroupSize == 32 || LaneGroupSize == 16,
                       "LaneGroupSize must be 64, 32, or 16");
         using InputEncoding =
@@ -92,6 +114,24 @@ struct DefaultTranspose
                                        tuple<sequence<0>>,
                                        sequence<2>,
                                        sequence<0>>;
+#else
+        static_assert(LaneGroupSize == 16, "LaneGroupSize must be 16");
+        using InputEncoding =
+            tile_distribution_encoding<sequence<>,
+                                       tuple<sequence<2, 4>, sequence<LaneGroupSize / 16, 2, 8>>,
+                                       tuple<sequence<2, 1, 2, 1>>,
+                                       tuple<sequence<0, 0, 1, 1>>,
+                                       sequence<2>,
+                                       sequence<2>>;
+
+        using OutputEncoding =
+            tile_distribution_encoding<sequence<>,
+                                       tuple<sequence<LaneGroupSize>, sequence<8>>,
+                                       tuple<sequence<1>>,
+                                       tuple<sequence<0>>,
+                                       sequence<2>,
+                                       sequence<0>>;
+#endif
     };
 
     // Select based on data size
@@ -176,6 +216,7 @@ struct DefaultTranspose
     template <typename InDstrEncode, bool ReverseDirection = false>
     struct ValidationTraits
     {
+#if defined(__gfx950__)
         static constexpr bool value =
             ValidationTraitsImpl<InDstrEncode, ReverseDirection, 64>::value ||
             ValidationTraitsImpl<InDstrEncode, ReverseDirection, 32>::value ||
@@ -185,6 +226,12 @@ struct DefaultTranspose
             : ValidationTraitsImpl<InDstrEncode, ReverseDirection, 32>::value ? 32
             : ValidationTraitsImpl<InDstrEncode, ReverseDirection, 16>::value ? 16
                                                                               : 0;
+#else
+        static constexpr bool value =
+            ValidationTraitsImpl<InDstrEncode, ReverseDirection, 16>::value;
+        static constexpr index_t LaneGroupSize =
+            ValidationTraitsImpl<InDstrEncode, ReverseDirection, 16>::value ? 16 : 0;
+#endif
     };
 };
 template <typename TileDistribution_, typename DataType_, typename Policy>

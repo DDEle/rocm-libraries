@@ -32,6 +32,8 @@ using BiasLayout = typename LayoutSettingSelector<NDimSpatial>::BiasLayout;
 template <ck::index_t NDimSpatial>
 using ResidualLayout = typename LayoutSettingSelector<NDimSpatial>::ResidualLayout;
 
+static constexpr auto KPerBlock = sizeof(InKernelDataType) == 1 ? 64 : 32;
+
 // instance for double rate mfma on gfx950 (vs gfx942)
 template <ck::index_t NDimSpatial>
 using DeviceConvFwdInstance2 =
@@ -105,7 +107,7 @@ using DeviceConvFwdInstance =
         256,         // BlockSize
         128,         // MPerBlock
         128,         // NPerBlock
-        32,          // KPerBlock
+        KPerBlock,   // KPerBlock
         4,           // AK1
         4,           // BK1
         16,          // MPerXdl

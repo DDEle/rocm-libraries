@@ -232,6 +232,7 @@ architecture:
   ArchString: gfxunknown
   Xnack: false
   Sramecc: false
+  AsicRevisionId: -1
 mac_m: 64
 mac_n: 64
 mac_k: 64
@@ -244,6 +245,9 @@ workgroup_size_y: 2
 workgroupMappingDim: -1
 workgroupRemapXCC: false
 workgroupRemapXCCValue: -1
+workgroup_cluster_size_x: 0
+workgroup_cluster_size_y: 0
+workgroup_cluster_size_z: 0
 unroll_x: 0
 unroll_y: 0
 load_A: BufferToLDSViaVGPR
@@ -297,6 +301,7 @@ architecture:
   ArchString: gfx90a
   Xnack: false
   Sramecc: false
+  AsicRevisionId: -1
 mac_m: 64
 mac_n: 64
 mac_k: 64
@@ -309,6 +314,9 @@ workgroup_size_y: 2
 workgroupMappingDim: -1
 workgroupRemapXCC: false
 workgroupRemapXCCValue: -1
+workgroup_cluster_size_x: 0
+workgroup_cluster_size_y: 0
+workgroup_cluster_size_z: 0
 unroll_x: 0
 unroll_y: 0
 load_A: BufferToLDSViaVGPR
@@ -361,6 +369,7 @@ architecture:
   ArchString: gfx1201
   Xnack: false
   Sramecc: false
+  AsicRevisionId: -1
 mac_m: 64
 mac_n: 64
 mac_k: 64
@@ -373,6 +382,9 @@ workgroup_size_y: 2
 workgroupMappingDim: -1
 workgroupRemapXCC: false
 workgroupRemapXCCValue: -1
+workgroup_cluster_size_x: 0
+workgroup_cluster_size_y: 0
+workgroup_cluster_size_z: 0
 unroll_x: 0
 unroll_y: 0
 load_A: BufferToLDSViaVGPR

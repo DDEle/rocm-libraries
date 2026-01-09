@@ -1,0 +1,3 @@
+projects/composablekernel/**  merge=theirs
+projects/hipdnn/**            merge=theirs
+shared/tensile/**             merge=theirs

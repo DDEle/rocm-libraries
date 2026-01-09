@@ -1202,6 +1202,35 @@ TEST_CASE("splitBitFieldCombine works", "[expression][expression-transformation]
         CHECK_THAT(splitBitfieldCombine(expr), IdenticalTo(expected));
     }
 
+    SECTION("Combine 64 bit register into second, third, and fourth dwords of 128 bit dst")
+    {
+        auto expr = bfc(reg64, zero128, 0, 57, 45);
+
+        // zero128    0x 00000000 00000000 00000000 00000000
+        // reg64      0x XXXXXXXX XXXXXXXX (45 bits used: bits 0-44)
+        // expr       0x 000000XX XXXXXXXX XXXXXXX0 00000000
+        //
+        // Bit layout (45 bits from reg64[0:44] inserted at dest bits 57-101):
+        //   dword0 (bits 0-31):   unchanged = zero32
+        //   dword1 (bits 32-63):  bits 57-63 = reg64[0:6] (7 bits at positions 25-31)
+        //   dword2 (bits 64-95):  bits 64-95 = reg64[7:38] (32 bits, crosses dword boundary)
+        //                         split into: bfe(reg64, 7, 25) | (bfe(reg64, 32, 7) << 25)
+        //   dword3 (bits 96-127): bits 96-101 = reg64[39:44] (6 bits at positions 0-5)
+
+        auto dword2_lower = bfe(DataType::Raw32, reg64, 7, 25);
+        auto dword2_upper = bfe(DataType::Raw32, reg64, 32, 7);
+        auto dword2       = dword2_lower | (dword2_upper << Expression::literal(25u));
+
+        std::vector<Expression::ExpressionPtr> operands{
+            zero32,
+            bfc(bfe(DataType::Raw32, reg64, 0, 7), zero32, 0, 25, 7),
+            dword2,
+            bfc(bfe(DataType::Raw32, reg64, 39, 6), zero32, 0, 0, 6)};
+        auto expected = concat(operands, {DataType::None, PointerType::Buffer});
+
+        CHECK_THAT(splitBitfieldCombine(expr), IdenticalTo(expected));
+    }
+
     SECTION("Combine into the first dword of 128 bit dst, across src dword boundary")
     {
         auto expr = bfc(reg64, zero128, 16, 0, 32);
@@ -1209,9 +1238,15 @@ TEST_CASE("splitBitFieldCombine works", "[expression][expression-transformation]
         // zero128    0x 00000000 00000000 00000000 00000000
         // reg64      0x 0000XXXX XXXX0000
         // expr       0x 00000000 00000000 00000000 XXXXXXXX
+        //
+        // bfe(reg64, 16, 32) extracts bits 16-47, crosses dword boundary at bit 32
+        // Split into: bfe(reg64, 16, 16) | (bfe(reg64, 32, 16) << 16)
 
-        std::vector<Expression::ExpressionPtr> operands{
-            bfe(DataType::Raw32, reg64, 16, 32), zero32, zero32, zero32};
+        auto dword0_lower = bfe(DataType::Raw32, reg64, 16, 16);
+        auto dword0_upper = bfe(DataType::Raw32, reg64, 32, 16);
+        auto dword0       = dword0_lower | (dword0_upper << Expression::literal(16u));
+
+        std::vector<Expression::ExpressionPtr> operands{dword0, zero32, zero32, zero32};
         auto expected = concat(operands, {DataType::None, PointerType::Buffer});
 
         CHECK_THAT(splitBitfieldCombine(expr), IdenticalTo(expected));
@@ -1505,14 +1540,92 @@ TEST_CASE("Code gen with ConvertPropagation", "[expression][expression-transform
 
     std::string expected;
     if(DataTypeInfo::Get(dstDatatype).isSigned)
-        expected = R"(        
-            v_add_i32 v4, v0, v2
-        )";
+        expected = R"(
+             v_add_i32 v4, v0, v2
+         )";
     else
         expected = R"(
-            v_add_u32 v4, v0, v2
-        )";
+             v_add_u32 v4, v0, v2
+         )";
 
     INFO(context.output());
     CHECK(NormalizedSource(context.output()) == NormalizedSource(expected));
+}
+
+TEST_CASE("periodizeWorkitemValues works", "[expression][expression-transformation]")
+{
+    using namespace rocRoller;
+    using namespace KernelGraph::CoordinateGraph;
+    using Expression::ExpressionPtr;
+    using Expression::literal;
+
+    auto context = TestContext::ForDefaultTarget();
+
+    auto graph    = KernelGraph::KernelGraph();
+    auto wiXCoord = graph.coordinates.addElement(Workitem(0));
+    auto wiYCoord = graph.coordinates.addElement(Workitem(1));
+    auto graphPtr = std::make_shared<KernelGraph::KernelGraph>(graph);
+
+    auto wiXExpr = std::make_shared<Expression::Expression>(
+        Expression::DataFlowTag{wiXCoord, Register::Type::Vector, DataType::UInt32});
+    auto wiYExpr = std::make_shared<Expression::Expression>(
+        Expression::DataFlowTag{wiYCoord, Register::Type::Vector, DataType::UInt32});
+
+    uint period        = 16;
+    auto logPeriod     = static_cast<uint>(log2(period));
+    auto logPeriodExpr = literal(logPeriod);
+    auto periodMask    = literal(period - 1);
+
+    auto const wavefrontSize
+        = context.get()->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
+    auto logWavefrontSize     = static_cast<uint>(log2(wavefrontSize));
+    auto logWavefrontSizeExpr = literal(logWavefrontSize);
+
+    auto nWave = std::make_shared<Expression::Expression>(
+        Expression::ArithmeticShiftR({wiXExpr, logWavefrontSizeExpr}));
+
+    auto nWaveOffset
+        = std::make_shared<Expression::Expression>(Expression::ShiftL({nWave, logPeriodExpr}));
+
+    auto maskedPeriodInWave
+        = std::make_shared<Expression::Expression>(Expression::BitwiseAnd({wiXExpr, periodMask}));
+
+    auto expectedBase = std::make_shared<Expression::Expression>(
+        Expression::Add({maskedPeriodInWave, nWaveOffset}));
+
+    SECTION("Simple")
+    {
+        auto expected = expectedBase;
+        auto actual = Expression::periodizeWorkitemValues(wiXExpr, context.get(), graphPtr, period);
+
+        CHECK(toString(expected) == toString(actual));
+    }
+
+    SECTION("Simple twice")
+    {
+        auto expected = expectedBase * expectedBase;
+        auto expr     = wiXExpr * wiXExpr;
+        auto actual   = Expression::periodizeWorkitemValues(expr, context.get(), graphPtr, period);
+
+        CHECK(toString(expected) == toString(actual));
+    }
+
+    SECTION("Workitem Y")
+    {
+        auto expected = expectedBase * wiYExpr;
+        auto expr     = wiXExpr * wiYExpr;
+        auto actual   = Expression::periodizeWorkitemValues(expr, context.get(), graphPtr, period);
+
+        CHECK(toString(expected) == toString(actual));
+    }
+
+    SECTION("Complex")
+    {
+        auto expected = expectedBase + wiYExpr / literal(wavefrontSize)
+                        << literal(period) + expectedBase;
+        auto expr   = wiXExpr + wiYExpr / literal(wavefrontSize) << literal(period) + wiXExpr;
+        auto actual = Expression::periodizeWorkitemValues(expr, context.get(), graphPtr, period);
+
+        CHECK(toString(expected) == toString(actual));
+    }
 }

@@ -68,46 +68,46 @@ namespace rocRoller
         Register::ValuePtr argumentPointer() const;
 
         /**
-         * Called by `preamble()`.  Allocates all the registers set by the initial kernel execution state.
-         *
-         * @return Generator<Instruction>
-         */
+          * Called by `preamble()`.  Allocates all the registers set by the initial kernel execution state.
+          *
+          * @return Generator<Instruction>
+          */
         Generator<Instruction> allocateInitialRegisters();
 
         /**
-         * Everything up to and including the label that marks the beginning of the kernel.
-         *
-         * @return Generator<Instruction>
-         */
+          * Everything up to and including the label that marks the beginning of the kernel.
+          *
+          * @return Generator<Instruction>
+          */
         Generator<Instruction> preamble();
 
         /**
-         * Instructions that set up the initial kernel state.
-         */
+          * Instructions that set up the initial kernel state.
+          */
         Generator<Instruction> prolog();
 
         /**
-         * `s_endpgm`, plus assembler directives that must follow the kernel, not
-         * including the `.amdgpu_metadata` section.
-         *
-         * @return Generator<Instruction>
-         */
+          * `s_endpgm`, plus assembler directives that must follow the kernel, not
+          * including the `.amdgpu_metadata` section.
+          *
+          * @return Generator<Instruction>
+          */
         Generator<Instruction> postamble() const;
 
         /**
-         * Metadata YAML document, surrounded by
-         *  `.amdgpu_metadata`/`.end_amdgpu_metadata` directives
-         *
-         *
-         * @return Generator<Instruction>
-         */
+          * Metadata YAML document, surrounded by
+          *  `.amdgpu_metadata`/`.end_amdgpu_metadata` directives
+          *
+          *
+          * @return Generator<Instruction>
+          */
         Generator<Instruction> amdgpu_metadata();
 
         /**
-         * Just the YAML document.
-         *
-         * @return std::string
-         */
+          * Just the YAML document.
+          *
+          * @return std::string
+          */
         std::string amdgpu_metadata_yaml();
 
         int kernarg_segment_size() const;
@@ -120,13 +120,13 @@ namespace rocRoller
         int agpr_count() const;
 
         /**
-         * Returns the value which should be supplied to the `accum_offset` meta value in the YAML metadata.
-         * Equal to the number of VGPRs used rounded up to a multiple of 4.
-         */
+          * Returns the value which should be supplied to the `accum_offset` meta value in the YAML metadata.
+          * Equal to the number of VGPRs used rounded up to a multiple of 4.
+          */
         int accum_offset() const;
         /**
-         * Returns the total number of VGPRs used, including AGPRs.
-         */
+          * Returns the total number of VGPRs used, including AGPRs.
+          */
         int total_vgprs() const;
 
         int max_flat_workgroup_size() const;
@@ -138,9 +138,9 @@ namespace rocRoller
         std::vector<AssemblyKernelArgument> resetArguments();
 
         /**
-         * If a kernel argument exists with an expression equivalent to `exp`, return an
-         * expression referencing that argument, otherwise `nullptr`.
-         */
+          * If a kernel argument exists with an expression equivalent to `exp`, return an
+          * expression referencing that argument, otherwise `nullptr`.
+          */
         Expression::ExpressionPtr findArgumentForExpression(Expression::ExpressionPtr exp) const;
 
         std::vector<AssemblyKernelArgument> const& arguments() const;
@@ -150,10 +150,10 @@ namespace rocRoller
         std::string uniqueArgName(std::string const& base) const;
 
         /**
-         * Adds a vector of CommandArguments as arguments to the AssemblyKernel.
-         *
-         * @param args Vector of CommandArgument pointers that should be added as arguments.
-         */
+          * Adds a vector of CommandArguments as arguments to the AssemblyKernel.
+          *
+          * @param args Vector of CommandArgument pointers that should be added as arguments.
+          */
         void                      addCommandArguments(std::vector<CommandArgumentPtr> args);
         Expression::ExpressionPtr addCommandArgument(CommandArgumentPtr arg);
 
@@ -162,13 +162,16 @@ namespace rocRoller
         /** The size in bytes of all the arguments. */
         size_t argumentSize() const;
 
-        std::array<unsigned int, 3> const&              workgroupSize() const;
-        Expression::ExpressionPtr                       workgroupCount(size_t index);
-        std::array<Expression::ExpressionPtr, 3> const& workitemCount() const;
-        Expression::ExpressionPtr const&                dynamicSharedMemBytes() const;
+        std::array<unsigned int, 3> const&                workgroupSize() const;
+        Expression::ExpressionPtr                         workgroupCount(size_t index);
+        std::array<Expression::ExpressionPtr, 3> const&   workitemCount() const;
+        std::optional<std::array<unsigned int, 3>> const& workgroupClusterSize() const;
+
+        Expression::ExpressionPtr const& dynamicSharedMemBytes() const;
 
         void setWorkgroupSize(std::array<unsigned int, 3> const& val);
         void setWorkitemCount(std::array<Expression::ExpressionPtr, 3> const& val);
+        void setWorkgroupClusterSize(std::array<unsigned int, 3> const& val);
         void setDynamicSharedMemBytes(Expression::ExpressionPtr const& val);
         void setKernelGraphMeta(KernelGraph::KernelGraphPtr graph);
         void setCommandMeta(CommandPtr graph);
@@ -184,15 +187,15 @@ namespace rocRoller
         void startCodeGeneration();
 
         /**
-         * Clears the index register pointers, allowing the registers to be freed
-         * if they are not referenced elsewhere.
-         */
+          * Clears the index register pointers, allowing the registers to be freed
+          * if they are not referenced elsewhere.
+          */
         void clearIndexRegisters();
 
         /**
-         * Arguments that are only needed at kernel launch time (for expression evaluation)
-         * and don't need to be loaded into SGPRs during kernel execution.
-         */
+          * Arguments that are only needed at kernel launch time (for expression evaluation)
+          * and don't need to be loaded into SGPRs during kernel execution.
+          */
         void                         setLaunchTimeOnlyArguments(std::set<std::string> args);
         std::set<std::string> const& launchTimeOnlyArguments() const;
 
@@ -201,10 +204,10 @@ namespace rocRoller
         friend struct rocRoller::Serialization::MappingTraits;
 
         /**
-         * If a kernel argument exists with an expression equivalent to `exp`, return an
-         * expression referencing that argument, and return its index in `idx`, otherwise return
-         * `nullptr` and set `idx` to -1.
-         */
+          * If a kernel argument exists with an expression equivalent to `exp`, return an
+          * expression referencing that argument, and return its index in `idx`, otherwise return
+          * `nullptr` and set `idx` to -1.
+          */
         Expression::ExpressionPtr findArgumentForExpression(Expression::ExpressionPtr exp,
                                                             ptrdiff_t&                idx) const;
 
@@ -234,6 +237,8 @@ namespace rocRoller
         int                                     m_argumentSize = 0;
 
         std::set<std::string> m_launchTimeOnlyArguments;
+
+        std::optional<std::array<unsigned int, 3>> m_workgroupClusterSize;
 
         int m_wavefrontSize = 64;
 

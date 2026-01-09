@@ -104,16 +104,16 @@ def _run_git(args: List[str], cwd: Optional[Path] = None) -> str:
 
 def _clone_subrepo(repo_url: str, branch: str, destination: Path) -> None:
     """Clone a specific branch from the given GitHub repository into the destination path."""
-    _run_git(
-        [
-            "clone",
-            "--branch",
-            branch,
-            "--single-branch",
-            f"https://github.com/{repo_url}",
-            str(destination),
-        ]
-    )
+    token = os.environ.get("GH_TOKEN")
+    if not token:
+        raise RuntimeError("GH_TOKEN environment variable is not set")
+    _run_git([
+        "clone",
+        "--branch", branch,
+        "--single-branch",
+        f"https://{token}@github.com/{repo_url}",
+        str(destination)
+    ])
     logger.debug(f"Cloned {repo_url} into {destination}")
 
 

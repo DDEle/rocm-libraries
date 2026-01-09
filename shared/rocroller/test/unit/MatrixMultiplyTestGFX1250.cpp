@@ -34,6 +34,7 @@ using namespace rocRoller;
 
 namespace MatrixMultiplyTest
 {
+    namespace SolutionParams = rocRoller::Parameters::Solution;
     // Params are: (AB type, waveK), (transA, transB)
     class WMMATestGFX1250
         : public BaseMatrixMultiplyContextFixture<
@@ -105,19 +106,21 @@ namespace MatrixMultiplyTest
         const auto [typeAndWaveK, transOp] = std::get<1>(GetParam());
         const auto [typeAB, waveK]         = typeAndWaveK;
         const auto [transA, transB]        = transOp;
-        auto typeStr{"f16"};
+        const auto loadPathB               = SolutionParams::LoadPath::BufferToLDSViaVGPR;
+        auto       typeStr{"f16"};
         switch(typeAB)
         {
         case DataType::Half:
-            matrixMultiplyMacroTile<Half, Half, float>(16, 16, waveK, 1, true, transA, transB);
+            matrixMultiplyMacroTile<Half, Half, float>(16, 16, waveK, 1, loadPathB, transA, transB);
             break;
         case DataType::BFloat16:
             matrixMultiplyMacroTile<BFloat16, BFloat16, float>(
-                16, 16, waveK, 1, true, transA, transB);
+                16, 16, waveK, 1, loadPathB, transA, transB);
             typeStr = "bf16";
             break;
         case DataType::Float:
-            matrixMultiplyMacroTile<float, float, float>(16, 16, waveK, 1, true, transA, transB);
+            matrixMultiplyMacroTile<float, float, float>(
+                16, 16, waveK, 1, loadPathB, transA, transB);
             typeStr = "f32";
             break;
         default:
@@ -136,7 +139,8 @@ namespace MatrixMultiplyTest
         const auto [typeAndWaveK, transOp] = std::get<1>(GetParam());
         const auto [dataType, waveK]       = typeAndWaveK;
         const auto [transA, transB]        = transOp;
-        auto typeStr{"f16"};
+        const auto loadPathB               = SolutionParams::LoadPath::BufferToLDSViaVGPR;
+        auto       typeStr{"f16"};
         switch(dataType)
         {
         case DataType::Half:
@@ -148,7 +152,8 @@ namespace MatrixMultiplyTest
             {
                 Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
             }
-            matrixMultiplyMacroTile<Half, Half, Half, Half>(16, 16, waveK, 1, true, transA, transB);
+            matrixMultiplyMacroTile<Half, Half, Half, Half>(
+                16, 16, waveK, 1, loadPathB, transA, transB);
             break;
         case DataType::BFloat16:
             if(waveK == 32)
@@ -160,7 +165,7 @@ namespace MatrixMultiplyTest
                 Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
             }
             matrixMultiplyMacroTile<BFloat16, BFloat16, BFloat16, BFloat16>(
-                16, 16, waveK, 1, true, transA, transB);
+                16, 16, waveK, 1, loadPathB, transA, transB);
             typeStr = "bf16";
             break;
         default:
@@ -180,21 +185,22 @@ namespace MatrixMultiplyTest
         const auto [typeAndWaveK, transOp] = std::get<1>(GetParam());
         const auto [typeAB, waveK]         = typeAndWaveK;
         const auto [transA, transB]        = transOp;
-        auto typeStr{"f16"};
+        const auto loadPathAB              = SolutionParams::LoadPath::BufferToLDSViaVGPR;
+        auto       typeStr{"f16"};
         switch(typeAB)
         {
         case DataType::Half:
             matrixMultiplyAB<Half, Half, float>(
-                16, 16, waveK, 1, true, transA == "T", transB == "T");
+                16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
             break;
         case DataType::BFloat16:
             matrixMultiplyAB<BFloat16, BFloat16, float>(
-                16, 16, waveK, 1, true, transA == "T", transB == "T");
+                16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
             typeStr = "bf16";
             break;
         case DataType::Float:
             matrixMultiplyAB<float, float, float>(
-                16, 16, waveK, 1, true, transA == "T", transB == "T");
+                16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
             typeStr = "f32";
             break;
         default:
@@ -213,7 +219,8 @@ namespace MatrixMultiplyTest
         const auto [typeAndWaveK, transOp] = std::get<1>(GetParam());
         const auto [typeAB, waveK]         = typeAndWaveK;
         const auto [transA, transB]        = transOp;
-        auto typeStr{"f16"};
+        const auto loadPathAB              = SolutionParams::LoadPath::BufferToLDSViaVGPR;
+        auto       typeStr{"f16"};
         switch(typeAB)
         {
         case DataType::Half:
@@ -226,7 +233,7 @@ namespace MatrixMultiplyTest
                 Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
             }
             matrixMultiplyAB<Half, Half, Half, Half>(
-                16, 16, waveK, 1, true, transA == "T", transB == "T");
+                16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
             break;
         case DataType::BFloat16:
             if(waveK == 32)
@@ -238,7 +245,7 @@ namespace MatrixMultiplyTest
                 Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
             }
             matrixMultiplyAB<BFloat16, BFloat16, BFloat16, BFloat16>(
-                16, 16, waveK, 1, true, transA == "T", transB == "T");
+                16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
             typeStr = "bf16";
             break;
         default:
@@ -257,6 +264,7 @@ namespace MatrixMultiplyTest
     {
         const auto [typeA, typeB, waveK, transOp] = std::get<1>(GetParam());
         const auto [transA, transB]               = transOp;
+        const auto  loadPathB                     = SolutionParams::LoadPath::BufferToLDSViaVGPR;
         std::string typeStr;
 
         KernelOptions options{};
@@ -268,11 +276,13 @@ namespace MatrixMultiplyTest
             switch(typeA)
             {
             case DataType::FP8:
-                matrixMultiplyMacroTile<FP8, FP8, float>(16, 16, waveK, 1, true, transA, transB);
+                matrixMultiplyMacroTile<FP8, FP8, float>(
+                    16, 16, waveK, 1, loadPathB, transA, transB);
                 typeStr = "fp8_fp8";
                 break;
             case DataType::BF8:
-                matrixMultiplyMacroTile<BF8, BF8, float>(16, 16, waveK, 1, true, transA, transB);
+                matrixMultiplyMacroTile<BF8, BF8, float>(
+                    16, 16, waveK, 1, loadPathB, transA, transB);
                 typeStr = "bf8_bf8";
                 break;
             default:
@@ -284,7 +294,7 @@ namespace MatrixMultiplyTest
         {
             AssertFatal(typeB == DataType::BF8,
                         "Unexpected data type: " + ShowValue(typeB) + "(Allowed: BF8)");
-            matrixMultiplyMacroTile<FP8, BF8, float>(16, 16, waveK, 1, true, transA, transB);
+            matrixMultiplyMacroTile<FP8, BF8, float>(16, 16, waveK, 1, loadPathB, transA, transB);
             typeStr = "fp8_bf8";
         }
         else
@@ -293,7 +303,7 @@ namespace MatrixMultiplyTest
                         "Unexpected data type: " + ShowValue(typeA) + "(Allowed: BF8)");
             AssertFatal(typeB == DataType::FP8,
                         "Unexpected data type: " + ShowValue(typeB) + "(Allowed: FP8)");
-            matrixMultiplyMacroTile<BF8, FP8, float>(16, 16, waveK, 1, true, transA, transB);
+            matrixMultiplyMacroTile<BF8, FP8, float>(16, 16, waveK, 1, loadPathB, transA, transB);
             typeStr = "bf8_fp8";
         }
 
@@ -310,6 +320,7 @@ namespace MatrixMultiplyTest
 
         const auto [typeA, typeB, waveK, transOp] = std::get<1>(GetParam());
         const auto [transA, transB]               = transOp;
+        const auto  loadPathB                     = SolutionParams::LoadPath::BufferToLDSViaVGPR;
         std::string typeStr;
 
         KernelOptions options{};
@@ -322,12 +333,12 @@ namespace MatrixMultiplyTest
             {
             case DataType::FP8:
                 matrixMultiplyMacroTile<FP8, FP8, Half, Half>(
-                    16, 16, waveK, 1, true, transA, transB);
+                    16, 16, waveK, 1, loadPathB, transA, transB);
                 typeStr = "fp8_fp8";
                 break;
             case DataType::BF8:
                 matrixMultiplyMacroTile<BF8, BF8, Half, Half>(
-                    16, 16, waveK, 1, true, transA, transB);
+                    16, 16, waveK, 1, loadPathB, transA, transB);
                 typeStr = "bf8_bf8";
                 break;
             default:
@@ -339,7 +350,8 @@ namespace MatrixMultiplyTest
         {
             AssertFatal(typeB == DataType::BF8,
                         "Unexpected data type: " + ShowValue(typeB) + "(Allowed: BF8)");
-            matrixMultiplyMacroTile<FP8, BF8, Half, Half>(16, 16, waveK, 1, true, transA, transB);
+            matrixMultiplyMacroTile<FP8, BF8, Half, Half>(
+                16, 16, waveK, 1, loadPathB, transA, transB);
             typeStr = "fp8_bf8";
         }
         else
@@ -348,7 +360,8 @@ namespace MatrixMultiplyTest
                         "Unexpected data type: " + ShowValue(typeA) + "(Allowed: BF8)");
             AssertFatal(typeB == DataType::FP8,
                         "Unexpected data type: " + ShowValue(typeB) + "(Allowed: FP8)");
-            matrixMultiplyMacroTile<BF8, FP8, Half, Half>(16, 16, waveK, 1, true, transA, transB);
+            matrixMultiplyMacroTile<BF8, FP8, Half, Half>(
+                16, 16, waveK, 1, loadPathB, transA, transB);
             typeStr = "bf8_fp8";
         }
 
@@ -362,8 +375,9 @@ namespace MatrixMultiplyTest
     {
         const auto [typeA, typeB, waveK, transOp] = std::get<1>(GetParam());
         const auto [transA, transB]               = transOp;
+        const auto loadPathB                      = SolutionParams::LoadPath::BufferToLDSViaVGPR;
 
-        matrixMultiplyMacroTileMixed(typeA, typeB, 16, 16, waveK, 1, true, transA, transB);
+        matrixMultiplyMacroTileMixed(typeA, typeB, 16, 16, waveK, 1, loadPathB, transA, transB);
 
         const auto        numWMMAs = 2; // F8, F6, and F4 mac_k = 2 * wave_k
         const std::string wmmaMnemonic{fmt::format("v_wmma_f32_16x16x{}_f8f6f4", waveK)};
@@ -374,8 +388,9 @@ namespace MatrixMultiplyTest
     TEST_P(WMMAF4TestGFX1250, GPU_MatrixMultiplyMacroTileWMMA)
     {
         const auto [transA, transB] = std::get<1>(GetParam());
+        const auto loadPathB        = SolutionParams::LoadPath::BufferToLDSViaVGPR;
 
-        matrixMultiplyMacroTile<FP4, FP4, float>(32, 16, 128, 1, true, transA, transB);
+        matrixMultiplyMacroTile<FP4, FP4, float>(32, 16, 128, 1, loadPathB, transA, transB);
 
         const auto        numWMMAs = 2; // F4 mac_k = 2 * wave_k
         const std::string wmmaMnemonic{"v_wmma_f32_32x16x128_f4"};
@@ -389,9 +404,10 @@ namespace MatrixMultiplyTest
             = std::get<1>(GetParam());
         const auto [transA, transB] = transOp;
         const ScaleParams scaleParams{scaleTypeA, scaleTypeB, scaleBlockSize};
+        const auto        loadPathB = SolutionParams::LoadPath::BufferToLDSViaVGPR;
 
         matrixMultiplyMacroTileMixed(
-            typeA, typeB, 32, 16, 128, 1, true, transA, transB, scaleParams);
+            typeA, typeB, 32, 16, 128, 1, loadPathB, transA, transB, scaleParams);
 
         const auto  numWMMAs = 2; // F4 mac_k = 2 * wave_k
         std::string wmmaMnemonic;
@@ -423,9 +439,10 @@ namespace MatrixMultiplyTest
         const auto [transA, transB]   = transOp;
         const ScaleParams scaleParams = {
             .scaleTypeA = scaleTypeA, .scaleTypeB = scaleTypeB, .scaleBlockSize = scaleBlockSize};
+        const auto loadPathB = SolutionParams::LoadPath::BufferToLDSViaVGPR;
 
         matrixMultiplyMacroTileMixed(
-            typeA, typeB, 16, 16, waveK, 1, true, transA, transB, scaleParams);
+            typeA, typeB, 16, 16, waveK, 1, loadPathB, transA, transB, scaleParams);
 
         const auto  numWMMAs = 2; // F8, F6, and F4 mac_k = 2 * wave_k
         std::string wmmaMnemonic;
@@ -452,6 +469,7 @@ namespace MatrixMultiplyTest
     {
         const auto [typeA, typeB, waveK, transOp] = std::get<1>(GetParam());
         const auto [transA, transB]               = transOp;
+        const auto  loadPathAB                    = SolutionParams::LoadPath::BufferToLDSViaVGPR;
         std::string typeStr;
 
         KernelOptions options{};
@@ -464,12 +482,12 @@ namespace MatrixMultiplyTest
             {
             case DataType::FP8:
                 matrixMultiplyAB<FP8, FP8, float>(
-                    16, 16, waveK, 1, true, transA == "T", transB == "T");
+                    16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
                 typeStr = "fp8_fp8";
                 break;
             case DataType::BF8:
                 matrixMultiplyAB<BF8, BF8, float>(
-                    16, 16, waveK, 1, true, transA == "T", transB == "T");
+                    16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
                 typeStr = "bf8_bf8";
                 break;
             default:
@@ -481,7 +499,8 @@ namespace MatrixMultiplyTest
         {
             AssertFatal(typeB == DataType::BF8,
                         "Unexpected data type: " + ShowValue(typeB) + "(Allowed: BF8)");
-            matrixMultiplyAB<FP8, BF8, float>(16, 16, waveK, 1, true, transA == "T", transB == "T");
+            matrixMultiplyAB<FP8, BF8, float>(
+                16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
             typeStr = "fp8_bf8";
         }
         else
@@ -490,7 +509,8 @@ namespace MatrixMultiplyTest
                         "Unexpected data type: " + ShowValue(typeA) + "(Allowed: BF8)");
             AssertFatal(typeB == DataType::FP8,
                         "Unexpected data type: " + ShowValue(typeB) + "(Allowed: FP8)");
-            matrixMultiplyAB<BF8, FP8, float>(16, 16, waveK, 1, true, transA == "T", transB == "T");
+            matrixMultiplyAB<BF8, FP8, float>(
+                16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
             typeStr = "bf8_fp8";
         }
 
@@ -507,6 +527,7 @@ namespace MatrixMultiplyTest
 
         const auto [typeA, typeB, waveK, transOp] = std::get<1>(GetParam());
         const auto [transA, transB]               = transOp;
+        const auto  loadPathAB                    = SolutionParams::LoadPath::BufferToLDSViaVGPR;
         std::string typeStr;
 
         KernelOptions options{};
@@ -519,12 +540,12 @@ namespace MatrixMultiplyTest
             {
             case DataType::FP8:
                 matrixMultiplyAB<FP8, FP8, Half, Half>(
-                    16, 16, waveK, 1, true, transA == "T", transB == "T");
+                    16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
                 typeStr = "fp8_fp8";
                 break;
             case DataType::BF8:
                 matrixMultiplyAB<BF8, BF8, Half, Half>(
-                    16, 16, waveK, 1, true, transA == "T", transB == "T");
+                    16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
                 typeStr = "bf8_bf8";
                 break;
             default:
@@ -537,7 +558,7 @@ namespace MatrixMultiplyTest
             AssertFatal(typeB == DataType::BF8,
                         "Unexpected data type: " + ShowValue(typeB) + "(Allowed: BF8)");
             matrixMultiplyAB<FP8, BF8, Half, Half>(
-                16, 16, waveK, 1, true, transA == "T", transB == "T");
+                16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
             typeStr = "fp8_bf8";
         }
         else
@@ -547,7 +568,7 @@ namespace MatrixMultiplyTest
             AssertFatal(typeB == DataType::FP8,
                         "Unexpected data type: " + ShowValue(typeB) + "(Allowed: FP8)");
             matrixMultiplyAB<BF8, FP8, Half, Half>(
-                16, 16, waveK, 1, true, transA == "T", transB == "T");
+                16, 16, waveK, 1, loadPathAB, transA == "T", transB == "T");
             typeStr = "bf8_fp8";
         }
 
@@ -559,7 +580,8 @@ namespace MatrixMultiplyTest
 
     TEST_P(ABCWMMATestGFX1250, GPU_MatrixMultiplyABCF16AccWMMAFP16)
     {
-        const auto waveK = std::get<1>(GetParam());
+        const auto waveK      = std::get<1>(GetParam());
+        const auto loadPathAB = SolutionParams::LoadPath::BufferToLDSViaVGPR;
         REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_F16_ACC);
 
         if(waveK == 32)
@@ -570,7 +592,7 @@ namespace MatrixMultiplyTest
         {
             Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
         }
-        matrixMultiplyABC<Half, Half>(16, 16, waveK, 1);
+        matrixMultiplyABC<Half, Half>(16, 16, waveK, 1, loadPathAB);
 
         const auto        numWMMAs = 2; // mac_k = 2 * wave_k
         const std::string wmmaMnemonic{fmt::format("v_wmma_f16_16x16x{}_f16", waveK)};
@@ -580,7 +602,8 @@ namespace MatrixMultiplyTest
 
     TEST_P(ABCWMMATestGFX1250, GPU_MatrixMultiplyABCF16AccWMMABFloat16)
     {
-        const auto waveK = std::get<1>(GetParam());
+        const auto waveK      = std::get<1>(GetParam());
+        const auto loadPathAB = SolutionParams::LoadPath::BufferToLDSViaVGPR;
         REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_F16_ACC);
 
         if(waveK == 32)
@@ -591,7 +614,7 @@ namespace MatrixMultiplyTest
         {
             Throw<FatalError>("Invalid waveK value.", ShowValue(waveK));
         }
-        matrixMultiplyABC<BFloat16, BFloat16>(16, 16, waveK, 1);
+        matrixMultiplyABC<BFloat16, BFloat16>(16, 16, waveK, 1, loadPathAB);
 
         const auto        numWMMAs = 2; // mac_k = 2 * wave_k
         const std::string wmmaMnemonic{fmt::format("v_wmma_bf16_16x16x{}_bf16", waveK)};

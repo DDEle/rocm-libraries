@@ -39,86 +39,74 @@ namespace rocRoller
     {
 
         /**
-          * @brief Class for generating instructions related to loading and storing tiles
-          *        to and from memory.
-          *
-          */
+           * @brief Class for generating instructions related to loading and storing tiles
+           *        to and from memory.
+           *
+           */
         class LoadStoreTileGenerator
         {
         public:
             LoadStoreTileGenerator(KernelGraphPtr, ContextPtr, unsigned int);
 
             /**
-              * @brief Generate instructions needed to load a tile from global memory
-              *
-              * @param tag The tag of the node in the control graph
-              * @param load The node in the control graph
-              * @param coords Known coordinates
-              * @return Generator<Instruction>
-              */
+               * @brief Generate instructions needed to load a tile from global memory
+               *
+               * @param tag The tag of the node in the control graph
+               * @param load The node in the control graph
+               * @param coords Known coordinates
+               * @return Generator<Instruction>
+               */
             Generator<Instruction> genLoadTile(int                            tag,
                                                ControlGraph::LoadTiled const& load,
                                                CoordinateGraph::Transformer   coords);
 
             /**
-              * @brief Generate instructions needed to load a tile from LDS
-              *
-              * @param tag The tag of the node in the control graph
-              * @param load The node in the control graph
-              * @param coords Known coordinates
-              * @return Generator<Instruction>
-              */
+               * @brief Generate instructions needed to load a tile from LDS
+               *
+               * @param tag The tag of the node in the control graph
+               * @param load The node in the control graph
+               * @param coords Known coordinates
+               * @return Generator<Instruction>
+               */
             Generator<Instruction> genLoadLDSTile(int                              tag,
                                                   ControlGraph::LoadLDSTile const& load,
                                                   CoordinateGraph::Transformer     coords);
 
             /**
-              * @brief Generate instructions needed to load a tile from global memory direct to lds
-              *
-              * @param tag The tag of the node in the control graph
-              * @param load The node in the control graph
-              * @param coords Known coordinates
-              * @return Generator<Instruction>
-              */
+               * @brief Generate instructions needed to load a tile from global memory direct to lds
+               *
+               * @param tag The tag of the node in the control graph
+               * @param load The node in the control graph
+               * @param coords Known coordinates
+               * @return Generator<Instruction>
+               */
             Generator<Instruction>
                 genLoadTileDirect2LDS(int                                     tag,
                                       ControlGraph::LoadTileDirect2LDS const& load,
                                       CoordinateGraph::Transformer            coords);
 
             /**
-              * @brief Generate instructions needed to store a tile to global memory
-              *
-              * @param tag The tag of the node in the control graph
-              * @param load The node in the control graph
-              * @param coords Known coordinates
-              * @return Generator<Instruction>
-              */
+               * @brief Generate instructions needed to store a tile to global memory
+               *
+               * @param tag The tag of the node in the control graph
+               * @param load The node in the control graph
+               * @param coords Known coordinates
+               * @return Generator<Instruction>
+               */
             Generator<Instruction> genStoreTile(int                             tag,
                                                 ControlGraph::StoreTiled const& store,
                                                 CoordinateGraph::Transformer    coords);
 
             /**
-              * @brief Generate instructions needed to store a tile to LDS
-              *
-              * @param tag The tag of the node in the control graph
-              * @param load The node in the control graph
-              * @param coords Known coordinates
-              * @return Generator<Instruction>
-              */
+               * @brief Generate instructions needed to store a tile to LDS
+               *
+               * @param tag The tag of the node in the control graph
+               * @param load The node in the control graph
+               * @param coords Known coordinates
+               * @return Generator<Instruction>
+               */
             Generator<Instruction> genStoreLDSTile(int                               tag,
                                                    ControlGraph::StoreLDSTile const& store,
-                                                   CoordinateGraph::Transformer      coords);
-
-            /**
-              * @brief Generate instructions needed to calculate offset and stride information
-              *
-              * @param tag The tag of the node in the control graph
-              * @param load The node in the control graph
-              * @param coords Known coordinates
-              * @return Generator<Instruction>
-              */
-            Generator<Instruction> genComputeIndex(int                               tag,
-                                                   ControlGraph::ComputeIndex const& ci,
                                                    CoordinateGraph::Transformer      coords);
 
             /**
@@ -177,35 +165,35 @@ namespace rocRoller
                                                 bool isStorePartOfGlobalToLDS = false);
 
             /**
-              * @brief Generate stride (in bytes).
-              *
-              * The `unitStride` flag is set if the generated
-              * byte-stride corresponds to a unit element-stride.  A
-              * unit element-stride is a unitary (=1) stride with
-              * respect to the element of the underlying data type.
-              *
-              * The generated stride is in bytes.  This facilitates,
-              * eg, advancing offset registers to the next macro tile
-              * by simply adding the stride in the increment of a for
-              * loop.
-              *
-              * However, determining whether a byte-stride in a
-              * stride-expression is a unit-stride is tricky for
-              * sub-byte datatypes.  To make this more robust,
-              * stride-expressions have meta-data attached to the
-              * expression to make this explicit.
-              *
-              * For example, if we only knew the byte-stride:
-              *
-              * | data type | byte-stride | unit element-stride |
-              * |-----------|-------------|---------------------|
-              * | FP64      | 8           | true                |
-              * | FP32      | 4           | true                |
-              * | FP32      | 8           | false               |
-              * | FP16      | 2           | true                |
-              * | FP8       | 1           | true                |
-              * | Sub-byte  | 1           | maybe!              |
-              */
+               * @brief Generate stride (in bytes).
+               *
+               * The `unitStride` flag is set if the generated
+               * byte-stride corresponds to a unit element-stride.  A
+               * unit element-stride is a unitary (=1) stride with
+               * respect to the element of the underlying data type.
+               *
+               * The generated stride is in bytes.  This facilitates,
+               * eg, advancing offset registers to the next macro tile
+               * by simply adding the stride in the increment of a for
+               * loop.
+               *
+               * However, determining whether a byte-stride in a
+               * stride-expression is a unit-stride is tricky for
+               * sub-byte datatypes.  To make this more robust,
+               * stride-expressions have meta-data attached to the
+               * expression to make this explicit.
+               *
+               * For example, if we only knew the byte-stride:
+               *
+               * | data type | byte-stride | unit element-stride |
+               * |-----------|-------------|---------------------|
+               * | FP64      | 8           | true                |
+               * | FP32      | 4           | true                |
+               * | FP32      | 8           | false               |
+               * | FP16      | 2           | true                |
+               * | FP8       | 1           | true                |
+               * | Sub-byte  | 1           | maybe!              |
+               */
             Generator<Instruction> generateStride(Register::ValuePtr&           stride,
                                                   RegisterExpressionAttributes& attrs,
                                                   int                           tag,

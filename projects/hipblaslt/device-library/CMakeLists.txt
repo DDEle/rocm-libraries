@@ -12,6 +12,7 @@ set(TENSILELITE_ENABLE_ASM_COMMENTS OFF CACHE STRING "Turn on asm comments when 
 option(HIPBLASLT_ENABLE_EXOPTS "" ON)
 option(HIPBLASLT_ENABLE_TRANSFORM "" ON)
 
+set(HIPBLASLT_LIBLOGIC_PATH "" CACHE STRING "Path to library logic files (will use 'library' if unset).")
 set(HIPBLASLT_TENSILE_LIBPATH "${hipblaslt_BINARY_DIR}/Tensile" CACHE STRING "Path to output the device gemm libraries.")
 file(MAKE_DIRECTORY "${HIPBLASLT_TENSILE_LIBPATH}/library")
 

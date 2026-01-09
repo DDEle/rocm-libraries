@@ -333,6 +333,7 @@ namespace ck_tile::core {
  * @var CK_TILE_ARCH_GFX1102 Indicates if the compiler target architecture is GFX1102.
  * @var CK_TILE_ARCH_GFX1151 Indicates if the compiler target architecture is GFX1151.
  * @var CK_TILE_ARCH_GFX1152 Indicates if the compiler target architecture is GFX1152.
+ * @var CK_TILE_ARCH_GFX1153 Indicates if the compiler target architecture is GFX1153.
  * @var CK_TILE_ARCH_GFX11_GENERIC Indicates if the compiler target architecture is GFX11 generic.
  * @var CK_TILE_ARCH_GFX1200 Indicates if the compiler target architecture is GFX1200.
  * @var CK_TILE_ARCH_GFX1201 Indicates if the compiler target architecture is GFX1201.
@@ -380,6 +381,26 @@ struct amdgcn_compiler_target_state
 #else
     static constexpr bool CK_TILE_ARCH_GFX1010 = false;
 #endif
+#if defined(__gfx1011__)
+    static constexpr bool CK_TILE_ARCH_GFX1011 = true;
+#else
+    static constexpr bool CK_TILE_ARCH_GFX1011 = false;
+#endif
+#if defined(__gfx1012__)
+    static constexpr bool CK_TILE_ARCH_GFX1012 = true;
+#else
+    static constexpr bool CK_TILE_ARCH_GFX1012 = false;
+#endif
+#if defined(__gfx1013__)
+    static constexpr bool CK_TILE_ARCH_GFX1013 = true;
+#else
+    static constexpr bool CK_TILE_ARCH_GFX1013 = false;
+#endif
+#if defined(__gfx10_1_generic__)
+    static constexpr bool CK_TILE_ARCH_GFX10_1_GENERIC = true;
+#else
+    static constexpr bool CK_TILE_ARCH_GFX10_1_GENERIC = false;
+#endif // __gfx10_1_generic__
 
 #if defined(__gfx1030__)
     static constexpr bool CK_TILE_ARCH_GFX1030 = true;
@@ -466,6 +487,12 @@ struct amdgcn_compiler_target_state
     static constexpr bool CK_TILE_ARCH_GFX1152 = false;
 #endif // __gfx1152__
 
+#if defined(__gfx1153__)
+    static constexpr bool CK_TILE_ARCH_GFX1153 = true;
+#else
+    static constexpr bool CK_TILE_ARCH_GFX1153 = false;
+#endif // __gfx1153__
+
 #if defined(__gfx11_generic__)
     static constexpr bool CK_TILE_ARCH_GFX11_GENERIC = true;
 #else
@@ -518,6 +545,10 @@ CK_TILE_HOST_DEVICE static constexpr uint32_t count_values_of(T search, Ts... se
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX942,          \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX950,          \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1010,         \
+        amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1011,         \
+        amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1012,         \
+        amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1013,         \
+        amdgcn_compiler_target_state::CK_TILE_ARCH_GFX10_1_GENERIC, \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1030,         \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1031,         \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1032,         \
@@ -532,6 +563,7 @@ CK_TILE_HOST_DEVICE static constexpr uint32_t count_values_of(T search, Ts... se
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1150,         \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1151,         \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1152,         \
+        amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1153,         \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX11_GENERIC,   \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1200,         \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1201,         \

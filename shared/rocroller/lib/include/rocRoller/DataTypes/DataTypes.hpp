@@ -173,6 +173,8 @@ namespace rocRoller
         WAVE_SPLIT,
         WAVE_Direct2LDS,
         WAVE_SWIZZLE,
+        WAVE_FROM_GLOBAL,
+        WAVE_LDS_FROM_GLOBAL,
         Literal,
         None,
         Count

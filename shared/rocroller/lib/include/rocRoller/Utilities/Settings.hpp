@@ -245,6 +245,12 @@ namespace rocRoller
             getDefaultValueForKernelGraphDOTSerialization,
             -1};
 
+        static inline const SettingsOption<std::size_t> GraphNodeLabelMaxLength{
+            "ROCROLLER_KGRAPH_NODE_LABEL_MAX_LENGTH",
+            "Maximum length of KernelGraph node expression when emitting DOT",
+            std::size_t{1000},
+            -1};
+
         static inline const SettingsOption<int> GFX1250AsicRevisionId{
             "ROCROLLER_GFX1250_ASIC_REVISION_ID",
             "Asic revision id to use when targetting GFX1250",

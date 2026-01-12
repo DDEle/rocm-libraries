@@ -367,7 +367,7 @@ defaultBenchmarkCommonParameters = [
     {"DirectToVgprA": [False]},
     {"DirectToVgprB": [False]},
     {"DirectToVgprSparseMetadata": [False]},
-    {"DirectToLds": [False]},
+    {"DirectToLds": [0]},
     {"UseSgprForGRO": [-1]},
     {"UseInstOffsetForGRO": [0]},
     {"AssertSummationElementMultiple": [1]},
@@ -430,7 +430,9 @@ defaultBenchmarkCommonParameters = [
     {"UseCustomMainLoopSchedule": [1]},
     {"SpaceFillingAlgo": [[]]},
     {"SFCWGM": [[[1,1],[1,1]]]},
-    {"AdaptiveGemm": [0]}
+    {"AdaptiveGemm": [0]},
+    {"ExtraMiLatencyLeft": [-1]},
+    {"ExtraLatencyForLR": [0]}
 ]
 
 # dictionary of defaults comprised of default option for each parameter

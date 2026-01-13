@@ -73,7 +73,7 @@ including the gfx908, gfx90a, gfx942, and gfx950 GPUs (collectively labeled as g
 
 Additionally, hipTensor is supported on AMD RDNA GPUs:
  - gfx11-generic: gfx1100, gfx1101, gfx1102, gfx1103, gfx1150, gfx1151, gfx1152 and gfx1153.
- - gfx12-generic; gfx1200 and gfx1201.
+ - gfx12-generic: gfx1200 and gfx1201.
 
 .. note::
 

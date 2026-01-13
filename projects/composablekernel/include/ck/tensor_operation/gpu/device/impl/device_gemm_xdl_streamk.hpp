@@ -340,7 +340,7 @@ struct DeviceGemmXdlStreamK : public DeviceGemmStreamK<ALayout,
                     hip_check_error(rtn);
                 }
             }
-            return occupancy_;
+            return std::max(1, occupancy_);
         }();
 
         hipDeviceProp_t dev_prop;
@@ -413,7 +413,7 @@ struct DeviceGemmXdlStreamK : public DeviceGemmStreamK<ALayout,
                     hip_check_error(rtn);
                 }
             }
-            return occupancy_;
+            return std::max(1, occupancy_);
         }();
 
         hipDeviceProp_t dev_prop;

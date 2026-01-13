@@ -80,8 +80,11 @@ struct BlockwiseGemmXdlops_pipeline_mx_moe_nbs_v1<BlockGemmPipelineScheduler::In
                                                   NRepeat,
                                                   KPack>
     : BlockwiseGemmXdlops_mx_pipeline_base<ThreadBlockSize,
+                                           ScaleBlockSize,
                                            ADataType,
+                                           AScaleDataType,
                                            BDataType,
+                                           BScaleDataType,
                                            ATileDesc,
                                            BTileDesc,
                                            AMmaTileDesc,
@@ -100,8 +103,11 @@ struct BlockwiseGemmXdlops_pipeline_mx_moe_nbs_v1<BlockGemmPipelineScheduler::In
 {
 
     using Base = BlockwiseGemmXdlops_mx_pipeline_base<ThreadBlockSize,
+                                                      ScaleBlockSize,
                                                       ADataType,
+                                                      AScaleDataType,
                                                       BDataType,
+                                                      BScaleDataType,
                                                       ATileDesc,
                                                       BTileDesc,
                                                       AMmaTileDesc,

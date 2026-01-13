@@ -71,7 +71,8 @@ namespace rocRoller
                 else if(isF4(type))
                 {
                     return ((mi.m == 16) && (mi.n == 16) && (mi.k == 128))
-                           || ((mi.m == 32) && (mi.n == 32) && (mi.k == 64));
+                           || ((mi.m == 32) && (mi.n == 32) && (mi.k == 64))
+                           || ((mi.m == 32) && (mi.n == 16) && (mi.k == 128));
                 }
                 return false;
             }
@@ -260,20 +261,23 @@ namespace rocRoller
             int                              iWaveY,
             int                              lane,
             int                              element,
+            LayoutType                       layout,
             MatrixMultiplySizes              mi,
             uint                             bitsPerElement,
             int                              wavefrontSize)
 
         {
+            uint const M            = layout == LayoutType::MATRIX_B ? mi.n : mi.m;
+            uint const N            = mi.k;
             uint const lanesPerSIMD = 16;
             uint const simdsPerWave = wavefrontSize / lanesPerSIMD;
 
-            uint const simdsPerSGroup = mi.m / lanesPerSIMD;
+            uint const simdsPerSGroup = M / lanesPerSIMD;
             // We should find a name for this 2x factor between wave32 & wave64.
             uint const numVBlocks = wavefrontSize == 64 ? (bitsPerElement == 8 ? 2 : 1)
                                                         : (bitsPerElement == 8 ? 4 : 2);
 
-            uint const elementsPerVGPRBlock = ((mi.m * mi.k) / wavefrontSize) / numVBlocks;
+            uint const elementsPerVGPRBlock = ((M * N) / wavefrontSize) / numVBlocks;
 
             auto SIMD = graph.coordinates.addElement(Adhoc("SIMD", literal(simdsPerWave), nullptr));
             auto laneInSIMD = graph.coordinates.addElement(Lane(literal(lanesPerSIMD), nullptr));
@@ -297,6 +301,52 @@ namespace rocRoller
                 Tile(), {iWaveY}, {elementBlockNumber, simdBlockNumber, elementBlockIndex});
 
             graph.coordinates.addElement(Flatten(), {simdBlockNumber, simdBlockIndex}, {SIMD});
+            graph.coordinates.addElement(Flatten(), {SIMD, laneInSIMD}, {lane});
+            graph.coordinates.addElement(
+                Flatten(), {elementBlockNumber, elementBlockIndex}, {element});
+        }
+
+        void addLoadWaveTile32x16x128FP4CT(KernelGraph&                     graph,
+                                           std::vector<DeferredConnection>& connections,
+                                           int                              iWaveX,
+                                           int                              iWaveY,
+                                           int                              lane,
+                                           int                              element,
+                                           MatrixMultiplySizes              mi,
+                                           uint                             bitsPerElement,
+                                           int                              wavefrontSize)
+
+        {
+            uint const lanesPerSIMD         = 16;
+            uint const simdsPerWave         = wavefrontSize / lanesPerSIMD;
+            uint const numVBlocks           = 4;
+            uint const numVBlockSets        = 2;
+            uint const numVBlocksInSet      = numVBlocks / numVBlockSets;
+            uint const elementsPerVGPRBlock = ((mi.m * mi.k) / wavefrontSize) / numVBlocks;
+
+            auto SIMD = graph.coordinates.addElement(Adhoc("SIMD", literal(simdsPerWave), nullptr));
+            auto laneInSIMD = graph.coordinates.addElement(Lane(literal(lanesPerSIMD), nullptr));
+
+            auto elementBlockSet
+                = graph.coordinates.addElement(VGPRBlockSet(literal(numVBlockSets), nullptr));
+            auto elementBlockNumber
+                = graph.coordinates.addElement(VGPRBlockNumber(literal(numVBlocksInSet), nullptr));
+            auto elementBlockIndex = graph.coordinates.addElement(
+                VGPRBlockIndex(literal(elementsPerVGPRBlock), nullptr));
+
+            connections.push_back(DC<VGPRBlockSet>(elementBlockSet));
+            connections.push_back(DC<VGPRBlockNumber>(elementBlockNumber));
+            connections.push_back(DC<VGPRBlockIndex>(elementBlockIndex));
+
+            auto simdsInM = graph.coordinates.addElement(Adhoc("simdsInM", literal(1), nullptr));
+            auto simdsInK = graph.coordinates.addElement(Adhoc("simdsInK", literal(2), nullptr));
+
+            graph.coordinates.addElement(Tile(), {iWaveX}, {elementBlockSet, simdsInM, laneInSIMD});
+
+            graph.coordinates.addElement(
+                Tile(), {iWaveY}, {elementBlockNumber, simdsInK, elementBlockIndex});
+
+            graph.coordinates.addElement(Flatten(), {simdsInM, simdsInK}, {SIMD});
             graph.coordinates.addElement(Flatten(), {SIMD, laneInSIMD}, {lane});
             graph.coordinates.addElement(
                 Flatten(), {elementBlockNumber, elementBlockIndex}, {element});
@@ -528,29 +578,68 @@ namespace rocRoller
             auto waveY = graph.coordinates.addElement(Wavefront(1));
             auto wave  = graph.coordinates.addElement(Wavefront(-1));
 
-            uint numElements       = waveTile.elements();
-            uint activeLanesInWave = static_cast<uint>(wavefrontSize);
-            uint numGPR            = numElements / activeLanesInWave;
+            const MatrixMultiplySizes mi{.m = macTile.miTileSizes[0],
+                                         .n = macTile.miTileSizes[1],
+                                         .k = macTile.miTileSizes[2]};
 
-            const MatrixMultiplySizes mi{.m = macTile.subTileSizes[0],
-                                         .n = macTile.subTileSizes[1],
-                                         .k = macTile.subTileSizes[2]};
-            uint                      K_L = mi.k / (activeLanesInWave / mi.m);
+            uint        numElements       = waveTile.elements();
+            uint        activeLanesInWave = static_cast<uint>(wavefrontSize);
+            const auto& arch              = context->targetArchitecture();
+            if(arch.HasCapability(GPUCapability::PartiallyActiveWaveSize) && isScaleType(dataType))
+            {
+                const uint numRequiredLanes = waveTile.elements() / mi.k;
+                if(numRequiredLanes < wavefrontSize)
+                {
+                    activeLanesInWave = arch.GetCapability(GPUCapability::PartiallyActiveWaveSize);
+                }
+            }
 
-            auto activeLanesInWaveLiteral = literal(activeLanesInWave);
+            uint numGPR = numElements / activeLanesInWave;
 
-            auto lane = graph.coordinates.addElement(Lane(activeLanesInWaveLiteral, nullptr));
+            uint MN  = waveTile.layout == LayoutType::MATRIX_B ? macTile.subTileSizes[1]
+                                                               : macTile.subTileSizes[0];
+            uint K   = macTile.subTileSizes[2];
+            uint K_L = K / (activeLanesInWave / MN);
+
+            auto lane = graph.coordinates.addElement(Lane(literal(activeLanesInWave), nullptr));
             auto vgpr = graph.coordinates.addElement(VGPR(literal(numGPR), nullptr));
 
             graph.coordinates.addElement(Flatten(), {waveX, waveY}, {wave});
-            graph.coordinates.addElement(Flatten(), {wave, lane}, {workitem});
+
+            if(arch.HasCapability(GPUCapability::PartiallyActiveWaveSize) && isScaleType(dataType)
+               && activeLanesInWave < wavefrontSize)
+            {
+                auto one        = literal(1);
+                auto wfsLiteral = literal(wavefrontSize);
+
+                auto newWorkitem       = graph.coordinates.addElement(Linear());
+                auto waveIndex         = graph.coordinates.addElement(Linear(one, one));
+                auto waveBlock_ignored = graph.coordinates.addElement(Linear(wfsLiteral, one));
+
+                auto activeLaneIndex
+                    = graph.coordinates.addElement(Linear(literal(activeLanesInWave), one));
+                auto activeLaneBlock_ignored = graph.coordinates.addElement(Linear(one, one));
+
+                // nWave = workitem // wavefrontSize
+                graph.coordinates.addElement(Flatten(), {waveIndex, waveBlock_ignored}, {workitem});
+                // maskedPeriodInWave = workitem % activeLanesInWave
+                graph.coordinates.addElement(
+                    Flatten(), {activeLaneBlock_ignored, activeLaneIndex}, {workitem});
+
+                // newWI = (workitem % activeLanesInWave) + (workitem // wavefrontSize) * activeLanesInWave
+                graph.coordinates.addElement(Tile(), {newWorkitem}, {waveIndex, activeLaneIndex});
+
+                graph.coordinates.addElement(Flatten(), {wave, lane}, {newWorkitem});
+            }
+            else
+            {
+                graph.coordinates.addElement(Flatten(), {wave, lane}, {workitem});
+            }
 
             connections.push_back(DC<Lane>(lane));
             connections.push_back(DC<VGPR>(vgpr));
 
             auto bitsPerElement = DataTypeInfo::Get(dataType).elementBits;
-
-            const auto& arch = context->targetArchitecture();
 
             bool isTransposeLayout = params->transposeMemoryAccess[waveTile.layout];
 
@@ -577,21 +666,38 @@ namespace rocRoller
                                                    iWaveY,
                                                    lane,
                                                    vgpr,
+                                                   waveTile.layout,
                                                    mi,
                                                    bitsPerElement,
                                                    activeLanesInWave);
                     }
                     else
                     {
-                        addLoadWaveTileViaNonContiguousVGPRBlocksCT(graph,
-                                                                    connections,
-                                                                    iWaveX,
-                                                                    iWaveY,
-                                                                    lane,
-                                                                    vgpr,
-                                                                    mi,
-                                                                    bitsPerElement,
-                                                                    activeLanesInWave);
+                        if(mi.m == 32 && mi.n == 16 && mi.k == 128 && isF4(dataType))
+                        {
+                            addLoadWaveTile32x16x128FP4CT(graph,
+                                                          connections,
+                                                          iWaveX,
+                                                          iWaveY,
+                                                          lane,
+                                                          vgpr,
+                                                          mi,
+                                                          bitsPerElement,
+                                                          activeLanesInWave);
+                        }
+                        else
+                        {
+                            addLoadWaveTileViaNonContiguousVGPRBlocksCT(graph,
+                                                                        connections,
+                                                                        iWaveX,
+                                                                        iWaveY,
+                                                                        lane,
+                                                                        vgpr,
+                                                                        waveTile.layout,
+                                                                        mi,
+                                                                        bitsPerElement,
+                                                                        activeLanesInWave);
+                        }
                     }
                 }
                 else
@@ -599,8 +705,8 @@ namespace rocRoller
                     AssertFatal(
                         K_L != 0,
                         "Invalid operand: cannot divide by zero to compute the BlockNumber");
-                    auto blockNumber = graph.coordinates.addElement(
-                        VGPRBlockNumber(literal(mi.k / K_L), nullptr));
+                    auto blockNumber
+                        = graph.coordinates.addElement(VGPRBlockNumber(literal(K / K_L), nullptr));
                     auto blockIndex
                         = graph.coordinates.addElement(VGPRBlockIndex(literal(K_L), nullptr));
 
@@ -641,6 +747,7 @@ namespace rocRoller
                                                    iWaveX,
                                                    lane,
                                                    vgpr,
+                                                   waveTile.layout,
                                                    mi,
                                                    bitsPerElement,
                                                    activeLanesInWave);
@@ -653,6 +760,7 @@ namespace rocRoller
                                                                     iWaveX,
                                                                     lane,
                                                                     vgpr,
+                                                                    waveTile.layout,
                                                                     mi,
                                                                     bitsPerElement,
                                                                     activeLanesInWave);
@@ -663,8 +771,8 @@ namespace rocRoller
                     AssertFatal(
                         K_L != 0,
                         "Invalid operand: cannot divide by zero to compute the BlockNumber");
-                    auto blockNumber = graph.coordinates.addElement(
-                        VGPRBlockNumber(literal(mi.k / K_L), nullptr));
+                    auto blockNumber
+                        = graph.coordinates.addElement(VGPRBlockNumber(literal(K / K_L), nullptr));
                     auto blockIndex
                         = graph.coordinates.addElement(VGPRBlockIndex(literal(K_L), nullptr));
 

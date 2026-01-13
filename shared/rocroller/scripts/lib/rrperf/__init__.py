@@ -37,6 +37,7 @@ import rrperf.optimize_weights
 import rrperf.profile
 import rrperf.rocm_control
 import rrperf.rrsuites
+import rrperf.rrsuites_gfx1250
 import rrperf.run
 import rrperf.specs
 from rrperf.problems import *

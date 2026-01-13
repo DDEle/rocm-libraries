@@ -255,8 +255,13 @@ struct ThreadGroupTensorSliceTransfer_DirectLoad
             const bool is_src_valid =
                 coordinate_has_valid_offset_assuming_visible_index_is_valid(src_desc, src_coord_);
 
+#if defined(__gfx125__)
+            src_buf.template AsyncCopyToLds<remove_cvref_t<decltype(dst_buf)>, ScalarPerVector>(
+                dst_buf, src_offset, dst_offset, is_src_valid);
+#else
             src_buf.template DirectCopyToLds<remove_cvref_t<decltype(dst_buf)>, ScalarPerVector>(
                 dst_buf, src_offset, dst_offset, is_src_valid);
+#endif
 
             constexpr auto move_on_dim = [&]() constexpr {
                 StaticallyIndexedArray<bool, nDim> move_on_dim_;

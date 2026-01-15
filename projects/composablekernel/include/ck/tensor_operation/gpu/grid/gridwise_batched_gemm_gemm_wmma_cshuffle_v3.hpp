@@ -109,6 +109,7 @@ struct GridwiseBatchedGemmGemm_wmma_cshuffle_v3
     static constexpr auto LWaves = LPerBlock / (LRepeat * LPerWmma);
     static constexpr auto NWaves = NPerBlock / (NRepeat * NPerWmma);
 
+<<<<<<< HEAD
     static constexpr index_t KPerWmmaBlk =
         WmmaSelector<ADataType, B0DataType, Acc0DataType, MPerWmma, LPerWmma>::selected_wmma
             .k_per_blk;
@@ -123,6 +124,15 @@ struct GridwiseBatchedGemmGemm_wmma_cshuffle_v3
         KInner *
         WmmaSelector<ADataType, B0DataType, Acc0DataType, MPerWmma, LPerWmma>::selected_wmma
             .k_per_wmma;
+=======
+    // TODO: Each GEMM should have own KPack
+    static constexpr index_t KPack = math::max(
+        math::lcm(math::lcm(AK1Value, L1Value), BK1Value),
+        WmmaSelector<ADataType, B0DataType, Acc0DataType, MPerWmma, LPerWmma>::selected_wmma
+            .k_per_wmma,
+        WmmaSelector<ADataType, B1DataType, Acc1DataType, MPerWmma, NPerWmma>::selected_wmma
+            .k_per_wmma);
+>>>>>>> origin/gfx1250
 
     using ThisThreadBlock = ThisThreadBlock<BlockSize>;
 

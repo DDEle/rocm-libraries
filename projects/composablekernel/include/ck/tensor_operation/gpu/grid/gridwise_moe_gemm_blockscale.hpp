@@ -173,7 +173,8 @@ template <typename ALayout,
           typename ComputeTypeA                       = CDataType,
           typename ComputeTypeB                       = ComputeTypeA,
           typename LDSTypeA                           = ADataType,
-          typename LDSTypeB                           = BDataType>
+          typename LDSTypeB                           = BDataType,
+          bool NonTemporalLoadB                       = false>
 struct GridwiseMoeGemmBlockScale
 {
     using AScaleType = float;
@@ -1209,6 +1210,13 @@ struct GridwiseMoeGemmBlockScale
                                BElementwiseOperation b_element_op,
                                CElementwiseOperation c_element_op)
     {
+#if defined(__gfx942__) || defined(__gfx950__)
+        constexpr auto b_coherence_flag = NonTemporalLoadB
+                                              ? AmdBufferCoherenceEnum::WAVE_NT1
+                                              : AmdBufferCoherenceEnum::DefaultCoherence;
+#else
+        constexpr auto b_coherence_flag = AmdBufferCoherenceEnum::DefaultCoherence;
+#endif
         ignore              = b_element_op;
         index_t BN0Shuffled = CalculateBN0Shuffled(problem.N * (IsInputGemm && IsSplitK ? 2 : 1));
         index_t BK0Shuffled = CalculateBK0Shuffled(problem.K);
@@ -1307,15 +1315,16 @@ struct GridwiseMoeGemmBlockScale
 
         const auto a_grid_buf = make_dynamic_buffer<AddressSpaceEnum::Global>(
             p_a_grid, a_grid_desc_ak0_m_ak1.GetElementSpaceSize());
-        const auto b_grid_buf = make_dynamic_buffer<AddressSpaceEnum::Global>(
+        const auto b_grid_buf = make_dynamic_buffer<AddressSpaceEnum::Global, b_coherence_flag>(
             p_b_grid + expert_id * static_cast<long_index_t>(expert_stride) / BPackedSize,
             b_grid_desc_bpreshuffled.GetElementSpaceSize());
 
         const auto a_scale_grid_buf = make_dynamic_buffer<AddressSpaceEnum::Global>(
             p_a_scale_grid, a_scale_grid_desc_am_ak.GetElementSpaceSize());
-        const auto b_scale_grid_buf = make_dynamic_buffer<AddressSpaceEnum::Global>(
-            p_b_scale_grid + expert_id * expert_scale_stride,
-            b_scale_grid_desc_bn_ak.GetElementSpaceSize());
+        const auto b_scale_grid_buf =
+            make_dynamic_buffer<AddressSpaceEnum::Global, b_coherence_flag>(
+                p_b_scale_grid + expert_id * expert_scale_stride,
+                b_scale_grid_desc_bn_ak.GetElementSpaceSize());
 
         // A matrix in LDS memory, dst of blockwise copy
         constexpr auto a_block_desc_ak0_m_ak1 = GetABlockDescriptor_AK0PerBlock_MPerBlock_AK1();
@@ -1472,9 +1481,11 @@ struct GridwiseMoeGemmBlockScale
         if constexpr(IsInputGemm && !IsSplitK)
         {
             const BDataType* p_b_grid_up = p_b_grid + expert_stride / 2 / BPackedSize;
-            const auto b_grid_buf_up     = make_dynamic_buffer<AddressSpaceEnum::Global>(
-                p_b_grid_up + expert_id * static_cast<long_index_t>(expert_stride) / BPackedSize,
-                b_grid_desc_bpreshuffled.GetElementSpaceSize());
+            const auto b_grid_buf_up =
+                make_dynamic_buffer<AddressSpaceEnum::Global, b_coherence_flag>(
+                    p_b_grid_up +
+                        expert_id * static_cast<long_index_t>(expert_stride) / BPackedSize,
+                    b_grid_desc_bpreshuffled.GetElementSpaceSize());
             auto b_blockwise_copy_up = ThreadwiseTensorSliceTransfer_v2<
                 BDataType,
                 BDataType,
@@ -1492,9 +1503,10 @@ struct GridwiseMoeGemmBlockScale
                                        KPack / KGroup * (get_thread_local_1d_id() % WarpSize)));
             const BScaleType* p_b_scale_grid_up =
                 p_b_scale_grid + expert_scale_stride / 2 / BPackedSize;
-            const auto b_scale_grid_buf_up = make_dynamic_buffer<AddressSpaceEnum::Global>(
-                p_b_scale_grid_up + expert_id * expert_scale_stride,
-                b_scale_grid_desc_bn_ak.GetElementSpaceSize());
+            const auto b_scale_grid_buf_up =
+                make_dynamic_buffer<AddressSpaceEnum::Global, b_coherence_flag>(
+                    p_b_scale_grid_up + expert_id * expert_scale_stride,
+                    b_scale_grid_desc_bn_ak.GetElementSpaceSize());
             auto b_scale_thread_copy_up =
                 ThreadwiseTensorSliceTransfer_v2<BScaleType,
                                                  BScaleType,
@@ -1965,6 +1977,13 @@ struct GridwiseMoeGemmBlockScale
                                     BElementwiseOperation b_element_op,
                                     CElementwiseOperation c_element_op)
     {
+#if defined(__gfx942__) || defined(__gfx950__)
+        constexpr auto b_coherence_flag = NonTemporalLoadB
+                                              ? AmdBufferCoherenceEnum::WAVE_NT1
+                                              : AmdBufferCoherenceEnum::DefaultCoherence;
+#else
+        constexpr auto b_coherence_flag = AmdBufferCoherenceEnum::DefaultCoherence;
+#endif
         ignore                           = b_element_op;
         index_t BN0Shuffled              = CalculateBN0Shuffled(problem.N);
         index_t BK0Shuffled              = CalculateBK0Shuffled(problem.K);
@@ -2061,15 +2080,16 @@ struct GridwiseMoeGemmBlockScale
 
         const auto a_grid_buf = make_dynamic_buffer<AddressSpaceEnum::Global>(
             p_a_grid, a_grid_desc_ak0_m_ak1.GetElementSpaceSize());
-        const auto b_grid_buf = make_dynamic_buffer<AddressSpaceEnum::Global>(
+        const auto b_grid_buf = make_dynamic_buffer<AddressSpaceEnum::Global, b_coherence_flag>(
             p_b_grid + expert_id * static_cast<long_index_t>(expert_stride) / BPackedSize,
             b_grid_desc_bpreshuffled.GetElementSpaceSize());
 
         const auto a_scale_grid_buf = make_dynamic_buffer<AddressSpaceEnum::Global>(
             p_a_scale_grid, a_scale_grid_desc_am_ak.GetElementSpaceSize());
-        const auto b_scale_grid_buf = make_dynamic_buffer<AddressSpaceEnum::Global>(
-            p_b_scale_grid + expert_id * expert_scale_stride,
-            b_scale_grid_desc_bn_ak.GetElementSpaceSize());
+        const auto b_scale_grid_buf =
+            make_dynamic_buffer<AddressSpaceEnum::Global, b_coherence_flag>(
+                p_b_scale_grid + expert_id * expert_scale_stride,
+                b_scale_grid_desc_bn_ak.GetElementSpaceSize());
 
         // A matrix in LDS memory, dst of blockwise copy
         constexpr auto a_block_desc_ak0_m_ak1 = GetABlockDescriptor_AK0PerBlock_MPerBlock_AK1();
@@ -2234,9 +2254,11 @@ struct GridwiseMoeGemmBlockScale
         if constexpr(IsInputGemm && !IsSplitK)
         {
             const BDataType* p_b_grid_up = p_b_grid + expert_stride / 2 / BPackedSize;
-            const auto b_grid_buf_up     = make_dynamic_buffer<AddressSpaceEnum::Global>(
-                p_b_grid_up + expert_id * static_cast<long_index_t>(expert_stride) / BPackedSize,
-                b_grid_desc_bpreshuffled.GetElementSpaceSize());
+            const auto b_grid_buf_up =
+                make_dynamic_buffer<AddressSpaceEnum::Global, b_coherence_flag>(
+                    p_b_grid_up +
+                        expert_id * static_cast<long_index_t>(expert_stride) / BPackedSize,
+                    b_grid_desc_bpreshuffled.GetElementSpaceSize());
             auto b_blockwise_copy_up = ThreadwiseTensorSliceTransfer_v2<
                 BDataType,
                 BDataType,
@@ -2254,9 +2276,10 @@ struct GridwiseMoeGemmBlockScale
                                        KPack / KGroup * (get_thread_local_1d_id() % WarpSize)));
             const BScaleType* p_b_scale_grid_up =
                 p_b_scale_grid + expert_scale_stride / 2 / BPackedSize;
-            const auto b_scale_grid_buf_up = make_dynamic_buffer<AddressSpaceEnum::Global>(
-                p_b_scale_grid_up + expert_id * expert_scale_stride / BPackedSize,
-                b_scale_grid_desc_bn_ak.GetElementSpaceSize());
+            const auto b_scale_grid_buf_up =
+                make_dynamic_buffer<AddressSpaceEnum::Global, b_coherence_flag>(
+                    p_b_scale_grid_up + expert_id * expert_scale_stride / BPackedSize,
+                    b_scale_grid_desc_bn_ak.GetElementSpaceSize());
             auto b_scale_thread_copy_up =
                 ThreadwiseTensorSliceTransfer_v2<BScaleType,
                                                  BScaleType,

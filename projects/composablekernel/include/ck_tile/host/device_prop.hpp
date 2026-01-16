@@ -72,7 +72,7 @@ inline bool is_gfx125_supported()
 
 inline bool is_gfx12_supported() { return is_gfx120_supported() || is_gfx125_supported(); }
 
-inline bool is_load_tr_supported()
+inline bool is_gfx95_supported()
 {
     // Check if load transpose is supported.
     return get_device_name() == "gfx950";

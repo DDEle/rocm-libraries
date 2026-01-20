@@ -225,14 +225,21 @@ namespace rocisa
                     }
                 }
             }
-            int setVal = msbSrc[0] + (msbSrc[1] << 2) + (msbSrc[2] << 4) + (msbDst << 6);
-            if(outputInlineAsm){
-                // workaround for inline asm. see kernels.cpp
-                kStr = "\"s_set_vgpr_msb " + std::to_string(setVal) + "\\n\\t\"\n" + kStr;
-            }
-            else if(hasVgpr && setVal != getVgprMsb()){
-                kStr = "s_set_vgpr_msb " + std::to_string(setVal) + "\n" + kStr;
-                rocIsa::getInstance().setVgprMsb(setVal);
+            int newVal = msbSrc[0] + (msbSrc[1] << 2) + (msbSrc[2] << 4) + (msbDst << 6);
+            int oriVal = getVgprMsb();
+            if(hasVgpr && newVal != oriVal && !outputInlineAsm){
+                // HW bug WA: need to store previous msb value in [15:8] bits.
+                int setVal;
+                if(oriVal == -1){
+                    // oriVal is non-determined, add snop beforehand
+                    setVal = newVal;
+                    kStr = std::string("s_nop 0\n") + "s_set_vgpr_msb " + std::to_string(setVal) + "\n" + kStr;
+                }
+                else{
+                    setVal = newVal + (oriVal << 8);
+                    kStr = "s_set_vgpr_msb " + std::to_string(setVal) + "\n" + kStr;
+                }
+                rocIsa::getInstance().setVgprMsb(newVal);
             }
         }
 

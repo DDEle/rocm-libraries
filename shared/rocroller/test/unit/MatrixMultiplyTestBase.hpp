@@ -238,11 +238,11 @@ namespace MatrixMultiplyTest
 
             auto command    = std::make_shared<Command>();
             auto tagTensorA = command->addOperation(rocRoller::Operations::Tensor(
-                2, dataTypeA, transA == "N" ? unitStridesN : unitStridesT));
+                2, dataTypeA, {}, transA == "N" ? unitStridesN : unitStridesT));
             auto tagLoadA = command->addOperation(rocRoller::Operations::T_Load_Tiled(tagTensorA));
 
             auto tagTensorB = command->addOperation(rocRoller::Operations::Tensor(
-                2, dataTypeB, transB == "N" ? unitStridesN : unitStridesT));
+                2, dataTypeB, {}, transB == "N" ? unitStridesN : unitStridesT));
             auto tagLoadB = command->addOperation(rocRoller::Operations::T_Load_Tiled(tagTensorB));
 
             std::optional<rocRoller::Operations::OperationTag> tagTensorScaleA, tagLoadScaleA,
@@ -251,7 +251,7 @@ namespace MatrixMultiplyTest
             if(scaleA)
             {
                 tagTensorScaleA = command->addOperation(rocRoller::Operations::Tensor(
-                    2, scaleTypeA, transA == "N" ? unitStridesN : unitStridesT));
+                    2, scaleTypeA, {}, transA == "N" ? unitStridesN : unitStridesT));
                 tagLoadScaleA
                     = command->addOperation(rocRoller::Operations::T_Load_Tiled(*tagTensorScaleA));
             }
@@ -259,7 +259,7 @@ namespace MatrixMultiplyTest
             if(scaleB)
             {
                 tagTensorScaleB = command->addOperation(rocRoller::Operations::Tensor(
-                    2, scaleTypeB, transB == "N" ? unitStridesN : unitStridesT));
+                    2, scaleTypeB, {}, transB == "N" ? unitStridesN : unitStridesT));
                 tagLoadScaleB
                     = command->addOperation(rocRoller::Operations::T_Load_Tiled(*tagTensorScaleB));
             }
@@ -668,12 +668,12 @@ namespace MatrixMultiplyTest
             std::vector<size_t> unitStridesN = {1, 0};
             std::vector<size_t> unitStridesT = {0, 1};
 
-            auto tagTensorA = command->addOperation(
-                rocRoller::Operations::Tensor(2, dataTypeA, transA ? unitStridesT : unitStridesN));
+            auto tagTensorA = command->addOperation(rocRoller::Operations::Tensor(
+                2, dataTypeA, {}, transA ? unitStridesT : unitStridesN));
             auto tagLoadA = command->addOperation(rocRoller::Operations::T_Load_Tiled(tagTensorA));
 
             auto tagTensorB = command->addOperation(rocRoller::Operations::Tensor(
-                2, dataTypeB, transB ? unitStridesT : unitStridesN)); // B
+                2, dataTypeB, {}, transB ? unitStridesT : unitStridesN)); // B
             auto tagLoadB = command->addOperation(rocRoller::Operations::T_Load_Tiled(tagTensorB));
 
             auto tagStoreD = command->addOperation(

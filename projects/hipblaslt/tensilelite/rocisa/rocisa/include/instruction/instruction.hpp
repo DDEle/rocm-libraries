@@ -194,6 +194,55 @@ namespace rocisa
             return "";
         }
 
+        void setMsb(std::string& kStr, const std::vector<InstructionInput>& srcs, const std::shared_ptr<Container>& dst) const
+        {
+            if(!getAsmCaps()["HasVgprMSB"])
+                return;
+
+            int msbSrc[3] = {0, 0, 0};
+            int msbDst = 0;
+            bool hasVgpr = false;
+            assert(srcs.size() <= 3);
+            for(int i=0; i<srcs.size(); i++){
+                if(std::holds_alternative<std::shared_ptr<Container>>(srcs[i]) && std::get<std::shared_ptr<Container>>(srcs[i]) != nullptr){
+                    auto gpr = dynamic_cast<RegisterContainer*>(std::get<std::shared_ptr<Container>>(srcs[i]).get());
+                    if(gpr){
+                        if(gpr->regType == "v"){
+                            msbSrc[i] = gpr->msb;
+                            hasVgpr = true;
+                        }
+                    }
+                }
+            }
+            // dst
+            if(dst){
+                std::string s = dst->toString();
+                auto gpr = dynamic_cast<RegisterContainer*>(dst.get());
+                if(gpr){
+                    if(gpr->regType == "v"){
+                        msbDst = gpr->msb;
+                        hasVgpr = true;
+                    }
+                }
+            }
+            int newVal = msbSrc[0] + (msbSrc[1] << 2) + (msbSrc[2] << 4) + (msbDst << 6);
+            int oriVal = getVgprMsb();
+            if(hasVgpr && newVal != oriVal && !outputInlineAsm){
+                // HW bug WA: need to store previous msb value in [15:8] bits.
+                int setVal;
+                if(oriVal == -1){
+                    // oriVal is non-determined, add snop beforehand
+                    setVal = newVal;
+                    kStr = std::string("s_nop 0\n") + "s_set_vgpr_msb " + std::to_string(setVal) + "\n" + kStr;
+                }
+                else{
+                    setVal = newVal + (oriVal << 8);
+                    kStr = "s_set_vgpr_msb " + std::to_string(setVal) + "\n" + kStr;
+                }
+                rocIsa::getInstance().setVgprMsb(newVal);
+            }
+        }
+
         virtual std::vector<InstructionInput> getParams() const = 0;
 
         virtual int getIssueLatency() const
@@ -407,7 +456,9 @@ namespace rocisa
             {
                 kStr += vop3->toString();
             }
-            return formatWithComment(kStr);
+            kStr = formatWithComment(kStr);
+            setMsb(kStr, srcs, dst);
+            return kStr;
         }
     };
 

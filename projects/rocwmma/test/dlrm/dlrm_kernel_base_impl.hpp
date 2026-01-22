@@ -115,7 +115,9 @@ namespace rocwmma
                        || (deviceArch == DeviceInfo::GFX1152)
                        || (deviceArch == DeviceInfo::GFX1153);
 
-        auto isGfx12 = (deviceArch == DeviceInfo::GFX1200) || (deviceArch == DeviceInfo::GFX1201);
+        auto isGfx12 = (deviceArch == DeviceInfo::GFX1200) || (deviceArch == DeviceInfo::GFX1201)
+                       || (deviceArch == DeviceInfo::GFX1250)
+                       || (deviceArch == DeviceInfo::GFX1251);
 
         // Datatypes
         auto isF64 = std::is_same<DataT, float64_t>::value;

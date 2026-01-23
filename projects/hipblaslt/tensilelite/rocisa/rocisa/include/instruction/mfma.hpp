@@ -249,6 +249,7 @@ namespace rocisa
         std::shared_ptr<RegisterContainer> a;
         std::shared_ptr<RegisterContainer> b;
         std::shared_ptr<RegisterContainer> metadata;
+        bool                               neg;
 
         SMFMAInstruction(InstType                                  instType,
                          InstType                                  accType,
@@ -258,6 +259,7 @@ namespace rocisa
                          const std::shared_ptr<RegisterContainer>& a,
                          const std::shared_ptr<RegisterContainer>& b,
                          const std::shared_ptr<RegisterContainer>& metadata,
+                         bool                                      neg     = false,
                          const std::string&                        comment = "")
             : Instruction(instType, comment)
             , accType(accType)
@@ -267,6 +269,7 @@ namespace rocisa
             , a(a)
             , b(b)
             , metadata(metadata)
+            , neg(neg)
         {
         }
 
@@ -279,6 +282,7 @@ namespace rocisa
             , a(other.a ? other.a->clone2() : nullptr)
             , b(other.b ? other.b->clone2() : nullptr)
             , metadata(other.metadata ? other.metadata->clone2() : nullptr)
+            , neg(other.neg)
         {
         }
 
@@ -299,6 +303,8 @@ namespace rocisa
                 return "bf16";
             case InstType::INST_I8:
                 return "i8";
+            case InstType::INST_U8:
+                return "iu8";
             case InstType::INST_I32:
                 return "i32";
             case InstType::INST_F8:
@@ -316,30 +322,34 @@ namespace rocisa
 
         std::vector<InstructionInput> getParams() const override
         {
-            return {acc, a, b, metadata};
+            std::string negStr = !neg ? "" : " neg_lo:[1,1]";
+            return {acc, a, b, metadata, negStr};
         }
 
         std::string preStr() const override
         {
             if(variant.size() == 4)
             {
+                bool is_smfma = getAsmCaps()["HasSMFMA"];
+                std::string instructionName = is_smfma ? "smfmac" : "swmmac";
                 std::string variantStr = std::to_string(variant[0]) + "x"
                                          + std::to_string(variant[1]) + "x"
                                          + std::to_string(variant[2]);
                 std::string strB = variant[3] > 1 ? std::to_string(variant[3]) + "ub_" : "";
-                return "v_smfmac_" + typeConvert(accType) + "_" + variantStr + "_" + strB
+                return "v_" + instructionName + "_" + typeConvert(accType) + "_" + variantStr + "_" + strB
                        + typeConvert(instType);
             }
             else
             {
-                throw std::runtime_error("Currently only support smfma variant 4");
+                throw std::runtime_error("Currently only support smfma and swmma variant 4");
             }
         }
 
         std::string getArgStr() const
         {
+            std::string negStr = !neg ? "" : " neg_lo:[1,1]";
             return acc->toString() + ", " + a->toString() + ", " + b->toString() + ", "
-                   + metadata->toString();
+                   + metadata->toString() + negStr;
         }
 
         std::string toString() const override

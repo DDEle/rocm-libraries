@@ -925,8 +925,12 @@ class KernelWriter(metaclass=abc.ABCMeta):
             instPerPackM = 1.5
           elif kernel["MIInputPerThreadMetadata"] == 4:
             instPerPackM = 3
+          elif kernel["MIInputPerThreadMetadata"] == 8:
+            instPerPackM = 6
         elif kernel["MIInputPerThreadMetadata"] == 4:
           instPerPackM = 3
+        elif kernel["MIInputPerThreadMetadata"] == 8:
+          instPerPackM = 6
       packItems = []
       packItemsA = []
       packItemsB = []
@@ -967,12 +971,12 @@ class KernelWriter(metaclass=abc.ABCMeta):
                 packINtemsA[j].append(packAItems.pop(0))
 
         if kernel["ProblemType"]["Sparse"] and not kernel["DirectToVgprSparseMetadata"]:
-          for j in range(self.states.numReadsIterCoalescedMetadata):
-            for n in range(ceil(instPerPackM)):
-              if packMItems:
-                packINtemsM[j].append(packMItems.pop(0))
-              else:
-                break
+          # for j in range(self.states.numReadsIterCoalescedMetadata):
+          for n in range(ceil(instPerPackM)):
+            if packMItems:
+              packINtemsM[0].append(packMItems.pop(0))
+            else:
+              break
 
         if packBItems:
           if kernel["ConvertAfterDS"] and kernel["ProblemType"]["DataTypeB"].isAnyFloat8():
@@ -1010,16 +1014,25 @@ class KernelWriter(metaclass=abc.ABCMeta):
                     packINtemsA[j].append(packAItems.pop(0))
                   else:
                     break
-          if kernel["ProblemType"]["Sparse"] and not kernel["DirectToVgprSparseMetadata"]:
-            while packMItems:
-              for j in range(self.states.numReadsIterCoalescedMetadata):
-                for n in range(ceil(instPerPackM)):
-                  if packMItems:
-                    packINtemsM[j].append(packMItems.pop(0))
-                  else:
-                    break
-          while packBItems:
-            if kernel["ConvertAfterDS"] and kernel["ProblemType"]["DataTypeB"].isAnyFloat8():
+
+        if kernel["ProblemType"]["Sparse"] and not kernel["DirectToVgprSparseMetadata"]:
+          while packMItems:
+            # for j in range(self.states.numReadsIterCoalescedMetadata):
+            for n in range(ceil(instPerPackM)):
+              if packMItems:
+                packINtemsM[0].append(packMItems.pop(0))
+              else:
+                break
+
+        while packBItems:
+          if kernel["ConvertAfterDS"] and kernel["ProblemType"]["DataTypeB"].isAnyFloat8():
+            for n in range(instPerPackB):
+              if packBItems:
+                packINtemsB[0].append(packBItems.pop(0))
+              else:
+                break
+          else:
+            for j in range(self.states.numReadsIterCoalescedB):
               for n in range(instPerPackB):
                 if packBItems:
                   packINtemsB[0].append(packBItems.pop(0))
@@ -1669,7 +1682,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
             # since packed register need to wait 2 quad cycle to finish packing
             # we insert pack instruction if we can, or s_nop
             remainLatency = 0
-            iterCode.addComment0("pack scheduling: curPackIdx:%u, numPack:%u, instPackLast:%s" %(curPackIdx,numPack,instPackLast))
+            iterCode.addComment0("pack scheduling: curPackIdx:%u, numPack:%u, instPackLast:%s" % (curPackIdx, numPack, instPackLast))
             if curPackIdx < numPack + 2:
               if len(instPackLast):
                 remainLatency = 2
@@ -3915,10 +3928,10 @@ class KernelWriter(metaclass=abc.ABCMeta):
       if kernel["EnableMatrixInstruction"]:
         self.states.numReadsIterCoalescedMetadata = ceil(self.states.lrvwUnrollMetadata / kernel["MIInputPerThreadMetadata"])
       else:
-        self.states.numReadsIterCoalescedMetadata  = 1
+        self.states.numReadsIterCoalescedMetadata = 1
     else:
       self.states.numReadsIterCoalescedMetadata  = 1
-    self.states.numIterPerCoalescedReadMetadata = max(1,self.states.numReadsIterCoalescedMetadata//kernel["InnerUnroll"])
+    self.states.numIterPerCoalescedReadMetadata = max(1,self.states.numReadsIterCoalescedMetadata // kernel["InnerUnroll"])
 
     if kernel["ScheduleIterAlg"] == 3 or kernel["ScheduleIterAlg"] == 2:
       self.states.numMfmaPerIter = kernel["MIWaveTile"][0] * kernel["MIWaveTile"][1] * kernel["InnerUnroll"]
@@ -4068,8 +4081,12 @@ class KernelWriter(metaclass=abc.ABCMeta):
       if kernel["MFMA_BF16_1K"] and not self.states.asmCaps["HasMFMA_bf16_1k"]:
         raise RuntimeError("BF16_1k MatrixInstruction not supported for {0}".format(self.states.version))
 
-      if kernel["ProblemType"]["Sparse"] and not self.states.asmCaps["HasSMFMA"]:
-        raise RuntimeError("Sparse MatrixInstruction not supported for {0}".format(self.states.version))
+      # Modification: Add "HasSWMMAC" to asmCaps for wave-32. Separatlly check for SMFMA and SWMMAC.
+      if kernel["ProblemType"]["Sparse"]:
+        if kernel["WavefrontSize"] == 32 and not self.states.asmCaps["HasSWMMAC"]:
+          raise RuntimeError("Sparse MatrixInstruction SWMMAC not supported for {0}".format(self.states.version))
+        if kernel["WavefrontSize"] == 64 and not self.states.asmCaps["HasSMFMA"]:
+          raise RuntimeError("Sparse MatrixInstruction SMFMA not supported for {0}".format(self.states.version))
 
       if (kernel["EnableF32XdlMathOp"] and kernel["ProblemType"]["F32XdlMathOp"].isXFloat32() and (not self.states.asmCaps["HasMFMA_xf32"])):
         if not kernel["UseF32XEmulation"]:
@@ -4100,7 +4117,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
     self.states.bpeCexternalGSU1 = int(self.states.bpr * kernel["ProblemType"]["DestDataType"].numRegisters())
     self.states.bpeCexternal = self.states.bpeCexternalGSU1
-    if kernel["_GlobalAccumulation"] and kernel["_GlobalAccumulation"] != 'PartialsBuffer':
+    if kernel["GlobalSplitU"] > 0 and kernel["_GlobalAccumulation"] and kernel["_GlobalAccumulation"] != 'PartialsBuffer':
       self.states.bpeCexternal = self.states.bpeCinternal
 
 
@@ -4300,10 +4317,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
         valuBlocks = (kernel["PrefetchGlobalRead"] + 1)
         self.states.m.numVgprValu = self.states.m.numVgprValuPerBlock * valuBlocks
       else:
-        if self.states.lrvwTileMetadata > 1:
-          self.states.m.numVgprValuPerBlock = kernel["MIWaveTileMetadata"] * roundUp(kernel["MIInputPerThreadMetadata"] / self.states.bpr)
-        else:
-          self.states.m.numVgprValuPerBlock = kernel["MIWaveTileMetadata"] * kernel["MIInputPerThreadMetadata"]
+        self.states.m.numVgprValuPerBlock = kernel["MIWaveTileMetadata"] * roundUp(kernel["MIInputPerThreadMetadata"] / self.states.bpr)
         self.states.m.numVgprValu = self.states.m.numVgprValuPerBlock * valuBlocks
         if self.states.lrvwTileMetadata > 1 and tensorParametersM["bpe"] < 4:
           self.states.m.numVgprValu = self.states.m.numVgprValuPerBlock * kernel["InnerUnroll"]
@@ -4757,10 +4771,10 @@ class KernelWriter(metaclass=abc.ABCMeta):
         vgprIdx = self.states.b.startVgprValu \
             + max(self.states.b.numVgprValu + numVgprValuPackB, self.states.b.numVgprG2LAllocated)
 
-    if ((tensorParametersA["bpe"] < 4 and not kernel["UnrollMajorLDSA"]) or                                 \
-        (tensorParametersB["bpe"] < 4 and not kernel["UnrollMajorLDSB"]) or                                 \
-        (not kernel["UnrollMajorLDSMetadata"] and kernel["MIInputPerThreadMetadata"] == 4))                \
-        and (kernel["ProblemType"]["DataType"].isInt8() or kernel["ProblemType"]["DataType"].is8bitFloat()):
+    if (((tensorParametersA["bpe"] < 4 and not kernel["UnrollMajorLDSA"]) or                                 \
+         (tensorParametersB["bpe"] < 4 and not kernel["UnrollMajorLDSB"]))                                   \
+        and (kernel["ProblemType"]["DataType"].isInt8() or kernel["ProblemType"]["DataType"].is8bitFloat())) \
+       or (not kernel["UnrollMajorLDSMetadata"] and kernel["MIInputPerThreadMetadata"] > 1) :
       self.states.a.startVgprValuPackTemp = vgprIdx
       self.states.b.startVgprValuPackTemp = vgprIdx
       vgprIdx += 1
@@ -4784,16 +4798,18 @@ class KernelWriter(metaclass=abc.ABCMeta):
         vgprIdx = ((vgprIdx+1)//2)*2
         if(self.states.archCaps["VgprBank"]):
           vgprIdx += 1
-        self.states.m.startVgprValu  = vgprIdx
+        # gfx1250
+        if self.states.m.numVgprValu >= 2: 
+          vgprIdx = ((vgprIdx+1)//2)*2
+        self.states.m.startVgprValu = vgprIdx
         vgprIdx += self.states.m.numVgprValu
         numVgprValuPackMetadata = 0
         if not kernel["UnrollMajorLDSMetadata"]:
           self.states.m.startVgprValuPack = vgprIdx
           if self.states.lrvwTileMetadata > 1:
-            miWaveTile = kernel["MIWaveTileB"] if kernel["ProblemType"]["Sparse"] == 2 else kernel["MIWaveTileA"]
-            numVgprValuPackMetadata = roundUp(kernel["VectorWidthMetadata"] * tensorParametersM["bpe"] / self.states.bpr) * miWaveTile // kernel["VectorWidthMetadata"] * kernel["InnerUnroll"] * self.states.numVgprBuffer * kernel["MIInputPerThreadMetadata"]
+            numVgprValuPackMetadata = roundUp(kernel["VectorWidthMetadata"] * tensorParametersM["bpe"] / self.states.bpr) * kernel["MIWaveTileMetadata"] // kernel["VectorWidthMetadata"] * kernel["InnerUnroll"] * self.states.numVgprBuffer * kernel["MIInputPerThreadMetadata"]
           else:
-            numVgprValuPackMetadata = self.states.m.numVgprValuPerBlock * kernel["InnerUnroll"] * self.states.numVgprBufferPackMetadata * (int(4/tensorParametersM["bpe"]) - 1)
+            numVgprValuPackMetadata = (kernel["MIInputPerThreadMetadata"]-1) * kernel["MIWaveTileMetadata"] * kernel["InnerUnroll"] * self.states.numVgprBufferPackMetadata
         vgprIdx += numVgprValuPackMetadata
         self.states.m.startVgprG2L = None
         if not kernel["PrefetchGlobalRead"]: # g2l can overlap valu

@@ -28,7 +28,7 @@ from typing import Dict, Optional
 from Tensile.Common import IsaVersion, IsaInfo, print2, elineno
 from Tensile.Common.Architectures import SUPPORTED_ISA
 from Tensile.Common.DataType import DataType
-from Tensile.Common.ValidParameters import makeValidMatrixInstructions, makeValidMFMA, makeValidSMFMA, makeValidWMMA, makeValidSWMMAC
+from Tensile.Common.ValidParameters import makeValidMatrixInstructions, makeValidMFMA, makeValidSMFMA, makeValidWMMA
 
 from ..Utilities import reject
 
@@ -168,7 +168,6 @@ def validateMIParameters(
     validMFMA = makeValidMFMA()
     validSMFMA = makeValidSMFMA()
     validWMMA = makeValidWMMA()
-    validSWMMAC = makeValidSWMMAC()
 
     assert MI_KEY in solution, elineno() + ": missing MatrixInstruction"
     assert MI_ENABLED_KEY in solution, elineno() + ": missing EnableMatrixInstruction"
@@ -224,9 +223,6 @@ def validateMIParameters(
 
     hasMFMA = isaInfoMap[isa].asmCaps["HasMFMA"]
     hasWMMA = isaInfoMap[isa].asmCaps["HasWMMA"]
-    # Sparse
-    hasSMFMA = isaInfoMap[isa].asmCaps["HasSMFMA"]
-    hasSWMMAC = isaInfoMap[isa].asmCaps["HasSWMMAC"]
 
     miBlock = solution["MIBlock"]
     miWaveGroup = solution["MIWaveGroup"]
@@ -248,14 +244,10 @@ def validateMIParameters(
                 solution, printSolutionRejectionReason, f"Invalid WMMA configuration: {solution}"
             )
     else:
-        if hasSMFMA and not (miDataType.toChar() in validSMFMA and mi4 in validSMFMA[miDataType.toChar()]):
+        if not (miDataType.toChar() in validSMFMA and mi4 in validSMFMA[miDataType.toChar()]):
             return not reject(
                 solution, printSolutionRejectionReason, f"Invalid SMFMA configuration: {solution}"
             )
-        elif hasSWMMAC and (not mi4 in validSWMMAC):
-            return not reject(
-                solution, printSolutionRejectionReason, f"Invalid SWMMAC configuration: {solution}"
-            ) 
 
     # Check MIBlock
     assert miBlock[0] == mi4[0], elineno()

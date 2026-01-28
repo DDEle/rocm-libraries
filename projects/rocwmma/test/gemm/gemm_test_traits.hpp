@@ -141,6 +141,7 @@ namespace rocwmma
             IsXFloat32 = std::is_same_v<InputT, xfloat32_t>,
 
             IsFloat64 = std::is_same_v<InputT, float64_t>,
+            IsUInt8 = std::is_same_v<InputT, uint8_t>,
         };
 
         enum struct OutputType : bool

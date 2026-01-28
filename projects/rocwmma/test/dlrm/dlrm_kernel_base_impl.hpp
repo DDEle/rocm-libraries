@@ -201,12 +201,12 @@ namespace rocwmma
                       << "MatM, MatK, MatB, "
 #if ROCWMMA_VALIDATION_TESTS
                       << "maxRelativeDiff, "
-                      << "tolerance, "
 #endif // ROCWMMA_VALIDATION_TESTS
                       << "elapsedMs, "
                       << "Problem Size(GFlops), "
                       << "TFlops/s, "
-                      << "Efficiency(%)" << std::endl;
+                      << "Efficiency(%), "
+                      << "Result" << std::endl;
     }
 
     template <uint32_t TileSize, typename DataT>

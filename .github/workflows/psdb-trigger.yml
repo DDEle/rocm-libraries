@@ -1,11 +1,10 @@
 name: PSDB Trigger
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - gfx1250
-      - gfx1310
 
 jobs:
   merge-and-trigger:
@@ -110,4 +109,3 @@ jobs:
             cat /tmp/response.txt
             exit 1
           fi
-

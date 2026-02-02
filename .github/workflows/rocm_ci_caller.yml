@@ -1,6 +1,6 @@
 name: ROCm CI Caller  
 on:  
-  pull_request_target:  
+  pull_request:  
     branches: [gfx1250]  
     types: [opened, reopened, synchronize]  
   workflow_dispatch:  

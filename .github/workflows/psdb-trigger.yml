@@ -1,15 +1,38 @@
 name: PSDB Trigger
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - gfx1250
 
 jobs:
+  check:
+    runs-on: rocm-ci-runner
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Check if this is our own merge commit
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMIT_MSG=$(curl -s \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}" \
+            | jq -r '.commit.message // ""')
+
+          if [[ "$COMMIT_MSG" == *"[psdb-merge]"* ]]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "Skipping - this is a re-trigger from our own merge push"
+          else
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          fi
+
   merge-and-trigger:
-    # Skip draft PRs unless they have the 'run-psdb' label
-    if: ${{ !github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'run-psdb') }}
+    needs: check
+    if: needs.check.outputs.should_run == 'true' && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'run-psdb'))
     runs-on: rocm-ci-runner
     steps:
       - name: Cleanup workspace
@@ -39,7 +62,7 @@ jobs:
         id: merge
         run: |
           if git merge origin/${{ github.base_ref }} --no-edit \
-            -m "Merge ${{ github.base_ref }} into PR #${{ github.event.pull_request.number }} [skip ci]"; then
+            -m "Merge ${{ github.base_ref }} into PR #${{ github.event.pull_request.number }} [psdb-merge]"; then
             echo "merge_success=true" >> $GITHUB_OUTPUT
             echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
           else
@@ -67,19 +90,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ROCM_SERVICE_ACCOUNT_PAT }}
         run: |
-          # Get in-progress and queued PSDB runs for this PR
           RUNS=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/AMD-ROCm-Internal/rocm-npi-dev/actions/runs?status=in_progress" \
             | jq -r ".workflow_runs[] | select(.name | contains(\"rocm-libraries\") and contains(\"PR #${{ github.event.pull_request.number }}\")) | .id")
-          
+
           QUEUED=$(curl -s \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/AMD-ROCm-Internal/rocm-npi-dev/actions/runs?status=queued" \
             | jq -r ".workflow_runs[] | select(.name | contains(\"rocm-libraries\") and contains(\"PR #${{ github.event.pull_request.number }}\")) | .id")
-          
+
           for RUN_ID in $RUNS $QUEUED; do
             if [ -n "$RUN_ID" ]; then
               echo "Cancelling PSDB run: $RUN_ID"

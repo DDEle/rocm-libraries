@@ -656,7 +656,8 @@ hiptensorStatus_t contractionInitPlan(const hiptensorHandle_t              handl
         }
         else if(pref->mSelectionAlgorithm == HIPTENSOR_ALGO_ACTOR_CRITIC)
         {
-            result = hiptensor::actorCriticModel(&winner,
+            result = hiptensor::actorCriticModel(handle,
+                                                 &winner,
                                                  solutionQ.solutions(),
                                                  ADataType,
                                                  hiptensor::getTensorLengths(desc->mDescA),

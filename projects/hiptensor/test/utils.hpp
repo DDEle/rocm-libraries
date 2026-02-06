@@ -135,7 +135,8 @@ inline bool isF16Supported()
            || (deviceName.find("gfx1152") != std::string::npos)
            || (deviceName.find("gfx1153") != std::string::npos)
            || (deviceName.find("gfx1200") != std::string::npos)
-           || (deviceName.find("gfx1201") != std::string::npos);
+           || (deviceName.find("gfx1201") != std::string::npos)
+           || (deviceName.find("gfx1250") != std::string::npos);
 }
 
 inline bool isF32Supported()
@@ -161,7 +162,8 @@ inline bool isF32Supported()
            || (deviceName.find("gfx1152") != std::string::npos)
            || (deviceName.find("gfx1153") != std::string::npos)
            || (deviceName.find("gfx1200") != std::string::npos)
-           || (deviceName.find("gfx1201") != std::string::npos);
+           || (deviceName.find("gfx1201") != std::string::npos)
+           || (deviceName.find("gfx1250") != std::string::npos);
 }
 
 inline bool isF64Supported()
@@ -176,7 +178,8 @@ inline bool isF64Supported()
 
     return (deviceName.find("gfx90a") != std::string::npos)
            || (deviceName.find("gfx942") != std::string::npos)
-           || (deviceName.find("gfx950") != std::string::npos);
+           || (deviceName.find("gfx950") != std::string::npos)
+           || (deviceName.find("gfx1250") != std::string::npos);
 }
 
 inline bool isF16MatrixCoreSupported()
@@ -202,7 +205,8 @@ inline bool isF16MatrixCoreSupported()
            || (deviceName.find("gfx1152") != std::string::npos)
            || (deviceName.find("gfx1153") != std::string::npos)
            || (deviceName.find("gfx1200") != std::string::npos)
-           || (deviceName.find("gfx1201") != std::string::npos);
+           || (deviceName.find("gfx1201") != std::string::npos)
+           || (deviceName.find("gfx1250") != std::string::npos);
 }
 
 inline bool isF32MatrixCoreSupported()
@@ -218,7 +222,8 @@ inline bool isF32MatrixCoreSupported()
     return (deviceName.find("gfx908") != std::string::npos)
            || (deviceName.find("gfx90a") != std::string::npos)
            || (deviceName.find("gfx942") != std::string::npos)
-           || (deviceName.find("gfx950") != std::string::npos);
+           || (deviceName.find("gfx950") != std::string::npos)
+           || (deviceName.find("gfx1250") != std::string::npos);
 }
 
 inline bool isF64MatrixCoreSupported()

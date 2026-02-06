@@ -202,8 +202,8 @@ namespace rocRoller::Client::GEMMClient
                       descC,
                       hostScaleA,
                       hostScaleB,
-                      problemParams.types.scaleA == Operations::ScaleMode::Separate,
-                      problemParams.types.scaleB == Operations::ScaleMode::Separate,
+                      problemParams.types.scaleTypeA,
+                      problemParams.types.scaleTypeB,
                       -1.f,
                       1.f,
                       static_cast<uint>(scaleBlockSize),
@@ -228,6 +228,17 @@ namespace rocRoller::Client::GEMMClient
         }
 
         size_t rotatingSize = benchmarkParams.rotatingBuffSize;
+        int    idx = -1, currDeviceAsicRevisionId = -1;
+        HIP_CHECK(hipGetDevice(&idx));
+        HIP_CHECK(
+            hipDeviceGetAttribute(&currDeviceAsicRevisionId, hipDeviceAttributeAsicRevision, idx));
+        if(arch.target().isCDNA5GPU() && currDeviceAsicRevisionId == 2)
+        {
+            Log::warn("Disabling rotating buffers for arch {} revision {}",
+                      toString(arch.target()),
+                      currDeviceAsicRevisionId);
+            rotatingSize = 0;
+        }
 
         RotatingBuffer<PackedTypeA> rotatingA(hostA, rotatingSize);
         RotatingBuffer<PackedTypeB> rotatingB(hostB, rotatingSize);
@@ -1263,7 +1274,10 @@ namespace rocRoller::Client::GEMMClient::CLI
         std::make_pair("--matchMemoryAccess", &SolutionParameters::matchMemoryAccess),
         std::make_pair("--streamK", &SolutionParameters::streamK),
         std::make_pair("--streamKTwoTile", &SolutionParameters::streamKTwoTile),
-        std::make_pair("--streamKTwoTileDPFirst", &SolutionParameters::streamKTwoTileDPFirst));
+        std::make_pair("--streamKTwoTileDPFirst", &SolutionParameters::streamKTwoTileDPFirst),
+        std::make_pair("--workgroup_cluster_size_x", &SolutionParameters::workgroupClusterSizeX),
+        std::make_pair("--workgroup_cluster_size_y", &SolutionParameters::workgroupClusterSizeY),
+        std::make_pair("--workgroup_cluster_size_z", &SolutionParameters::workgroupClusterSizeZ));
 
     template <typename T, typename U>
     std::string getSolutionParameterArgumentName(U T::*member_ptr)
@@ -1505,6 +1519,9 @@ int main(int argc, const char* argv[])
         .workgroupMappingDim    = -1,
         .workgroupRemapXCC      = false,
         .workgroupRemapXCCValue = -1,
+        .workgroupClusterSizeX  = 0,
+        .workgroupClusterSizeY  = 0,
+        .workgroupClusterSizeZ  = 0,
 
         .types = {.scaleA     = Operations::ScaleMode::None,
                   .scaleTypeA = DataType::None,
@@ -1792,6 +1809,16 @@ int main(int argc, const char* argv[])
                    runParams.workgroupMappingValue,
                    "Workgroup mapping value. Default: -1")
         ->check(CLI::IsMember({-1}) | CLI::PositiveNumber);
+
+    app.add_option("--workgroup_cluster_size_x",
+                   solution.workgroupClusterSizeX,
+                   "Workgroup cluster size in the x dimension.");
+    app.add_option("--workgroup_cluster_size_y",
+                   solution.workgroupClusterSizeY,
+                   "Workgroup cluster size in the y dimension.");
+    app.add_option("--workgroup_cluster_size_z",
+                   solution.workgroupClusterSizeZ,
+                   "Workgroup cluster size in the z dimension.");
 
     //
     // Benchmarking options
@@ -2090,8 +2117,19 @@ int main(int argc, const char* argv[])
         if(solution.waveB == -1)
             solution.waveB = 1;
 
-        if((typeA == DataType::Half && typeB == DataType::Half)
-           || (typeA == DataType::BFloat16 && typeB == DataType::BFloat16))
+        if(typeA == DataType::Float && typeB == DataType::Float)
+        {
+            if(solution.macK == -1)
+                solution.macK = 64;
+
+            if(arch.HasCapability(GPUCapability::HasWMMA_f32_16x16x4_f32))
+            {
+                if(solution.waveK == -1)
+                    solution.waveK = 4;
+            }
+        }
+        else if((typeA == DataType::Half && typeB == DataType::Half)
+                || (typeA == DataType::BFloat16 && typeB == DataType::BFloat16))
         {
             if(solution.macK == -1)
                 solution.macK = 64;
@@ -2101,9 +2139,15 @@ int main(int argc, const char* argv[])
                 if(solution.waveK == -1)
                     solution.waveK = 16;
             }
+            else if(arch.HasCapability(GPUCapability::HasWMMA_f32_16x16x32_f16))
+            {
+                if(solution.waveK == -1)
+                    solution.waveK = 32;
+            }
         }
-        else if(isUnpackedF8(fromString<DataType>(solution.types.typeA))
-                && isUnpackedF8(fromString<DataType>(solution.types.typeB)))
+        else if(isUnpackedF8(typeA) && isUnpackedF8(typeB)
+                && types.scaleA == Operations::ScaleMode::None
+                && types.scaleB == Operations::ScaleMode::None)
         {
             if(solution.macK == -1)
                 solution.macK = 64;
@@ -2112,6 +2156,22 @@ int main(int argc, const char* argv[])
             {
                 if(solution.waveK == -1)
                     solution.waveK = 16;
+            }
+            else if(arch.HasCapability(GPUCapability::HasWMMA_f32_16x16x64_f8))
+            {
+                if(solution.waveK == -1)
+                    solution.waveK = 64;
+            }
+        }
+        else if(isUnpackedF8F6F4(typeA) && isUnpackedF8F6F4(typeB))
+        {
+            if(solution.macK == -1)
+                solution.macK = 128;
+
+            if(arch.HasCapability(GPUCapability::HasWMMA_f8f6f4))
+            {
+                if(solution.waveK == -1)
+                    solution.waveK = 128;
             }
         }
     }
@@ -2143,6 +2203,19 @@ int main(int argc, const char* argv[])
         {
             std::cout << "Warning: disabling prefetching for RDNA4." << std::endl;
             solution.prefetch = false;
+        }
+    }
+
+    if(arch.target().isCDNA5GPU())
+    {
+        // TODO: Remove these default sizes
+        if(problem.m * problem.n + problem.m * problem.k + problem.k * problem.n > 512 * 512 * 3)
+        {
+            std::cout << "Warning: M, N, K sizes have been overridden to 512 for CDNA5."
+                      << std::endl;
+            problem.m = 512;
+            problem.n = 512;
+            problem.k = 512;
         }
     }
 

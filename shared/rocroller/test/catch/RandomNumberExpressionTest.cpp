@@ -130,7 +130,8 @@ namespace ExpressionTest
                 //rocRoller does the intial setup for the buffer (global memory)
                 bufferExpr = BufferDescriptor::SetDefaults(bufferExpr, m_context);
                 // set the buffer base pointer to the starting address of the input vector
-                bufferExpr = BufferDescriptor::SetBasePointer(bufferExpr, s_input->expression());
+                bufferExpr = BufferDescriptor::SetBasePointer(
+                    bufferExpr, s_input->expression(), m_context);
 
                 auto bufferRegs = Register::Value::Placeholder(
                     m_context, Register::Type::Scalar, {DataType::None, PointerType::Buffer}, 1);
@@ -158,7 +159,8 @@ namespace ExpressionTest
                     vgprIndex, vgprIndex, Register::Value::Literal(outputBytesPerElement));
 
                 // set the buffer base pointer to the starting address of the output vector
-                bufferExpr = BufferDescriptor::SetBasePointer(bufferExpr, s_output->expression());
+                bufferExpr = BufferDescriptor::SetBasePointer(
+                    bufferExpr, s_output->expression(), m_context);
                 co_yield Expression::generate(bufferRegs, bufferExpr, m_context);
 
                 // Write the result into global memory

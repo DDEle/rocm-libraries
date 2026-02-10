@@ -1673,6 +1673,13 @@ struct ConvInvscale
         e = type_convert<f8_t>(c / scale_in_ / scale_wei_ / scale_out_);
     };
 
+    template <>
+    __host__ __device__ void operator()<f8_t, f8_t>(f8_t& e, const f8_t& c) const
+    {
+        const float c_float = type_convert<float>(c);
+        e                   = type_convert<f8_t>(c_float / scale_in_ / scale_wei_ / scale_out_);
+    };
+
     float scale_in_;
     float scale_wei_;
     float scale_out_;
@@ -1696,6 +1703,13 @@ struct ConvScale
     __host__ __device__ void operator()<f8_t, float>(f8_t& e, const float& c) const
     {
         e = type_convert<f8_t>(c * scale_in_ * scale_wei_ * scale_out_);
+    };
+
+    template <>
+    __host__ __device__ void operator()<f8_t, f8_t>(f8_t& e, const f8_t& c) const
+    {
+        const float c_float = type_convert<float>(c);
+        e                   = type_convert<f8_t>(c_float * scale_in_ * scale_wei_ * scale_out_);
     };
 
     float scale_in_;
@@ -1722,6 +1736,15 @@ struct ConvScaleRelu
     {
         float x;
         Relu{}.template operator()<float>(x, c * scale_in_ * scale_wei_);
+        e = type_convert<f8_t>(x * scale_out_);
+    };
+
+    template <>
+    __host__ __device__ void operator()<f8_t, f8_t>(f8_t& e, const f8_t& c) const
+    {
+        const float c_float = type_convert<float>(c);
+        float x;
+        Relu{}.template operator()<float>(x, c_float * scale_in_ * scale_wei_);
         e = type_convert<f8_t>(x * scale_out_);
     };
 

@@ -120,6 +120,10 @@ Generator<Instruction> simple_mi(ContextPtr m_context)
     {
         mi_mnemonic = "v_wmma_f32_16x16x16_f16";
     }
+    else if(arch.HasCapability(GPUCapability::HasWMMA_f16_16x16x32_f16))
+    {
+        mi_mnemonic = "v_wmma_f16_16x16x32_f16";
+    }
     else
     {
         Throw<FatalError>(concatenate("Arch not supported: ", arch.target().toString()));
@@ -143,6 +147,10 @@ Generator<Instruction> complex_mi_with_coop(ContextPtr m_context)
     else if(arch.HasCapability(GPUCapability::HasWMMA_f32_16x16x16_f16))
     {
         mi_mnemonic = "v_wmma_f32_16x16x16_f16";
+    }
+    else if(arch.HasCapability(GPUCapability::HasWMMA_f16_16x16x32_f16))
+    {
+        mi_mnemonic = "v_wmma_f16_16x16x32_f16";
     }
     else
     {

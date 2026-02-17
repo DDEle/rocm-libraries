@@ -38,7 +38,7 @@ __launch_bounds__(CK_MAX_THREAD_PER_BLOCK, MinimumOccupancy)
     // __attribute__((amdgpu_waves_per_eu(1, 1)))
     kernel_gemm_xdl_cshuffle_v3_mx(typename GridwiseGemm::Argument karg)
 {
-#if defined(__gfx950__)
+#if defined(__gfx950__) || defined(__gfx125__)
     if constexpr(GridwiseGemm::template IsValidCompilationParameter<CGlobalMemoryDataOperation>())
     {
         __shared__ char p_shared[GridwiseGemm::GetSharedMemoryNumberOfByte(get_device_arch())];
@@ -56,7 +56,7 @@ __launch_bounds__(CK_MAX_THREAD_PER_BLOCK, MinimumOccupancy)
     }
 #else
     ignore = karg;
-#endif // end of if (defined(__gfx9__))
+#endif
 }
 
 template <bool Use2LDS,
@@ -72,7 +72,7 @@ __launch_bounds__(CK_MAX_THREAD_PER_BLOCK, MinimumOccupancy)
     // __attribute__((amdgpu_waves_per_eu(1, 1)))
     kernel_gemm_xdl_cshuffle_v3_mx(typename GridwiseGemm::Argument karg)
 {
-#if defined(__gfx950__)
+#if defined(__gfx950__) || defined(__gfx125__)
     if constexpr(GridwiseGemm::template IsValidCompilationParameter<CGlobalMemoryDataOperation>())
     {
         // Pass two lds pointer is the key to tell compiler that ds_read/write
@@ -94,7 +94,7 @@ __launch_bounds__(CK_MAX_THREAD_PER_BLOCK, MinimumOccupancy)
     }
 #else
     ignore = karg;
-#endif // end of if (defined(__gfx9__))
+#endif
 }
 
 template <typename ALayout,

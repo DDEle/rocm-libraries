@@ -362,6 +362,42 @@ def check_host() {
     }
 }
 
+def build_compiler(){
+    def compiler
+    compiler = "${params.BUILD_COMPILER}"
+    return compiler
+}
+
+def check_arch(){
+    def arch_type = 0
+    sh 'rocminfo | tee rocminfo.log'
+    if ( runShell('grep -n "gfx90a" rocminfo.log') ){
+        arch_type = 1
+    }
+    else if ( runShell('grep -n "gfx942" rocminfo.log') ) {
+        arch_type = 2
+    }
+    else if ( runShell('grep -n "gfx10" rocminfo.log') ) {
+        arch_type = 3
+    }
+    else if ( runShell('grep -n "gfx11" rocminfo.log') ) {
+        arch_type = 4
+    }
+    else if ( runShell('grep -n "gfx120" rocminfo.log') ) {
+        arch_type = 5
+    }
+    else if ( runShell('grep -n "gfx908" rocminfo.log') ) {
+        arch_type = 6
+    }
+    else if ( runShell('grep -n "gfx950" rocminfo.log') ) {
+        arch_type = 7
+    }
+    else if ( runShell('grep -n "gfx125" rocminfo.log') ) {
+        arch_type = 8
+    }
+    return arch_type
+}
+
 def check_arch_name(){
     sh 'rocminfo | tee rocminfo.log'
     if ( runShell('grep -n "gfx90a" rocminfo.log') ){
@@ -395,7 +431,11 @@ def check_arch_name(){
 
 def getDockerImage(Map conf=[:]){
     def image
-    if ( conf.get("docker_name", "") != "" ){
+    if ( params.BUILD_LEGACY_OS && conf.get("docker_name", "") != "" ){
+        image = conf.get("docker_name", "")
+        echo "Using legacy docker: ${image}"
+    }
+    else if ( (params.BUILD_GFX1250 || params.BUILD_GFX950 || params.RUN_CK_TILE_FMHA_TESTS) && conf.get("docker_name", "") != "" ){
         image = conf.get("docker_name", "")
         echo "Using special docker: ${image}"
     }
@@ -784,7 +824,31 @@ def buildHipClangJob(Map conf=[:]){
         show_node_info()
         checkoutComposableKernel()
         def prefixpath = conf.get("prefixpath", "/opt/rocm")
-        def dockerOpts = get_docker_options()
+
+        // Jenkins is complaining about the render group
+        def dockerOpts
+        if ( params.BUILD_INSTANCES_ONLY ){
+            dockerOpts = "--group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+        }
+        else{
+            dockerOpts = "--device=/dev/kfd --device=/dev/dri --group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+        }
+        def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
+        def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
+        dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
+        if (conf.get("enforce_xnack_on", false)) {
+            dockerOpts = dockerOpts + " --env HSA_XNACK=1 "
+        }
+        def dockerArgs = "--build-arg PREFIX=${prefixpath} --build-arg CK_SCCACHE='${env.CK_SCCACHE}' --build-arg compiler_version='${params.COMPILER_VERSION}' --build-arg compiler_commit='${params.COMPILER_COMMIT}' --build-arg ROCMVERSION='${params.ROCMVERSION}' "
+        if (params.COMPILER_VERSION == "amd-staging" || params.COMPILER_VERSION == "amd-mainline" || params.COMPILER_COMMIT != ""){
+            // the  --env COMPRESSED_BUNDLE_FORMAT_VERSION=2 env variable is required when building code with offload-compress flag with
+            // newer clang22 compilers and running with older hip runtima libraries
+            dockerOpts = dockerOpts + " --env HIP_CLANG_PATH='/llvm-project/build/bin' --env COMPRESSED_BUNDLE_FORMAT_VERSION=2 "
+        }
+
+        echo "Docker flags: ${dockerOpts}"
+
+        def variant = env.STAGE_NAME
         def image
         def retimage
         (retimage, image) = getDockerImage(conf)
@@ -815,7 +879,28 @@ def Build_CK(Map conf=[:]){
         show_node_info()
         checkoutComposableKernel()
         def prefixpath = conf.get("prefixpath", "/opt/rocm")
-        def dockerOpts=get_docker_options()
+
+        // Jenkins is complaining about the render group 
+        def dockerOpts="--device=/dev/kfd --device=/dev/dri --group-add video --group-add render --cap-add=SYS_PTRACE --security-opt seccomp=unconfined"
+        def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
+        def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
+        dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} "
+        if (conf.get("enforce_xnack_on", false)) {
+            dockerOpts = dockerOpts + " --env HSA_XNACK=1 "
+        }
+        def dockerArgs = "--build-arg PREFIX=${prefixpath} --build-arg compiler_version='${params.COMPILER_VERSION}' --build-arg compiler_commit='${params.COMPILER_COMMIT}' --build-arg ROCMVERSION='${params.ROCMVERSION}' "
+        if (params.COMPILER_VERSION == "amd-staging" || params.COMPILER_VERSION == "amd-mainline" || params.COMPILER_COMMIT != ""){
+            // the  --env COMPRESSED_BUNDLE_FORMAT_VERSION=2 env variable is required when building code with offload-compress flag with
+            // newer clang22 compilers and running with older hip runtima libraries
+            dockerOpts = dockerOpts + " --env HIP_CLANG_PATH='/llvm-project/build/bin' --env COMPRESSED_BUNDLE_FORMAT_VERSION=2 "
+        }
+        if(params.BUILD_LEGACY_OS){
+            dockerOpts = dockerOpts + " --env LD_LIBRARY_PATH='/opt/Python-3.8.13/lib' "
+        }
+
+        echo "Docker flags: ${dockerOpts}"
+
+        def variant = env.STAGE_NAME
         def image
         def retimage
 
@@ -842,7 +927,8 @@ def Build_CK(Map conf=[:]){
                 timeout(time: 20, unit: 'HOURS')
                 {
                     //check whether to run performance tests on this node
-                    def arch = check_arch_name()
+                    // Check the architecture
+                    def arch = check_arch()
                     cmake_build(conf)
                     if ( params.RUN_INDUCTOR_TESTS && arch == "gfx90a" ){
                             echo "Run inductor codegen tests"
@@ -1261,11 +1347,11 @@ pipeline {
             defaultValue: true,
             description: "Build CK and run tests on gfx950 (default: ON)")
         booleanParam(
-            name: "BUILD_GFX101",
-            defaultValue: false,
-            description: "Build CK and run tests on gfx101 (default: OFF)")
+            name: "BUILD_GFX1250",
+            defaultValue: true,
+            description: "Build CK for gfx1250 (default: ON)")
         booleanParam(
-            name: "BUILD_GFX103",
+            name: "BUILD_GFX10",
             defaultValue: true,
             description: "Build CK and run tests on gfx103 (default: ON)")
         booleanParam(

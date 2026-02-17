@@ -1096,11 +1096,11 @@ namespace rocRoller::KernelGraph
 
             // Build the buffer descriptor
             Expression::ExpressionPtr bufferExpr = L(rocRoller::Buffer{0, 0, 0, 0});
-            bufferExpr = BufferDescriptor::SetBasePointer(bufferExpr, basePointer);
+            bufferExpr = BufferDescriptor::SetBasePointer(bufferExpr, basePointer, context);
             bufferExpr = BufferDescriptor::SetOptions(bufferExpr,
                                                       BufferDescriptor::GetDefaultOptions(context));
-            bufferExpr
-                = BufferDescriptor::SetSize(bufferExpr, ToBytes(user->size, params.valueType));
+            bufferExpr = BufferDescriptor::SetSize(
+                bufferExpr, ToBytes(user->size, params.valueType), context);
 
             // Create the Assign node
             auto bufferVarType      = VariableType{DataType::None, PointerType::Buffer};

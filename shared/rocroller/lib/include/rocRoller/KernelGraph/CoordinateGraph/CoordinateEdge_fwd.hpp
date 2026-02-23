@@ -77,6 +77,7 @@ namespace rocRoller
         struct Segment;
         struct Stride;
         struct View;
+        struct TDM;
 
         using DataFlowEdge = std::variant<DataFlow,
                                           Alias,
@@ -88,7 +89,8 @@ namespace rocRoller
                                           Offset,
                                           Segment,
                                           Stride,
-                                          View>;
+                                          View,
+                                          TDM>;
 
         template <typename T>
         concept CDataFlowEdge = std::constructible_from<DataFlowEdge, T>;

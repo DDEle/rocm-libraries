@@ -1,499 +1,238 @@
-/*******************************************************************************
- *
- * MIT License
- *
- * Copyright 2025 AMD ROCm(TM) Software
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- *******************************************************************************/
+// Copyright Advanced Micro Devices, Inc., or its affiliates.
+// SPDX-License-Identifier: MIT
 
-#include <ranges>
-
+#include <rocRoller/CodeGen/Annotate.hpp>
 #include <rocRoller/CodeGen/CopyGenerator.hpp>
 #include <rocRoller/CodeGen/TensorDataMover.hpp>
-#include <rocRoller/CodeGen/TensorDataMover_detail.hpp>
 #include <rocRoller/Utilities/Generator.hpp>
 
 namespace rocRoller
 {
-    namespace TensorDataMover
+    namespace TDMDescriptor
     {
         constexpr size_t MAX_PAD_AMOUNT_DWORDS   = 128;
         constexpr size_t MAX_PAD_INTERVAL_DWORDS = 256;
 
-        BitfieldValue::BitfieldValue(size_t             bitOffset,
-                                     size_t             bitWidth,
-                                     Register::ValuePtr value,
-                                     std::string        name)
-            : m_bitOffset(bitOffset)
-            , m_bitWidth(bitWidth)
-            , m_value(value)
-            , m_name(name)
+        namespace TDMInfo
         {
-            if(value->regType() == Register::Type::Literal)
+            struct BitfieldInfo
             {
-                const auto valueAsUInt64 = getUInt64(value->getLiteralValue());
-                const auto valueBitwidth = std::bit_width(valueAsUInt64);
-                AssertFatal(
-                    valueBitwidth <= bitWidth,
-                    fmt::format("Value {} needs {} bits but specified bit width of {} bits.",
-                                valueAsUInt64,
-                                valueBitwidth,
-                                bitWidth));
-            }
-        }
-
-        void BitfieldValue::operator=(const BitfieldValue& v)
-        {
-            AssertFatal(m_bitOffset == v.m_bitOffset,
-                        "Cannot copy-assign bitfield with different bit offset.",
-                        ShowValue(*this),
-                        ShowValue(v));
-            AssertFatal(m_bitWidth == v.m_bitWidth,
-                        "Cannot copy-assign bitfield with different bitWidth",
-                        ShowValue(*this),
-                        ShowValue(v));
-            m_value = v.m_value;
-        }
-
-        void BitfieldValue::operator=(Register::ValuePtr v)
-        {
-            setValue(v);
-        }
-
-        size_t BitfieldValue::getBitOffset() const
-        {
-            return m_bitOffset;
-        }
-
-        size_t BitfieldValue::getBitWidth() const
-        {
-            return m_bitWidth;
-        }
-
-        void BitfieldValue::setValue(Register::ValuePtr value)
-        {
-            if(value->regType() == Register::Type::Literal)
-            {
-                const auto valueAsUInt64 = getUInt64(value->getLiteralValue());
-                const auto valueBitwidth = std::bit_width(valueAsUInt64);
-                AssertFatal(value->regType() != Register::Type::Literal
-                                || valueBitwidth <= m_bitWidth,
-                            fmt::format("Bitfield has {} bits but tried to set value {} "
-                                        "that needs {} bits.",
-                                        m_bitWidth,
-                                        valueAsUInt64,
-                                        valueBitwidth));
-            }
-            m_value = value;
-        }
-
-        Register::ValuePtr BitfieldValue::getValue() const
-        {
-            return m_value;
-        }
-
-        std::string BitfieldValue::getName() const
-        {
-            return m_name;
-        }
-
-        std::string BitfieldValue::toString() const
-        {
-            return fmt::format("{}[{}:{}] = {}",
-                               m_name.size() > 0 ? m_name : "unamed_bitfield",
-                               m_bitOffset + m_bitWidth - 1,
-                               m_bitOffset,
-                               m_value ? m_value->toString() : "nullptr");
-        }
-
-        bool BitfieldValue::operator==(const BitfieldValue& bf)
-        {
-            return m_bitOffset == bf.m_bitOffset && m_bitWidth == bf.m_bitWidth
-                   && ((m_value->regType() == Register::Type::Literal
-                        && getUInt64(m_value->getLiteralValue())
-                               == getUInt64(bf.m_value->getLiteralValue()))
-                       || m_value == bf.m_value);
-        }
-
-        bool BitfieldValue::operator!=(const BitfieldValue& bf)
-        {
-            return not(*this == bf);
-        }
-
-        std::vector<size_t> BitfieldValue::sgprIndexInGroup() const
-        {
-            const size_t startIndex = m_bitOffset / 32;
-            const size_t endIndex   = (m_bitOffset + m_bitWidth) / 32;
-            const auto   r
-                = std::views::iota(startIndex, endIndex + (startIndex == endIndex ? 1 : 0));
-            return std::vector(r.begin(), r.end());
-        }
-
-        std::vector<BitfieldValue>
-            BitfieldValue::combineLiteralBitFields(std::vector<BitfieldValue> bitfields)
-        {
-            std::vector<BitfieldValue> combinedBitFields{};
-
-            const size_t COMBINED_BITFIELD_BIT_WIDTH = NUM_DWORD_BITS;
-
-            uint64_t currentDwordValue          = 0;
-            size_t   startBitOffset             = 0;
-            size_t   remainingBitsInDword       = COMBINED_BITFIELD_BIT_WIDTH;
-            size_t   numBitsInCombinedBitFields = 0;
-
-            auto appendCombinedBitfield = [&]() {
-                const size_t numBits          = COMBINED_BITFIELD_BIT_WIDTH - remainingBitsInDword;
-                auto         combinedBitfield = BitfieldValue(
-                    startBitOffset,
-                    numBits,
-                    Register::Value::Literal(static_cast<uint32_t>(currentDwordValue)));
-                combinedBitFields.push_back(combinedBitfield);
-
-                currentDwordValue    = 0;
-                remainingBitsInDword = COMBINED_BITFIELD_BIT_WIDTH;
-                startBitOffset += numBits;
+                uint32_t bitoffset;
+                uint32_t bitwidth;
             };
+            // TDM Group 0
+            constexpr BitfieldInfo Reserved0{0, 30};
+            constexpr BitfieldInfo GatherIndexSize{30, 1};
+            constexpr BitfieldInfo GatherMode{31, 1};
+            constexpr BitfieldInfo LDSAddress{32, 32};
+            constexpr BitfieldInfo GlobalAddress{64, 57};
+            constexpr BitfieldInfo Reserved1{121, 5};
+            constexpr BitfieldInfo Type{126, 2};
 
-            for(const auto& bitfield : bitfields)
-            {
-                const auto bitfieldRegType = bitfield.getValue()->regType();
-                const auto isLiteral       = bitfieldRegType == Register::Type::Literal;
-                const auto isScalar        = bitfieldRegType == Register::Type::Scalar;
-                AssertFatal(
-                    isLiteral || isScalar,
-                    "Only BitFieldValue of Literal or Scalar Register::Type can be combined",
-                    ShowValue(bitfieldRegType));
-
-                size_t bfBitWidth = bitfield.getBitWidth();
-                numBitsInCombinedBitFields += bfBitWidth;
-
-                if(isLiteral)
-                {
-                    size_t   remainingBitsInValue = bfBitWidth;
-                    uint64_t value = getUInt64(bitfield.getValue()->getLiteralValue());
-
-                    while(remainingBitsInValue > 0)
-                    {
-                        const size_t bitOffsetInDword
-                            = COMBINED_BITFIELD_BIT_WIDTH - remainingBitsInDword;
-                        const size_t numInsertedBits
-                            = (remainingBitsInValue <= remainingBitsInDword) ? remainingBitsInValue
-                                                                             : remainingBitsInDword;
-
-                        const uint64_t selectBitsMask = (1UL << numInsertedBits) - 1UL;
-                        const uint64_t bitsToInsert   = value & selectBitsMask;
-
-                        currentDwordValue &= ~(selectBitsMask << bitOffsetInDword);
-                        currentDwordValue |= (bitsToInsert << bitOffsetInDword);
-
-                        remainingBitsInDword -= numInsertedBits;
-                        remainingBitsInValue -= numInsertedBits;
-
-                        value >>= numInsertedBits;
-
-                        if(remainingBitsInDword == 0)
-                        {
-                            appendCombinedBitfield();
-                        }
-                    }
-                }
-                else
-                {
-                    // Append current combined bitfield of partial dword if any
-                    if(remainingBitsInDword < COMBINED_BITFIELD_BIT_WIDTH)
-                    {
-                        appendCombinedBitfield();
-                    }
-
-                    // Copy bitfield in Scalar registers
-                    combinedBitFields.push_back(bitfield);
-                    startBitOffset += bfBitWidth;
-                }
-            }
-
-            // Append last partial dword if any
-            if(remainingBitsInDword < COMBINED_BITFIELD_BIT_WIDTH)
-            {
-                appendCombinedBitfield();
-            }
-
-            AssertFatal(startBitOffset == numBitsInCombinedBitFields,
-                        "Failed to split all bits in bitfield");
-
-            return combinedBitFields;
+            // TDM Group 1
+            constexpr BitfieldInfo WorkgroupMask{128, 16};
+            constexpr BitfieldInfo DataSize{144, 2};
+            constexpr BitfieldInfo SendAtomicBarrierOption{146, 1};
+            constexpr BitfieldInfo TensorIterateMode{147, 1};
+            constexpr BitfieldInfo PaddingMode{148, 1};
+            constexpr BitfieldInfo EarlyTimeoutOption{149, 1};
+            constexpr BitfieldInfo PadInterval{150, 3};
+            constexpr BitfieldInfo PadAmount{153, 7};
+            constexpr BitfieldInfo AtomicBarrierAddress{160, 16};
+            constexpr BitfieldInfo TensorDim0{176, 32};
+            constexpr BitfieldInfo TensorDim1{208, 32};
+            constexpr BitfieldInfo TileDim0{240, 16};
+            constexpr BitfieldInfo TileDim1{256, 16};
+            constexpr BitfieldInfo TileDim2{272, 16};
+            constexpr BitfieldInfo TensorDim0Stride{288, 48};
+            constexpr BitfieldInfo TensorDim1Stride{336, 48};
         }
 
-        std::vector<BitfieldValue> BitfieldValue::splitBitfield(BitfieldValue bitfield)
-        {
-            if(bitfield.getBitWidth() <= NUM_DWORD_BITS)
-            {
-                return {bitfield};
-            }
-            const size_t numSGPRs = (bitfield.getBitWidth() + NUM_DWORD_BITS - 1) / NUM_DWORD_BITS;
-
-            const auto& value        = bitfield.getValue();
-            const auto  isLiteral    = value->regType() == Register::Type::Literal;
-            uint64_t    literalValue = isLiteral ? getUInt64(value->getLiteralValue()) : 0;
-
-            std::vector<BitfieldValue> subBitfields;
-
-            size_t remainingBitsInValue = bitfield.getBitWidth();
-            size_t currentBitOffset     = bitfield.getBitOffset();
-            for(size_t sourceSGPRIndex = 0; sourceSGPRIndex < numSGPRs; ++sourceSGPRIndex)
-            {
-                const size_t sgprIndex            = currentBitOffset / NUM_DWORD_BITS;
-                const size_t bitOffsetInSGPR      = currentBitOffset - sgprIndex * NUM_DWORD_BITS;
-                const size_t remainingBitsInDword = NUM_DWORD_BITS - bitOffsetInSGPR;
-                const size_t numBits              = remainingBitsInValue <= remainingBitsInDword
-                                                        ? remainingBitsInValue
-                                                        : remainingBitsInDword;
-
-                if(isLiteral)
-                {
-                    const uint64_t selectBitsMask = (1UL << numBits) - 1UL;
-                    const uint32_t valueBits = static_cast<uint32_t>(literalValue & selectBitsMask);
-                    subBitfields.push_back(
-                        BitfieldValue{currentBitOffset, numBits, Literal(valueBits)});
-
-                    literalValue >>= numBits;
-                }
-                else
-                {
-                    subBitfields.push_back(
-                        BitfieldValue{currentBitOffset, numBits, value->subset({sourceSGPRIndex})});
-                }
-
-                currentBitOffset += numBits;
-                remainingBitsInValue -= numBits;
-            }
-            AssertFatal(remainingBitsInValue == 0, "Failed to split all bits in bitfield");
-
-            return subBitfields;
-        }
-
-        std::vector<BitfieldValue>
-            BitfieldValue::splitBitFields(std::vector<BitfieldValue> bitfields)
-        {
-            std::vector<BitfieldValue> splitFields;
-            for(const auto& bf : bitfields)
-            {
-                auto sbfs = splitBitfield(bf);
-                splitFields.insert(splitFields.end(), sbfs.begin(), sbfs.end());
-            }
-            return splitFields;
-        }
-
-        struct BitfieldSplitter
-        {
-            BitfieldSplitter() = default;
-
-            template <std::ranges::range Range>
-            Range operator()(Range& x) const
-            {
-                return BitfieldValue::splitBitFields(x);
-            }
-        };
-        template <std::ranges::range Range>
-        auto operator|(Range&& x, const BitfieldSplitter& splitter)
-        {
-            return splitter(x);
-        }
-
-        struct BitfieldCombiner
-        {
-            BitfieldCombiner() = default;
-            template <std::ranges::range Range>
-            Range operator()(Range& x) const
-            {
-                return BitfieldValue::combineLiteralBitFields(x);
-            }
-        };
-        template <std::ranges::range Range>
-        Range operator|(Range&& x, const BitfieldCombiner& combiner)
-        {
-            return combiner(x);
-        }
-
-        std::ostream& operator<<(std::ostream& os, BitfieldValue const& bf)
-        {
-            os << bf.toString();
-            return os;
-        }
-
-        std::string toString(GatherIndexSizeOption option)
+        Expression::ExpressionPtr DataSizeToExpression(DataSize option)
         {
             switch(option)
             {
-            case GatherIndexSizeOption::RowAddress16Bits:
-                return "RowAddress16Bits";
-            case GatherIndexSizeOption::RowAddress32Bits:
-                return "RowAddress32Bits";
+            case DataSize::OneByte:
+                return Expression::literal(0);
+            case DataSize::TwoBytes:
+                return Expression::literal(1);
+            case DataSize::FourBytes:
+                return Expression::literal(2);
+            case DataSize::EightBytes:
+                return Expression::literal(3);
             default:
-                Throw<FatalError>(
-                    fmt::format("Invalid GatherIndexSizeOption {}", static_cast<int>(option)));
+                Throw<FatalError>(fmt::format("Invalid DataSize {}", static_cast<int>(option)));
             }
+            return nullptr;
         }
 
-        std::string toString(DataSizeOption option)
+        Expression::ExpressionPtr SetDataSize(Expression::ExpressionPtr tdmExpr, DataSize dataSize)
         {
-            switch(option)
+            AssertFatal(tdmExpr, "TDM expression cannot be null.");
+            auto exprVarType = resultVariableType(tdmExpr);
+            AssertFatal(exprVarType.pointerType == PointerType::TDM,
+                        "TDM expression must be of TDM pointer type. ",
+                        ShowValue(exprVarType));
+
+            auto dataSizeExpr = DataSizeToExpression(dataSize);
+
+            const auto [bitoffset, bitwidth] = TDMInfo::DataSize;
+            tdmExpr                          = bfc(dataSizeExpr, tdmExpr, 0, bitoffset, bitwidth);
+            return tdmExpr;
+        }
+
+        Expression::ExpressionPtr SetLDSAddress(Expression::ExpressionPtr tdmExpr,
+                                                Expression::ExpressionPtr ldsAddrExpr)
+        {
+            AssertFatal(tdmExpr && ldsAddrExpr,
+                        "TDM expression and LDS address expression cannot be null.");
+            auto exprVarType = resultVariableType(tdmExpr);
+            AssertFatal(exprVarType.pointerType == PointerType::TDM,
+                        "TDM expression must be of TDM pointer type. ",
+                        ShowValue(exprVarType));
+
+            // Ensure type is valid
+            auto ldsAddrExprType = resultVariableType(ldsAddrExpr);
+            AssertFatal(DataTypeInfo::Get(ldsAddrExprType).elementBits == 32,
+                        "LDS address must be of type UInt32, got ",
+                        ldsAddrExprType);
+
+            const auto [bitoffset, bitwidth] = TDMInfo::LDSAddress;
+            tdmExpr                          = bfc(ldsAddrExpr, tdmExpr, 0, bitoffset, bitwidth);
+            return tdmExpr;
+        }
+
+        Expression::ExpressionPtr SetGlobalAddress(Expression::ExpressionPtr tdmExpr,
+                                                   Expression::ExpressionPtr globalAddrExpr)
+        {
+            AssertFatal(tdmExpr && globalAddrExpr,
+                        "TDM expression and Global address expression cannot be null.");
+            auto exprVarType = resultVariableType(tdmExpr);
+            AssertFatal(exprVarType.pointerType == PointerType::TDM,
+                        "TDM expression must be of TDM pointer type. ",
+                        ShowValue(exprVarType));
+
+            // Ensure type is valid
+            auto globalAddrExprType = resultVariableType(globalAddrExpr);
+            AssertFatal(DataTypeInfo::Get(globalAddrExprType).elementBits == 64,
+                        "Global address must be of type UInt64, got ",
+                        globalAddrExprType);
+
+            const auto [bitoffset, bitwidth] = TDMInfo::GlobalAddress;
+            tdmExpr                          = bfc(globalAddrExpr, tdmExpr, 0, bitoffset, bitwidth);
+            return tdmExpr;
+        }
+
+        Expression::ExpressionPtr SetTileDims(Expression::ExpressionPtr tdmExpr,
+                                              Expression::ExpressionPtr tileDim0Expr,
+                                              Expression::ExpressionPtr tileDim1Expr,
+                                              Expression::ExpressionPtr tileDim2Expr)
+        {
+            AssertFatal(tdmExpr && tileDim0Expr && tileDim1Expr,
+                        "TDM expression and tile dimension expressions cannot be null.");
+            auto exprVarType = resultVariableType(tdmExpr);
+            AssertFatal(exprVarType.pointerType == PointerType::TDM,
+                        "TDM expression must be of TDM pointer type. ",
+                        ShowValue(exprVarType));
+
+            const auto zero = Expression::literal(0);
+
             {
-            case DataSizeOption::OneByte:
-                return "OneByte";
-            case DataSizeOption::TwoBytes:
-                return "TwoBytes";
-            case DataSizeOption::FourBytes:
-                return "FourBytes";
-            case DataSizeOption::EightBytes:
-                return "EightBytes";
-            default:
-                Throw<FatalError>(
-                    fmt::format("Invalid DataSizeOption {}", static_cast<int>(option)));
+                const auto [bitoffset, bitwidth] = TDMInfo::TileDim0;
+                tdmExpr = bfc(tileDim0Expr, tdmExpr, 0, bitoffset, bitwidth);
             }
-        }
-
-        std::string toString(SwitchOption opt)
-        {
-            return fmt::format("{}::{}", opt.getName(), (opt.isEnabled() ? "ENABLED" : "DISABLED"));
-        }
-
-        TDMDescriptor::TDMDescriptor(ContextPtr ctx)
-        {
-            m_context = ctx;
-
-            m_sgprsGroup0 = std::make_shared<Register::Value>(
-                ctx,
-                Register::Type::Scalar,
-                VariableType{DataType::None, PointerType::TDMDescGroup0},
-                1);
-            m_sgprsGroup1 = std::make_shared<Register::Value>(
-                ctx,
-                Register::Type::Scalar,
-                VariableType{DataType::None, PointerType::TDMDescGroup1},
-                1);
-
-            // TODO: support 3D, 4D, and 5D tensors and gather mode
-            m_sgprsGroup2 = nullptr;
-            m_sgprsGroup3 = nullptr;
-
-            m_group0Bitfields = std::make_shared<TDMGroup0Fields>();
-            m_group1Bitfields = std::make_shared<TDMGroup1Fields>();
-        }
-
-        Generator<Instruction>
-            updateBitfield(ContextPtr ctx, BitfieldValue bitfield, Register::ValuePtr sgprGroup)
-        {
-            // TODO: explicitly indicate which TDM bitfields are affected.
-            for(const auto bf : BitfieldValue::splitBitfield(bitfield))
             {
-                const auto sgprIndices = bf.sgprIndexInGroup();
-                if(bf.getBitWidth() == BitfieldValue::NUM_DWORD_BITS)
-                {
-                    co_yield ctx->copier()->copy(sgprGroup->subset(sgprIndices),
-                                                 bf.getValue(),
-                                                 fmt::format("Updating TDM descriptor"));
-                }
-                else
-                {
-                    const uint32_t numBits = bf.getBitWidth();
-                    const uint32_t bitOffsetInSgpr
-                        = bf.getBitOffset() - sgprIndices[0] * BitfieldValue::NUM_DWORD_BITS;
-                    const uint32_t selectBitsMask = (1 << numBits) - 1;
-                    const uint32_t clearBitsMask  = ~(selectBitsMask << bitOffsetInSgpr);
-
-                    auto targetSGPR     = sgprGroup->subset(sgprIndices);
-                    auto targetSGPRExpr = targetSGPR->expression();
-                    auto sourceSGPRExpr = bf.getValue()->expression();
-
-                    auto expr = (targetSGPRExpr & L(clearBitsMask))
-                                | ((sourceSGPRExpr & L(selectBitsMask)) << L(bitOffsetInSgpr));
-                    co_yield Expression::generate(targetSGPR, expr, ctx);
-                }
+                const auto [bitoffset, bitwidth] = TDMInfo::TileDim1;
+                tdmExpr = bfc(tileDim1Expr, tdmExpr, 0, bitoffset, bitwidth);
             }
-        }
 
-        Generator<Instruction> TDMDescriptor::update()
-        {
-            for(const auto& bf :
-                m_group0Bitfields->getBitfields() | BitfieldSplitter() | BitfieldCombiner())
+            if(not tileDim2Expr)
             {
-                co_yield updateBitfield(m_context, bf, m_sgprsGroup0);
+                tileDim2Expr = zero;
             }
 
-            for(const auto& bf :
-                m_group1Bitfields->getBitfields() | BitfieldSplitter() | BitfieldCombiner())
             {
-                co_yield updateBitfield(m_context, bf, m_sgprsGroup1);
+                const auto [bitoffset, bitwidth] = TDMInfo::TileDim2;
+                tdmExpr = bfc(tileDim2Expr, tdmExpr, 0, bitoffset, bitwidth);
             }
+            return tdmExpr;
         }
 
-        void TDMDescriptor::setGatherIndexSizeValue(GatherIndexSizeOption option)
+        Expression::ExpressionPtr SetTensorDims(Expression::ExpressionPtr tdmExpr,
+                                                Expression::ExpressionPtr tensorDim0Expr,
+                                                Expression::ExpressionPtr tensorDim1Expr)
         {
-            switch(option)
+            AssertFatal(tdmExpr && tensorDim0Expr && tensorDim1Expr,
+                        "TDM expression and tensor dimension expressions cannot be null.");
+            auto exprVarType = resultVariableType(tdmExpr);
+            AssertFatal(exprVarType.pointerType == PointerType::TDM,
+                        "TDM expression must be of TDM pointer type. ",
+                        ShowValue(exprVarType));
+
+            // Ensure type is valid
+            auto tensorDim0ExprType = resultVariableType(tensorDim0Expr);
+            AssertFatal(DataTypeInfo::Get(tensorDim0ExprType).elementBits == 32,
+                        "Tensor Dim0 must be of type UInt32, got ",
+                        tensorDim0ExprType);
+            auto tensorDim1ExprType = resultVariableType(tensorDim1Expr);
+            AssertFatal(DataTypeInfo::Get(tensorDim1ExprType).elementBits == 32,
+                        "Tensor Dim1 must be of type UInt32, got ",
+                        tensorDim1ExprType);
+
             {
-            case GatherIndexSizeOption::RowAddress16Bits:
-                m_group0Bitfields->gatherIndexSize = Register::Value::Literal(0);
-                break;
-            case GatherIndexSizeOption::RowAddress32Bits:
-                m_group0Bitfields->gatherIndexSize = Register::Value::Literal(1);
-                break;
-            default:
-                Throw<FatalError>(
-                    fmt::format("Invalid GatherIndexSizeOption {}", static_cast<int>(option)));
+                const auto [bitoffset, bitwidth] = TDMInfo::TensorDim0;
+                tdmExpr = bfc(tensorDim0Expr, tdmExpr, 0, bitoffset, bitwidth);
             }
-        }
 
-        void TDMDescriptor::setDataSizeValue(DataSizeOption option)
-        {
-            switch(option)
             {
-            case DataSizeOption::OneByte:
-                m_group1Bitfields->dataSize = Literal(0);
-                break;
-            case DataSizeOption::TwoBytes:
-                m_group1Bitfields->dataSize = Literal(1);
-                break;
-            case DataSizeOption::FourBytes:
-                m_group1Bitfields->dataSize = Literal(2);
-                break;
-            case DataSizeOption::EightBytes:
-                m_group1Bitfields->dataSize = Literal(3);
-                break;
-            default:
-                Throw<FatalError>(
-                    fmt::format("Invalid DataSizeOption {}", static_cast<int>(option)));
+                const auto [bitoffset, bitwidth] = TDMInfo::TensorDim1;
+                tdmExpr = bfc(tensorDim1Expr, tdmExpr, 0, bitoffset, bitwidth);
             }
+            return tdmExpr;
         }
 
-        Generator<Instruction> TDMDescriptor::updateDataSize()
+        Expression::ExpressionPtr SetTensorStrides(Expression::ExpressionPtr tdmExpr,
+                                                   Expression::ExpressionPtr tensorDim0StrideExpr,
+                                                   Expression::ExpressionPtr tensorDim1StrideExpr)
         {
-            co_yield updateBitfield(m_context, m_group1Bitfields->dataSize, m_sgprsGroup1);
+            AssertFatal(tdmExpr && tensorDim0StrideExpr && tensorDim1StrideExpr,
+                        "TDM expression and tensor dimension stride expressions cannot be null.");
+            auto exprVarType = resultVariableType(tdmExpr);
+            AssertFatal(exprVarType.pointerType == PointerType::TDM,
+                        "TDM expression must be of TDM pointer type. ",
+                        ShowValue(exprVarType));
+
+            // Ensure type is valid
+            auto tensorDim0StrideExprType = resultVariableType(tensorDim0StrideExpr);
+            AssertFatal(DataTypeInfo::Get(tensorDim0StrideExprType).elementBits == 64,
+                        "Tensor Dim0 Stride must be of type UInt64, got ",
+                        tensorDim0StrideExprType);
+            auto tensorDim1StrideExprType = resultVariableType(tensorDim1StrideExpr);
+            AssertFatal(DataTypeInfo::Get(tensorDim1StrideExprType).elementBits == 64,
+                        "Tensor Dim1 Stride must be of type UInt64, got ",
+                        tensorDim1StrideExprType);
+
+            {
+                const auto [bitoffset, bitwidth] = TDMInfo::TensorDim0Stride;
+                tdmExpr = bfc(tensorDim0StrideExpr, tdmExpr, 0, bitoffset, bitwidth);
+            }
+
+            {
+                const auto [bitoffset, bitwidth] = TDMInfo::TensorDim1Stride;
+                tdmExpr = bfc(tensorDim1StrideExpr, tdmExpr, 0, bitoffset, bitwidth);
+            }
+            return tdmExpr;
         }
 
-        void TDMDescriptor::setPadIntervalValue(uint32_t numDwords)
+        Expression::ExpressionPtr SetPadInterval(Expression::ExpressionPtr tdmExpr,
+                                                 uint32_t                  numDwords)
         {
-            AssertFatal(
-                numDwords > 0,
-                "Padding interval needs to be greated than zero. Otherwise, padding is not needed",
-                ShowValue(numDwords));
+            AssertFatal(tdmExpr, "TDM expression expression cannot be null.");
+            auto exprVarType = resultVariableType(tdmExpr);
+            AssertFatal(exprVarType.pointerType == PointerType::TDM,
+                        "TDM expression must be of TDM pointer type. ",
+                        ShowValue(exprVarType));
+
             AssertFatal((numDwords & (numDwords - 1)) == 0,
                         "Padding interval must a power of two.",
                         ShowValue(numDwords));
@@ -501,94 +240,104 @@ namespace rocRoller
                         "Padding interval must be at most 256 dwords",
                         ShowValue(numDwords),
                         ShowValue(MAX_PAD_INTERVAL_DWORDS));
-            m_group1Bitfields->padInterval = Literal(numDwords);
+
+            const auto [bitoffset, bitwidth] = TDMInfo::PadInterval;
+            tdmExpr = bfc(Expression::literal(numDwords), tdmExpr, 0, bitoffset, bitwidth);
+            return tdmExpr;
         }
 
-        Generator<Instruction> TDMDescriptor::updatePadInterval()
+        Expression::ExpressionPtr SetPadAmount(Expression::ExpressionPtr tdmExpr,
+                                               uint32_t                  numDwords)
         {
-            co_yield updateBitfield(m_context, m_group1Bitfields->padInterval, m_sgprsGroup1);
-        }
+            AssertFatal(tdmExpr, "TDM expression expression cannot be null.");
+            auto exprVarType = resultVariableType(tdmExpr);
+            AssertFatal(exprVarType.pointerType == PointerType::TDM,
+                        "TDM expression must be of TDM pointer type. ",
+                        ShowValue(exprVarType));
 
-        void TDMDescriptor::setPadAmountValue(uint32_t numDwords)
-        {
-            AssertFatal(
-                numDwords > 0,
-                "Padding amount needs to be greated than zero. Otherwise, padding is not needed.",
-                ShowValue(numDwords));
             AssertFatal(numDwords <= MAX_PAD_AMOUNT_DWORDS,
                         "Padding amount must be at most 128 dwords",
                         ShowValue(numDwords),
                         ShowValue(MAX_PAD_AMOUNT_DWORDS));
-            m_group1Bitfields->padAmount = Literal(numDwords - 1);
+
+            const auto amount                = numDwords > 0 ? numDwords - 1 : 0;
+            const auto [bitoffset, bitwidth] = TDMInfo::PadAmount;
+            tdmExpr = bfc(Expression::literal(amount), tdmExpr, 0, bitoffset, bitwidth);
+            return tdmExpr;
         }
 
-        Generator<Instruction> TDMDescriptor::updatePadAmount()
+        Expression::ExpressionPtr SetDefaults(Expression::ExpressionPtr tdmExpr, ContextPtr ctx)
         {
-            co_yield updateBitfield(m_context, m_group1Bitfields->padAmount, m_sgprsGroup1);
+            AssertFatal(tdmExpr && ctx, "TDM expression and context cannot be null.");
+            auto exprVarType = resultVariableType(tdmExpr);
+            AssertFatal(exprVarType.pointerType == PointerType::TDM,
+                        "TDM expression must be of TDM pointer type. ",
+                        ShowValue(exprVarType));
+
+            const auto zero       = Expression::literal(0, DataType::UInt32);
+            const auto zero64bits = Expression::literal(0, DataType::UInt64);
+            const auto one        = Expression::literal(1, DataType::UInt32);
+            const auto two        = Expression::literal(2, DataType::UInt32);
+
+            const auto reserved0 = TDMInfo::Reserved0;
+            tdmExpr              = bfc(one, tdmExpr, 0, reserved0.bitoffset, reserved0.bitwidth);
+
+            const auto gatherIndexSize = TDMInfo::GatherIndexSize;
+            tdmExpr = bfc(zero, tdmExpr, 0, gatherIndexSize.bitoffset, gatherIndexSize.bitwidth);
+
+            const auto gatherMode = TDMInfo::GatherMode;
+            tdmExpr = bfc(zero, tdmExpr, 0, gatherMode.bitoffset, gatherMode.bitwidth);
+
+            const auto ldsAddress = TDMInfo::LDSAddress;
+            tdmExpr = bfc(zero, tdmExpr, 0, ldsAddress.bitoffset, ldsAddress.bitwidth);
+
+            const auto globalAddress = TDMInfo::GlobalAddress;
+            tdmExpr = bfc(zero64bits, tdmExpr, 0, globalAddress.bitoffset, globalAddress.bitwidth);
+
+            const auto reserved1 = TDMInfo::Reserved1;
+            tdmExpr              = bfc(zero, tdmExpr, 0, reserved1.bitoffset, reserved1.bitwidth);
+
+            const auto type = TDMInfo::Type;
+            tdmExpr         = bfc(two, tdmExpr, 0, type.bitoffset, type.bitwidth);
+
+            const auto workgroupMask = TDMInfo::WorkgroupMask;
+            tdmExpr = bfc(zero, tdmExpr, 0, workgroupMask.bitoffset, workgroupMask.bitwidth);
+
+            tdmExpr = SetDataSize(tdmExpr, DataSize::OneByte);
+
+            const auto sendAtomicBarrierOption = TDMInfo::SendAtomicBarrierOption;
+            tdmExpr                            = bfc(zero,
+                          tdmExpr,
+                          0,
+                          sendAtomicBarrierOption.bitoffset,
+                          sendAtomicBarrierOption.bitwidth);
+
+            const auto tensorIterateMode = TDMInfo::TensorIterateMode;
+            tdmExpr
+                = bfc(zero, tdmExpr, 0, tensorIterateMode.bitoffset, tensorIterateMode.bitwidth);
+
+            const auto paddingMode = TDMInfo::PaddingMode;
+            tdmExpr = bfc(zero, tdmExpr, 0, paddingMode.bitoffset, paddingMode.bitwidth);
+
+            const auto earlyTimeoutOption = TDMInfo::EarlyTimeoutOption;
+            tdmExpr
+                = bfc(zero, tdmExpr, 0, earlyTimeoutOption.bitoffset, earlyTimeoutOption.bitwidth);
+
+            tdmExpr = SetPadInterval(tdmExpr, 0);
+
+            tdmExpr = SetPadAmount(tdmExpr, 0);
+
+            const auto atomicBarrierAddress = TDMInfo::AtomicBarrierAddress;
+            tdmExpr                         = bfc(
+                zero, tdmExpr, 0, atomicBarrierAddress.bitoffset, atomicBarrierAddress.bitwidth);
+
+            tdmExpr = SetTensorDims(tdmExpr, zero, zero);
+
+            tdmExpr = SetTileDims(tdmExpr, zero, zero);
+
+            tdmExpr = SetTensorStrides(tdmExpr, zero64bits, zero64bits);
+
+            return tdmExpr;
         }
-
-#define DEFINE_SWITCH_BITFIELD_METHODS(groupBitfields, groupSgprs, OptionType, bitfield) \
-    void TDMDescriptor::enable##OptionType()                                             \
-    {                                                                                    \
-        groupBitfields->bitfield = Literal(1);                                           \
-    }                                                                                    \
-    void TDMDescriptor::disable##OptionType()                                            \
-    {                                                                                    \
-        groupBitfields->bitfield = Literal(0);                                           \
-    }                                                                                    \
-    Generator<Instruction> TDMDescriptor::update##OptionType()                           \
-    {                                                                                    \
-        co_yield updateBitfield(m_context, groupBitfields->bitfield, groupSgprs);        \
-    }
-
-#define DEFINE_BITFIELD_METHODS(groupBitfields, groupSgpr, method, bitfield)     \
-    void TDMDescriptor::set##method(Register::ValuePtr value)                    \
-    {                                                                            \
-        groupBitfields->bitfield = value;                                        \
-    }                                                                            \
-    Generator<Instruction> TDMDescriptor::update##method()                       \
-    {                                                                            \
-        co_yield updateBitfield(m_context, groupBitfields->bitfield, groupSgpr); \
-    }
-
-        // TDM Resource Descriptor Group 0
-        DEFINE_SWITCH_BITFIELD_METHODS(m_group0Bitfields, m_sgprsGroup0, GatherMode, gatherMode)
-        DEFINE_BITFIELD_METHODS(m_group0Bitfields, m_sgprsGroup0, LdsAddress, ldsAddress)
-        DEFINE_BITFIELD_METHODS(m_group0Bitfields, m_sgprsGroup0, GlobalAddress, globalAddress)
-
-        // TDM Resource Descriptor Group 1
-        DEFINE_BITFIELD_METHODS(m_group1Bitfields, m_sgprsGroup1, WorkgroupMask, workgroupMask)
-        DEFINE_SWITCH_BITFIELD_METHODS(m_group1Bitfields,
-                                       m_sgprsGroup1,
-                                       SendAtomicBarrierOption,
-                                       sendAtomicBarrierOption)
-        DEFINE_SWITCH_BITFIELD_METHODS(m_group1Bitfields,
-                                       m_sgprsGroup1,
-                                       TensorIterateMode,
-                                       tensorIterateMode)
-        DEFINE_SWITCH_BITFIELD_METHODS(m_group1Bitfields, m_sgprsGroup1, PaddingOption, paddingMode)
-        DEFINE_SWITCH_BITFIELD_METHODS(m_group1Bitfields,
-                                       m_sgprsGroup1,
-                                       EarlyTimeOutOption,
-                                       earlyTimeoutOption)
-        DEFINE_BITFIELD_METHODS(m_group1Bitfields,
-                                m_sgprsGroup1,
-                                AtomicBarrierAddress,
-                                atomicBarrierAddress)
-        DEFINE_BITFIELD_METHODS(m_group1Bitfields, m_sgprsGroup1, TensorDim0, tensorDim0)
-        DEFINE_BITFIELD_METHODS(m_group1Bitfields, m_sgprsGroup1, TensorDim1, tensorDim1)
-        DEFINE_BITFIELD_METHODS(m_group1Bitfields, m_sgprsGroup1, TileDim0, tileDim0)
-        DEFINE_BITFIELD_METHODS(m_group1Bitfields, m_sgprsGroup1, TileDim1, tileDim1)
-        DEFINE_BITFIELD_METHODS(m_group1Bitfields, m_sgprsGroup1, TileDim2, tileDim2)
-        DEFINE_BITFIELD_METHODS(m_group1Bitfields,
-                                m_sgprsGroup1,
-                                TensorDim0Stride,
-                                tensorDim0Stride)
-        DEFINE_BITFIELD_METHODS(m_group1Bitfields,
-                                m_sgprsGroup1,
-                                TensorDim1Stride,
-                                tensorDim1Stride)
-#undef DEFINE_BITFIELD_METHODS
-#undef DEFINE_SWITCH_BITFIELD_METHODS
     }
 }

@@ -858,79 +858,17 @@ namespace rocRoller
     {
     };
 
-    struct TDMDescGroup0
-    {
-        uint32_t sgpr[4];
-    };
-
-    struct TDMDescGroup1
-    {
-        uint32_t sgpr[8];
-    };
-
-    struct TDMDescGroup2
-    {
-        uint32_t sgpr[4];
-    };
-
-    struct TDMDescGroup3
-    {
-        uint32_t sgpr[4];
-    };
-
     template <>
-    struct TypeInfo<TDMDescGroup0> : public BaseTypeInfo<TDMDescGroup0,
-                                                         DataType::None,
-                                                         DataType::None,
-                                                         PointerType::TDMDescGroup0,
-                                                         1,
-                                                         4,
-                                                         128,
-                                                         false,
-                                                         true,
-                                                         false>
-    {
-    };
-
-    template <>
-    struct TypeInfo<TDMDescGroup1> : public BaseTypeInfo<TDMDescGroup1,
-                                                         DataType::None,
-                                                         DataType::None,
-                                                         PointerType::TDMDescGroup1,
-                                                         1,
-                                                         8,
-                                                         256,
-                                                         false,
-                                                         true,
-                                                         false>
-    {
-    };
-
-    template <>
-    struct TypeInfo<TDMDescGroup2> : public BaseTypeInfo<TDMDescGroup2,
-                                                         DataType::None,
-                                                         DataType::None,
-                                                         PointerType::TDMDescGroup2,
-                                                         1,
-                                                         4,
-                                                         128,
-                                                         false,
-                                                         true,
-                                                         false>
-    {
-    };
-
-    template <>
-    struct TypeInfo<TDMDescGroup3> : public BaseTypeInfo<TDMDescGroup3,
-                                                         DataType::None,
-                                                         DataType::None,
-                                                         PointerType::TDMDescGroup3,
-                                                         1,
-                                                         4,
-                                                         128,
-                                                         false,
-                                                         true,
-                                                         false>
+    struct TypeInfo<TDM> : public BaseTypeInfo<TDM,
+                                               DataType::None,
+                                               DataType::None,
+                                               PointerType::TDM,
+                                               1,
+                                               12,
+                                               384,
+                                               false,
+                                               true,
+                                               false>
     {
     };
 

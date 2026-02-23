@@ -564,6 +564,8 @@ namespace rocRoller
                         return static_cast<uint32_t>(val) == 0;
                     else if constexpr(std::is_same_v<T, Buffer>)
                         return val.desc0 == 0 && val.desc1 == 0 && val.desc2 == 0 && val.desc3 == 0;
+                    else if constexpr(std::is_same_v<T, TDM>)
+                        return IsTDMAllZeros(val);
                     else
                         return val == 0;
                 },

@@ -65,6 +65,8 @@ namespace rocRoller
             return "Buffer";
         case MemoryInstructions::MemoryKind::Buffer2LDS:
             return "Buffer2LDS";
+        case MemoryInstructions::MemoryKind::TDMToLDS:
+            return "TDMToLDS";
         default:
             break;
         }
@@ -354,12 +356,16 @@ namespace rocRoller
         }
     }
 
-    Generator<Instruction>
-        MemoryInstructions::loadTensorToLDS(std::shared_ptr<TensorDataMover::TDMDescriptor> tdmDesc)
+    Generator<Instruction> MemoryInstructions::loadTensorToLDS(Register::ValuePtr tdmDesc)
     {
         auto ctx = m_context.lock();
 
-        const auto [g0, g1, g2, g3] = tdmDesc->getAllRegisters();
+        const auto numRegisters = tdmDesc->registerCount();
+
+        const auto g0 = tdmDesc->subset({0, 1, 2, 3});
+        const auto g1 = tdmDesc->subset({4, 5, 6, 7, 8, 9, 10, 11});
+        const auto g2 = numRegisters > 12 ? tdmDesc->subset({12, 13, 14, 15}) : nullptr;
+        const auto g3 = numRegisters > 16 ? tdmDesc->subset({16, 17, 18, 19}) : nullptr;
         AssertFatal(not(g2 == nullptr xor g3 == nullptr),
                     "Either both or neither of TDMGroup2 & TDMGroup3 registers can be used");
 
@@ -378,12 +384,16 @@ namespace rocRoller
                 WaitCount::Zero(ctx->targetArchitecture(), "DEBUG: Wait after load"));
     }
 
-    Generator<Instruction> MemoryInstructions::storeTensorFromLDS(
-        std::shared_ptr<TensorDataMover::TDMDescriptor> tdmDesc)
+    Generator<Instruction> MemoryInstructions::storeTensorFromLDS(Register::ValuePtr tdmDesc)
     {
         auto ctx = m_context.lock();
 
-        const auto [g0, g1, g2, g3] = tdmDesc->getAllRegisters();
+        const auto numRegisters = tdmDesc->registerCount();
+
+        const auto g0 = tdmDesc->subset({0, 1, 2, 3});
+        const auto g1 = tdmDesc->subset({4, 5, 6, 7, 8, 9, 10, 11});
+        const auto g2 = numRegisters > 12 ? tdmDesc->subset({12, 13, 14, 15}) : nullptr;
+        const auto g3 = numRegisters > 16 ? tdmDesc->subset({16, 17, 18, 19}) : nullptr;
         AssertFatal(not(g2 == nullptr xor g3 == nullptr),
                     "Either both or neither of TDMGroup2 & TDMGroup3 registers can be used");
 

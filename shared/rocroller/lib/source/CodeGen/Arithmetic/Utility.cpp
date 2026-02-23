@@ -42,6 +42,11 @@ namespace rocRoller
                 Throw<FatalError>("Buffer type is not valid for get2LiteralDwords.");
             }
 
+            void operator()(TDM const&) const
+            {
+                Throw<FatalError>("TDM type is not valid for get2LiteralDwords.");
+            }
+
             template <typename T>
             void operator()(T v) const
             {

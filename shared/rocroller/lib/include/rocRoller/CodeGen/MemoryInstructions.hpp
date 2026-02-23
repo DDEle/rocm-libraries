@@ -53,6 +53,7 @@ namespace rocRoller
             Local,
             Buffer,
             Buffer2LDS,
+            TDMToLDS,
             Count,
         };
 
@@ -357,14 +358,12 @@ namespace rocRoller
         /**
           * @brief Generate the instructions required to perform Global into LDS loads using TDM.
           */
-        Generator<Instruction>
-            loadTensorToLDS(std::shared_ptr<TensorDataMover::TDMDescriptor> tdmDesc);
+        Generator<Instruction> loadTensorToLDS(Register::ValuePtr tdmDesc);
 
         /**
           * @brief Generate the instructions required to perform LDS into Global stores using TDM.
           */
-        Generator<Instruction>
-            storeTensorFromLDS(std::shared_ptr<TensorDataMover::TDMDescriptor> tdmDesc);
+        Generator<Instruction> storeTensorFromLDS(Register::ValuePtr tdmDesc);
 
         /**
           * @brief Generate the instructions required to add a wave synchronization barrier.

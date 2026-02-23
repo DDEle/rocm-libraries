@@ -110,6 +110,16 @@ namespace GEMMTests
     {
     };
 
+    // Params are: A type, B type, K tile size, (transA, transB), (useTDMToLoadA, useTDMToLoadB)
+    class MixedGEMMTestTDMF8F6F4WMMAGPU
+        : public BaseGEMMContextFixture<std::tuple<rocRoller::DataType,
+                                                   rocRoller::DataType,
+                                                   int,
+                                                   std::pair<std::string, std::string>,
+                                                   std::pair<bool, bool>>>
+    {
+    };
+
     TEST_P(GEMMTestWMMAGPU, GPU_BasicGEMM)
     {
         REQUIRE_ARCH_CAP(GPUCapability::HasWMMA);
@@ -390,6 +400,31 @@ namespace GEMMTests
         basicGEMMMixed(typeA, typeB, gemm);
     }
 
+    TEST_P(MixedGEMMTestTDMF8F6F4WMMAGPU, GPU_TDMBasicGEMM)
+    {
+        REQUIRE_ARCH_CAP(GPUCapability::HasWMMA_f8f6f4);
+        REQUIRE_ARCH_CAP(GPUCapability::HasTDM);
+        auto [typeA, typeB, waveK, transOp, useTDMOp] = std::get<1>(GetParam());
+        AssertFatal(waveK == 128, "Invalid waveK value.", ShowValue(waveK));
+
+        auto gemm = GEMMProblemF8F6F4{16, 16, waveK};
+        gemm.wavefrontSize
+            = m_context->targetArchitecture().GetCapability(GPUCapability::DefaultWavefrontSize);
+        // TODO: change setup_GEMMF8F6F4 to query wavefrontSize
+        gemm.workgroupSizeX                = 2 * gemm.wavefrontSize;
+        gemm.workgroupSizeY                = 2;
+        std::tie(gemm.transA, gemm.transB) = transOp;
+
+        auto [useTDMToLoadA, useTDMToLoadB] = useTDMOp;
+
+        gemm.loadPathA = useTDMToLoadA ? SolutionParams::LoadPath::TDMToLDS
+                                       : SolutionParams::LoadPath::BufferToLDSViaVGPR;
+        gemm.loadPathB = useTDMToLoadB ? SolutionParams::LoadPath::TDMToLDS
+                                       : SolutionParams::LoadPath::BufferToLDSViaVGPR;
+
+        basicGEMMMixed(typeA, typeB, gemm);
+    }
+
     INSTANTIATE_TEST_SUITE_P(
         GEMMTestWMMA,
         GEMMTestWMMAGPU,
@@ -616,4 +651,29 @@ namespace GEMMTests
                                    std::pair<std::string, std::string>("T", "N")
                                    //std::pair<std::string, std::string>("T", "T")
                                    )))));
+
+    INSTANTIATE_TEST_SUITE_P(
+        MixedGEMMTestTDMWMMA1250,
+        MixedGEMMTestTDMF8F6F4WMMAGPU,
+        ::testing::Combine(
+            currentGPUISA(),
+            ::testing::Combine(::testing::Values(rocRoller::DataType::FP8,
+                                                 rocRoller::DataType::BF8,
+                                                 rocRoller::DataType::FP6,
+                                                 rocRoller::DataType::BF6,
+                                                 rocRoller::DataType::FP4),
+                               ::testing::Values(rocRoller::DataType::FP8,
+                                                 rocRoller::DataType::BF8,
+                                                 rocRoller::DataType::FP6,
+                                                 rocRoller::DataType::BF6,
+                                                 rocRoller::DataType::FP4),
+                               ::testing::Values(/*waveK*/ 128),
+                               ::testing::Values(std::pair<std::string, std::string>("N", "N"),
+                                                 std::pair<std::string, std::string>("N", "T"),
+                                                 std::pair<std::string, std::string>("T", "N"),
+                                                 std::pair<std::string, std::string>("T", "T")),
+                               // useTDMToLoadA, useTDMToLoadB
+                               ::testing::Values(std::pair<bool, bool>(true, false),
+                                                 std::pair<bool, bool>(false, true),
+                                                 std::pair<bool, bool>(true, true)))));
 } // namespace GEMMTests

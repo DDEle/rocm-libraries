@@ -189,6 +189,7 @@ namespace rocRoller::KernelGraph
                                     LoadTiled,
                                     StoreLDSTile,
                                     LoadTileDirect2LDS,
+                                    LoadTiledTDMToLDS,
                                     StoreLinear,
                                     StoreTiled,
                                     StoreVGPR,

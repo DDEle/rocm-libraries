@@ -444,6 +444,7 @@ namespace rocRoller
         transforms.push_back(std::make_shared<KernelGraph::AddF6LDSPadding>(m_context));
         transforms.push_back(
             std::make_shared<KernelGraph::AddDirect2LDS>(m_context, m_commandParameters));
+        transforms.push_back(std::make_shared<KernelGraph::AddTDMToLDS>(m_context));
         transforms.push_back(std::make_shared<KernelGraph::Simplify>());
         transforms.push_back(std::make_shared<KernelGraph::AddPRNG>(m_context));
         transforms.push_back(
@@ -665,13 +666,12 @@ namespace rocRoller
         m_executableKernel->loadKernelFromCodeObjectFile(
             fileName, kernelName, m_context->targetArchitecture().target());
 
+        // XXX Instead of adding `setKernel`, should the context load from a code object?
         auto kernels   = AssemblyKernels::fromELF(fileName).kernels;
         auto kernel    = kernels.at(0);
         auto kernelPtr = std::make_shared<AssemblyKernel>(kernel);
         m_context->setKernel(kernelPtr);
         return kernelPtr;
-
-        // XXX Instead of adding `setKernel`, should the context load from a code object?
     }
 
     ContextPtr CommandKernel::getContext()

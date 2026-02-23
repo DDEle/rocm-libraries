@@ -48,6 +48,8 @@ namespace rocRoller
                     return MemoryType::WAVE_FROM_GLOBAL;
                 case LoadPath::GlobalToLDSViaVGPR:
                     return MemoryType::WAVE_LDS_FROM_GLOBAL;
+                case LoadPath::TDMToLDS:
+                    return MemoryType::WAVE_TDMToLDS;
                 case LoadPath::Count:
                     Throw<FatalError>(
                         fmt::format("No valid MemoryType available for mode {}\n", toString(mode)));
@@ -87,6 +89,8 @@ namespace rocRoller
                     return "GlobalToVGPR";
                 case LoadPath::GlobalToLDSViaVGPR:
                     return "GlobalToLDSViaVGPR";
+                case LoadPath::TDMToLDS:
+                    return "TDMToLDS";
                 default:
                     break;
                 }

@@ -862,7 +862,8 @@ namespace rocRoller
                     m_context, Register::Type::Vector, info.varType, info.m * info.n, allocOptions);
                 tmpl->setName("tmpl");
 
-                if(info.kind == MemoryInstructions::MemoryKind::Buffer2LDS)
+                if(info.kind == MemoryInstructions::MemoryKind::Buffer2LDS
+                   || info.kind == MemoryInstructions::MemoryKind::TDMToLDS)
                 {
                     info.bufOpts.lds = 1;
 
@@ -942,7 +943,8 @@ namespace rocRoller
             co_yield getOffset(info, coords, !allStridesAreLiteral && info.m > 1);
             AssertFatal(info.rowOffsetReg, "Invalid row offset register.");
 
-            if(info.kind == MemoryInstructions::MemoryKind::Buffer2LDS)
+            if(info.kind == MemoryInstructions::MemoryKind::Buffer2LDS
+               || info.kind == MemoryInstructions::MemoryKind::TDMToLDS)
             {
                 co_yield getOffset(
                     info, coords, /*preserveOffset=*/false, /*isStorePartOfGlobalToLDS=*/true);
@@ -950,7 +952,29 @@ namespace rocRoller
                 // set global read offset
             }
 
-            if(allStridesAreLiteral)
+            if(info.kind == MemoryInstructions::MemoryKind::TDMToLDS)
+            {
+                auto tdmExpr = info.tdmDesc->expression();
+
+                const auto ldsAddressExpr    = info.data->expression();
+                const auto globalAddressExpr = info.rowOffsetReg->expression();
+
+                tdmExpr = TDMDescriptor::SetLDSAddress(tdmExpr, ldsAddressExpr);
+                tdmExpr = TDMDescriptor::SetGlobalAddress(tdmExpr, globalAddressExpr);
+
+                const auto tileDim0 = info.n;
+                const auto tileDim1 = info.m;
+                Log::debug(fmt::format("  TileDim0 {} TileDim1 {}", tileDim0, tileDim1));
+
+                const auto tileDim0Expr = Expression::literal(tileDim0);
+                const auto tileDim1Expr = Expression::literal(tileDim1);
+                tdmExpr = TDMDescriptor::SetTileDims(tdmExpr, tileDim0Expr, tileDim1Expr);
+
+                co_yield Expression::generate(info.tdmDesc, tdmExpr, m_context);
+
+                co_yield m_context->mem()->loadTensorToLDS(info.tdmDesc);
+            }
+            else if(allStridesAreLiteral)
             {
                 co_yield moveTileLiteralStrides<Dir>(info);
             }
@@ -1338,6 +1362,77 @@ namespace rocRoller
             int tag, LoadTileDirect2LDS const& load, Transformer coords)
         {
             co_yield loadMacroTileDirect2LDS(tag, load, coords);
+        }
+
+        Generator<Instruction> LoadStoreTileGenerator::genLoadTiledTDMToLDS(
+            int tag, LoadTiledTDMToLDS const& load, Transformer coords)
+        {
+            auto [ldsTag, lds]   = m_graph->getDimension<LDS>(tag);
+            auto [tileTag, tile] = m_graph->getDimension<MacroTile>(tag);
+
+            rocRoller::Log::getLogger()->debug("KernelGraph::LoadStoreTileGenerator::"
+                                               "genLoadTDMToLDS: OP {} LDS {} MacroTile {}",
+                                               tag,
+                                               ldsTag,
+                                               tileTag);
+            co_yield Instruction::Comment(concatenate(
+                "GEN: LoadTiledTDMToLDS OP ", tag, " LDS ", ldsTag, " MacroTile ", tileTag));
+
+            auto numElements = product(tile.subTileSizes) * m_workgroupSizeTotal;
+
+            // Allocate LDS memory
+            Register::ValuePtr ldsAllocation;
+            if(!m_context->registerTagManager()->hasRegister(ldsTag))
+            {
+                ldsAllocation = Register::Value::AllocateLDS(m_context, load.varType, numElements);
+                m_context->registerTagManager()->addRegister(ldsTag, ldsAllocation);
+            }
+            else
+            {
+                ldsAllocation = m_context->registerTagManager()->getRegister(ldsTag);
+            }
+
+            // base offset of the allocation
+            const auto ldsOffset
+                = Register::Value::Literal(ldsAllocation->getLDSAllocation()->offset());
+
+            auto [elemXTag, elemX]           = m_graph->getDimension<ElementNumber>(tag, 0);
+            const auto  swapTileDimensions   = isSwappedLayout(*m_graph, elemXTag, elemX);
+            const auto& workgroupSizeSlowDim = m_context->kernel()->workgroupSize()[0];
+            const auto  wavefrontSize        = m_context->targetArchitecture().GetCapability(
+                GPUCapability::DefaultWavefrontSize);
+            const auto wavesPerWorkgroup = workgroupSizeSlowDim / wavefrontSize;
+
+            const uint64_t m
+                = (swapTileDimensions ? tile.sizes[1] : tile.sizes[0]) / wavesPerWorkgroup;
+            const uint64_t n = (swapTileDimensions ? tile.sizes[0] : tile.sizes[1]);
+
+            auto toBytes = [&](auto dimSize) -> uint32_t {
+                const auto bitsInAByte   = 8;
+                const auto elementBits   = DataTypeInfo::Get(load.varType).elementBits;
+                const auto dimSizeInBits = dimSize * elementBits;
+
+                AssertFatal(dimSizeInBits % bitsInAByte == 0,
+                            "Dimension size in bytes must be an integer.",
+                            ShowValue(dimSize),
+                            ShowValue(elementBits),
+                            ShowValue(dimSizeInBits));
+                return dimSizeInBits / bitsInAByte;
+            };
+
+            auto tdmTag  = m_graph->mapper.get<TDM>(tag);
+            auto tdmRegs = m_context->registerTagManager()->getRegister(tdmTag);
+
+            LoadStoreTileInfo info{.tag     = tag,
+                                   .kind    = MemoryInstructions::MemoryKind::TDMToLDS,
+                                   .m       = m,
+                                   .n       = toBytes(n),
+                                   .data    = ldsOffset,
+                                   .varType = load.varType,
+                                   .tdmDesc = tdmRegs};
+
+            co_yield moveTile<MemoryInstructions::MemoryDirection::Load>(info, coords)
+                .map(MemoryInstructions::addExtraDst(ldsAllocation));
         }
 
         Generator<Instruction> LoadStoreTileGenerator::storeMacroTileLDS(int                 tag,

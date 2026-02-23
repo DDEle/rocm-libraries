@@ -541,11 +541,8 @@ namespace rocRoller
                 dest->subset({1}), Register::Value::Literal(0), "convert");
             co_yield m_context->copier()->copy(dest->subset({0}), arg, "convert");
             break;
-
-        case DataType::Int64:
-            co_yield m_context->copier()->copy(dest, arg, "convert");
-            break;
         case DataType::UInt64:
+        case DataType::Int64:
             co_yield m_context->copier()->copy(dest, arg, "convert");
             break;
 

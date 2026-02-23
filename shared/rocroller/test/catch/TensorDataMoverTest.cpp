@@ -1,33 +1,9 @@
-/*******************************************************************************
- *
- * MIT License
- *
- * Copyright 2025 AMD ROCm(TM) Software
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- *
- *******************************************************************************/
+// Copyright Advanced Micro Devices, Inc., or its affiliates.
+// SPDX-License-Identifier: MIT
 
 #include <rocRoller/CodeGen/ArgumentLoader.hpp>
 #include <rocRoller/CodeGen/MemoryInstructions.hpp>
 #include <rocRoller/CodeGen/TensorDataMover.hpp>
-#include <rocRoller/CodeGen/TensorDataMover_detail.hpp>
 #include <rocRoller/Utilities/Error.hpp>
 
 #include <catch2/catch_template_test_macros.hpp>
@@ -39,94 +15,44 @@
 #include "CustomMatchers.hpp"
 #include "TestContext.hpp"
 #include "TestKernels.hpp"
+#include "rocRoller/Expression.hpp"
 
 using namespace rocRoller;
-using namespace TensorDataMover;
+// using namespace TensorDataMover;
 
 namespace TensorDataMoverTest
 {
-    TEST_CASE("BitfieldValue basic behavior", "[utility]")
+    static auto L(const auto& x)
     {
-        auto context = TestContext::ForDefaultTarget();
-        auto ctx     = context.get();
-
-        SECTION("Stringification of named and unamed BitfieldValues")
-        {
-            BitfieldValue unamedBf{42, 6, Literal(33)};
-            CHECK(unamedBf.toString() == "unamed_bitfield[47:42] = 33");
-
-            BitfieldValue namedBf{24, 8, Literal(22), "testBitfield"};
-            CHECK(namedBf.toString() == "testBitfield[31:24] = 22");
-        }
-
-        SECTION("BitFieldValues are *EQUAL* if their bit offset, bit width, and value are equal")
-        {
-            BitfieldValue bf0{42, 5, Literal(11)};
-            BitfieldValue bf1{bf0.getBitOffset(), bf0.getBitWidth(), bf0.getValue()};
-            CHECK(bf0 == bf1);
-
-            // Equal even if ValuePtr is different as long as literal values are the same.
-            BitfieldValue bf2{bf0.getBitOffset(), bf0.getBitWidth(), Literal(11)};
-            CHECK(bf0 == bf2);
-
-            auto sReg0
-                = Register::Value::Placeholder(ctx, Register::Type::Scalar, DataType::UInt64, 1);
-            BitfieldValue bf3{22, 5, sReg0};
-            BitfieldValue bf4{bf3.getBitOffset(), bf3.getBitWidth(), sReg0};
-            CHECK(bf3 == bf4);
-        }
-
-        SECTION("BitFieldValues are *DIFFERENT* if any of its bit offset, bit width, or value is "
-                "different")
-        {
-            BitfieldValue bf0{42, 5, Literal(11)};
-            BitfieldValue bf1{bf0.getBitOffset() + 1, bf0.getBitWidth(), bf0.getValue()};
-            CHECK(bf0 != bf1);
-
-            BitfieldValue bf2{bf0.getBitOffset(), bf0.getBitWidth() + 1, Literal(11)};
-            CHECK(bf0 != bf2);
-
-            BitfieldValue bf3{bf0.getBitOffset(), bf0.getBitWidth(), Literal(22)};
-            CHECK(bf0 != bf3);
-
-            auto scalarReg0
-                = Register::Value::Placeholder(ctx, Register::Type::Scalar, DataType::UInt64, 1);
-            auto scalarReg1
-                = Register::Value::Placeholder(ctx, Register::Type::Scalar, DataType::UInt64, 1);
-            BitfieldValue bf4{42, 5, scalarReg0};
-            BitfieldValue bf5{bf4.getBitOffset(), bf4.getBitWidth(), scalarReg1};
-            CHECK(bf4 != bf5);
-        }
-
-        SECTION(
-            "Equivalent BitfiledValues can only be copy-assigned to change underlaying ValuePtr")
-        {
-            auto sReg0
-                = Register::Value::Placeholder(ctx, Register::Type::Scalar, DataType::UInt64, 1);
-            BitfieldValue bf0{42, 5, sReg0};
-            BitfieldValue bf1{bf0.getBitOffset(), bf0.getBitWidth(), Literal(0)};
-            // OK since bf0 & bf1 have the same bit offset and bit width
-            CHECK_NOTHROW(bf1 = bf0);
-            CHECK_NOTHROW(bf0 = bf1);
-
-            BitfieldValue bf3{bf0.getBitOffset() + 1, bf0.getBitWidth(), Literal(0)};
-            CHECK_THROWS_AS(bf3 = bf0, FatalError);
-            CHECK_THROWS_AS(bf0 = bf3, FatalError);
-        }
+        return Expression::literal(x);
     }
+
+    static auto L(const auto& x, DataType dt)
+    {
+        return Expression::literal(x, dt);
+    };
 
     TEST_CASE("Packing and codegen of TensorDataMover descriptors", "[codegen][utility]")
     {
-
         SECTION("A descriptor with all bitfields as literals should be fully packed")
         {
             auto context = TestContext::ForDefaultTarget();
             auto ctx     = context.get();
 
-            TensorDataMover::TDMDescriptor desc{ctx};
-            desc.setLdsAddress(Literal(0x8BADF00D));
-            desc.setGlobalAddress(Literal(0x01600DBEEFDEADBD));
-            auto kb = [&]() -> Generator<Instruction> { co_yield desc.update(); };
+            auto kb = [&]() -> Generator<Instruction> {
+                auto tdmRegs = Register::Value::Placeholder(
+                    ctx, Register::Type::Scalar, {DataType::None, PointerType::TDM}, 1);
+                tdmRegs->allocateNow();
+
+                auto tdmExpr = L(TDM{});
+
+                tdmExpr = TDMDescriptor::SetDefaults(tdmExpr, ctx);
+                tdmExpr = TDMDescriptor::SetLDSAddress(tdmExpr, L(0x8BADF00Du, DataType::UInt32));
+                tdmExpr = TDMDescriptor::SetGlobalAddress(
+                    tdmExpr, L(0x01600DBEEFDEADBDull, DataType::UInt64));
+
+                co_yield Expression::generate(tdmRegs, tdmExpr, ctx);
+            };
             ctx->schedule(kb());
 
             auto expectedCode = R"(
@@ -146,25 +72,72 @@ namespace TensorDataMoverTest
             CHECK(NormalizedSource(context.output()) == NormalizedSource(expectedCode));
         }
 
+        SECTION("Can set fields that cross sgpr boundaries with literals")
+        {
+            auto context = TestContext::ForDefaultTarget();
+            auto ctx     = context.get();
+
+            auto kb = [&]() -> Generator<Instruction> {
+                auto tdmRegs = Register::Value::Placeholder(
+                    ctx, Register::Type::Scalar, {DataType::None, PointerType::TDM}, 1);
+                tdmRegs->allocateNow();
+
+                auto tdmExpr = L(TDM{});
+
+                tdmExpr = TDMDescriptor::SetDefaults(tdmExpr, ctx);
+                tdmExpr = TDMDescriptor::SetTensorDims(
+                    tdmExpr, L(0x8BADF00D, DataType::UInt32), L(0x8BADBEEF, DataType::UInt32));
+                tdmExpr = TDMDescriptor::SetTileDims(tdmExpr,
+                                                     L(0x8BAD, DataType::UInt32),
+                                                     L(0xDECA, DataType::UInt32),
+                                                     L(0xBEEF, DataType::UInt32));
+
+                co_yield Expression::generate(tdmRegs, tdmExpr, ctx);
+            };
+            ctx->schedule(kb());
+
+            auto expectedCode = R"(
+                s_mov_b32 s0, 1
+                s_mov_b32 s1, 0
+                s_mov_b32 s2, 0
+                s_mov_b32 s3, 2147483648
+                s_mov_b32 s4, 0
+                s_mov_b32 s5, 4027383808
+                s_mov_b32 s6, 3203369901
+                s_mov_b32 s7, 2343406509
+                s_mov_b32 s8, 3203391178
+                s_mov_b32 s9, 0
+                s_mov_b32 s10, 0
+                s_mov_b32 s11, 0
+            )";
+            CHECK(NormalizedSource(context.output()) == NormalizedSource(expectedCode));
+        }
+
         SECTION("Update ldsAddress should emit only one additional instruction")
         {
             auto context = TestContext::ForDefaultTarget();
             auto ctx     = context.get();
 
-            TensorDataMover::TDMDescriptor desc{ctx};
-            auto                           kb = [&]() -> Generator<Instruction> {
-                desc.setLdsAddress(Literal(0x8BADF00D));
-                co_yield desc.update();
+            auto kb = [&]() -> Generator<Instruction> {
+                auto tdmRegs = Register::Value::Placeholder(
+                    ctx, Register::Type::Scalar, {DataType::None, PointerType::TDM}, 1);
 
-                desc.setLdsAddress(Literal(0xDECAFBAD));
-                co_yield desc.updateLdsAddress();
+                auto tdmExpr = L(TDM{});
+
+                tdmExpr = TDMDescriptor::SetDefaults(tdmExpr, ctx);
+                tdmExpr = TDMDescriptor::SetLDSAddress(tdmExpr, L(0x8BADF00D));
+                co_yield Expression::generate(tdmRegs, tdmExpr, ctx);
+
+                tdmExpr = TDMDescriptor::SetLDSAddress(tdmRegs->expression(), L(0xDECAFBAD));
+                co_yield Expression::generate(tdmRegs, tdmExpr, ctx);
 
                 auto ldsAddress = Register::Value::Placeholder(
                     ctx, Register::Type::Scalar, DataType::UInt32, 1);
                 ldsAddress->allocateNow();
 
-                desc.setLdsAddress(ldsAddress);
-                co_yield desc.updateLdsAddress();
+                tdmExpr
+                    = TDMDescriptor::SetLDSAddress(tdmRegs->expression(), ldsAddress->expression());
+                co_yield Expression::generate(tdmRegs, tdmExpr, ctx);
             };
             ctx->schedule(kb());
 
@@ -194,17 +167,23 @@ namespace TensorDataMoverTest
             auto context = TestContext::ForDefaultTarget();
             auto ctx     = context.get();
 
-            TensorDataMover::TDMDescriptor desc{ctx};
-            auto                           kb = [&]() -> Generator<Instruction> {
-                desc.setGlobalAddress(Literal(0x01600DBEEFDEADBD));
-                co_yield desc.update();
+            auto kb = [&]() -> Generator<Instruction> {
+                auto tdmRegs = Register::Value::Placeholder(
+                    ctx, Register::Type::Scalar, {DataType::None, PointerType::TDM}, 1);
+
+                auto tdmExpr = L(TDM{});
+
+                tdmExpr = TDMDescriptor::SetDefaults(tdmExpr, ctx);
+                tdmExpr = TDMDescriptor::SetGlobalAddress(tdmExpr, L(0x01600DBEEFDEADBD));
+                co_yield Expression::generate(tdmRegs, tdmExpr, ctx);
 
                 auto globalAddress = Register::Value::Placeholder(
                     ctx, Register::Type::Scalar, DataType::UInt64, 1);
                 globalAddress->allocateNow();
 
-                desc.setGlobalAddress(globalAddress);
-                co_yield desc.updateGlobalAddress();
+                tdmExpr = TDMDescriptor::SetGlobalAddress(tdmRegs->expression(),
+                                                          globalAddress->expression());
+                co_yield Expression::generate(tdmRegs, tdmExpr, ctx);
             };
             ctx->schedule(kb());
 
@@ -221,11 +200,13 @@ namespace TensorDataMoverTest
                 s_mov_b32 s9, 0
                 s_mov_b32 s10, 0
                 s_mov_b32 s11, 0
+                // using bfe to avoid touching reserved bits
+                s_bfe_u32 s14, s13, 1638400
+                s_and_b32 s15, 4261412864, s3
+                s_and_b32 s16, 33554431, s14
+                s_or_b32 s14, s16, s15
                 s_mov_b32 s2, s12
-                // using bit masks to avoid touching reserved bits
-                s_and_b32 s14, s3, 4261412864
-                s_and_b32 s15, s13, 33554431
-                s_or_b32 s3, s14, s15
+                s_mov_b32 s3, s14
             )";
             CHECK(NormalizedSource(context.output()) == NormalizedSource(expectedCode));
         }
@@ -260,7 +241,7 @@ namespace TensorDataMoverTest
             auto k = m_context->kernel();
 
             auto one                = Expression::literal(1);
-            auto workitemCountXExpr = Expression::literal(32);
+            auto workitemCountXExpr = Expression::literal(workitemCountX);
 
             k->setKernelDimensions(1);
             k->setWorkgroupSize({workitemCountX, 1, 1});
@@ -274,18 +255,18 @@ namespace TensorDataMoverTest
             m_context->schedule(k->preamble());
             m_context->schedule(k->prolog());
 
-            const auto dataSizeOption = [](auto datatype) -> DataSizeOption {
+            const auto dataSize = [](auto datatype) -> TDMDescriptor::DataSize {
                 const size_t size = DataTypeInfo::Get(datatype).elementBytes;
                 switch(size)
                 {
                 case 1:
-                    return DataSizeOption::OneByte;
+                    return TDMDescriptor::DataSize::OneByte;
                 case 2:
-                    return DataSizeOption::TwoBytes;
+                    return TDMDescriptor::DataSize::TwoBytes;
                 case 4:
-                    return DataSizeOption::FourBytes;
+                    return TDMDescriptor::DataSize::FourBytes;
                 case 8:
-                    return DataSizeOption::EightBytes;
+                    return TDMDescriptor::DataSize::EightBytes;
                 default:
                     Throw<FatalError>(fmt::format(
                         "Invalid datatype {}. TDM does not support moving data with {} bytes.",
@@ -299,6 +280,11 @@ namespace TensorDataMoverTest
                 co_yield m_context->argLoader()->getValue("outputTile", sOutputTile);
                 co_yield m_context->argLoader()->getValue("inputTensor", sInputTensor);
 
+                auto tdmRegs = Register::Value::Placeholder(
+                    m_context, Register::Type::Scalar, {DataType::None, PointerType::TDM}, 1);
+                // TODO: remove this once assembler bug is fixed.
+                tdmRegs->allocateNow();
+
                 auto sLDSAddress = Register::Value::Placeholder(
                     m_context, Register::Type::Scalar, DataType::UInt32, 1);
 
@@ -308,31 +294,32 @@ namespace TensorDataMoverTest
                 co_yield m_context->copier()->copy(
                     sLDSAddress, Register::Value::Literal(lds->getLDSAllocation()->offset()));
 
-                auto desc = std::make_shared<TDMDescriptor>(m_context);
-                desc->setLdsAddress(sLDSAddress);
-                desc->setGlobalAddress(sInputTensor);
-                desc->setDataSizeValue(dataSizeOption);
-                desc->setTensorDim0(Literal(m_tensorDim0));
-                desc->setTensorDim1(Literal(m_tensorDim1));
-                desc->setTensorDim0Stride(Literal(m_tensorDim1));
-                desc->setTensorDim1Stride(Literal(1));
+                auto tdmExpr = L(TDM{});
+
+                tdmExpr = TDMDescriptor::SetDefaults(tdmExpr, m_context);
+                tdmExpr = TDMDescriptor::SetLDSAddress(tdmExpr, sLDSAddress->expression());
+                tdmExpr = TDMDescriptor::SetGlobalAddress(tdmExpr, sInputTensor->expression());
+                tdmExpr = TDMDescriptor::SetDataSize(tdmExpr, dataSize);
+
+                tdmExpr = TDMDescriptor::SetTensorDims(tdmExpr, L(m_tensorDim0), L(m_tensorDim1));
+                tdmExpr = TDMDescriptor::SetTensorStrides(
+                    tdmExpr, L(m_tensorDim1, DataType::UInt64), L(1, DataType::UInt64));
                 // tileDim0 is tile's fast-moving dimension
-                desc->setTileDim0(Literal(m_tileDim1));
-                desc->setTileDim1(Literal(m_tileDim0));
+                tdmExpr = TDMDescriptor::SetTileDims(tdmExpr, L(m_tileDim1), L(m_tileDim0));
 
-                co_yield desc->update();
-
-                co_yield m_context->mem()->loadTensorToLDS(desc).map(
+                co_yield Expression::generate(tdmRegs, tdmExpr, m_context);
+                co_yield m_context->mem()->loadTensorToLDS(tdmRegs).map(
                     MemoryInstructions::addExtraDst(lds));
 
-                desc->setGlobalAddress(sOutputTile);
+                tdmExpr = TDMDescriptor::SetGlobalAddress(tdmRegs->expression(),
+                                                          sOutputTile->expression());
                 // tileDim0 is tile's fast-moving dimension
-                desc->setTensorDim0(Literal(m_tileDim1));
-                desc->setTensorDim1(Literal(m_tileDim0));
-                desc->setTensorDim0Stride(Literal(m_tileDim1));
-                co_yield desc->update();
+                tdmExpr = TDMDescriptor::SetTensorDims(tdmExpr, L(m_tileDim1), L(m_tileDim0));
+                tdmExpr = TDMDescriptor::SetTensorStrides(
+                    tdmExpr, L(m_tileDim1, DataType::UInt64), L(1, DataType::UInt64));
 
-                co_yield m_context->mem()->storeTensorFromLDS(desc).map(
+                co_yield Expression::generate(tdmRegs, tdmExpr, m_context);
+                co_yield m_context->mem()->storeTensorFromLDS(tdmRegs).map(
                     MemoryInstructions::addExtraSrc(lds));
             };
             m_context->schedule(kb());

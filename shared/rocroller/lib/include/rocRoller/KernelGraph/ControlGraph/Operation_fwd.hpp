@@ -55,6 +55,7 @@ namespace rocRoller
         struct SetCoordinate;
         struct StoreLDSTile;
         struct LoadTileDirect2LDS;
+        struct LoadTiledTDMToLDS;
         struct StoreLinear;
         struct StoreTiled;
         struct StoreVGPR;
@@ -79,6 +80,7 @@ namespace rocRoller
                                        LoadVGPR,
                                        LoadSGPR,
                                        LoadTileDirect2LDS,
+                                       LoadTiledTDMToLDS,
                                        Multiply,
                                        NOP,
                                        Block,

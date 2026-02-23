@@ -408,6 +408,18 @@ namespace rocRoller
                 Concatenate{{operands}, {DataType::None, PointerType::Buffer}});
         }
 
+        inline ExpressionPtr literal(TDM value)
+        {
+            std::vector<ExpressionPtr> operands;
+
+            std::for_each(std::begin(value.parts),
+                          std::end(value.parts),
+                          [&operands](auto const& v) { operands.push_back(literal(v)); });
+
+            return std::make_shared<Expression>(
+                Concatenate{{operands}, {DataType::None, PointerType::TDM}});
+        }
+
         template <CCommandArgumentValue T>
         ExpressionPtr literal(T value, VariableType v)
         {

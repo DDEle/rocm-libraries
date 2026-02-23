@@ -1611,7 +1611,8 @@ namespace rocRoller
                 std::swap(thrTileM, thrTileN);
 
             auto memoryType{MemoryType::VGPR};
-            if(macTile.memoryType == MemoryType::WAVE_Direct2LDS)
+            if(macTile.memoryType == MemoryType::WAVE_Direct2LDS
+               || macTile.memoryType == MemoryType::WAVE_TDMToLDS)
             {
                 memoryType = macTile.memoryType;
             }
@@ -2079,6 +2080,17 @@ namespace rocRoller
                                        m_context,
                                        /*isGlobalToLDS=*/true);
                     break;
+                case MemoryType::WAVE_TDMToLDS:
+                    loadMacroTile_VGPR(graph,
+                                       connections,
+                                       userTag,
+                                       tileTag,
+                                       sdims,
+                                       {1, 1},
+                                       m_params,
+                                       m_context,
+                                       /*isGlobalToLDS=*/false);
+                    break;
                 default:
                     Throw<FatalError>("LoadTiled: MacroTile memory type not supported yet.",
                                       ShowValue(tile.memoryType));
@@ -2346,6 +2358,20 @@ namespace rocRoller
                                          jammedTiles,
                                          useSwappedAccess,
                                          /*isGlobalToLDS=*/true);
+                }
+                else if(tile.memoryType == MemoryType::WAVE_TDMToLDS)
+                {
+                    // We are storing entire workgroup tiles
+                    std::vector<uint> jammedTiles = {1, 1};
+                    addStoreThreadTileCT(graph,
+                                         connections,
+                                         tileTag,
+                                         iMacX,
+                                         iMacY,
+                                         workgroupSizes,
+                                         jammedTiles,
+                                         useSwappedAccess,
+                                         /*isGlobalToLDS=*/false);
                 }
                 else
                 {

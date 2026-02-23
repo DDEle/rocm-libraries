@@ -260,6 +260,8 @@ namespace rocRoller
             return "WAVE_FROM_GLOBAL";
         case MemoryType::WAVE_LDS_FROM_GLOBAL:
             return "WAVE_LDS_FROM_GLOBAL";
+        case MemoryType::WAVE_TDMToLDS:
+            return "WAVE_TDMToLDS";
         case MemoryType::Literal:
             return "Literal";
         case MemoryType::None:
@@ -338,14 +340,8 @@ namespace rocRoller
             return "PointerGlobal";
         case PointerType::Buffer:
             return "Buffer";
-        case PointerType::TDMDescGroup0:
-            return "TDMDescGroup0";
-        case PointerType::TDMDescGroup1:
-            return "TDMDescGroup1";
-        case PointerType::TDMDescGroup2:
-            return "TDMDescGroup2";
-        case PointerType::TDMDescGroup3:
-            return "TDMDescGroup3";
+        case PointerType::TDM:
+            return "TDM";
 
         case PointerType::Count:;
         }
@@ -395,14 +391,8 @@ namespace rocRoller
             return "PG";
         case PointerType::Buffer:
             return "PB";
-        case PointerType::TDMDescGroup0:
-            return "PTDMG0";
-        case PointerType::TDMDescGroup1:
-            return "PTDMG1";
-        case PointerType::TDMDescGroup2:
-            return "PTDMG2";
-        case PointerType::TDMDescGroup3:
-            return "PTDMG3";
+        case PointerType::TDM:
+            return "TDM";
 
         case PointerType::Count:;
         }
@@ -427,14 +417,8 @@ namespace rocRoller
             return 8;
         case PointerType::Buffer:
             return 16;
-        case PointerType::TDMDescGroup0:
-            return 16;
-        case PointerType::TDMDescGroup1:
-            return 32;
-        case PointerType::TDMDescGroup2:
-            return 16;
-        case PointerType::TDMDescGroup3:
-            return 16;
+        case PointerType::TDM:
+            return 48;
 
         default:
         case PointerType::Count:
@@ -610,10 +594,7 @@ namespace rocRoller
         registerTypeInfo<PointerLocal>();
         registerTypeInfo<PointerGlobal>();
         registerTypeInfo<Buffer>();
-        registerTypeInfo<TDMDescGroup0>();
-        registerTypeInfo<TDMDescGroup1>();
-        registerTypeInfo<TDMDescGroup2>();
-        registerTypeInfo<TDMDescGroup3>();
+        registerTypeInfo<TDM>();
 
         registerTypeInfo<E8M0>();
         registerTypeInfo<E8M0x4>();

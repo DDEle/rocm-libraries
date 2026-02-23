@@ -56,6 +56,7 @@ namespace rocRoller
         bool,
         Raw32,
         Buffer,
+        TDM,
         // int16_t*,
         int32_t*,
         int64_t*,

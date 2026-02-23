@@ -30,6 +30,7 @@
 #include <rocRoller/Operations/BlockScale_fwd.hpp>
 #include <rocRoller/Parameters/Solution/LoadOption.hpp>
 #include <rocRoller/Parameters/Solution/StreamK.hpp>
+
 #include <string>
 
 namespace SolutionParams = rocRoller::Parameters::Solution;

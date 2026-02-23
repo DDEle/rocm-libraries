@@ -155,6 +155,11 @@ namespace rocRoller
         return false;
     }
 
+    inline bool GPUArchitecture::isSupportedConstantValue(TDM value) const
+    {
+        return false;
+    }
+
     template <std::integral T>
     bool GPUArchitecture::isSupportedConstantValue(T value) const
     {

@@ -47,16 +47,18 @@ set(FMHA_FWD_CODE_GEN_COMMON_ARGS
   ${CMAKE_CURRENT_LIST_DIR}/generate.py
   --targets ${FMHA_TARGETS_ARG}
   --api ${FMHA_FWD_APIS}
-  --optdim 32,64,80,128,256
+  --optdim 64
   # --filter fmha_fwd...
 )
 set(FMHA_BWD_CODE_GEN_COMMON_ARGS
   ${CMAKE_CURRENT_LIST_DIR}/generate.py
   --targets ${FMHA_TARGETS_ARG}
   --api bwd
-  --receipt 3
-  --optdim 32,64,96,128,256
-  # --filter fmha_bwd_dot...@fmha_bwd_convert...@fmha_bwd...
+  --receipt 300
+  # --optdim 64,128
+  --optdim 64
+  # --filter fmha_bwd_dot_do_o_d128_fp16_b64_batch_o2_npad@fmha_bwd_convert_dq_d128_fp16_b64x*@fmha_bwd_d128_fp16_batch_b16x192x128x16x128x16x32x128x128_r1x4x1_r4x1x1_r1x4x1_w16x16x32_w16x16x16_o1_maxq0_npad_nbias_ndbias_nmask_ndropout_*_trload
+  # --filter fmha_bwd_dot_do_o_d64_fp16_b64_batch_o2_npad@fmha_bwd_convert_dq_d64_fp16_b64x*@fmha_bwd_d64_fp16_batch_b*_maxq0_npad_nbias_ndbias_nmask_ndropout_*_trload
 )
 
 # Reduce building time by disabling instances that are not currently used in the gtests
@@ -183,6 +185,7 @@ endif()
 # use RTN_ASM on float to bfloat16 conversion by default, align with FA upstream
 list(APPEND FMHA_BWD_PRIVATE_COMPILE_OPTIONS -DCK_TILE_FLOAT_TO_BFLOAT16_DEFAULT=3)
 list(APPEND FMHA_BWD_INTERFACE_COMPILE_OPTIONS -DCK_TILE_FLOAT_TO_BFLOAT16_DEFAULT=3)
+list(APPEND FMHA_BWD_PRIVATE_COMPILE_OPTIONS --save-temps -Wno-gnu-line-marker)
 
 target_compile_options(${FMHA_FWD_INSTANCES}
   PRIVATE ${FMHA_FWD_PRIVATE_COMPILE_OPTIONS}

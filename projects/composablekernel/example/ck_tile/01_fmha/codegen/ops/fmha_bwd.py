@@ -1118,9 +1118,9 @@ def get_bwd_blobs(
                     continue
             # Aiter (mha_bwd) integration
             elif receipt == 300:
-                cond = dtype in ["fp16", "bf16"]
+                cond = dtype in ["fp16"]
                 cond &= mode == "batch"
-                cond &= dropout in ["no", "dropout_wg32", "dropout_wg16"]
+                cond &= dropout in ["no"]
                 if not cond:
                     continue
             # Aiter (mha_varlen_bwd) integration

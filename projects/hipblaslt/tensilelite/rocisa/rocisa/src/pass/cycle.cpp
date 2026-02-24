@@ -1190,7 +1190,7 @@ namespace rocisa
         }
         else {
             // not supported
-            formocast.setHardware(origami::hardware_t::architecture_t::gfx950);
+	    return 0;
         }
         // Calculate local read bytes
         auto localReadBytes = _calculateLocalReadBytes(module, numWaves);

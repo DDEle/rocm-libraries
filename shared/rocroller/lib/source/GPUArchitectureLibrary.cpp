@@ -35,6 +35,40 @@
 
 namespace rocRoller
 {
+
+    void GPUArchitectureLibrary::GetCurrentDevices(std::vector<GPUArchitecture>& retval,
+                                                   int&                          default_device)
+    {
+        retval.clear();
+        default_device = -1;
+#ifdef ROCROLLER_USE_HIP
+        int        count;
+        hipError_t error = hipGetDeviceCount(&count);
+        if(error != hipSuccess)
+        {
+            count = 0;
+        }
+
+        for(int i = 0; i < count; i++)
+        {
+            hipDeviceProp_t deviceProps;
+
+            HIP_CHECK(hipGetDeviceProperties(&deviceProps, i));
+
+            retval.push_back(
+                m_gpuArchitectures.at(GPUArchitectureTarget::fromString(deviceProps.gcnArchName)));
+        }
+
+        if(count > 0)
+        {
+            HIP_CHECK(hipGetDevice(&default_device));
+        }
+#else
+        //TODO: Add a way to get specific GPUs. Maybe through env vars.
+        Throw<FatalError>("Non-HIP Path Not Implemented");
+#endif
+    }
+
     GPUArchitecture GPUArchitectureLibrary::GetArch(GPUArchitectureTarget const& target)
     {
         auto iter = m_gpuArchitectures.find(target);

@@ -73,6 +73,7 @@ CK_TILE_TYPE_CONVERT(fp16_t, fp16, bf8_t, bf8)
 } // namespace ck_tile
 
 #include "ck_tile/core/numeric/pk_fp4.hpp"
+#include "ck_tile/core/numeric/pk_fp6.hpp"
 
 namespace ck_tile {
 

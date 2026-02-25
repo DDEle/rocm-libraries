@@ -1064,12 +1064,18 @@ namespace TensileLite
             defaultWGMXCCCHUNK = pAMDGPU->fixedWGMXCCCHUNK;
         }
 
-        // WGM should be in this range: [-1023, -1022, ..., -1, 0, 1, ..., 1023]
-        assert(std::fabs(defaultWGM) < 1024);
-        // WGMXCC should be in this range: [0, 1, 2, 3, ..., 63]
-        assert(defaultWGMXCC >= 0 && defaultWGMXCC < 64);
-        // WGMXCCCHUNK should be in this range: [0, 1, 2, 3, ..., 1023]
-        assert(defaultWGMXCCCHUNK >= 0 && defaultWGMXCCCHUNK < 1024);
+        // These range assertions only apply when SpaceFillingCurve (SFC) is not used.
+        // When SFC is enabled, workGroupMapping contains a packed 32-bit encoding of
+        // grid dimensions (SFCWGM) which can exceed the normal WGM range.
+        if(!internalArgsSupport.useSFC)
+        {
+            // WGM should be in this range: [-1023, -1022, ..., -1, 0, 1, ..., 1023]
+            assert(std::fabs(defaultWGM) < 1024);
+            // WGMXCC should be in this range: [0, 1, 2, 3, ..., 63]
+            assert(defaultWGMXCC >= 0 && defaultWGMXCC < 64);
+            // WGMXCCCHUNK should be in this range: [0, 1, 2, 3, ..., 1023]
+            assert(defaultWGMXCCCHUNK >= 0 && defaultWGMXCCCHUNK < 1024);
+        }
         
         return std::make_tuple(defaultWGM, defaultWGMXCC, defaultWGMXCCCHUNK);
     }
@@ -2542,7 +2548,8 @@ namespace TensileLite
     {
         calculateAutoGSU(problem, &hardware);
         if(Debug::Instance().printWinningKernelName())
-            std::cout << "Running kernel: " << this->KernelName() << std::endl;
+            std::cout << "Running kernel: " << this->KernelName()
+                      << " [MatchingTag: " << this->matchingTag() << "]" << std::endl;
 
         // retreive alpha/beta type set via setAlpha/BetaType()
         auto alphaType = problem.alphaType();
@@ -2692,7 +2699,8 @@ namespace TensileLite
         hipStream_t                                      stream) const
     {
         if(Debug::Instance().printWinningKernelName())
-            std::cout << "Running kernel: " << this->KernelName() << std::endl;
+            std::cout << "Running kernel: " << this->KernelName()
+                      << " [MatchingTag: " << this->matchingTag() << "]" << std::endl;
 
         // retreive alpha/beta type set via setAlpha/BetaType()
         auto alphaType = problems[0].alphaType();
@@ -3489,6 +3497,54 @@ namespace TensileLite
         pp.CUs         = NumCUs;
 
         return pp;
+    }
+
+    double ContractionSolution::calculateDimensionM(Problem const&  problem) const
+    {
+        double M = 1.0;
+        if(problem.freeIndicesA().size() > 1 || sizeMapping.packBatchDims & 0x1)
+        {
+            std::vector<size_t> packedIndices
+                = generatePackedIndicesA(problem, sizeMapping.packBatchDims);
+            for(auto pi = packedIndices.begin(); pi != packedIndices.end(); pi++)
+                M *= problem.a().sizes()[*pi];
+        }
+        else
+        {
+            M = problem.freeSizeA(0);
+        }
+        return M;
+    }
+
+    double ContractionSolution::calculateDimensionN(Problem const&  problem) const
+    {
+        double N = 1.0;
+        if(problem.freeIndicesB().size() > 1 || sizeMapping.packBatchDims & 0x2)
+        {
+            std::vector<size_t> packedIndices
+                = generatePackedIndicesB(problem, sizeMapping.packBatchDims);
+            for(auto pi = packedIndices.begin(); pi != packedIndices.end(); pi++)
+                N *= problem.b().sizes()[*pi];
+        }
+        else
+            N = problem.freeSizeB(0);
+        return N;
+    }
+
+    double ContractionSolution::calculateNumBatches(Problem const&  problem) const
+    {
+        double NumBatches = 1;
+        if(sizeMapping.packBatchDims == 0)
+        {
+            for(size_t i = 0; i < problem.batchIndices().size(); i++)
+                NumBatches *= problem.batchSize(i);
+        }
+        return NumBatches;
+    }
+
+    origami::data_type_t ContractionSolution::getOrigamiDatatype(Problem const&  problem) const
+    {
+        return datatypeToAnalyticalDatatype(problem.computeInputType());
     }
 
     std::ostream& operator<<(std::ostream&                                      stream,

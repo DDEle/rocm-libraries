@@ -135,7 +135,9 @@ ConvSolution BnBwdTrgActivationFused::GetSolution(const FusionContext& context,
 
         kernel.g_wk = {xgridsize, ygridsize, zgridsize};
 
-        unsigned int ldsgcn   = xlocalsize / 64;
+        auto const waveSize = handle.GetWavefrontWidth();
+
+        unsigned int ldsgcn   = xlocalsize / waveSize;
         unsigned int ldsnogcn = xlocalsize;
 
         int variant = 0;
@@ -156,7 +158,7 @@ ConvSolution BnBwdTrgActivationFused::GetSolution(const FusionContext& context,
 
         const auto& activ_op =
             dynamic_cast<ActivBwdFusionOpDescriptor&>(*problem.fusion_plan_desc->op_map[1]);
-        const auto build_params = KernelBuildParameters{
+        auto build_params = KernelBuildParameters{
             {"MIO_BN_N", static_cast<int>(n)},
             {"MIO_BN_NCHW", static_cast<int>(n * c * h * w)},
             {"MIO_BN_NHW", static_cast<int>(n * h * w)},
@@ -178,6 +180,11 @@ ConvSolution BnBwdTrgActivationFused::GetSolution(const FusionContext& context,
             {"MIOPEN_USE_FP32", static_cast<int>(dtype == miopenFloat)},
             {"DATA_TYPE", data_type}};
         kernel.comp_options = build_params.GenerateFor(kbp::HIP{});
+
+        if(mode == miopenBNSpatial)
+        {
+	    build_params.Define("HIP_ENABLE_EXTRA_WARP_SYNC_TYPES");
+        }
 
         result.construction_params.push_back(kernel);
     }

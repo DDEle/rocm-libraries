@@ -227,6 +227,8 @@ ConvSolution BnFwdTrainingSpatial::GetSolution(const ExecutionContext& context,
     int stash_method = 0;
     size_t nelements;
 
+    auto const waveSize = handle.GetWavefrontWidth();
+
     GetVariantFromKernelId(
         config.kernel_id, variant, vectorsize, xlocalsize, ylocalsize, zlocalsize, nelements);
 
@@ -240,7 +242,7 @@ ConvSolution BnFwdTrainingSpatial::GetSolution(const ExecutionContext& context,
             xlocalsize = 256;
         }
         xgridsize = c * xlocalsize;
-        ldsgcn    = xlocalsize / 64;
+        ldsgcn    = xlocalsize / waveSize;
         ldsnogcn  = xlocalsize;
     }
     else
@@ -282,7 +284,7 @@ ConvSolution BnFwdTrainingSpatial::GetSolution(const ExecutionContext& context,
                 (xlocalsize * ylocalsize * zlocalsize) / xlocalsize_final / zlocalsize_final;
         }
         ldsnogcn = xlocalsize * ylocalsize * zlocalsize;
-        ldsgcn   = xlocalsize * ylocalsize * zlocalsize / 64;
+        ldsgcn   = xlocalsize * ylocalsize * zlocalsize / waveSize;
     }
 
     auto result = ConvSolution{miopenStatusSuccess};
@@ -328,6 +330,8 @@ ConvSolution BnFwdTrainingSpatial::GetSolution(const ExecutionContext& context,
         build_params.Define("MIO_BN_NHW", in_nhw);
         build_params.Define("MIO_BN_CHW", in_nstride);
         build_params.Define("MIO_BN_NCHW", in_nchw);
+      
+	      build_params.Define("HIP_ENABLE_EXTRA_WARP_SYNC_TYPES");
 
         kernel.kernel_file      = "MIOpenBatchNormFwdTrainSpatial.cpp";
         std::string kernel_name = "MIOpenBatchNormFwdTrainSpatial";
@@ -507,3 +511,4 @@ ConvSolution BnFwdTrainingSpatial::GetSolution(const ExecutionContext& context,
 } // namespace solver
 
 } // namespace miopen
+

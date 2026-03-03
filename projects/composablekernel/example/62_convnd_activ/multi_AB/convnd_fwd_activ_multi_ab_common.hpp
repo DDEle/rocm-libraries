@@ -69,32 +69,32 @@ using DeviceGroupedConvNDMultiABFwdInstance =
         InElementOp,
         WeiElementOp,
         OutElementOp,
-        ConvSpec,    // ConvForwardSpecialization
-        GemmSpec,    // GemmSpecialization
-        256,         // BlockSize
-        128,         // MPerBlock
-        256,         // NPerBlock
-        32,          // KPerBlock
-        8,           // AK1
-        8,           // BK1
-        16,          // MPerWmma
-        16,          // NPerWmma
-        4,           // MWmmaPerWave
-        4,           // NWmmaPerWave
-        S<4, 64, 1>, // ABlockTransferThreadClusterLengths_AK0_M_AK1
-        S<1, 0, 2>,  // ABlockTransferThreadClusterArrangeOrder
-        S<1, 0, 2>,  // ABlockTransferSrcAccessOrder
-        2,           // ABlockTransferSrcVectorDim
-        8,           // ABlockTransferSrcScalarPerVector
-        8,           // ABlockTransferDstScalarPerVector_AK1
-        1,           // ABlockLdsExtraM
-        S<4, 64, 1>, // BBlockTransferThreadClusterLengths_BK0_N_BK1
-        S<1, 0, 2>,  // BBlockTransferThreadClusterArrangeOrder
-        S<1, 0, 2>,  // BBlockTransferSrcAccessOrder
-        2,           // BBlockTransferSrcVectorDim
-        8,           // BBlockTransferSrcScalarPerVector
-        8,           // BBlockTransferDstScalarPerVector_BK1
-        1,           // BBlockLdsExtraN
+        ConvSpec,                        // ConvForwardSpecialization
+        GemmSpec,                        // GemmSpecialization
+        256,                             // BlockSize
+        128,                             // MPerBlock
+        256,                             // NPerBlock
+        sizeof(DataType) == 1 ? 64 : 32, // KPerBlock
+        8,                               // AK1
+        8,                               // BK1
+        16,                              // MPerWmma
+        16,                              // NPerWmma
+        4,                               // MWmmaPerWave
+        4,                               // NWmmaPerWave
+        S<4, 64, 1>,                     // ABlockTransferThreadClusterLengths_AK0_M_AK1
+        S<1, 0, 2>,                      // ABlockTransferThreadClusterArrangeOrder
+        S<1, 0, 2>,                      // ABlockTransferSrcAccessOrder
+        2,                               // ABlockTransferSrcVectorDim
+        8,                               // ABlockTransferSrcScalarPerVector
+        8,                               // ABlockTransferDstScalarPerVector_AK1
+        1,                               // ABlockLdsExtraM
+        S<4, 64, 1>,                     // BBlockTransferThreadClusterLengths_BK0_N_BK1
+        S<1, 0, 2>,                      // BBlockTransferThreadClusterArrangeOrder
+        S<1, 0, 2>,                      // BBlockTransferSrcAccessOrder
+        2,                               // BBlockTransferSrcVectorDim
+        8,                               // BBlockTransferSrcScalarPerVector
+        8,                               // BBlockTransferDstScalarPerVector_BK1
+        1,                               // BBlockLdsExtraN
         1,
         1,
         S<1, 32, 1, 8>,

@@ -105,6 +105,18 @@ struct BlockwiseGemmXdlops_mx_pipeline_base
     static constexpr auto a_scale_thread_vec_size = sizeof(int32_t) / scale_pack_size_a;
     static constexpr auto b_scale_thread_vec_size = sizeof(int32_t) / scale_pack_size_b;
 
+    // Detect FP4/FP6 separately for A and B based on packed_size_v:
+    // FP4: packed_size_v = 2 (f4x2_pk_t)
+    // FP6: packed_size_v = 16 or 32 (f6x16_pk_t, f6x32_pk_t, bf6x16_pk_t, bf6x32_pk_t)
+    // FP8: packed_size_v = 1 or other small values
+    // Note: 2x MFMA speedup requires BOTH operands to be the right type
+    static constexpr bool IsF4_A = (packed_size_v<ComputeTypeA> == 2);
+    static constexpr bool IsF4_B = (packed_size_v<ComputeTypeB> == 2);
+    static constexpr bool IsF6_A =
+        (packed_size_v<ComputeTypeA> == 16 || packed_size_v<ComputeTypeA> == 32);
+    static constexpr bool IsF6_B =
+        (packed_size_v<ComputeTypeB> == 16 || packed_size_v<ComputeTypeB> == 32);
+
     using HotLoopInstList = ck::BlockwiseGemmXdlops_pipeline_hotloop_inst< //
         BlockSize,
         MPerBlock,
@@ -121,10 +133,14 @@ struct BlockwiseGemmXdlops_mx_pipeline_base
         MPerXDL,
         NPerXDL,
         xdlops_gemm.KPerXdlops,
-        (packed_size_v<ComputeTypeA> > 1 || packed_size_v<ComputeTypeB> > 1)>;
-
+        IsF4_A,
+        IsF4_B,
+        IsF6_A,
+        IsF6_B>;
+#if defined(__HIP_DEVICE_COMPILE__)
     static_assert(KPerThread % KPack == 0,
                   "Wrong KPack setting; try increasing KPerThread or decreasing KPack");
+#endif
 
     StaticBufferTupleOfVector<AddressSpaceEnum::Vgpr,
                               AccType,
@@ -236,6 +252,7 @@ struct BlockwiseGemmXdlops_mx_pipeline_base
 
         static_assert(MPerBlock % (MPerXDL * MRepeat) == 0 && NPerBlock % (NPerXDL * NRepeat) == 0,
                       "wrong!");
+        static_assert(MRepeat % MXdlPack == 0);
 #endif
     }
 
@@ -287,6 +304,27 @@ struct BlockwiseGemmXdlops_mx_pipeline_base
                                                               M1,
                                                               M2,
                                                               N));
+    }
+    // transposed XDL output supporting C_xdl' = B_xdl' * A_xdl' packed mfma
+    __host__ __device__ static constexpr auto GetCThreadDescriptor_M0_N0_M1_N1_M2_N2_M3_N3_N4_N5()
+    {
+        constexpr auto c_m0_m1_m2_n_tblk_lens = xdlops_gemm.GetCM0M1M2NThreadBlkLengths();
+
+        constexpr auto M0 = c_m0_m1_m2_n_tblk_lens[I0];
+        constexpr auto M1 = c_m0_m1_m2_n_tblk_lens[I1];
+        constexpr auto M2 = c_m0_m1_m2_n_tblk_lens[I2];
+        constexpr auto N  = c_m0_m1_m2_n_tblk_lens[I3];
+
+        return make_naive_tensor_descriptor_packed(make_tuple(Number<MRepeat / MXdlPack>{},
+                                                              Number<NRepeat / NXdlPack>{},
+                                                              I1,
+                                                              I1,
+                                                              Number<MXdlPack>{},
+                                                              Number<NXdlPack>{},
+                                                              N,
+                                                              M0,
+                                                              M1,
+                                                              M2));
     }
 
     __host__ __device__ static constexpr auto GetCThreadDescriptor_G_M0_N0_M1_N1_M2_M3_M4_N2()
@@ -344,6 +382,23 @@ struct BlockwiseGemmXdlops_mx_pipeline_base
                                                            Number<NPerXDL>{}));
 
         return xdlops_gemm.MakeCDescriptor_M0_N0_M1_N1_M2_N2_M3_M4_M5_N3(
+            c_block_desc_m0_n0_m1_n1_m2_n2);
+    }
+
+    // transposed XDL output supporting C_xdl' = B_xdl' * A_xdl'_packed mfma
+    __host__ __device__ static constexpr auto GetCBlockDescriptor_M0_N0_M1_N1_M2_N2_M3_N3_N4_N5()
+    {
+        constexpr auto c_block_desc_m0_n0_m1_n1_m2_n2 =
+            make_naive_tensor_descriptor_packed(make_tuple(Number<MRepeat / MXdlPack>{},
+                                                           Number<NRepeat / NXdlPack>{},
+                                                           Number<MWaves>{},
+                                                           Number<NWaves>{},
+                                                           Number<MXdlPack>{},
+                                                           Number<NXdlPack>{},
+                                                           Number<MPerXDL>{},
+                                                           Number<NPerXDL>{}));
+
+        return xdlops_gemm.MakeCDescriptor_M0_N0_M1_N1_M2_N2_M3_N3_N4_N5(
             c_block_desc_m0_n0_m1_n1_m2_n2);
     }
 

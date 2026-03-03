@@ -33,7 +33,8 @@ template <BlockGemmPipelineScheduler BlkGemmPipelineVer,
           index_t NPerXDL,
           index_t MRepeat, // MXdlPerWave
           index_t NRepeat, // NXdlPerWave
-          index_t KPack>
+          index_t KPack,
+          bool TransposeC>
 struct BlockwiseGemmXdlops_pipeline_v3_mx
 {
 };
@@ -57,7 +58,8 @@ template <index_t ThreadBlockSize,
           index_t NPerXDL,
           index_t MRepeat, // MXdlPerWave
           index_t NRepeat, // NXdlPerWave
-          index_t KPack>
+          index_t KPack,
+          bool TransposeC>
 struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                                           ThreadBlockSize,
                                           ScaleBlockSize,
@@ -78,7 +80,8 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                                           NPerXDL,
                                           MRepeat,
                                           NRepeat,
-                                          KPack>
+                                          KPack,
+                                          TransposeC>
     : BlockwiseGemmXdlops_mx_pipeline_base<ThreadBlockSize,
                                            ScaleBlockSize,
                                            ADataType,
@@ -98,7 +101,8 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                                            NPerXDL,
                                            MRepeat,
                                            NRepeat,
-                                           KPack>
+                                           KPack,
+                                           TransposeC>
 
 {
 
@@ -121,7 +125,8 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                                                       NPerXDL,
                                                       MRepeat,
                                                       NRepeat,
-                                                      KPack>;
+                                                      KPack,
+                                                      TransposeC>;
     using Base::I0;
     using Base::I1;
     using Base::KRepeat;
@@ -221,9 +226,9 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                                                num_buffer_load_a_scale + num_buffer_load_b_scale;
 
         constexpr auto mfma_perstage_more =
-            math::integer_divide_ceil(num_mfma_stage1, num_buffer_load_total);
+            math::max(1, math::integer_divide_ceil(num_mfma_stage1, num_buffer_load_total));
         constexpr auto mfma_perstage_less =
-            math::integer_divide_floor(num_mfma_stage1, num_buffer_load_total);
+            math::max(1, math::integer_divide_floor(num_mfma_stage1, num_buffer_load_total));
 
         constexpr auto mfma_stages_more =
             num_mfma_stage1 - mfma_perstage_less * num_buffer_load_total;
@@ -444,11 +449,12 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
 
 // Local prefetch 1, sync the async load
 #if defined(__gfx125__)
-        // ?
+        block_sync_lds_async_load();
 #else
         __builtin_amdgcn_s_waitcnt(3952); // wait for EXP_CNT, LDS, GDS, Constant and Message
+        block_sync_lds();
 #endif
-        block_sync_lds_async_load();
+
         static_for<0, KRepeat, 1>{}([&](auto k) {
             constexpr auto k_step = k * xdlops_gemm.KPerXdlops * KPack / xdlops_gemm.K1PerXdlops;
             static_for<0, MRepeat, 1>{}([&](auto m0) {
@@ -516,12 +522,12 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
             {
                 auto LoopFunc = [&](auto scale_comp_buf, auto scale_mem_buf) {
 #if defined(__gfx125__)
-                // ?
-#else
-                    __builtin_amdgcn_s_waitcnt(
-                        3952); // wait for EXP_CNT, LDS, GDS, Constant and Message
-#endif
                     block_sync_lds_async_load();
+#else
+                    // wait for EXP_CNT, LDS, GDS, Constant and Message
+                    __builtin_amdgcn_s_waitcnt(3952);
+                    block_sync_lds();
+#endif
 
                     a_blockwise_copy.Run(
                         a_grid_desc, a_grid_buf, a_block_desc, a_block_bufs(scale_comp_buf));
@@ -842,11 +848,11 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
             });
 
 #if defined(__gfx125__)
-            // ?
+            block_sync_lds_async_load();
 #else
             __builtin_amdgcn_s_waitcnt(3952); // wait for EXP_CNT, LDS, GDS, Constant and Message
+            block_sync_lds();
 #endif
-            block_sync_lds_async_load();
 
             static_for<0, KRepeat, 1>{}([&](auto k) {
                 constexpr auto k_step =

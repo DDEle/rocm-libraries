@@ -59,4 +59,11 @@ __device__ inline auto amd_wave_read_first_lane(const Object& obj)
     return bit_cast<Object>(dst);
 }
 
+// Overload for host to return the same value
+template <typename T>
+__host__ inline T amd_wave_read_first_lane(T v)
+{
+    return v;
+}
+
 } // namespace ck_tile

@@ -26,17 +26,18 @@ struct BQuantBlockUniversalGemmAsBsCr
     template <typename PipelineProblem_, typename GemmPolicy_>
     struct GemmTraits_
     {
-        using Problem         = remove_cvref_t<PipelineProblem_>;
-        using Policy          = remove_cvref_t<GemmPolicy_>;
-        using ADataType       = remove_cvref_t<typename Problem::ADataType>;
-        using BDataType       = remove_cvref_t<typename Problem::BDataType>;
-        using BQDataType      = remove_cvref_t<typename Problem::BQDataType>;
-        using BLayout         = remove_cvref_t<typename Problem::BLayout>;
-        using BQLayout        = remove_cvref_t<typename Problem::BQLayout>;
-        using ComputeDataType = remove_cvref_t<typename Problem::ComputeDataType>;
-        using CDataType       = remove_cvref_t<typename Problem::CDataType>;
-        using BlockGemmShape  = remove_cvref_t<typename Problem::BlockGemmShape>;
-        using BQuantGroupSize = remove_cvref_t<typename Problem::BQuantGroupSize>;
+        using Problem          = remove_cvref_t<PipelineProblem_>;
+        using Policy           = remove_cvref_t<GemmPolicy_>;
+        using ADataType        = remove_cvref_t<typename Problem::ADataType>;
+        using BDataType        = remove_cvref_t<typename Problem::BDataType>;
+        using BQDataType       = remove_cvref_t<typename Problem::BQDataType>;
+        using BLayout          = remove_cvref_t<typename Problem::BLayout>;
+        using BQLayout         = remove_cvref_t<typename Problem::BQLayout>;
+        using AComputeDataType = remove_cvref_t<typename Problem::AComputeDataType>;
+        using BComputeDataType = remove_cvref_t<typename Problem::BComputeDataType>;
+        using CDataType        = remove_cvref_t<typename Problem::CDataType>;
+        using BlockGemmShape   = remove_cvref_t<typename Problem::BlockGemmShape>;
+        using BQuantGroupSize  = remove_cvref_t<typename Problem::BQuantGroupSize>;
 
         static constexpr index_t kBlockSize = Problem::kBlockSize;
         static constexpr auto Scheduler     = Problem::Scheduler;
@@ -101,15 +102,15 @@ struct BQuantBlockUniversalGemmAsBsCr
         // 2. bf8, bf8, fp32 -> f32
         // 3. i4,  fp8, (fp8/fp32) -> f32
         // 4. i4,  bf8, (fp8/fp32) -> f32
-        static_assert((std::is_same_v<ADataType, fp8_t> || std::is_same_v<ADataType, bf8_t>) &&
-                      (std::is_same_v<BDataType, fp8_t> || std::is_same_v<BDataType, bf8_t> ||
-                       std::is_same_v<BDataType, ck_tile::pk_int4_t>) &&
-                      (std::is_same_v<BQDataType, float> ||
-                       std::is_same_v<BQDataType, ck_tile::fp8_t> ||
-                       std::is_same_v<BQDataType, ck_tile::bf8_t>) &&
-                      (std::is_same_v<ComputeDataType, fp8_t> ||
-                       std::is_same_v<ComputeDataType, bf8_t>) &&
-                      std::is_same_v<CDataType, fp32_t>);
+        static_assert(
+            (std::is_same_v<ADataType, fp8_t> || std::is_same_v<ADataType, bf8_t>) &&
+            (std::is_same_v<BDataType, fp8_t> || std::is_same_v<BDataType, bf8_t> ||
+             std::is_same_v<BDataType, ck_tile::pk_int4_t>) &&
+            (std::is_same_v<BQDataType, float> || std::is_same_v<BQDataType, ck_tile::fp8_t> ||
+             std::is_same_v<BQDataType, ck_tile::bf8_t>) &&
+            (std::is_same_v<AComputeDataType, fp8_t> || std::is_same_v<AComputeDataType, bf8_t>) &&
+            (std::is_same_v<BComputeDataType, fp8_t> || std::is_same_v<BComputeDataType, bf8_t>) &&
+            std::is_same_v<CDataType, fp32_t>);
 
         static constexpr index_t InterWaveSchedulingMacClusters = 1;
 
@@ -120,11 +121,12 @@ struct BQuantBlockUniversalGemmAsBsCr
     public:
     using Traits = GemmTraits_<Problem_, Policy_>;
 
-    using ADataType       = remove_cvref_t<typename Traits::ADataType>;
-    using BDataType       = remove_cvref_t<typename Traits::BDataType>;
-    using BQDataType      = remove_cvref_t<typename Traits::BQDataType>;
-    using ComputeDataType = remove_cvref_t<typename Traits::ComputeDataType>;
-    using CDataType       = remove_cvref_t<typename Traits::CDataType>;
+    using ADataType        = remove_cvref_t<typename Traits::ADataType>;
+    using BDataType        = remove_cvref_t<typename Traits::BDataType>;
+    using BQDataType       = remove_cvref_t<typename Traits::BQDataType>;
+    using AComputeDataType = remove_cvref_t<typename Traits::AComputeDataType>;
+    using BComputeDataType = remove_cvref_t<typename Traits::BComputeDataType>;
+    using CDataType        = remove_cvref_t<typename Traits::CDataType>;
 
     // BDataType gets converted from PkInt4 during loading
     using OverrideBDataType = std::conditional_t<
@@ -243,8 +245,8 @@ struct BQuantBlockUniversalGemmAsBsCr
         static constexpr auto BLdsTileDistr =
             decltype(make_static_tile_distribution(MakeBBlockDistributionEncode())){};
 
-        using ALdsTile = decltype(make_static_distributed_tensor<ComputeDataType>(ALdsTileDistr));
-        using BLdsTile = decltype(make_static_distributed_tensor<ComputeDataType>(BLdsTileDistr));
+        using ALdsTile = decltype(make_static_distributed_tensor<AComputeDataType>(ALdsTileDistr));
+        using BLdsTile = decltype(make_static_distributed_tensor<BComputeDataType>(BLdsTileDistr));
 
         ALdsTile a_warp_tile_;
         BLdsTile b_warp_tile_;
@@ -258,10 +260,10 @@ struct BQuantBlockUniversalGemmAsBsCr
                                           bool_constant<ALoadTranspose> = {},
                                           bool_constant<BLoadTranspose> = {})
         {
-            load_int4_tile<ADataType, ComputeDataType, UnaryOpSize_, ALoadTranspose>(
+            load_int4_tile<ADataType, AComputeDataType, UnaryOpSize_, ALoadTranspose>(
                 a_warp_tile_, a_block_window);
             // If B datatype were pkint4 it would be converted prior to storing in LDS
-            load_int4_tile<OverrideBDataType, ComputeDataType, UnaryOpSize_, BLoadTranspose>(
+            load_int4_tile<OverrideBDataType, BComputeDataType, UnaryOpSize_, BLoadTranspose>(
                 b_warp_tile_, b_block_window);
         }
 

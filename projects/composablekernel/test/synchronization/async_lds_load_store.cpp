@@ -1,5 +1,5 @@
-// Copyright © Advanced Micro Devices, Inc., or its affiliates.
 // SPDX-License-Identifier: MIT
+// Copyright (c) Advanced Micro Devices, Inc., or its affiliates.
 
 #include "gtest/gtest.h"
 #include "ck/library/utility/device_memory.hpp"
@@ -10,6 +10,7 @@
 #include "ck/utility/env.hpp"
 #include "ck/utility/common_header.hpp"
 
+using ::ck::DeviceMem;
 using F8DataType = ck::f8_t;
 
 // Very specific M and K values for illustrative purposes
@@ -41,7 +42,7 @@ __global__ void async_load_store_kernel(F8DataType* in, F8DataType* out, const i
         reinterpret_cast<__attribute__((address_space(1))) F8DataType*>(
             reinterpret_cast<uintptr_t>(out + global_index));
 
-    ck::amd_async_copy_to_lds_impl<F8DataType, K>(g_ptr_in, lds_ptr);
+    ck::amd_async_copy_to_lds_impl<F8DataType, K, 0, false>(g_ptr_in, 0, lds_ptr);
 
     ck::block_sync_lds_async_load();
 

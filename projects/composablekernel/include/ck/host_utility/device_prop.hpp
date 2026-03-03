@@ -52,6 +52,23 @@ inline std::string get_device_name()
     }
 }
 
+inline int get_device_revision()
+{
+    hipDeviceProp_t props{};
+    int device;
+    auto status = hipGetDevice(&device);
+    if(status != hipSuccess)
+    {
+        return -1; // Error: cannot get device
+    }
+    status = hipGetDeviceProperties(&props, device);
+    if(status != hipSuccess)
+    {
+        return -1; // Error: cannot get device properties
+    }
+    return props.asicRevision;
+}
+
 inline bool is_gfx12_supported()
 {
     return ck::get_device_name() == "gfx1200" || ck::get_device_name() == "gfx1201" ||
@@ -124,9 +141,17 @@ inline bool is_xdl_wmma_supported()
     }
     else if(is_gfx125_supported())
     {
-        if constexpr((MPerXDL != 16) || (NPerXDL != 16))
+        if constexpr((MPerXDL32 != 16) || (NPerXDL32 != 16))
         {
             return false;
+        }
+
+        if constexpr(sizeof(ADataType) > 4 || sizeof(BDataType) > 4)
+        {
+            if(ck::get_device_name() == "gfx1250")
+            {
+                return false;
+            }
         }
         return true;
     }
@@ -151,14 +176,46 @@ inline bool is_xdl_wmma_k_supported()
         }
         return true;
     }
+    else if(is_gfx120_supported())
+    {
+        return (KPerBlock % 16 == 0) && (KPack % 8 == 0);
+    }
+    else if(is_gfx11_supported())
+    {
+        return (KPerBlock % 16 == 0) && (KPack % 16 == 0);
+    }
     return true;
+}
+
+template <typename ADataType, index_t K1 = 0>
+inline index_t __host__ get_wmma_k()
+{
+    if(is_gfx125_supported())
+    {
+        return 64 / sizeof(ADataType);
+    }
+    else
+    {
+        return K1 == 16 ? 32 : 16;
+    }
+}
+
+template <typename ADataType, index_t K1 = 0>
+inline index_t __device__ get_wmma_k()
+{
+#if defined(__gfx125__)
+    return 64 / sizeof(ADataType);
+#else
+
+    return K1 == 16 ? 32 : 16;
+#endif
 }
 
 inline bool is_lds_direct_load_supported()
 {
     // Check if direct loads from global memory to LDS are supported.
     return ck::get_device_name() == "gfx90a" || ck::get_device_name() == "gfx942" ||
-           ck::get_device_name() == "gfx950";
+           ck::get_device_name() == "gfx950" || is_gfx125_supported();
 }
 
 inline bool is_bf16_atomic_supported()

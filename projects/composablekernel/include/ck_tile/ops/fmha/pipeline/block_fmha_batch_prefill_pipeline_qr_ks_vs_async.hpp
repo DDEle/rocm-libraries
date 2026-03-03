@@ -299,7 +299,6 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
 
 #if CK_TILE_FMHA_FWD_FAST_EXP2
     static constexpr auto R_LOG2E = 1.0 / log2e_v<SaccDataType>;
-    static constexpr auto LOG2E   = log2e_v<SaccDataType>;
 #endif
 
     static constexpr index_t kBlockPerCu = []() {
@@ -407,7 +406,6 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                const index_t page_stride_k,
                const index_t page_stride_v,
                DropoutType& dropout,
-               const float sink_v,
                // KV_BLOCKSCALE parameters (only used when QScaleEnum == KV_BLOCKSCALE)
                const float* k_descale_ptr             = nullptr,
                const float* v_descale_ptr             = nullptr,
@@ -505,24 +503,8 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
         auto l     = MLBlockTileType{};
 
         clear_tile(o_acc);
-        if(__builtin_isinf_sign(sink_v) >= 0)
-        {
-#if CK_TILE_FMHA_FWD_FAST_EXP2
-            if constexpr(BiasEnum == BlockAttentionBiasEnum::ELEMENTWISE_BIAS ||
-                         BiasEnum == BlockAttentionBiasEnum::ALIBI)
-                set_tile(m, sink_v * LOG2E * scale_s);
-            else
-                set_tile(m, sink_v * LOG2E);
-#else
-            set_tile(m, sink_v);
-#endif
-            set_tile(l, SMPLComputeDataType{1.0f});
-        }
-        else
-        {
-            set_tile(m, -numeric<SMPLComputeDataType>::infinity());
-            clear_tile(l);
-        }
+        set_tile(m, -numeric<SMPLComputeDataType>::infinity());
+        clear_tile(l);
 
         __builtin_amdgcn_sched_barrier(0);
         const auto q_origin = q_dram_window.get_window_origin();
@@ -541,14 +523,7 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                     auto lse =
                         make_static_distributed_tensor<LSEDataType>(m.get_tile_distribution());
 
-                    if(__builtin_isinf_sign(sink_v) >= 0)
-                    {
-                        set_tile(lse, SMPLComputeDataType{sink_v * scale_s});
-                    }
-                    else
-                    {
-                        set_tile(lse, -numeric<SMPLComputeDataType>::infinity());
-                    }
+                    set_tile(lse, -numeric<SMPLComputeDataType>::infinity());
 
                     store_tile(lse_dram_window_tmp, tile_elementwise_in(lse_element_func, lse));
                 }
@@ -1491,8 +1466,7 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                const index_t stride_v,
                const index_t page_stride_k,
                const index_t page_stride_v,
-               DropoutType& dropout,
-               float sink_v) const
+               DropoutType& dropout) const
     {
         return operator()(q_dram_block_window_tmp,
                           identity{},
@@ -1520,8 +1494,7 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                           stride_v,
                           page_stride_k,
                           page_stride_v,
-                          dropout,
-                          sink_v);
+                          dropout);
     }
 
     // Overload for KV_BLOCKSCALE: K/V descale is per-page
@@ -1555,7 +1528,6 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                const index_t page_stride_k,
                const index_t page_stride_v,
                DropoutType& dropout,
-               float sink_v,
                const float* k_descale_ptr,
                const float* v_descale_ptr,
                index_t nblock_stride_kv_block_descale,
@@ -1588,7 +1560,6 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                           page_stride_k,
                           page_stride_v,
                           dropout,
-                          sink_v,
                           k_descale_ptr,
                           v_descale_ptr,
                           nblock_stride_kv_block_descale,

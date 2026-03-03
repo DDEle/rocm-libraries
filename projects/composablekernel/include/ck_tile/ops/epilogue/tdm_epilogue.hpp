@@ -12,14 +12,15 @@ namespace ck_tile {
 template <typename Problem_>
 struct TdmEpilogue
 {
-    using Problem     = remove_cvref_t<Problem_>;
-    using AsDataType  = remove_cvref_t<typename Problem::AsDataType>;
-    using BsDataType  = remove_cvref_t<typename Problem::BsDataType>;
-    using AccDataType = remove_cvref_t<typename Problem::AccDataType>;
-    using ODataType   = remove_cvref_t<typename Problem::ODataType>;
-    using DsDataType  = remove_cvref_t<typename Problem::DsDataType>;
-    using DsLayout    = remove_cvref_t<typename Problem::DsLayout>;
-
+    using Problem                          = remove_cvref_t<Problem_>;
+    using AsDataType                       = remove_cvref_t<typename Problem::AsDataType>;
+    using BsDataType                       = remove_cvref_t<typename Problem::BsDataType>;
+    using AccDataType                      = remove_cvref_t<typename Problem::AccDataType>;
+    using ODataType                        = remove_cvref_t<typename Problem::ODataType>;
+    using DsDataType                       = remove_cvref_t<typename Problem::DsDataType>;
+    using DsLayout                         = remove_cvref_t<typename Problem::DsLayout>;
+    using AComputeDataType                 = remove_cvref_t<typename Problem::AComputeDataType>;
+    using BComputeDataType                 = remove_cvref_t<typename Problem::BComputeDataType>;
     static constexpr bool ADataTypeIsTuple = is_detected<is_tuple, AsDataType>::value;
     static constexpr bool BDataTypeIsTuple = is_detected<is_tuple, BsDataType>::value;
 
@@ -31,13 +32,17 @@ struct TdmEpilogue
                                                remove_cvref_t<BsDataType>,
                                                remove_cvref_t<tuple<BsDataType>>>;
 
-    using ADataType = remove_cvref_t<std::tuple_element_t<number<0>{}, AsDataTypeTuple>>;
-    using BDataType = remove_cvref_t<std::tuple_element_t<number<0>{}, BsDataTypeTuple>>;
-    using ATypeToUse =
-        std::conditional_t<std::is_same_v<ADataType, pk_int4_t>, BDataType, ADataType>;
+    using ADataType  = remove_cvref_t<std::tuple_element_t<number<0>{}, AsDataTypeTuple>>;
+    using BDataType  = remove_cvref_t<std::tuple_element_t<number<0>{}, BsDataTypeTuple>>;
+    using ATypeToUse = std::conditional_t<
+        std::is_same_v<AComputeDataType, void>,
+        std::conditional_t<std::is_same_v<ADataType, pk_int4_t>, BDataType, ADataType>,
+        AComputeDataType>;
     // Used for weight-only quantization kernel, B would be dequantized to the same data type as A
-    using BTypeToUse =
-        std::conditional_t<std::is_same_v<BDataType, pk_int4_t>, ADataType, BDataType>;
+    using BTypeToUse = std::conditional_t<
+        std::is_same_v<BComputeDataType, void>,
+        std::conditional_t<std::is_same_v<BDataType, pk_int4_t>, ADataType, BDataType>,
+        BComputeDataType>;
     using ELayout       = remove_cvref_t<typename Problem::ELayout>;
     using CDElementwise = remove_cvref_t<typename Problem::CDElementwise>;
     static constexpr memory_operation_enum MemoryOperation = Problem::MemoryOperation;

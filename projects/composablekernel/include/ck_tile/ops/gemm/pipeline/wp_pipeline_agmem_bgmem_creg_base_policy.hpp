@@ -264,27 +264,30 @@ struct UniversalWeightPreshufflePipelineAgBgCrPolicy
         // this behaviour used to work
         using ATypeToUse = mixed_prec_compute_type_from_input_t<typename Problem::ADataType,
                                                                 typename Problem::BDataType,
-                                                                typename Problem::ComputeDataType>;
+                                                                typename Problem::AComputeDataType>;
         using BTypeToUse = mixed_prec_compute_type_from_input_t<typename Problem::BDataType,
                                                                 typename Problem::ADataType,
-                                                                typename Problem::ComputeDataType>;
-
+                                                                typename Problem::BComputeDataType>;
+#if defined(__gfx125__)
+        constexpr auto NumAccess = WGAttrNumAccessEnum::Single;
+#else
         constexpr index_t WaveSize = get_warp_size();
         constexpr index_t KLane    = WarpTile::at(I2) * WarpTile::at(I0) / WaveSize;
         using BDataType            = typename Problem::BDataType;
         constexpr index_t KLaneBytes =
             KLane / numeric_traits<BDataType>::PackedSize * sizeof(BDataType);
         constexpr auto NumAccess = static_cast<WGAttrNumAccessEnum>(max(1, KLaneBytes / 16));
-        using WarpGemm           = WarpGemmDispatcher<ATypeToUse,
-                                                      BTypeToUse,
-                                                      typename Problem::CDataType,
-                                                      WarpTile::at(I0),
-                                                      WarpTile::at(I1),
-                                                      WarpTile::at(I2),
-                                                      Problem::TransposeC,
-                                                      false,
-                                                      false,
-                                                      NumAccess>;
+#endif
+        using WarpGemm = WarpGemmDispatcher<ATypeToUse,
+                                            BTypeToUse,
+                                            typename Problem::CDataType,
+                                            WarpTile::at(I0),
+                                            WarpTile::at(I1),
+                                            WarpTile::at(I2),
+                                            Problem::TransposeC,
+                                            false,
+                                            false,
+                                            NumAccess>;
 
         using BlockWeightPreshufflePolicy =
             BlockWeightPreshuffleASmemBSmemCRegV1CustomPolicy<typename Problem::ADataType,

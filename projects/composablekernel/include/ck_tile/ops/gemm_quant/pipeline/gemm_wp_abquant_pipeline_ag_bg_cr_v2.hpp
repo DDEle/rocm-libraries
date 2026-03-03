@@ -19,16 +19,17 @@ namespace ck_tile {
 template <typename Problem, typename PipelinePolicy = GemmWPABQuantPipelineAgBgCrPolicy>
 struct WPABQuantBPipelineAgBgCrV2 : public WeightPreshufflePipelineAGmemBGmemCRegV2<Problem>
 {
-    using Base            = WeightPreshufflePipelineAGmemBGmemCRegV2<Problem>;
-    using ADataType       = remove_cvref_t<typename Problem::ADataType>;
-    using AQDataType      = remove_cvref_t<typename Problem::AQDataType>;
-    using BDataType       = remove_cvref_t<typename Problem::BDataType>;
-    using BQDataType      = remove_cvref_t<typename Problem::BQDataType>;
-    using CDataType       = remove_cvref_t<typename Problem::CDataType>;
-    using ComputeDataType = remove_cvref_t<typename Problem::ComputeDataType>;
-    using BlockGemmShape  = remove_cvref_t<typename Problem::BlockGemmShape>;
-    using AQuantGroupSize = remove_cvref_t<typename Problem::AQuantGroupSize>;
-    using BQuantGroupSize = remove_cvref_t<typename Problem::BQuantGroupSize>;
+    using Base             = WeightPreshufflePipelineAGmemBGmemCRegV2<Problem>;
+    using ADataType        = remove_cvref_t<typename Problem::ADataType>;
+    using AQDataType       = remove_cvref_t<typename Problem::AQDataType>;
+    using BDataType        = remove_cvref_t<typename Problem::BDataType>;
+    using BQDataType       = remove_cvref_t<typename Problem::BQDataType>;
+    using CDataType        = remove_cvref_t<typename Problem::CDataType>;
+    using AComputeDataType = remove_cvref_t<typename Problem::AComputeDataType>;
+    using BComputeDataType = remove_cvref_t<typename Problem::BComputeDataType>;
+    using BlockGemmShape   = remove_cvref_t<typename Problem::BlockGemmShape>;
+    using AQuantGroupSize  = remove_cvref_t<typename Problem::AQuantGroupSize>;
+    using BQuantGroupSize  = remove_cvref_t<typename Problem::BQuantGroupSize>;
 
     using ALayout  = remove_cvref_t<typename Problem::ALayout>;
     using BLayout  = remove_cvref_t<typename Problem::BLayout>;
@@ -321,7 +322,7 @@ struct WPABQuantBPipelineAgBgCrV2 : public WeightPreshufflePipelineAGmemBGmemCRe
                 b_flat_distribution);
 
         using BTypeToUse =
-            mixed_prec_compute_type_from_input_t<BDataType, ADataType, ComputeDataType>;
+            mixed_prec_compute_type_from_input_t<BDataType, ADataType, AComputeDataType>;
         using BTileType = decltype(make_static_distributed_tensor<BTypeToUse>(b_flat_distribution));
 
         // pingpong buffer for B
@@ -401,7 +402,7 @@ struct WPABQuantBPipelineAgBgCrV2 : public WeightPreshufflePipelineAGmemBGmemCRe
 
         // preload A00,A10 from lds
         using ATypeToUse =
-            mixed_prec_compute_type_from_input_t<ADataType, BDataType, ComputeDataType>;
+            mixed_prec_compute_type_from_input_t<ADataType, BDataType, AComputeDataType>;
         using ATileType =
             decltype(make_static_distributed_tensor<BTypeToUse>(a_warp_tile_distribution));
         statically_indexed_array<ATileType, m_preload> a_warp_tensor;

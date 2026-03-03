@@ -473,6 +473,15 @@ CK_TILE_HOST void reference_gemm(const HostTensor<ADataType>& a_m_k,
                 else
                     v_a = fp32_val.lo;
             }
+            else if constexpr(std::is_same_v<ADataType, pk_fp4_t>)
+            {
+                const pk_fp4_t pk_val   = a_element_op(a_m_k(m, k));
+                const fp32x2_t fp32_val = pk_fp4_to_fp32x2(pk_val, 1.f);
+                if(k % 2 == 1)
+                    v_a = fp32_val.hi;
+                else
+                    v_a = fp32_val.lo;
+            }
             else
             {
                 v_a = ck_tile::type_convert<AccDataType>(a_element_op(a_m_k(m, k)));
@@ -481,6 +490,15 @@ CK_TILE_HOST void reference_gemm(const HostTensor<ADataType>& a_m_k,
             {
                 const pk_int4_t pk_val  = b_element_op(b_k_n(k, n));
                 const fp32x2_t fp32_val = pk_int4_t_to_fp32x2_t(pk_val);
+                if(k % 2 == 1)
+                    v_b = fp32_val.hi;
+                else
+                    v_b = fp32_val.lo;
+            }
+            else if constexpr(std::is_same_v<BDataType, pk_fp4_t>)
+            {
+                const pk_fp4_t pk_val   = b_element_op(b_k_n(k, n));
+                const fp32x2_t fp32_val = pk_fp4_to_fp32x2(pk_val, 1.f);
                 if(k % 2 == 1)
                     v_b = fp32_val.hi;
                 else
@@ -809,7 +827,7 @@ __global__ void naive_gemm_kernel(ADataType* A,
             }
             else if constexpr(std::is_same_v<BDataType, pk_fp4_t>)
             {
-                const fp32x2_t fp32_val = pk_fp4_to_fp32x2(B[b_index / packed_size_b]);
+                const fp32x2_t fp32_val = pk_fp4_to_fp32x2(B[b_index / packed_size_b], 1.0f);
                 if(k % 2 == 1)
                     v_b = fp32_val.hi;
                 else

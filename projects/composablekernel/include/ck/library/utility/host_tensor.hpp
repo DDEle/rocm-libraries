@@ -834,6 +834,8 @@ struct Tensor
         }
     }
 
+    bool empty() const { return mData.empty(); }
+
     std::size_t GetElementSpaceSizeInBytes() const { return sizeof(T) * GetElementSpaceSize(); }
 
     void SetZero() { ck::ranges::fill<T>(mData, T{0}); }

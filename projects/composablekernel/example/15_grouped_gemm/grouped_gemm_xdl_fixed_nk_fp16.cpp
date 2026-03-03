@@ -301,7 +301,8 @@ int main(int argc, char* argv[])
 
     problem_size.group_count = 16;
 
-    if(argc == 5)
+    if(argc == 1) {}
+    else if(argc == 5)
     {
         config.do_verification = std::stoi(argv[1]);
         config.init_method     = std::stoi(argv[2]);

@@ -36,7 +36,9 @@ struct BasicInvoker
 
         constexpr ck_tile::index_t M_Warp_Tile = 16;
         constexpr ck_tile::index_t N_Warp_Tile = 16;
-        constexpr ck_tile::index_t K_Warp_Tile = 16;
+        constexpr ck_tile::index_t K_Warp_Tile =
+            ck_tile::get_k_warp_tile<ADataType, M_Warp_Tile, true>();
+        ;
 #else
         constexpr ck_tile::index_t M_Warp = 2;
         constexpr ck_tile::index_t N_Warp = 2;
@@ -61,11 +63,20 @@ struct BasicInvoker
                                                           BLayout,
                                                           CLayout>;
 
+        using AComputeDataType =
+            std::conditional_t<std::is_same_v<ADataType, ck_tile::pk_int4_t>, BDataType, ADataType>;
+        using BComputeDataType =
+            std::conditional_t<std::is_same_v<BDataType, ck_tile::pk_int4_t> ||
+                                   std::is_same_v<BDataType, ck_tile::pk_fp4_raw_t>,
+                               ADataType,
+                               BDataType>;
         using CodegenPipelineProblem = ck_tile::GemmPipelineProblem<ADataType,
                                                                     BDataType,
                                                                     AccDataType,
                                                                     CodegenGemmShape,
-                                                                    CodegenGemmTraits>;
+                                                                    CodegenGemmTraits,
+                                                                    AComputeDataType,
+                                                                    BComputeDataType>;
 
         using CodegenGemmPipeline = ck_tile::GemmPipelineAGmemBGmemCRegV1<CodegenPipelineProblem>;
 

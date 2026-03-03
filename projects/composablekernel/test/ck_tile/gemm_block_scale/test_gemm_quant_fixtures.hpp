@@ -7,16 +7,6 @@
 #include "ck_tile/host/permute_pk_int4.hpp"
 #include "ck_tile/host/tensor_shuffle_utils.hpp"
 
-template <bool is_8bit>
-constexpr ck_tile::index_t get_k_warp_tile()
-{
-#if CK_TILE_USE_WMMA
-    return 16;
-#else
-    return is_8bit ? 64 : 32;
-#endif
-}
-
 struct GemmConfigBase
 {
     static constexpr bool kPadM = false;
@@ -51,23 +41,20 @@ struct GemmConfigBase
 
     static constexpr ck_tile::index_t M_Warp_Tile = 16;
     static constexpr ck_tile::index_t N_Warp_Tile = 16;
-    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<false>();
 };
 
 struct GemmConfigDecode : public GemmConfigBase
 {
-    static constexpr ck_tile::index_t M_Tile      = 16;
-    static constexpr ck_tile::index_t N_Tile      = 64;
-    static constexpr ck_tile::index_t K_Tile      = 256;
-    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<true>();
+    static constexpr ck_tile::index_t M_Tile = 16;
+    static constexpr ck_tile::index_t N_Tile = 64;
+    static constexpr ck_tile::index_t K_Tile = 256;
 };
 
 struct GemmConfigPrefill : public GemmConfigBase
 {
-    static constexpr ck_tile::index_t M_Tile      = 128;
-    static constexpr ck_tile::index_t N_Tile      = 128;
-    static constexpr ck_tile::index_t K_Tile      = 128;
-    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<true>();
+    static constexpr ck_tile::index_t M_Tile = 128;
+    static constexpr ck_tile::index_t N_Tile = 128;
+    static constexpr ck_tile::index_t K_Tile = 128;
 };
 
 struct GemmConfigPrefillIntrawave : public GemmConfigBase
@@ -135,6 +122,8 @@ struct GemmConfigPreshuffleBDecode : public GemmConfigDecode
 {
     static constexpr bool PreshuffleB      = true;
     static constexpr bool DoubleSmemBuffer = true;
+
+    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<true>();
 };
 
 struct GemmConfigPreshuffleQuantDecode : public GemmConfigDecode
@@ -146,6 +135,8 @@ struct GemmConfigPreshuffleBPrefill : public GemmConfigPrefill
 {
     static constexpr bool PreshuffleB      = true;
     static constexpr bool DoubleSmemBuffer = true;
+
+    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<true>();
 };
 
 struct GemmConfigPreshuffleQuantPrefill : public GemmConfigPrefill
@@ -337,6 +328,7 @@ class TestCkTileGemmAQuant : public TestCkTileGemmQuantBase<Tuple, TestCkTileGem
                                                                      AccDataType,
                                                                      CodegenGemmShape,
                                                                      CodegenGemmTraits,
+                                                                     ComputeDataType,
                                                                      ComputeDataType>;
 
         using BaseGemmPipeline = ck_tile::BaseGemmPipelineAgBgCrCompV3<GemmPipelineProblem>;
@@ -834,6 +826,7 @@ class TestCkTileGemmBQuant : public TestCkTileGemmQuantBase<Tuple, TestCkTileGem
                                                                      AccDataType,
                                                                      CodegenGemmShape,
                                                                      CodegenGemmTraits,
+                                                                     ComputeDataType,
                                                                      ComputeDataType>;
 
         using BaseGemmPipeline = std::conditional_t<
@@ -1141,6 +1134,7 @@ class TestCkTileGemmABQuant : public TestCkTileGemmQuantBase<Tuple, TestCkTileGe
                                                                      AccDataType,
                                                                      CodegenGemmShape,
                                                                      CodegenGemmTraits,
+                                                                     ComputeDataType,
                                                                      ComputeDataType>;
 
         using BaseGemmPipeline = std::conditional_t<
@@ -1180,8 +1174,8 @@ class TestCkTileGemmABQuant : public TestCkTileGemmQuantBase<Tuple, TestCkTileGe
                                    ck_tile::ABQuantGemmPipelineAgBgCrCompV3<PipelineProblem>>;
 
             using GemmEpilogue = ck_tile::CShuffleEpilogue<
-                ck_tile::CShuffleEpilogueProblem<typename PipelineProblem::ComputeDataType,
-                                                 typename PipelineProblem::ComputeDataType,
+                ck_tile::CShuffleEpilogueProblem<typename PipelineProblem::AComputeDataType,
+                                                 typename PipelineProblem::BComputeDataType,
                                                  ck_tile::tuple<>,
                                                  AccDataType,
                                                  CDataType,
@@ -1376,6 +1370,7 @@ class TestCkTileGemmRowColQuant
                                                                      AccDataType,
                                                                      CodegenGemmShape,
                                                                      CodegenGemmTraits,
+                                                                     ComputeDataType,
                                                                      ComputeDataType>;
 
         using BaseGemmPipeline = ck_tile::BaseGemmPipelineAgBgCrCompV3<GemmPipelineProblem>;
@@ -1590,6 +1585,7 @@ class TestCkTileGemmTensorQuant
                                                                      AccDataType,
                                                                      CodegenGemmShape,
                                                                      CodegenGemmTraits,
+                                                                     ComputeDataType,
                                                                      ComputeDataType>;
 
         using BaseGemmPipeline = ck_tile::BaseGemmPipelineAgBgCrCompV3<GemmPipelineProblem>;

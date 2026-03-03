@@ -82,7 +82,9 @@ struct tensor_view
 
     // X is vector of DataType.
     // "coord" is coordinate of DataType, not X. "coord" should be aligned to X
+    // static_offset is compile-time offset for LDS access optimization
     template <typename X,
+              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename std::enable_if<
                   std::is_same_v<typename vector_traits<remove_cvref_t<X>>::scalar_type,
@@ -93,7 +95,7 @@ struct tensor_view
                             index_t linear_offset,
                             bool_constant<oob_conditional_check> = {}) const
     {
-        return buf_.template get<X>(
+        return buf_.template get<X, static_offset / PackedSize>(
             coord.get_offset() / PackedSize,
             linear_offset / PackedSize,
             coordinate_has_valid_offset_assuming_top_index_is_valid(desc_, coord),
@@ -101,6 +103,7 @@ struct tensor_view
     }
 
     template <typename X,
+              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename std::enable_if<
                   std::is_same_v<typename vector_traits<remove_cvref_t<X>>::scalar_type,
@@ -112,10 +115,11 @@ struct tensor_view
                             bool is_valid_element, // flag
                             bool_constant<oob_conditional_check> = {}) const
     {
-        return buf_.template get<X>(coord.get_offset() / PackedSize,
-                                    linear_offset / PackedSize,
-                                    is_valid_element,
-                                    bool_constant<oob_conditional_check>{});
+        return buf_.template get<X, static_offset / PackedSize>(
+            coord.get_offset() / PackedSize,
+            linear_offset / PackedSize,
+            is_valid_element,
+            bool_constant<oob_conditional_check>{});
     }
 
     // X is vector of DataType.
@@ -164,6 +168,7 @@ struct tensor_view
     }
 
     template <typename X,
+              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename std::enable_if<
                   std::is_same_v<typename vector_traits<remove_cvref_t<X>>::scalar_type,
@@ -175,7 +180,7 @@ struct tensor_view
                                   index_t linear_offset,
                                   bool_constant<oob_conditional_check> = {}) const
     {
-        return buf_.template async_get<X>(
+        return buf_.template async_get<X, static_offset / PackedSize>(
             smem,
             coord.get_offset() / PackedSize + linear_offset / PackedSize,
             0, // linear_offset need to be imm and is not supported currently
@@ -184,6 +189,7 @@ struct tensor_view
     }
 
     template <typename X,
+              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename std::enable_if<
                   std::is_same_v<typename vector_traits<remove_cvref_t<X>>::scalar_type,
@@ -196,11 +202,12 @@ struct tensor_view
                                   bool is_valid_element,
                                   bool_constant<oob_conditional_check> = {}) const
     {
-        return buf_.template async_get<X>(smem,
-                                          coord.get_offset() / PackedSize,
-                                          linear_offset / PackedSize,
-                                          is_valid_element,
-                                          bool_constant<oob_conditional_check>{});
+        return buf_.template async_get<X, static_offset / PackedSize>(
+            smem,
+            coord.get_offset() / PackedSize,
+            linear_offset / PackedSize,
+            is_valid_element,
+            bool_constant<oob_conditional_check>{});
     }
 
     template <typename X,
@@ -470,7 +477,7 @@ struct tensor_view
                                          null_buffer_view,
                                          gather_index_offset>(tdm_config,
                                                               smem,
-                                                              coord.get_offset(),
+                                                              coord.get_offset() / PackedSize,
                                                               tensor_dims,
                                                               global_strides,
                                                               number<num_tensor_dims>{},
@@ -487,7 +494,7 @@ struct tensor_view
                                          decltype(buffer_view),
                                          gather_index_offset>(tdm_config,
                                                               smem,
-                                                              coord.get_offset(),
+                                                              coord.get_offset() / PackedSize,
                                                               tensor_dims,
                                                               global_strides,
                                                               number<num_tensor_dims>{},
@@ -508,7 +515,7 @@ struct tensor_view
         return buf_.template tdm_store<TDMConfig_, DimTuple_, BoxDim_, num_tensor_dims>(
             tdm_config,
             smem,
-            coord.get_offset(),
+            coord.get_offset() / PackedSize,
             tensor_dims,
             global_strides,
             number<num_tensor_dims>{});
@@ -517,12 +524,6 @@ struct tensor_view
     // member
     buffer_view buf_;
     TensorDesc desc_;
-};
-
-<<<<<<< HEAD
-// placeholder type if we want to opt-out a tile view parameter
-struct null_tensor_view
-{
 };
 
 template <typename T>
@@ -540,8 +541,6 @@ struct is_tensor_view<null_tensor_view> : std::true_type
 template <typename T>
 inline constexpr bool is_tensor_view_v = is_tensor_view<T>::value;
 
-=======
->>>>>>> origin/gfx1250
 template <address_space_enum BufferAddressSpace = address_space_enum::generic,
           memory_operation_enum DstInMemOp      = memory_operation_enum::set,
           amd_buffer_coherence_enum Coherence   = amd_buffer_coherence_enum::coherence_default,

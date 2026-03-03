@@ -29,13 +29,8 @@ using DeviceGemmV2Instance = ck::tensor_operation::device::DeviceGemm_Wmma_CShuf
     ADataType, BDataType, CDataType, AccDataType, CShuffleDataType,
     PassThrough, PassThrough, PassThrough, GemmDefault,
     128,
-<<<<<<< HEAD
-    128, 64, 64,
-    16, 16, // AK1, BK1
-=======
     128, 64, 128,
-    8, 8,
->>>>>>> origin/gfx1250
+    16, 16, // AK1, BK1
     16, 16,
     4, 2,
     S<4, 32, 1>, S<0, 2, 1>, S<0, 2, 1>,

@@ -378,7 +378,9 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3
             return false;
         }
 
-        if constexpr(K1Value % MfmaSelector<FloatAB, MPerXdl, NPerXdl>::selected_mfma.k_per_blk !=
+        if constexpr(K1Value %
+                         MfmaSelector<FloatAB, MPerXdl, NPerXdl, FloatAB, is_single_rate_mfma>::
+                             selected_mfma.k_per_blk !=
                      0)
         {
             return false;
@@ -917,8 +919,6 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3_ext
         }
     }
 
-    IS_VALID_COMPILATION_PARAMETER_IMPL(FloatC)
-
     __host__ static constexpr bool CheckValidity(const Problem& problem)
     {
         static_assert(is_known_at_compile_time<remove_cv_t<decltype(K1)>>::value,
@@ -927,6 +927,11 @@ struct GridwiseGemm_k0mk1_k0nk1_mn_xdlops_v2r3_ext
         static_assert((MPerBlock % (MPerXdl * MXdlPerWave) == 0) &&
                           (NPerBlock % (NXdlPerWave * NPerXdl)) == 0,
                       "Invalid tuning param!");
+
+        if(!is_xdl_wmma_k_supported<FloatAB, K0PerBlock * K1Value, K1Value>())
+        {
+            return false;
+        }
 
         if constexpr(!(GemmSpec == tensor_operation::device::GemmSpecialization::MPadding ||
                        GemmSpec == tensor_operation::device::GemmSpecialization::MNPadding ||

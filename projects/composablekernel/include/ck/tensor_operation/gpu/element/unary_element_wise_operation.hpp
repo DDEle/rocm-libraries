@@ -401,6 +401,12 @@ struct PassThrough
     }
 
     template <>
+    __host__ __device__ void operator()<int32_t, float>(int32_t& y, const float& x) const
+    {
+        y = static_cast<int32_t>(x);
+    }
+
+    template <>
     __host__ __device__ void operator()<bhalf_t, bhalf_t>(bhalf_t& y, const bhalf_t& x) const
     {
         y = x;

@@ -124,7 +124,6 @@ struct FmhaFwdSplitKVKernel
         const void* v_ptr;
         void* lse_acc_ptr;
         void* o_acc_ptr;
-        const void* sink_ptr;
 
         ck_tile::index_t batch;
 
@@ -328,15 +327,13 @@ struct FmhaFwdSplitKVKernel
               ck_tile::index_t window_size_left,
               ck_tile::index_t window_size_right,
               ck_tile::index_t sink_size,
-              ck_tile::index_t mask_type,
-              const void* sink_ptr = nullptr)
+              ck_tile::index_t mask_type)
     {
         Kargs kargs{{q_ptr,
                      k_ptr,
                      v_ptr,
                      lse_acc_ptr,
                      o_acc_ptr,
-                     sink_ptr,
                      batch,
                      seqlen_q,
                      seqlen_k,
@@ -458,15 +455,13 @@ struct FmhaFwdSplitKVKernel
               ck_tile::index_t window_size_left,
               ck_tile::index_t window_size_right,
               ck_tile::index_t sink_size,
-              ck_tile::index_t mask_type,
-              const void* sink_ptr = nullptr)
+              ck_tile::index_t mask_type)
     {
         Kargs kargs{{q_ptr,
                      k_ptr,
                      v_ptr,
                      lse_acc_ptr,
                      o_acc_ptr,
-                     sink_ptr,
                      batch,
                      -1, // seqlen_q will be updated by another pointer
                      -1, // seqlen_k will be updated by another pointer
@@ -535,6 +530,7 @@ struct FmhaFwdSplitKVKernel
         {
             kargs.init_logits_soft_cap(logits_soft_cap);
         }
+
         return kargs;
     }
 
@@ -619,10 +615,6 @@ struct FmhaFwdSplitKVKernel
         long_index_t batch_offset_o_acc   = 0;
         index_t kv_l2p_offset =
             0; // logical-to-physical offset of seqlen_k coordinate. only used for paged-kvcache
-        const float sink_value =
-            kargs.sink_ptr != nullptr
-                ? (*(static_cast<const float*>(kargs.sink_ptr) + i_nhead)) / kargs.scale_s
-                : -numeric<float>::infinity();
 
         if constexpr(kIsGroupMode)
         {
@@ -706,6 +698,7 @@ struct FmhaFwdSplitKVKernel
                 kargs.seqlen_k = kargs.seqlen_k_ptr[i_batch];
             }
         }
+
         // for simplicity, batch stride we just modify the pointer
         const index_t i_nhead_k =
             (kMergeNumHeadGroupsSeqLenQ ? i_nhead : i_nhead / kargs.nhead_ratio_qk);
@@ -1090,8 +1083,7 @@ struct FmhaFwdSplitKVKernel
                                       variant_params,
                                       block_indices,
                                       kv_l2p_offset,
-                                      smem_ptr,
-                                      sink_value);
+                                      smem_ptr);
             }
             else
             {
@@ -1111,8 +1103,7 @@ struct FmhaFwdSplitKVKernel
                                       variant_params,
                                       block_indices,
                                       kv_l2p_offset,
-                                      smem_ptr,
-                                      sink_value);
+                                      smem_ptr);
             }
         }();
 

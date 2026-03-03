@@ -1315,6 +1315,18 @@ struct nnvb_data_t_selector<e8m0_bexp_t>
 {
     using type = e8m0_bexp_t::type;
 };
+
+template <>
+struct nnvb_data_t_selector<e4m3_scale_t>
+{
+    using type = e4m3_scale_t::type;
+};
+
+template <>
+struct nnvb_data_t_selector<e5m3_scale_t>
+{
+    using type = e5m3_scale_t::type;
+};
 #endif
 
 template <>
@@ -2258,26 +2270,40 @@ using uint8x32_t = typename vector_type<uint8_t, 32>::type;
 using uint8x64_t = typename vector_type<uint8_t, 64>::type;
 
 // f4
-using f4x2_t  = typename vector_type<f4x2_pk_t, 1>::type;
-using f4x4_t  = typename vector_type<f4x2_pk_t, 2>::type;
-using f4x8_t  = typename vector_type<f4x2_pk_t, 4>::type;
-using f4x16_t = typename vector_type<f4x2_pk_t, 8>::type;
-using f4x32_t = typename vector_type<f4x2_pk_t, 16>::type;
-using f4x64_t = typename vector_type<f4x2_pk_t, 32>::type;
+using f4x2_t   = typename vector_type<f4x2_pk_t, 1>::type;
+using f4x4_t   = typename vector_type<f4x2_pk_t, 2>::type;
+using f4x8_t   = typename vector_type<f4x2_pk_t, 4>::type;
+using f4x16_t  = typename vector_type<f4x2_pk_t, 8>::type;
+using f4x32_t  = typename vector_type<f4x2_pk_t, 16>::type;
+using f4x64_t  = typename vector_type<f4x2_pk_t, 32>::type;
+using f4x128_t = typename vector_type<f4x2_pk_t, 64>::type;
 
 // f6
 using f6x16_t   = typename vector_type<f6x16_pk_t, 1>::type;
 using f6x16x2_t = typename vector_type<f6x16_pk_t, 2>::type;
+using f6x16x4_t = typename vector_type<f6x16_pk_t, 4>::type;
 using f6x32_t   = typename vector_type<f6x32_pk_t, 1>::type;
+using f6x32x2_t = typename vector_type<f6x32_pk_t, 2>::type;
+using f6x64_t   = typename vector_type<f6x32_pk_t, 2>::type;
 
 // bf6
 using bf6x16_t   = typename vector_type<bf6x16_pk_t, 1>::type;
 using bf6x16x2_t = typename vector_type<bf6x16_pk_t, 2>::type;
+using bf6x16x4_t = typename vector_type<bf6x16_pk_t, 4>::type;
 using bf6x32_t   = typename vector_type<bf6x32_pk_t, 1>::type;
+using bf6x32x2_t = typename vector_type<bf6x32_pk_t, 2>::type;
+using bf6x64_t   = typename vector_type<bf6x32_pk_t, 2>::type;
 
 #ifndef CK_CODE_GEN_RTC
 // e8m0
 using e8m0x4_bexp_t = typename vector_type<e8m0_bexp_t, 4>::type;
+using e8m0x8_bexp_t = typename vector_type<e8m0_bexp_t, 8>::type;
+// e4m3
+using e4m3x4_scale_t = typename vector_type<e4m3_scale_t, 4>::type;
+using e4m3x8_scale_t = typename vector_type<e4m3_scale_t, 8>::type;
+// e5m3
+using e5m3x4_scale_t = typename vector_type<e5m3_scale_t, 4>::type;
+using e5m3x8_scale_t = typename vector_type<e5m3_scale_t, 8>::type;
 #endif
 
 // pack int4

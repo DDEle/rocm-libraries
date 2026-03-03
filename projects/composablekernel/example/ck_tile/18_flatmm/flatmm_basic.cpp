@@ -45,48 +45,6 @@ static constexpr inline auto is_row_major(Layout layout_)
                                                  ck_tile::tensor_layout::gemm::RowMajor>>{};
 }
 
-// mfma_type, 0:32x32, 1:16x16
-template <typename FlatmmConfig, typename T>
-auto shuffle_b_v0(const ck_tile::HostTensor<T>& t)
-{
-    assert(t.get_lengths().size() == 2);
-    int n_ = t.get_lengths()[1];
-    int k_ = t.get_lengths()[0];
-
-    constexpr int MaxVecSize     = 16 / sizeof(T);
-    constexpr int KLane          = ck_tile::get_warp_size() / FlatmmConfig::N_Warp_Tile;
-    constexpr int ItemsPerAccess = std::min(MaxVecSize, FlatmmConfig::K_Warp_Tile / KLane);
-
-    ck_tile::HostTensor<T> t_view({n_ / FlatmmConfig::N_Warp_Tile,
-                                   FlatmmConfig::N_Warp_Tile,
-                                   k_ / ItemsPerAccess,
-                                   ItemsPerAccess});
-    std::copy(t.begin(), t.end(), t_view.begin());
-    return ck_tile::reference_permute(t_view, {0, 2, 1, 3});
-}
-
-template <typename FlatmmConfig, typename T>
-auto shuffle_b_v1(const ck_tile::HostTensor<T>& t)
-{
-    assert(t.get_lengths().size() == 2);
-    int n_ = t.get_lengths()[1];
-    int k_ = t.get_lengths()[0];
-
-    constexpr int MaxVecSize     = 16 / sizeof(T);
-    constexpr int KLane          = ck_tile::get_warp_size() / FlatmmConfig::N_Warp_Tile;
-    constexpr int ItemsPerAccess = std::min(MaxVecSize, FlatmmConfig::K_Warp_Tile / KLane);
-    constexpr int NRepeat = FlatmmConfig::N_Tile / FlatmmConfig::N_Warp_Tile / FlatmmConfig::N_Warp;
-
-    ck_tile::HostTensor<T> t_view({n_ / FlatmmConfig::N_Tile,
-                                   FlatmmConfig::N_Warp,
-                                   FlatmmConfig::N_Warp_Tile,
-                                   NRepeat,
-                                   k_ / ItemsPerAccess,
-                                   ItemsPerAccess});
-    std::copy(t.begin(), t.end(), t_view.begin());
-    return ck_tile::reference_permute(t_view, {0, 3, 1, 4, 2, 5});
-}
-
 template <typename ADataType, typename BDataType, typename AccDataType, typename CDataType>
 auto calculate_rtol_atol(const ck_tile::index_t K,
                          const ck_tile::index_t kbatch,
@@ -215,8 +173,8 @@ float flatmm_calc(const ck_tile::ScaleFlatmmHostArgs<ScaleM, ScaleN>& args,
 
         auto kargs = Kernel::MakeKernelArgs(args);
 
-        const dim3 grids      = Kernel::GridSize(kargs);
-        constexpr dim3 blocks = Kernel::BlockSize();
+        const dim3 grids  = Kernel::GridSize(kargs);
+        const dim3 blocks = Kernel::BlockSize();
 
         if(!Kernel::IsSupportedArgument(kargs))
         {
@@ -484,6 +442,9 @@ int main(int argc, char* argv[])
 
     try
     {
+#if CK_TILE_USE_WMMA
+        return !run_flatmm_example<FlatmmConfig16_Wmma>(argc, argv);
+#else
         int warp_tile = arg_parser.get_int("warp_tile");
         if(warp_tile == 0)
         {
@@ -501,6 +462,7 @@ int main(int argc, char* argv[])
         {
             return !run_flatmm_example<FlatmmConfig32_950>(argc, argv);
         }
+#endif
     }
     catch(const std::runtime_error& e)
     {

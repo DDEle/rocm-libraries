@@ -35,7 +35,9 @@ template <typename AsDataType_,
           index_t VectorSizeC_         = 1,
           bool TiledMMAPermuteN_       = false,
           index_t BlockedXDLN_PerWarp_ = 1, // The number of continuous xdl_output per warp
-          bool DoubleSmemBuffer_       = false>
+          bool DoubleSmemBuffer_       = false,
+          typename AComputeDataType_   = void,
+          typename BComputeDataType_   = void>
 struct CShuffleEpilogueProblem
 {
     using AsDataType                             = remove_cvref_t<AsDataType_>;
@@ -46,6 +48,8 @@ struct CShuffleEpilogueProblem
     using DsLayout                               = remove_cvref_t<DsLayout_>;
     using ELayout                                = remove_cvref_t<ELayout_>;
     using CDElementwise                          = remove_cvref_t<CDElementwise_>;
+    using AComputeDataType                       = remove_cvref_t<AComputeDataType_>;
+    using BComputeDataType                       = remove_cvref_t<BComputeDataType_>;
     static constexpr index_t kBlockSize          = MWave_ * NWave_ * get_warp_size();
     static constexpr index_t kMPerBlock          = kM_;
     static constexpr index_t kNPerBlock          = kN_;
@@ -70,13 +74,15 @@ struct CShuffleEpilogueProblem
 template <typename Problem_, typename Policy_ = void>
 struct CShuffleEpilogue
 {
-    using Problem     = remove_cvref_t<Problem_>;
-    using AsDataType  = remove_cvref_t<typename Problem::AsDataType>;
-    using BsDataType  = remove_cvref_t<typename Problem::BsDataType>;
-    using AccDataType = remove_cvref_t<typename Problem::AccDataType>;
-    using ODataType   = remove_cvref_t<typename Problem::ODataType>;
-    using DsDataType  = remove_cvref_t<typename Problem::DsDataType>;
-    using DsLayout    = remove_cvref_t<typename Problem::DsLayout>;
+    using Problem          = remove_cvref_t<Problem_>;
+    using AsDataType       = remove_cvref_t<typename Problem::AsDataType>;
+    using BsDataType       = remove_cvref_t<typename Problem::BsDataType>;
+    using AccDataType      = remove_cvref_t<typename Problem::AccDataType>;
+    using ODataType        = remove_cvref_t<typename Problem::ODataType>;
+    using DsDataType       = remove_cvref_t<typename Problem::DsDataType>;
+    using DsLayout         = remove_cvref_t<typename Problem::DsLayout>;
+    using AComputeDataType = remove_cvref_t<typename Problem::AComputeDataType>;
+    using BComputeDataType = remove_cvref_t<typename Problem::BComputeDataType>;
 
     static constexpr bool ADataTypeIsTuple = is_detected<is_tuple, AsDataType>::value;
     static constexpr bool BDataTypeIsTuple = is_detected<is_tuple, BsDataType>::value;
@@ -92,16 +98,23 @@ struct CShuffleEpilogue
     using ADataType = remove_cvref_t<std::tuple_element_t<number<0>{}, AsDataTypeTuple>>;
     using BDataType = remove_cvref_t<std::tuple_element_t<number<0>{}, BsDataTypeTuple>>;
 
-    using ATypeToUse = std::conditional_t<std::is_same_v<ADataType, pk_int4_t> ||
-                                              std::is_same_v<ADataType, pk_fp4_t>,
-                                          BDataType,
-                                          ADataType>;
+    // to be compatiable with original implementation
+    using ATypeToUse =
+        std::conditional_t<std::is_same_v<AComputeDataType, void>,
+                           std::conditional_t<std::is_same_v<ADataType, pk_int4_t> ||
+                                                  std::is_same_v<ADataType, pk_fp4_t>,
+                                              BDataType,
+                                              ADataType>,
+                           AComputeDataType>;
     // Used for weight-only quantization kernel, B would be dequantized to the same data type as A
-    using BTypeToUse = std::conditional_t<std::is_same_v<BDataType, pk_int4_t> ||
-                                              std::is_same_v<BDataType, pk_fp4_t> ||
-                                              std::is_same_v<BDataType, pk_fp4_raw_t>,
-                                          ADataType,
-                                          BDataType>;
+    using BTypeToUse =
+        std::conditional_t<std::is_same_v<BComputeDataType, void>,
+                           std::conditional_t<std::is_same_v<BDataType, pk_int4_t> ||
+                                                  std::is_same_v<BDataType, pk_fp4_t> ||
+                                                  std::is_same_v<BDataType, pk_fp4_raw_t>,
+                                              ADataType,
+                                              BDataType>,
+                           BComputeDataType>;
 
     using ELayout                                = remove_cvref_t<typename Problem::ELayout>;
     using CDElementwise                          = remove_cvref_t<typename Problem::CDElementwise>;
@@ -296,19 +309,89 @@ struct CShuffleEpilogue
     template <typename Problem>
     CK_TILE_HOST_DEVICE static constexpr auto MakeLdsBlockDescriptor()
     {
+        constexpr auto DataTypeSize = sizeof(ODataType);
+        constexpr index_t VectorLen = GetVectorSizeC();
+
+        // calculate how many elements to pad to avoid bank conflict
+#if defined(__gfx950__) || defined(__gfx125__)
+        constexpr auto PaddingAmount = VectorLen;
+#else
+        constexpr auto PaddingAmount = 0;
+#endif
+        constexpr index_t BytesPerBank = 4;
         // N is contiguous dimension
         if constexpr(std::is_same_v<ELayout, tensor_layout::gemm::RowMajor>)
         {
-            return make_naive_tensor_descriptor(
-                make_tuple(number<MPerIterationShuffle>{}, number<NPerIterationShuffle>{}),
-                make_tuple(number<NPerIterationShuffle>{}, number<1>{}));
+            constexpr index_t MLdsLayerRequired =
+                get_n_lds_banks() * BytesPerBank / NPerIterationShuffle / DataTypeSize;
+            constexpr auto MLdsLayer = max(1, MLdsLayerRequired);
+
+            constexpr auto lds_block_desc_0 = make_naive_tensor_descriptor(
+                make_tuple(number<MPerIterationShuffle / MLdsLayer>{},
+                           number<NPerIterationShuffle / VectorLen * MLdsLayer>{},
+                           number<VectorLen>{}),
+                make_tuple(number<NPerIterationShuffle * MLdsLayer + PaddingAmount>{},
+                           number<VectorLen>{},
+                           number<1>{}),
+                number<VectorLen>{},
+                number<1>{});
+
+            constexpr auto lds_block_desc_1 = transform_tensor_descriptor(
+                lds_block_desc_0,
+                make_tuple(make_pass_through_transform(number<MPerIterationShuffle / MLdsLayer>{}),
+                           make_unmerge_transform(make_tuple(
+                               number<MLdsLayer>{}, number<NPerIterationShuffle / VectorLen>{})),
+                           make_pass_through_transform(number<VectorLen>{})),
+                make_tuple(sequence<0>{}, sequence<1>{}, sequence<2>{}),
+                make_tuple(sequence<0>{}, sequence<1, 2>{}, sequence<3>{}));
+
+            constexpr auto lds_block_desc = transform_tensor_descriptor(
+                lds_block_desc_1,
+                make_tuple(make_merge_transform_v3_division_mod(make_tuple(
+                               number<MPerIterationShuffle / MLdsLayer>{}, number<MLdsLayer>{})),
+                           make_merge_transform_v3_division_mod(make_tuple(
+                               number<NPerIterationShuffle / VectorLen>{}, number<VectorLen>{}))),
+                make_tuple(sequence<0, 1>{}, sequence<2, 3>{}),
+                make_tuple(sequence<0>{}, sequence<1>{}));
+
+            return lds_block_desc;
         }
         // M is contiguous dimension
         else if constexpr(std::is_same_v<ELayout, tensor_layout::gemm::ColumnMajor>)
         {
-            return make_naive_tensor_descriptor(
-                make_tuple(number<MPerIterationShuffle>{}, number<NPerIterationShuffle>{}),
-                make_tuple(number<1>{}, number<MPerIterationShuffle>{}));
+            constexpr index_t NLdsLayerRequired =
+                get_n_lds_banks() * BytesPerBank / MPerIterationShuffle / DataTypeSize;
+            constexpr auto NLdsLayer = max(1, NLdsLayerRequired);
+
+            constexpr auto lds_block_desc_0 = make_naive_tensor_descriptor(
+                make_tuple(number<NPerIterationShuffle / NLdsLayer>{},
+                           number<MPerIterationShuffle / VectorLen * NLdsLayer>{},
+                           number<VectorLen>{}),
+                make_tuple(number<MPerIterationShuffle * NLdsLayer + PaddingAmount>{},
+                           number<VectorLen>{},
+                           number<1>{}),
+                number<VectorLen>{},
+                number<1>{});
+
+            constexpr auto lds_block_desc_1 = transform_tensor_descriptor(
+                lds_block_desc_0,
+                make_tuple(make_pass_through_transform(number<NPerIterationShuffle / NLdsLayer>{}),
+                           make_unmerge_transform(make_tuple(
+                               number<NLdsLayer>{}, number<MPerIterationShuffle / VectorLen>{})),
+                           make_pass_through_transform(number<VectorLen>{})),
+                make_tuple(sequence<0>{}, sequence<1>{}, sequence<2>{}),
+                make_tuple(sequence<0>{}, sequence<1, 2>{}, sequence<3>{}));
+
+            constexpr auto lds_block_desc = transform_tensor_descriptor(
+                lds_block_desc_1,
+                make_tuple(make_merge_transform_v3_division_mod(make_tuple(
+                               number<NPerIterationShuffle / NLdsLayer>{}, number<NLdsLayer>{})),
+                           make_merge_transform_v3_division_mod(make_tuple(
+                               number<MPerIterationShuffle / VectorLen>{}, number<VectorLen>{}))),
+                make_tuple(sequence<0, 1>{}, sequence<2, 3>{}),
+                make_tuple(sequence<0>{}, sequence<1>{}));
+
+            return lds_block_desc;
         }
         else
         {
@@ -697,7 +780,7 @@ struct CShuffleEpilogue
                                                   MPerIterationShuffle,
                                                   NPerIterationShuffle,
                                                   GetVectorSizeC(),
-                                                  tile_distribution_pattern::thread_raked,
+                                                  tile_distribution_pattern::warp_raked,
                                                   Problem::kNumWaveGroups>;
         constexpr auto dram_tile_distribution =
             TileEncodingPattern::make_2d_static_tile_distribution();

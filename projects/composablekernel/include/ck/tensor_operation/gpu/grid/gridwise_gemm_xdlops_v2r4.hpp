@@ -195,7 +195,8 @@ struct GridwiseGemm_bk0mk1_bk0nk1_mn_xdlops_v2r4
             return false;
         }
 
-        if constexpr(K1Value % MfmaSelector<FloatAB, MPerXdl, NPerXdl>::selected_mfma.k_per_blk !=
+        if constexpr(K1Value % MfmaSelector<FloatAB, MPerXdl, NPerXdl, FloatAB, true>::selected_mfma
+                                   .k_per_blk !=
                      0)
         {
             return false;

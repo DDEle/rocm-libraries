@@ -181,8 +181,8 @@ auto preShuffleWeight(ck_tile::HostTensor<dtype>& src)
     constexpr int packed_size = ck_tile::numeric_traits<dtype>::PackedSize;
     int KPack =
         std::is_same_v<dtype, ck_tile::pk_fp6x16_t> ? 32 : 16 * packed_size; // fp4/fp6:32 or fp8:16
-    int NLane = N_Warp_Tile;
-    int KLane = 64 / NLane;
+    int NLane = CurrentArchTraits::template GetNLane<N_Warp_Tile>();
+    int KLane = ck_tile::get_warp_size() / NLane;
     int K0    = K / (KLane * KPack);
 
     ck_tile::HostTensor<dtype> shuffled(ck_tile::HostTensorDescriptor({N * K}, {1}));
@@ -214,55 +214,7 @@ auto preShuffleWeight(ck_tile::HostTensor<dtype>& src)
 template <class FlatmmConfig, bool KLast, typename dtype>
 auto preShuffleScale(ck_tile::HostTensor<dtype>& src)
 {
-    auto src_lengths = src.get_lengths();
-    const auto MN    = KLast ? src_lengths[0] : src_lengths[1];
-    const auto K     = KLast ? src_lengths[1] : src_lengths[0];
-
-    size_t MNXdlPack   = 2;
-    size_t KXdlPack    = 2;
-    size_t XdlMNThread = FlatmmConfig::N_Warp_Tile; // 16
-    size_t XdlKThread  = 64 / XdlMNThread;
-
-    const auto MN_Paded = ck_tile::integer_least_multiple(MN, XdlMNThread * MNXdlPack);
-
-    ck_tile::HostTensor<dtype> shuffled(ck_tile::HostTensorDescriptor({MN_Paded * K}, {1}));
-
-    size_t K0 = K / KXdlPack / XdlKThread; // KRepeat
-
-    // The 4 16x128 building blocks will be packed into 1 32x256 for F4
-    // The 8 16x16x128 mfma will be packed into 1 32x32x256 for F4
-
-    // unfold the MN32xK(256/32) scale buffer
-    //    4            16             2           2
-    // To XdlKThread-> XdlMNThread -> KXdlPack -> MNXdlPack
-    // Then, MNRepeat->KRepeat
-
-    for(size_t n = 0; n < MN_Paded; ++n)
-    {
-        for(size_t k = 0; k < K; ++k)
-        {
-            auto n0    = n / (XdlMNThread * MNXdlPack); // i MNRepeat
-            auto tempn = n % (XdlMNThread * MNXdlPack);
-            auto n1    = tempn % XdlMNThread; // i XdlMNThread
-            auto n2    = tempn / XdlMNThread; // i MNXdlPack
-
-            auto k0    = k / (XdlKThread * KXdlPack); // i KRepeat
-            auto tempk = k % (XdlKThread * KXdlPack);
-            auto k1    = tempk % XdlKThread; // i XdlKThread
-            auto k2    = tempk / XdlKThread; // i KXdlPack
-
-            auto outputIndex = n0 * MNXdlPack * KXdlPack * XdlMNThread * XdlKThread * K0 +
-                               k0 * MNXdlPack * KXdlPack * XdlMNThread * XdlKThread +
-                               k1 * MNXdlPack * KXdlPack * XdlMNThread + n1 * MNXdlPack * KXdlPack +
-                               k2 * MNXdlPack + n2;
-
-            if constexpr(KLast)
-                shuffled(outputIndex) = n < MN ? src(n, k) : dtype{};
-            else
-                shuffled(outputIndex) = n < MN ? src(k, n) : dtype{};
-        }
-    }
-    return shuffled;
+    return CurrentArchTraits::template preShuffleScale<FlatmmConfig, KLast>(src);
 }
 
 #include "run_mx_flatmm.inc"

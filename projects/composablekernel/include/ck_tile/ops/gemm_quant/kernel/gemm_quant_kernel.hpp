@@ -245,7 +245,7 @@ struct QuantGemmKernel
     [[nodiscard]] CK_TILE_HOST static const std::string GetName()
     {
         // clang-format off
-        return concat('_', "gemm_quant", gemm_prec_str<ADataType, BDataType>, GemmPipeline::GetName());
+        return concat('_', "gemm_quant", gemm_prec_str<ADataType, BDataType>(), GemmPipeline::GetName());
         // clang-format on
     }
 
@@ -1450,7 +1450,7 @@ struct QuantGemmKernel
 
         // allocate LDS
         __shared__ char smem_ptr[GetSmemSize()];
-
+        assert(kargs.k_batch == 1);
         RunGemm(
             a_ptr, b_ptr, aq_ptr, bq_ptr, c_ptr, smem_ptr, kargs, splitk_batch_offset, i_m, i_n);
     }

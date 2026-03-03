@@ -204,9 +204,8 @@ bool profile_grouped_conv_bwd_data_impl(int do_verification,
     ck::index_t best_split_k = 1;
 
     // profile device op instances
-    bool pass          = true;
-    index_t num_kernel = 0;
-    auto run_impl      = [&](auto& op_ptr, auto& argument_ptr, const index_t& split_k_for_run) {
+    bool pass     = true;
+    auto run_impl = [&](auto& op_ptr, auto& argument_ptr, const index_t& split_k_for_run) {
         // workspace_sz will be equal to 0 for other layout than NGCHW
         const std::size_t workspace_sz = op_ptr->GetWorkSpaceSize(argument_ptr.get());
         DeviceMem workspace_dev(workspace_sz);
@@ -214,12 +213,6 @@ bool profile_grouped_conv_bwd_data_impl(int do_verification,
 
         if(op_ptr->IsSupportedArgument(argument_ptr.get()))
         {
-            num_kernel++;
-            if((instance_index != -1) && (instance_index + 1 != num_kernel))
-            {
-                // skip test if instance_index is specified
-                return;
-            }
             std::string op_name = op_ptr->GetTypeString();
 
             auto invoker_ptr = op_ptr->MakeInvokerPointer();
@@ -257,12 +250,12 @@ bool profile_grouped_conv_bwd_data_impl(int do_verification,
             {
                 // GPU verification path
                 using ComputeType_ = std::conditional_t<sizeof(OutDataType) < sizeof(WeiDataType),
-                                                             OutDataType,
-                                                             WeiDataType>;
+                                                        OutDataType,
+                                                        WeiDataType>;
                 using ComputeType =
                     std::conditional_t<sizeof(ComputeType_) < sizeof(ComputeDataType),
-                                            ComputeType_,
-                                            ComputeDataType>;
+                                       ComputeType_,
+                                       ComputeDataType>;
                 using AccDataType =
                     std::conditional_t<std::is_same_v<ComputeType, int8_t>, int32_t, float>;
 
@@ -312,12 +305,12 @@ bool profile_grouped_conv_bwd_data_impl(int do_verification,
                 in_device_buf.FromDevice(in_device.mData.data());
 
                 using ComputeType_ = std::conditional_t<sizeof(OutDataType) < sizeof(WeiDataType),
-                                                             OutDataType,
-                                                             WeiDataType>;
+                                                        OutDataType,
+                                                        WeiDataType>;
                 using ComputeType =
                     std::conditional_t<sizeof(ComputeType_) < sizeof(ComputeDataType),
-                                            ComputeType_,
-                                            ComputeDataType>;
+                                       ComputeType_,
+                                       ComputeDataType>;
                 using AccDataType =
                     std::conditional_t<std::is_same_v<ComputeType, int8_t>, int32_t, float>;
                 const index_t num_accums = conv_param.K_;
@@ -386,6 +379,8 @@ bool profile_grouped_conv_bwd_data_impl(int do_verification,
     const auto op_ptrs = ck::tensor_operation::device::instance::DeviceOperationInstanceFactory<
         DeviceOp>::GetInstances();
 
+    std::cout << "found " << op_ptrs.size() << " instances" << std::endl;
+
     std::array<ck::index_t, NDimSpatial + 3> out_lengths{};
     std::array<ck::index_t, NDimSpatial + 3> out_strides{};
     std::array<ck::index_t, NDimSpatial + 3> wei_lengths{};
@@ -417,8 +412,15 @@ bool profile_grouped_conv_bwd_data_impl(int do_verification,
         split_k_list = {split_k};
     }
 
-    for(auto& op_ptr : op_ptrs)
+    for(size_t i = 0; i < op_ptrs.size(); i++)
     {
+        if((instance_index != -1) && (instance_index != static_cast<int>(i)))
+        {
+            // skip test if instance_index is specified
+            continue;
+        }
+        auto& op_ptr = op_ptrs[i];
+
         for(std::size_t split_k_id = 0; split_k_id < split_k_list.size(); split_k_id++)
         {
             auto argument_ptr = op_ptr->MakeArgumentPointer(
@@ -451,11 +453,6 @@ bool profile_grouped_conv_bwd_data_impl(int do_verification,
               << "\navg_time: " << best_avg_time << "\ntflops: " << best_tflops
               << "\nGB/s: " << best_gb_per_sec << ", SplitK " << best_split_k << std::endl;
 
-    if(instance_index != -1)
-    {
-        std::cout << "grouped_conv_bwd_data_instance (" << instance_index << "/" << num_kernel
-                  << "): Passed" << std::endl;
-    }
     return pass;
 }
 

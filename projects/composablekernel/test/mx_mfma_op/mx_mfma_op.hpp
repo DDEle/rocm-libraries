@@ -1249,30 +1249,23 @@ struct TestMXMFMA
         case 2:
             // expect small round off errors
             a_m_k.GenerateTensorValue(GeneratorTensor_3<PackedAType>{-2.0, 2.0});
-            a_scales.GenerateTensorValue(
-                GeneratorTensor_2<ScaleType>{126, 129}); // scales: {0.5, 1, 2}
+            a_scales.GenerateTensorValue(GeneratorTensor_2<ScaleType>{0, 4});
             b_n_k.GenerateTensorValue(GeneratorTensor_3<PackedBType>{-2.0, 2.0});
-            b_scales.GenerateTensorValue(GeneratorTensor_2<ScaleType>{126, 129});
+            b_scales.GenerateTensorValue(GeneratorTensor_2<ScaleType>{0, 4});
             break;
         case 3:
             // expect small round off errors
             a_m_k.GenerateTensorValue(GeneratorTensor_4<PackedAType>(0, 1, time(nullptr)));
-            a_scales.GenerateTensorValue(
-                GeneratorTensor_2<ScaleType>{126, 129}); // scales: {0.5, 1, 2}
+            a_scales.GenerateTensorValue(GeneratorTensor_2<ScaleType>{0, 4});
             b_n_k.GenerateTensorValue(GeneratorTensor_4<PackedBType>(0, 1, time(nullptr) / 2));
-            b_scales.GenerateTensorValue(
-                GeneratorTensor_2<ScaleType>{126, 129}); //  scales: {0.5, 1, 2}
+            b_scales.GenerateTensorValue(GeneratorTensor_2<ScaleType>{0, 4});
             break;
-
         default:
             // all initial values are representable in FP8, BF8
             a_m_k.GenerateTensorValue(GeneratorTensor_2<PackedAType>{-6, 7}); // Z[-6,6]
-            a_scales.GenerateTensorValue(
-                GeneratorTensor_2<ScaleType>{122, 129}); // scales: [1/32,..., 2]
+            a_scales.GenerateTensorValue(GeneratorTensor_3<ScaleType>{0.0625f, 8.0f});
             b_n_k.GenerateTensorValue(GeneratorTensor_2<PackedBType>{-6, 7}); // Z[-6,6]
-            b_scales.GenerateTensorValue(
-                GeneratorTensor_2<ScaleType>{122, 129}); //  scales: [1/32,..., 2]
-
+            b_scales.GenerateTensorValue(GeneratorTensor_3<ScaleType>{0.0625f, 8.0f});
             break;
         }
 

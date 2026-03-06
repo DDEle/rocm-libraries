@@ -334,22 +334,23 @@ namespace rocRoller
 
             auto const chunkWidth = options.contiguousChunkWidth;
 
-            auto const searchStart = (arch.HasCapability(GPUCapability::HasVGPRIndexing)
-                                      && regType() == Register::Type::Vector
-                                      && not(options.forceReservedRegion))
-                                         ? ReservedRegionSize()
-                                         : 0;
-            auto const searchStop = (arch.HasCapability(GPUCapability::HasVGPRIndexing)
-                                     && regType() == Register::Type::Vector
-                                     && options.forceReservedRegion)
-                                        ? ReservedRegionSize()
-                                        : static_cast<int>(m_registers.size());
+            auto const searchStart
+                = (arch.HasCapability(GPUCapability::HasVGPRIndexing)
+                   && regType() == Register::Type::Vector && not(options.forceReservedRegion))
+                      ? ReservedRegionSize()
+                      : 0;
+            auto const searchStop
+                = (arch.HasCapability(GPUCapability::HasVGPRIndexing)
+                   && regType() == Register::Type::Vector && options.forceReservedRegion)
+                      ? ReservedRegionSize()
+                      : static_cast<int>(m_registers.size());
 
             // Gather all candidate blocks
             PerfectFitCandidates candidates(m_registers.size());
             for(int searchPos = searchStart; searchPos < searchStop;)
             {
-                auto [start, blockSize] = findContiguousRange(searchPos, chunkWidth, options, arch, rv);
+                auto [start, blockSize]
+                    = findContiguousRange(searchPos, chunkWidth, options, arch, rv);
                 if(start < 0)
                     break;
 

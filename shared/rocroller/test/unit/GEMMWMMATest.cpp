@@ -95,7 +95,6 @@ namespace GEMMTests
                 ::testing::Values(SolutionParams::LoadPath::BufferToLDSViaVGPR,
                                   SolutionParams::LoadPath::GlobalToLDSViaVGPR))));
 
-
     INSTANTIATE_TEST_SUITE_P(
         GEMMTestWMMA1250,
         GEMMWMMATestSuite,

@@ -30,7 +30,7 @@ from rocisa.label import LabelManager
 from rocisa.asmpass import rocIsaPass, rocIsaPassOption
 from rocisa.instruction import BufferLoadB128, BufferLoadB32, BufferLoadB64, \
   BufferLoadD16B16, BufferLoadD16U8, DSLoad2B32, DSLoad2B64, DSLoadB128, \
-  DSLoadB32, DSLoadB64, DSLoadB64TrB16, DSLoadInstruction, DSLoadU16, \
+  DSLoadB32, DSLoadB64, DSLoadB64TrB16, DSLoadB128TrB16, DSLoadB64TrB8, DSLoadInstruction, DSLoadU16, \
   DSLoadU8, DSStore2B32, DSStore2B64, DSStoreB128, DSStoreB16, DSStoreB256, \
   DSStoreB32, DSStoreB64, DSStoreB8, DSStoreInstruction, FlatLoadB128, FlatLoadB32, \
   FlatLoadB64, FlatStoreB128, FlatStoreB32, FlatStoreB64, Instruction, MacroInstruction, \
@@ -440,6 +440,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
     self.do["KeepDirectToLdsAlloc"] = False  # If true, keep regs used for LDS alloc even if not used
     self.do["OptimizeNumItersPLR0"] = True
     self.do["AutoSplitDsWrite"] = True
+    self.do["EmulatedECCBufferLoad"] = False
 
     self.do["executeToInitEnd"] = 0
     self.do["executeToPrefetchEnd"] = 0
@@ -3428,6 +3429,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
     module = Module("body")
     module.add(Label("ASM_Start", "Main body of the asm kernel"))
     module.add(self.defineAndResources(kernel, tensorParametersA, tensorParametersB, tPM))
+    module.add(self.disableWmmaArbStall())
 
     # Initialize stream-k loop
     skComponent = Component.StreamK.find(self)
@@ -3867,7 +3869,6 @@ class KernelWriter(metaclass=abc.ABCMeta):
         module.addComment1("remove stagger offsets for tail loop")
         module.add(self.removeStaggerAB(kernel, tensorParametersA, tensorParametersB))
 
-      # if swapGlobalRoad is true, swap the order of global read (B->A)
       tensorParameters1st = tensorParametersA
       tensorParameters2nd = tensorParametersB
       tailLoopOpt1st = kernel["tailLoopOptA"] and self.do["GlobalReadA"]
@@ -3875,6 +3876,8 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
       tc1 = 'A'
       tc2 = 'B'
+
+      # if swapGlobalRoad is true, swap the order of global read (B->A)
       if self.isSwapGlobalReadOrderForDtvOrDtl(kernel):
         tensorParameters1st, tensorParameters2nd = tensorParameters2nd, tensorParameters1st
         tailLoopOpt1st, tailLoopOpt2nd = tailLoopOpt2nd, tailLoopOpt1st
@@ -4456,7 +4459,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
     """
 
     if kernel["EnableMatrixInstruction"] and kernel["LocalReadVectorWidth"] >= kernel["MIInputPerThread"]:
-      WLR = max(kernel["LocalReadVectorWidth"]//kernel["MIInputPerThread"], 1)
+      WLR = max(max(kernel["LocalReadVectorWidth"]//kernel["MIInputPerThread"], 1), 1)
       self.states.numItersPLR = kernel["PrefetchLocalRead"]%(kernel["LoopIters"]//WLR)
     else:
       self.states.numItersPLR = kernel["PrefetchLocalRead"]%(kernel["LoopIters"])
@@ -4710,7 +4713,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
       self.states.doubleVgpr = True
 
     if kernel["EnableMatrixInstruction"]:
-      if (kernel["ProblemType"]["DataType"].MIOutputTypeNameAbbrev() == 'f64') and (not self.states.asmCaps["HasMFMA_f64"]):
+      if (kernel["ProblemType"]["DataType"].MIOutputTypeNameAbbrev() == 'f64') and not (self.states.asmCaps["HasMFMA_f64"] or self.states.asmCaps["HasWMMA_V3_f64"]):
         raise RuntimeError("FP64 MatrixInstruction not supported for {0}".format(self.states.version))
       elif not ( self.states.asmCaps["HasMFMA"] or self.states.asmCaps["HasWMMA"]):
         raise RuntimeError("MatrixInstruction not supported for {0}".format(self.states.version))
@@ -4792,7 +4795,9 @@ class KernelWriter(metaclass=abc.ABCMeta):
     _ds_load_b32 = MemoryInstruction(DSLoadB32,    1, 1, 1, 1)
     _ds_load_u16 = MemoryInstruction(DSLoadU16,    1, 1, 1, 0.5)
     _ds_load_u8 = MemoryInstruction(DSLoadU8,      1, 1, 1, 0.25)
-    _ds_load_b64_tr_b16 = MemoryInstruction(DSLoadB64TrB16,    1, 1, 2, 2)
+    _ds_load_b64_tr_b16 = MemoryInstruction(DSLoadB64TrB16,    1, 1, 2, 2, bpe=2)
+    _ds_load_b128_tr_b16 = MemoryInstruction(DSLoadB128TrB16,    1, 1, 4, 4, bpe=2)
+    _ds_load_b64_tr_b8 = MemoryInstruction(DSLoadB64TrB8,    1, 1, 2, 2, bpe=1)
 
     ########################################
     # Local Write
@@ -4856,8 +4861,8 @@ class KernelWriter(metaclass=abc.ABCMeta):
                            chosen_load_b16, chosen_load_b8 ],
           "GlobalWrite": [ chosen_store_b128, chosen_store_b64, chosen_store_b32 ],
           "LocalRead"  : [ _ds_load_b128, _ds_load2_b64, _ds_load_b64,
-                           _ds_load2_b32, _ds_load_b32, _ds_load_u16, _ds_load_u8,
-                           _ds_load_b64_tr_b16],
+                           _ds_load2_b32, _ds_load_b32, _ds_load_u16, _ds_load_u8],
+          "TrLocalRead": [_ds_load_b64_tr_b16, _ds_load_b128_tr_b16, _ds_load_b64_tr_b8],
           "LocalWrite" : [ _ds_store_b256, _ds_store_b128, _ds_store2_b64,
                            _ds_store_b64, _ds_store2_b32, _ds_store_b32,
                            _ds_store_b16, _ds_store_b8 ]
@@ -5080,13 +5085,17 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
     if self.states.archCaps["DeviceLDS"] > maxLDSConstOffset:
       hasMultipleBuffer = kernel["ExpandPointerSwap"] and not kernel["1LDSBuffer"] and not kernel["StoreSwapAddr"]
-
-      numVgprMultiplier = 1 if not hasMultipleBuffer else (kernel["LdsOffsetA_Blk"] // maxLDSConstOffset + 1)
-
-      numVgprMultiplierA = max(numVgprMultiplier, kernel["LdsNumElementsAlignedA"] // maxLDSConstOffset + 1)
-      numVgprMultiplierB = max(numVgprMultiplier, kernel["LdsNumElementsAlignedB"] // maxLDSConstOffset + 1)
-      numVgprMultiplierMetadata = max(numVgprMultiplier, kernel["LdsNumElementsAlignedMetadata"] // maxLDSConstOffset + 1)
-
+      maxOffsetA = kernel["LdsNumElementsAlignedA"]
+      maxOffsetB = kernel["LdsNumElementsAlignedB"]
+      maxOffsetMetadata = kernel["LdsNumElementsAlignedMetadata"]
+      if hasMultipleBuffer:
+        maxOffsetA += kernel["LdsOffsetA_Blk"]
+        maxOffsetB += kernel["LdsOffsetA_Blk"]
+        maxOffsetMetadata += kernel["LdsOffsetA_Blk"]
+        
+      numVgprMultiplierA = maxOffsetA // maxLDSConstOffset + 1
+      numVgprMultiplierB = maxOffsetB // maxLDSConstOffset + 1
+      numVgprMultiplierMetadata = maxOffsetMetadata // maxLDSConstOffset + 1
 
     self.states.a.numVgprLocalReadAddr *= numVgprMultiplierA
     self.states.a.numVgprLocalWriteAddr *= numVgprMultiplierA
@@ -5340,15 +5349,20 @@ class KernelWriter(metaclass=abc.ABCMeta):
     # TODO: alignment hack, figure out a better solution
     vgprIdx = ((vgprIdx+1)//2)*2
     # Avoid bank conflict between VgprA and VgprC
-    if(self.states.archCaps["VgprBank"]):
+    if(self.states.archCaps["VgprBank"]) and not self.states.asmCaps["HasVgprMSB"]:
       if (self.states.c.startVgprValu % 4) != (vgprIdx % 4):
         vgprIdx += 2
     # dot2: alignment hack for wider local read
     if kernel["UseDotInstruction"] and kernel["InnerUnroll"] > 1:
       vgprIdx = ((vgprIdx+3)//4)*4
+
+    # 1024 vgpr: avoid cross pool usage
+    if self.states.asmCaps["HasVgprMSB"]:
+      vgprIdx = ((vgprIdx+7)//8)*8
     self.states.a.startVgprValu  = vgprIdx
     self.states.startVgpr        = vgprIdx
     vgprIdx += self.states.a.numVgprValu
+    
     numVgprValuPackA = 0
     if tensorParametersA["bpe"] < 4 and not kernel["UnrollMajorLDSA"] and not kernel["enableLDSTrA"]:
       self.states.a.startVgprValuPack = vgprIdx
@@ -5377,13 +5391,19 @@ class KernelWriter(metaclass=abc.ABCMeta):
             + max(self.states.a.numVgprValu + numVgprValuPackA, self.states.a.numVgprG2LAllocated)
 
     # TODO: alignment hack, figure out a better solution
-    if(self.states.archCaps["VgprBank"]):
+    if(self.states.archCaps["VgprBank"]) and not self.states.asmCaps["HasVgprMSB"]:
       residual = (vgprIdx % 4)
       if (residual % 2) == 0:
         # if 2-aligned bank(bank0 and bank2), move to bank1 or bank3.
         vgprIdx += 1
+      if kernel["ISA"][:2] == (12, 5):
+        vgprIdx = ((vgprIdx+1)//2)*2
     else:
       vgprIdx = ((vgprIdx+1)//2)*2
+      
+    # 1024 vgpr: avoid cross pool usage
+    if self.states.asmCaps["HasVgprMSB"]:
+      vgprIdx = ((vgprIdx+7)//8)*8
     self.states.b.startVgprValu  = vgprIdx
     vgprIdx += self.states.b.numVgprValu
     numVgprValuPackB = 0
@@ -5467,6 +5487,9 @@ class KernelWriter(metaclass=abc.ABCMeta):
     if self.states.a.startVgprG2L is None and self.states.a.numVgprG2LAllocated > 0:
       # TODO: alignment hack, figure out a better solution
       vgprIdx = ((vgprIdx+1)//2)*2
+      # 1024 vgpr: avoid cross pool usage
+      if self.states.asmCaps["HasVgprMSB"]:
+        vgprIdx = ((vgprIdx+3)//4)*4
       self.states.a.startVgprG2L = vgprIdx
       if ("ULSGRODoubleG2L" in kernel) and kernel["ULSGRODoubleG2L"] == 1:
         vgprIdx += self.states.a.numVgprG2LAllocated*2
@@ -5476,6 +5499,9 @@ class KernelWriter(metaclass=abc.ABCMeta):
     if self.states.b.startVgprG2L is None and self.states.b.numVgprG2LAllocated > 0:
       # TODO: alignment hack, figure out a better solution
       vgprIdx = ((vgprIdx+1)//2)*2
+      # 1024 vgpr: avoid cross pool usage
+      if self.states.asmCaps["HasVgprMSB"]:
+        vgprIdx = ((vgprIdx+3)//4)*4
       self.states.b.startVgprG2L = vgprIdx
       if ("ULSGRODoubleG2L" in kernel) and kernel["ULSGRODoubleG2L"] == 1:
         vgprIdx += self.states.b.numVgprG2LAllocated*2
@@ -6924,13 +6950,13 @@ class KernelWriter(metaclass=abc.ABCMeta):
 
       _placeholder.name = "Branch_%s"%_target.getLabelName()
       if _operation == "SCBranchSCC0":
-        if currentInstLength - count + 1 >= 16384:
+        if currentInstLength - count + 1 >= self.states.asmCaps["ShortBranchMaxLength"]:
           with self.allocTmpSgpr(3) as tmpSgprInfo:
               _placeholder.add(self.longBranchScc0(_target, 1, tmpSgprInfo))
         else:
           _placeholder.add(SCBranchSCC0(labelName=_target.getLabelName()))
       elif _operation == "SCBranchSCC1":
-        if currentInstLength - count + 1 >= 16384:
+        if currentInstLength - count + 1 >= self.states.asmCaps["ShortBranchMaxLength"]:
           with self.allocTmpSgpr(3) as tmpSgprInfo:
               _placeholder.add(self.longBranchScc1(_target, 1, tmpSgprInfo))
         else:
@@ -6942,7 +6968,7 @@ class KernelWriter(metaclass=abc.ABCMeta):
         else:
           _placeholder.add(SCBranchVCCNZ(labelName=_target.getLabelName()))
       elif _operation == "SBranch":
-        if currentInstLength - count + 1 >= 16384:
+        if currentInstLength - count + 1 >= self.states.asmCaps["ShortBranchMaxLength"]:
           with self.allocTmpSgpr(3) as tmpSgprInfo:
             _placeholder.add(SLongBranchPositive(_target, tmpSgprInfo))
         else:

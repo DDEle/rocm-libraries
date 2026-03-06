@@ -705,7 +705,8 @@ hiptensorStatus_t contractionInitPlan(const hiptensorHandle_t              handl
                                                              desc->mDescCompute,
                                                              workspaceSizeLimit);
             else
-                result = hiptensor::actorCriticModel(&winner,
+                result = hiptensor::actorCriticModel(handle,
+				                     &winner,
                                                      solutionQ.solutions(),
                                                      ADataType,
                                                      hiptensor::getTensorLengths(desc->mDescA),

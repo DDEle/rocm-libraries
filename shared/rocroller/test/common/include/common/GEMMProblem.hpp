@@ -8,6 +8,7 @@
 #include <rocRoller/Parameters/Solution/LoadOption.hpp>
 #include <rocRoller/Parameters/Solution/StoreOption.hpp>
 #include <rocRoller/Parameters/Solution/StreamK.hpp>
+
 #include <string>
 
 namespace SolutionParams = rocRoller::Parameters::Solution;
@@ -83,6 +84,10 @@ struct GEMMProblem
     int  workgroupMappingDim   = -1;
     int  workgroupMappingValue = -1;
     bool workgroupRemapXCC     = false;
+
+    uint workgroupClusterSizeX = 0;
+    uint workgroupClusterSizeY = 0;
+    uint workgroupClusterSizeZ = 0;
 
     rocRoller::Operations::ScaleMode scaleAMode = rocRoller::Operations::ScaleMode::None;
     rocRoller::Operations::ScaleMode scaleBMode = rocRoller::Operations::ScaleMode::None;

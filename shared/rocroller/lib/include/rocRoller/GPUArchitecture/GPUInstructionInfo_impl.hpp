@@ -116,6 +116,7 @@ namespace rocRoller
         {"KMQueue", Value::KMQueue},
         {"EXPQueue", Value::EXPQueue},
         {"VSQueue", Value::VSQueue},
+        {"TensorQueue", Value::TensorQueue},
         {"Count", Value::Count},
     };
 
@@ -146,6 +147,7 @@ namespace rocRoller
             {"DSQueue", Value::DSQueue},
             {"EXPQueue", Value::EXPQueue},
             {"VSQueue", Value::VSQueue},
+            {"TensorQueue", Value::TensorQueue},
             {"FinalInstruction", Value::FinalInstruction},
             {"Count", Value::Count},
     };

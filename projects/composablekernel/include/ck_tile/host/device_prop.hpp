@@ -60,12 +60,19 @@ inline bool is_gfx11_supported()
            get_device_name() == "gfx1152" || get_device_name() == "gfx1153";
 }
 
-inline bool is_gfx12_supported()
+inline bool is_gfx120_supported()
 {
     return get_device_name() == "gfx1200" || get_device_name() == "gfx1201";
 }
 
 inline bool is_gfx95_supported() { return get_device_name() == "gfx950"; }
+
+inline bool is_gfx125_supported()
+{
+    return get_device_name() == "gfx1250" || get_device_name() == "gfx1251";
+}
+
+inline bool is_gfx12_supported() { return is_gfx120_supported() || is_gfx125_supported(); }
 
 inline size_t get_num_cus()
 {

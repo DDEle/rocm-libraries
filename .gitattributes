@@ -1,3 +1,6 @@
+projects/composablekernel/**  merge=theirs
+projects/hipdnn/**            merge=theirs
+shared/tensile/**             merge=theirs
 # Preserve original line endings for files that already have CRLF in develop branch
 shared/origami/include/origami/types.hpp -text
 shared/origami/tests/include/common.hpp -text

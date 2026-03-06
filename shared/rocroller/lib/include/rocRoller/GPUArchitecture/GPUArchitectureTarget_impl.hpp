@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -16,6 +17,8 @@
 #include <vector>
 
 #include <rocRoller/GPUArchitecture/GPUArchitectureTarget.hpp>
+#include <rocRoller/Utilities/Logging.hpp>
+#include <rocRoller/Utilities/Settings.hpp>
 #include <rocRoller/Utilities/Utils.hpp>
 
 namespace rocRoller
@@ -44,6 +47,8 @@ namespace rocRoller
             return "gfx1200";
         case GPUArchitectureGFX::GFX1201:
             return "gfx1201";
+        case GPUArchitectureGFX::GFX1250:
+            return "gfx1250";
         default:
             return "gfxunknown";
         }
@@ -73,6 +78,8 @@ namespace rocRoller
         case GPUArchitectureGFX::GFX1200:
         case GPUArchitectureGFX::GFX1201:
             return "AMD RDNA 4";
+        case GPUArchitectureGFX::GFX1250:
+            return "AMD CDNA 5";
         default:
             return "unknown";
         }
@@ -114,6 +121,17 @@ namespace rocRoller
 
     inline std::string GPUArchitectureTarget::toString() const
     {
+        std::string rv{rocRoller::toString(gfx)};
+        if(asicRevisionId >= 0)
+            rv = concatenate(rv, "rev", asicRevisionId);
+
+        if(features.sramecc || features.xnack)
+            rv = concatenate(rv, ":", features.toString());
+        return rv;
+    }
+
+    inline std::string GPUArchitectureTarget::toAssemblerString() const
+    {
         if(features.sramecc || features.xnack)
             return concatenate(gfx, ":", features.toString());
         else
@@ -125,13 +143,34 @@ namespace rocRoller
         return rocRoller::name(gfx);
     }
 
-    inline GPUArchitectureTarget GPUArchitectureTarget::fromString(std::string const& archStr)
+    inline GPUArchitectureTarget GPUArchitectureTarget::fromString(std::string const& archStr,
+                                                                   int asicRevisionId)
     {
         GPUArchitectureTarget rv;
 
         int         start = 0;
         size_t      end   = archStr.find(":");
         std::string arch  = archStr.substr(start, end - start);
+
+        std::regex  pattern(R"(rev(\d+))");
+        std::smatch revIdMatch;
+        if(std::regex_search(arch, revIdMatch, pattern))
+        {
+            rv.asicRevisionId = std::stoi(revIdMatch[1]);
+            arch              = arch.substr(0, revIdMatch.position(0));
+        }
+        else if(arch == "gfx1250")
+        {
+            if(asicRevisionId == 2)
+            {
+                int newRevId = Settings::Get(Settings::GFX1250AsicRevisionId);
+                Log::warn("Overriding current device asic revision id from {} to {}",
+                          asicRevisionId,
+                          newRevId);
+                asicRevisionId = newRevId;
+            }
+            rv.asicRevisionId = asicRevisionId;
+        }
 
         rv.gfx = rocRoller::fromString<GPUArchitectureGFX>(arch);
 

@@ -1226,7 +1226,7 @@ rocsparselt_status
             {
                 hipsparselt_cerr << "There are no solutions for this problem size" << std::endl;
                 log_error(_handle, __func__, "There are no solutions for this problem size");
-                return rocsparselt_status_not_implemented;
+                //return rocsparselt_status_not_implemented;
             }
             memcpy(_algSelection, &tmpAlgSelection, sizeof(_rocsparselt_matmul_alg_selection));
             _algSelection->alg           = alg;

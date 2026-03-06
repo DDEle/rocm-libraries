@@ -202,11 +202,11 @@ namespace TensorDataMoverTest
                 s_mov_b32 s11, 0
                 // using bfe to avoid touching reserved bits
                 s_bfe_u32 s14, s13, 1638400
-                s_and_b32 s15, 4261412864, s3
-                s_and_b32 s16, 33554431, s14
-                s_or_b32 s14, s16, s15
+                s_and_b32 s15, 33554431, s14
+                s_and_b32 s14, 4261412864, s3
+                s_or_b32 s16, s15, s14
                 s_mov_b32 s2, s12
-                s_mov_b32 s3, s14
+                s_mov_b32 s3, s16
             )";
             CHECK(NormalizedSource(context.output()) == NormalizedSource(expectedCode));
         }

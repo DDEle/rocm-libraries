@@ -67,21 +67,22 @@ inline bool is_gfx12_supported()
 
 inline bool is_gfx95_supported() { return get_device_name() == "gfx950"; }
 
-inline size_t get_num_cus()
+inline size_t __host__ get_num_cus()
 {
-    hipDeviceProp_t props{};
-    int device;
-    auto status = hipGetDevice(&device);
-    if(status != hipSuccess)
-    {
-        return 0;
-    }
-    status = hipGetDeviceProperties(&props, device);
-    if(status != hipSuccess)
-    {
-        return 0;
-    }
-    return static_cast<size_t>(props.multiProcessorCount);
+    static size_t num_cus = []() {
+        hipError_t status;
+
+        int device;
+        if((status = hipGetDevice(&device)) != hipSuccess)
+            throw std::runtime_error(hipGetErrorString(status));
+
+        int result;
+        if((status = hipDeviceGetAttribute(
+                &result, hipDeviceAttributeMultiprocessorCount, device)) != hipSuccess)
+            throw std::runtime_error(hipGetErrorString(status));
+        return static_cast<size_t>(result);
+    }();
+    return num_cus;
 }
 
 } // namespace ck_tile

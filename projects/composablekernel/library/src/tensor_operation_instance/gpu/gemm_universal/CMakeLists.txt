@@ -353,5 +353,9 @@ set_source_files_properties(device_gemm_xdl_universal_f8_f8_bf16/device_gemm_xdl
 set_source_files_properties(device_gemm_xdl_universal_f8_f8_bf16/device_gemm_xdl_universal_f8_f8_bf16_mk_nk_mn_comp_default_instance.cpp PROPERTIES COMPILE_OPTIONS ";-mllvm;-greedy-reverse-local-assignment=1")
 set_source_files_properties(device_gemm_xdl_universal_f8_f8_bf16/device_gemm_xdl_universal_f8_f8_bf16_mk_nk_mn_comp_kpadding_instance.cpp PROPERTIES COMPILE_OPTIONS ";-mllvm;-greedy-reverse-local-assignment=1")
 
+# Add data cache prefetch instances
+list(APPEND GEMM_UNIVERSAL_INSTANCES
+  device_gemm_xdl_universal_bf16_bf16_bf16_mk_nk_mn_v3_data_cache_prefetch_instance.cpp
+)
 
 add_instance_library(device_gemm_universal_instance ${GEMM_UNIVERSAL_INSTANCES})

@@ -102,7 +102,9 @@ struct tile_distribution
         {
             if constexpr(IsWarpLevelParallelOnly_)
             {
-                return array<index_t, 1>{get_warp_id()};
+                constexpr auto p_len_over_h =
+                    DstrEncode::detail::get_uniformed_p_dim_lengths_over_h();
+                return array<index_t, 1>{get_warp_id() % p_len_over_h[0]};
             }
             else
             {

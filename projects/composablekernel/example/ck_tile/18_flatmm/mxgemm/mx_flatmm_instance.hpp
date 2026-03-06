@@ -63,7 +63,7 @@ float mx_flatmm_calc(const ck_tile::ScaleFlatmmHostArgs<ScaleM, ScaleN>& args,
     constexpr auto scheduler = FlatmmConfig::Scheduler;
     ck_tile::ignore          = Splitk;
 
-    constexpr int BlockedXDLN_PerWarp = 2; // determined by scale shuffle pattern
+    constexpr int BlockedXDLN_PerWarp = CurrentArchTraits::BlockedXDLN_PerWarp;
 
     using MXPipelineProblem = ck_tile::MXFlatmmPipelineProblem<ADataType,
                                                                BDataType,
@@ -74,7 +74,8 @@ float mx_flatmm_calc(const ck_tile::ScaleFlatmmHostArgs<ScaleM, ScaleN>& args,
                                                                HasHotLoop,
                                                                TailNum>;
 
-    using MXFlatmmPipeline = ck_tile::MXFlatmmPipelineAGmemBGmemCRegV1<MXPipelineProblem>;
+    using MXFlatmmPipeline =
+        typename CurrentArchTraits::template MXFlatmmPipeline<MXPipelineProblem>;
 
     using TilePartitioner =
         ck_tile::GemmSpatiallyLocalTilePartitioner<FlatmmShape,
@@ -107,8 +108,8 @@ float mx_flatmm_calc(const ck_tile::ScaleFlatmmHostArgs<ScaleM, ScaleN>& args,
 
     auto kargs = Kernel::MakeKernelArgs(args);
 
-    const dim3 grids      = Kernel::GridSize(kargs);
-    constexpr dim3 blocks = Kernel::BlockSize();
+    const dim3 grids  = Kernel::GridSize(kargs);
+    const dim3 blocks = Kernel::BlockSize();
 
     if(!Kernel::IsSupportedArgument(kargs))
         throw std::runtime_error("Wrong! Arguments not supported! Skipping gemm!\n");

@@ -258,8 +258,14 @@ bool profile_grouped_conv_bwd_weight_impl(int do_verification,
     }
 
     index_t num_kernel = 0;
-    for(auto& op_ptr : op_ptrs)
+    for(size_t i = 0; i < op_ptrs.size(); i++)
     {
+        if((instance_index != -1) && (instance_index != static_cast<int>(i)))
+        {
+            // skip test if instance_index is specified
+            continue;
+        }
+        auto& op_ptr = op_ptrs[i];
         for(std::size_t split_k_id = 0; split_k_id < split_k_list.size(); split_k_id++)
         {
             auto argument_ptr = op_ptr->MakeArgumentPointer(
@@ -316,11 +322,6 @@ bool profile_grouped_conv_bwd_weight_impl(int do_verification,
             if(op_ptr->IsSupportedArgument(argument_ptr.get()))
             {
                 num_kernel++;
-                if((instance_index != -1) && (instance_index + 1 != num_kernel))
-                {
-                    // skip test if instance_index is specified
-                    continue;
-                }
 
                 std::string op_name = op_ptr->GetTypeString();
 
@@ -503,11 +504,6 @@ bool profile_grouped_conv_bwd_weight_impl(int do_verification,
               << "\navg_time: " << best_avg_time << "\ntflops: " << best_tflops
               << "\nGB/s: " << best_gb_per_sec << ", SplitK " << best_split_k << std::endl;
 
-    if(instance_index != -1)
-    {
-        std::cout << "grouped_conv_bwd_weight_instance (" << instance_index << "/" << num_kernel
-                  << "): Passed" << std::endl;
-    }
     return all_pass;
 }
 

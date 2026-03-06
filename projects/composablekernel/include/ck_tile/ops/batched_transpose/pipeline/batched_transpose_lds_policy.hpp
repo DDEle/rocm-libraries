@@ -91,9 +91,10 @@ struct BatchedTransposeLdsPolicy : public BatchedTransposeCommonPolicy
         // Calculate block-level dimensions
         // TODO: unify for all architectures
 #if defined(__gfx125__)
-        constexpr index_t kLeadIterPerWarp = Problem::kLeadSizePerBlock / Problem::kWarpTileLeadDim;
+        constexpr index_t kLeadIterPerWarp =
+            Problem::kLeadSizePerBlock / Problem::kWarpTileLeadDim / Problem::kLeadNumWarps;
         constexpr index_t kSecondIterPerWarp =
-            Problem::kSecondSizePerBlock / Problem::kWarpTileSecondDim;
+            Problem::kSecondSizePerBlock / Problem::kWarpTileSecondDim / Problem::kSecondNumWarps;
         constexpr index_t kLeadNumWarps   = Problem::kLeadNumWarps;
         constexpr index_t kSecondNumWarps = Problem::kSecondNumWarps;
 

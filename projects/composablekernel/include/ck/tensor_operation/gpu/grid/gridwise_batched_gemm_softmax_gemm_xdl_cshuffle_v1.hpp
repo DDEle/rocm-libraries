@@ -14,6 +14,7 @@
 #include "ck/tensor_operation/gpu/thread/threadwise_tensor_slice_transfer.hpp"
 #include "ck/tensor_operation/gpu/element/element_wise_operation.hpp"
 #include "ck/tensor_operation/gpu/block/blockwise_softmax.hpp"
+#include "ck/host_utility/device_prop.hpp"
 #include "ck/tensor_operation/gpu/grid/gridwise_gemm_xdl_cshuffle_common.hpp"
 
 namespace ck {
@@ -349,6 +350,12 @@ struct GridwiseBatchedGemmSoftmaxGemm_Xdl_CShuffle
         InMemoryDataOperationEnum CGlobalMemoryDataOperation_ = InMemoryDataOperationEnum::Set>
     __device__ static bool constexpr IsValidCompilationParameter()
     {
+        if constexpr(KPerBlock %
+                         MfmaSelector<FloatAB, MPerXdl, NPerXdl, FloatAB, true>::GetKPerXdlops() !=
+                     0)
+        {
+            return false;
+        }
         return ck::tensor_operation::device::IsValidGemmCompilationParameter<
             BlockSize,
             MPerBlock,
@@ -389,7 +396,12 @@ struct GridwiseBatchedGemmSoftmaxGemm_Xdl_CShuffle
         {
             return false;
         }
-
+#if !defined(__HIPCC_RTC__) || !defined(CK_CODE_GEN_RTC)
+        if(!is_xdl_wmma_k_supported<FloatAB, KPerBlock>())
+        {
+            return false;
+        }
+#endif
         // check gemm0 gridwise gemm pipeline
         const auto num_gemm0_k_loop = K / KPerBlock;
         if(!GridwiseGemmPipe::IsSupported(num_gemm0_k_loop))

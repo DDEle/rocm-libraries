@@ -29,7 +29,7 @@ using DeviceGemmV2Instance = ck::tensor_operation::device::DeviceGemm_Wmma_CShuf
     ADataType, BDataType, CDataType, AccDataType, CShuffleDataType,
     PassThrough, PassThrough, PassThrough, GemmDefault,
     128,
-    128, 64, 64,
+    128, 64, 128,
     16, 16, // AK1, BK1
     16, 16,
     4, 2,

@@ -100,6 +100,8 @@ class ContractionDeviceOpWrapper
         const auto op_ptrs = ck::tensor_operation::device::instance::DeviceOperationInstanceFactory<
             DeviceOp>::GetInstances();
 
+        std::cout << "found " << op_ptrs.size() << " instances" << std::endl;
+
         for(auto& op_ptr : op_ptrs)
         {
             auto argument_ptr =

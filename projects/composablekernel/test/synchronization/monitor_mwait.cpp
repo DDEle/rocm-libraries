@@ -9,11 +9,14 @@
 #include "ck/utility/type_convert.hpp"
 #include "ck/utility/env.hpp"
 
+using ::ck::DeviceMem;
 using F8DataType = ck::f8_t;
 
 #if defined(__gfx125__)
-__device__ constexpr int hint_and_scope = 2 << 3;                      // temporal + Device
-__device__ constexpr short duration     = static_cast<short>(1 << 15); // forever
+__device__ constexpr int hint_and_scope = 2 << 3; // temporal + Device
+// BUG: duration = 0x8000 (sleep-forever) should not be used as the wave might never wake up if the
+// s_monitor_sleep(duration) is called when MWAIT=0
+__device__ constexpr short duration = static_cast<short>(1 << 15) - 1; // forever - 1 clock cycle
 #endif
 
 /// @param ptr points to a buffer of 4 F8 numbers
@@ -37,6 +40,7 @@ __global__ void gpu_ping(F8DataType* ptr, const int Num, int* runNum, bool ck_lo
             ptr[0] = F8DataType{0x38}; // send 1 back
             if(ck_logging)
                 printf("PING 1\n");
+            __builtin_amdgcn_s_sleep(10); // sleep to simulate workload
         }
         else
         {
@@ -74,6 +78,7 @@ __global__ void gpu_pong(F8DataType* ptr, const int Num, int* runNum, bool ck_lo
             ptr[0] = F8DataType{0}; // send 0 back
             if(ck_logging)
                 printf("PONG 0\n");
+            __builtin_amdgcn_s_sleep(20); // sleep to simulate workload
         }
         else
         {
@@ -99,46 +104,6 @@ __global__ void gpu_pong(F8DataType* ptr, const int Num, int* runNum, bool ck_lo
  * synchronization by ensuring that both kernels complete their iterations and the values in the
  * buffer are as expected.
  *
- * Sequence:
- * PONG 0
- * PING goes to sleep at run = 1.
- * PING 1
- * PONG goes to sleep at run = 2.
- * PONG 0
- * PING goes to sleep at run = 2.
- * PING 1
- * PONG goes to sleep at run = 3.
- * PONG 0
- * PING goes to sleep at run = 3.
- * PING 1
- * PONG goes to sleep at run = 4.
- * PONG 0
- * PING goes to sleep at run = 4.
- * PING 1
- * PONG goes to sleep at run = 5.
- * PONG 0
- * PING goes to sleep at run = 5.
- * PING 1
- * PONG goes to sleep at run = 6.
- * PONG 0
- * PING goes to sleep at run = 6.
- * PING 1
- * PONG goes to sleep at run = 7.
- * PONG 0
- * PING goes to sleep at run = 7.
- * PING 1
- * PONG goes to sleep at run = 8.
- * PONG 0
- * PING goes to sleep at run = 8.
- * PING 1
- * PONG goes to sleep at run = 9.
- * PONG 0
- * PING goes to sleep at run = 9.
- * PING 1
- * PONG goes to sleep at run = 10.
- * PONG 0
- * PING goes to sleep at run = 10.
- * PING 1
  */
 
 static void test_single_cacheline()

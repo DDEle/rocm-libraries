@@ -674,6 +674,27 @@ struct PassThroughPack8
         y[7] = x3[1];
     }
 
+    CK_TILE_HOST_DEVICE constexpr void operator()(bf8x8_t& y, const pk_fp4x4_t& x) const
+    {
+        pk_fp4_t f0 = pk_fp4_t{x[0]};
+        pk_fp4_t f1 = pk_fp4_t{x[1]};
+        pk_fp4_t f2 = pk_fp4_t{x[2]};
+        pk_fp4_t f3 = pk_fp4_t{x[3]};
+
+        bf8x2_t x0 = f0.to_bf8x2();
+        bf8x2_t x1 = f1.to_bf8x2();
+        bf8x2_t x2 = f2.to_bf8x2();
+        bf8x2_t x3 = f3.to_bf8x2();
+
+        y[0] = x0[0];
+        y[1] = x0[1];
+        y[2] = x1[0];
+        y[3] = x1[1];
+        y[4] = x2[0];
+        y[5] = x2[1];
+        y[6] = x3[0];
+        y[7] = x3[1];
+    }
     constexpr const static bool is_pack8_invocable = true;
 };
 
@@ -1092,23 +1113,6 @@ struct Relu
 struct FastGelu
 {
     static constexpr const char* name = "FastGelu";
-
-    template <typename Y, typename X>
-    CK_TILE_HOST void operator()(Y& y, const X& x) const;
-
-    template <typename Y, typename X>
-    CK_TILE_DEVICE void operator()(Y& y, const X& x) const;
-
-    template <>
-    CK_TILE_HOST void operator()<float, float>(float& y, const float& x) const
-    {
-        // const float u   = -2.f * x * (0.035677f * x * x + 0.797885f);
-        const float c1  = -2.0 * 0.035677f;
-        const float c2  = -2.0 * 0.797885f;
-        const float u   = x * (c1 * x * x + c2);
-        const float emu = exp(u);
-        y               = x / (1.f + emu);
-    }
 
     // device code, use lower precision "__ocml_exp_f32" and "rcp"
     template <typename Y, typename X>

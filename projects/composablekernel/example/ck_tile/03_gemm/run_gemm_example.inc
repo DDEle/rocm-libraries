@@ -73,6 +73,9 @@ void permute_tensor_b(Tensor& tensor)
                                               ck_tile::element_wise::PassThrough,
                                               ck_tile::element_wise::PassThrough,
                                               ADataType,
+                                              // because original BDataType is not used; so all use
+                                              // ADataType
+                                              ADataType,
                                               true>;
 
     using GemmPipeline = typename PipelineTypeTraits<GemmConfig::Pipeline>::template GemmPipeline<
@@ -367,9 +370,12 @@ int run_gemm_example_with_layouts(ck_tile::ArgParser& arg_parser,
 
     c_m_n_dev_buf.FromDevice(c_m_n_dev_result.data());
 
-    std::size_t flop = std::size_t(2) * M * N * K;
-    std::size_t num_byte =
-        sizeof(ADataType) * M * K + sizeof(BDataType) * N * K + sizeof(CDataType) * M * N;
+    constexpr int PackedSizeA = ck_tile::numeric_traits<ADataType>::PackedSize;
+    constexpr int PackedSizeB = ck_tile::numeric_traits<BDataType>::PackedSize;
+
+    std::size_t flop     = std::size_t(2) * M * N * K;
+    std::size_t num_byte = sizeof(ADataType) * M * K / PackedSizeA +
+                           sizeof(BDataType) * N * K / PackedSizeB + sizeof(CDataType) * M * N;
     float tflops     = static_cast<float>(flop) / 1.E9 / ave_time;
     float gb_per_sec = num_byte / 1.E6 / ave_time;
 

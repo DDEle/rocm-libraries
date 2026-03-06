@@ -475,9 +475,24 @@ struct GridwiseGemm_bk0mk1_bk0nk1_mn_xdlops_v2r4r2
         return gemm_padder.PadCDescriptor_M_N(c_grid_desc_m_n);
     }
 
-    static constexpr auto MXdlPerWave = MRepeat;
-    static constexpr auto NXdlPerWave = NRepeat;
-    IS_VALID_COMPILATION_PARAMETER_IMPL(FloatC)
+    template <
+        InMemoryDataOperationEnum CGlobalMemoryDataOperation_ = InMemoryDataOperationEnum::Set>
+    __device__ static bool constexpr IsValidCompilationParameter()
+    {
+        constexpr bool valid = tensor_operation::device::IsValidGemmCompilationParameter<
+            BlockSize,
+            MPerBlock,
+            NPerBlock,
+            MPerXdl,
+            NPerXdl,
+            MRepeat,
+            NRepeat,
+            FloatC,
+            CGlobalMemoryDataOperation_>();
+        if constexpr(!valid)
+        {
+            return false;
+        }
 
         if constexpr(K1Value %
                          MfmaSelector<ComputeTypeA, MPerXdl, NPerXdl, ComputeTypeB>::selected_mfma

@@ -145,7 +145,11 @@
 #endif
 
 #ifndef CK_TILE_USE_AMD_LDS_DIRECT_LOAD_INLINE_ASM
+#if defined(__gfx125__)
 #define CK_TILE_USE_AMD_LDS_DIRECT_LOAD_INLINE_ASM 1
+#else
+#define CK_TILE_USE_AMD_LDS_DIRECT_LOAD_INLINE_ASM 1
+#endif
 #endif
 
 #ifndef CK_TILE_USE_AMD_BUFFER_LOAD
@@ -187,6 +191,9 @@
 #define CK_TILE_WORKAROUND_SWDEV_XXXXXX_INT8_DS_WRITE_ISSUE 1
 #endif
 
+// workaround: gfx1250 does not support a negative offset (emulator issue)
+#define CK_TILE_WORKAROUND_SWDEV_XXXXXX_GFX1250_NEG_OFFSET_ISSUE 1
+
 #ifndef CK_TILE_WORKAROUND_ROCM_6_1_SCRATCH_MEMORY_ISSUE
 #if HIP_VERSION_MAJOR == 6 && HIP_VERSION_MINOR == 1 && HIP_VERSION_PATCH >= 40091
 #define CK_TILE_WORKAROUND_ROCM_6_1_SCRATCH_MEMORY_ISSUE 1
@@ -200,6 +207,22 @@
 #else
 #define CK_TILE_ENABLE_TDM_FEATURE 0
 #endif
+
+#ifndef CK_TILE_ENABLE_CLUSTER_LAUNCH
+#ifdef __HIP_DEVICE_COMPILE__ // for device code
+#if defined(__gfx125__)
+#define CK_TILE_ENABLE_CLUSTER_LAUNCH 1
+#else
+#define CK_TILE_ENABLE_CLUSTER_LAUNCH 0
+#endif
+#else // for host code
+#if defined(CK_USE_GFX1250)
+#define CK_TILE_ENABLE_CLUSTER_LAUNCH 1
+#else
+#define CK_TILE_ENABLE_CLUSTER_LAUNCH 0
+#endif
+#endif
+#endif // CK_TILE_ENABLE_CLUSTER_LAUNCH
 
 // workaround for ROCm 6.2 and later
 #ifndef CK_TILE_WORKAROUND_ROCM_6_2_SCRATCH_MEMORY_ISSUE
@@ -273,6 +296,15 @@
 #define CK_TILE_REFERENCE_MOE_SORTING_MOCK_ID 1
 #endif
 
+// Workaround for host CPU without AVX-512F support e.g. for fp32x16 (512-bits)
+#ifndef CK_TILE_AVX512F_WA
+#if defined(__HIP_DEVICE_COMPILE__) || defined(CK_TILE_HOST_HAS_AVX512F)
+#define CK_TILE_AVX512F_WA 0
+#else
+#define CK_TILE_AVX512F_WA 1
+#endif
+#endif
+
 #ifndef CK_TILE_USE_OCP_FP8
 #if defined(__HIP_DEVICE_COMPILE__)
 #if defined(__gfx950__) || defined(__gfx12__)
@@ -286,7 +318,7 @@
 #endif
 
 #ifndef CK_TILE_USE_BUFFER_ADDRESSING_BUILTIN
-#if __clang_major__ >= 20 && !(defined(__gfx103__) || defined(__gfx11__) || defined(__gfx12__))
+#if __clang_major__ >= 20
 #define CK_TILE_USE_BUFFER_ADDRESSING_BUILTIN 1
 #else
 #define CK_TILE_USE_BUFFER_ADDRESSING_BUILTIN 0
@@ -338,6 +370,8 @@ namespace ck_tile::core {
  * @var CK_TILE_ARCH_GFX1200 Indicates if the compiler target architecture is GFX1200.
  * @var CK_TILE_ARCH_GFX1201 Indicates if the compiler target architecture is GFX1201.
  * @var CK_TILE_ARCH_GFX12_GENERIC Indicates if the compiler target architecture is GFX12 generic.
+ * @var CK_TILE_ARCH_GFX1250 Indicates if the compiler target architecture is GFX1250.
+ * @var CK_TILE_ARCH_GFX1251 Indicates if the compiler target architecture is GFX1251.
  */
 struct amdgcn_compiler_target_state
 {
@@ -517,6 +551,19 @@ struct amdgcn_compiler_target_state
 #else
     static constexpr bool CK_TILE_ARCH_GFX12_GENERIC = false;
 #endif // __gfx12_generic__
+
+    // GFX12.5
+#if defined(__gfx1250__)
+    static constexpr bool CK_TILE_ARCH_GFX1250 = true;
+#else
+    static constexpr bool CK_TILE_ARCH_GFX1250 = false;
+#endif // __gfx1250__
+
+#if defined(__gfx1251__)
+    static constexpr bool CK_TILE_ARCH_GFX1251 = true;
+#else
+    static constexpr bool CK_TILE_ARCH_GFX1251 = false;
+#endif // __gfx1251__
 };
 
 /**
@@ -567,7 +614,9 @@ CK_TILE_HOST_DEVICE static constexpr uint32_t count_values_of(T search, Ts... se
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX11_GENERIC,   \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1200,         \
         amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1201,         \
-        amdgcn_compiler_target_state::CK_TILE_ARCH_GFX12_GENERIC
+        amdgcn_compiler_target_state::CK_TILE_ARCH_GFX12_GENERIC,   \
+        amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1250,         \
+        amdgcn_compiler_target_state::CK_TILE_ARCH_GFX1251
 
 // Sanity check: make sure only one target architecture is defined during device compile
 static_assert(!amdgcn_compiler_target_state::CK_TILE_DEVICE_COMPILE ||

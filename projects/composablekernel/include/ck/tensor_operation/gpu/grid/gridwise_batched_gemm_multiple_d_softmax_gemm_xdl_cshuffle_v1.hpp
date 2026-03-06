@@ -329,6 +329,7 @@ struct GridwiseBatchedGemmMultipleDSoftmaxGemm_Xdl_CShuffle
                 BBlockDesc_BK0_N_BK1{});
         }
     }
+
     __host__ __device__ static constexpr index_t GetSharedMemoryNumberOfByte()
     {
         const index_t gemm0_bytes_end = (SharedMemTrait::a_block_space_size_aligned +

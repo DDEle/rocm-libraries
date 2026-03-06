@@ -92,6 +92,7 @@ struct buffer_view<address_space_enum::generic,
 
     // i is offset of T, not X. i should be aligned to X
     template <typename X,
+              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename std::enable_if<
                   std::is_same<typename vector_traits<remove_cvref_t<X>>::scalar_type,
@@ -284,6 +285,7 @@ struct buffer_view<address_space_enum::global,
 
     // i is offset of T, not X. i should be aligned to X
     template <typename X,
+              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename std::enable_if<
                   std::is_same<typename vector_traits<remove_cvref_t<X>>::scalar_type,
@@ -411,6 +413,7 @@ struct buffer_view<address_space_enum::global,
 
     // i is offset of T, not X. i should be aligned to X
     template <typename X,
+              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename std::enable_if<
                   std::is_same<typename vector_traits<remove_cvref_t<X>>::scalar_type,
@@ -432,6 +435,12 @@ struct buffer_view<address_space_enum::global,
                       "wrong! X should contain multiple T");
 
         constexpr index_t t_per_x = scalar_per_x_vector / scalar_per_t_vector;
+#if defined(__gfx125__) // for gfx125; there uses another instruction to do async load
+        auto p_uniform_ptr = amd_wave_read_first_lane(p_data_);
+        amd_async_global_load_to_lds<remove_cvref_t<T>, t_per_x, static_offset, true, Coherence>(
+            smem, p_uniform_ptr, i + linear_offset, is_valid_element);
+#else
+        static_assert(static_offset == 0);
         const auto rsrc = make_builtin_buffer_resource(p_data_, buffer_size_ * sizeof(type));
 
         amd_async_buffer_load_with_oob<remove_cvref_t<T>, t_per_x, Coherence>(
@@ -442,6 +451,7 @@ struct buffer_view<address_space_enum::global,
             std::forward<linear_offset_t>(linear_offset),
             is_valid_element,
             bool_constant<oob_conditional_check>{});
+#endif
     }
 
     // i is offset of T, not X. i should be aligned to X
@@ -468,6 +478,96 @@ struct buffer_view<address_space_enum::global,
 
         amd_async_buffer_load_with_oob_raw<remove_cvref_t<T>, t_per_x, Coherence>(
             smem, cached_buf_res_, i, linear_offset, bool_constant<pre_nop>{});
+    }
+
+    template <amd_buffer_coherence_enum Coherence_ = Coherence>
+    struct GlobalPrefetchDataOp
+    {
+        // addr needs to point to global memory!
+        CK_TILE_DEVICE void operator()([[maybe_unused]] const void* addr) const
+        {
+#if defined(__gfx125__)
+            // Compiler fence to not move ds_loads freely before/after this prefetch builtin
+            asm volatile("" ::: "memory");
+            __builtin_amdgcn_global_prefetch(addr, static_cast<index_t>(Coherence_));
+            asm volatile("" ::: "memory");
+#endif
+        }
+
+#if defined(__gfx12__)
+        static constexpr bool is_cu_scope = []() {
+            constexpr int coherence    = static_cast<int>(Coherence_);
+            constexpr int se_scope     = static_cast<int>(amd_buffer_coherence_enum::SE);
+            constexpr int device_scope = static_cast<int>(amd_buffer_coherence_enum::DEVICE);
+            constexpr int system_scope = static_cast<int>(amd_buffer_coherence_enum::SYSTEM);
+            // CU scope: check if scope bits are zero
+            return !(coherence & se_scope || coherence & device_scope || coherence & system_scope);
+        }();
+#endif
+
+        CK_TILE_DEVICE constexpr bool need_oob_check() const
+        {
+#if defined(__gfx125__)
+            // we need oob check for non-speculative prefetch to not get Page Fault
+            constexpr int coherence = static_cast<int>(Coherence_);
+            constexpr int rt_non_spec =
+                static_cast<int>(amd_buffer_coherence_enum::RT_NON_SPECULATIVE);
+            constexpr int ht_non_spec =
+                static_cast<int>(amd_buffer_coherence_enum::HT_NON_SPECULATIVE);
+
+            if constexpr(is_cu_scope) // for all CU scope we have non-speculative prefetch
+            {
+                return true;
+            }
+            else if constexpr(((coherence & rt_non_spec) == rt_non_spec) ||
+                              ((coherence & ht_non_spec) ==
+                               ht_non_spec)) // for all other scopes we have speculative prefetch
+                                             // unless set otherwise by Temporal Hint
+            {
+                return true;
+            }
+#endif
+            return false;
+        }
+    };
+
+    // i is offset of T, not X. i should be aligned to X
+    // static_offset is compile-time offset for LDS access optimization
+    template <typename X,
+              amd_buffer_coherence_enum Coherence_ = Coherence,
+              index_t static_offset                = 0,
+              bool oob_conditional_check           = true,
+              typename std::enable_if<
+                  std::is_same<typename vector_traits<remove_cvref_t<X>>::scalar_type,
+                               typename vector_traits<remove_cvref_t<T>>::scalar_type>::value,
+                  bool>::type = false>
+    CK_TILE_DEVICE constexpr void prefetch(index_t i,
+                                           index_t linear_offset,
+                                           bool is_valid_element,
+                                           bool_constant<oob_conditional_check> = {}) const
+    {
+        // X contains multiple T
+        constexpr index_t scalar_per_t_vector = vector_traits<remove_cvref_t<T>>::vector_size;
+
+        constexpr index_t scalar_per_x_vector = vector_traits<remove_cvref_t<X>>::vector_size;
+
+        static_assert(scalar_per_x_vector % scalar_per_t_vector == 0,
+                      "wrong! X should contain multiple T");
+
+        if constexpr(!GlobalPrefetchDataOp<Coherence_>{}.need_oob_check())
+        {
+            is_valid_element = true;
+        }
+
+        if(is_valid_element)
+        {
+            // call prefetch here
+            GlobalPrefetchDataOp<Coherence_>{}(
+                c_style_pointer_cast<const void*>(&(p_data_[i + linear_offset + static_offset])));
+        }
+
+        // Note: prefetch is a hint instruction that doesn't return a value
+        // No action needed for invalid elements
     }
 
     // i is offset of T, not X. i should be aligned to X
@@ -903,7 +1003,9 @@ struct buffer_view<address_space_enum::lds,
     CK_TILE_DEVICE constexpr T& operator()(index_t i) { return p_data_[i]; }
 
     // i is offset of T, not X. i should be aligned to X
+    // static_offset is compile-time offset for LDS access optimization
     template <typename X,
+              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename std::enable_if<
                   std::is_same<typename vector_traits<remove_cvref_t<X>>::scalar_type,
@@ -927,14 +1029,15 @@ struct buffer_view<address_space_enum::lds,
 #if CK_TILE_EXPERIMENTAL_USE_MEMCPY_FOR_VECTOR_ACCESS
             X tmp;
 
-            __builtin_memcpy(&tmp, &(p_data_[i + linear_offset]), sizeof(X));
+            __builtin_memcpy(&tmp, &(p_data_[i + linear_offset + static_offset]), sizeof(X));
 
             return tmp;
 #else
             constexpr index_t load_elts = scalar_per_t_vector * scalar_per_x_vector;
             if constexpr(load_elts == 12 && sizeof(typename X::value_type) == 1)
             {
-                auto rtn = reinterpret_cast<const int32_t*>(p_data_) + (i + linear_offset) / 4;
+                auto rtn = reinterpret_cast<const int32_t*>(p_data_) +
+                           (i + linear_offset + static_offset) / 4;
                 struct
                 {
                     int32_t x, y, z;
@@ -945,7 +1048,8 @@ struct buffer_view<address_space_enum::lds,
             {
                 using buf_t = ext_vector_t<typename vector_traits<remove_cvref_t<T>>::scalar_type,
                                            scalar_per_t_vector * scalar_per_x_vector>;
-                auto rtn    = *c_style_pointer_cast<const buf_t*>(&p_data_[i + linear_offset]);
+                auto rtn    = *c_style_pointer_cast<const buf_t*>(
+                    &p_data_[i + linear_offset + static_offset]);
                 return bit_cast<X>(rtn);
             }
 #endif
@@ -1286,6 +1390,7 @@ struct buffer_view<address_space_enum::vgpr,
 
     // i is offset of T, not X. i should be aligned to X
     template <typename X,
+              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename std::enable_if<
                   std::is_same<typename vector_traits<remove_cvref_t<X>>::scalar_type,

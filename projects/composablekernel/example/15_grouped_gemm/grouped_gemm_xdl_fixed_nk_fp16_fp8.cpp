@@ -287,7 +287,6 @@ bool run_grouped_gemm(const ProblemSize& problem_size, const ExecutionConfig& co
                                                       c_element_op);
 
             ref_invoker.Run(ref_argument);
-
             pass &= ck::utils::check_err(c_device_tensors[i], c_host_tensors[i]);
         }
     }
@@ -302,7 +301,8 @@ int main(int argc, char* argv[])
 
     problem_size.group_count = 16;
 
-    if(argc == 5)
+    if(argc == 1) {}
+    else if(argc == 5)
     {
         config.do_verification = std::stoi(argv[1]);
         config.init_method     = std::stoi(argv[2]);

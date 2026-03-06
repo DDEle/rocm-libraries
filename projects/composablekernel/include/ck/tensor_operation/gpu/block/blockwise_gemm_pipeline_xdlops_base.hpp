@@ -65,7 +65,7 @@ struct BlockwiseGemmXdlops_pipeline_base
     static constexpr index_t BMmaKStride = KPack;
 
     static constexpr index_t KPerThread    = KPerBlock / xdlops_gemm.K0PerXdlops;
-    static constexpr index_t KRepeat       = KPerThread / KPack;
+    static constexpr index_t KRepeat       = math::max(KPerThread / KPack, 1);
     static constexpr index_t KPerInnerLoop = KPack;
 
     static constexpr index_t KGroup = []() {
@@ -93,7 +93,7 @@ struct BlockwiseGemmXdlops_pipeline_base
                                                       xdlops_gemm.KPerXdlops>;
 
 #if defined(__HIP_DEVICE_COMPILE__)
-    static_assert(KPerThread % KPack == 0,
+    static_assert(WaveSize != get_warp_size() || (KPerThread % KPack == 0),
                   "Wrong KPack setting; try increasing KPerThread or decreasing KPack");
 #endif
 

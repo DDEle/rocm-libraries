@@ -542,12 +542,6 @@ struct tensor_view
     TensorDesc desc_;
 };
 
-<<<<<<< HEAD
-// placeholder type if we want to opt-out a tile view parameter
-struct null_tensor_view
-{
-};
-
 template <typename T>
 struct is_tensor_view : std::false_type
 {
@@ -563,8 +557,6 @@ struct is_tensor_view<null_tensor_view> : std::true_type
 template <typename T>
 inline constexpr bool is_tensor_view_v = is_tensor_view<T>::value;
 
-=======
->>>>>>> origin/gfx1250
 template <address_space_enum BufferAddressSpace = address_space_enum::generic,
           memory_operation_enum DstInMemOp      = memory_operation_enum::set,
           amd_buffer_coherence_enum Coherence   = amd_buffer_coherence_enum::coherence_default,

@@ -117,18 +117,17 @@ struct FlatmmConfig16_950 : public FlatmmConfig16<DataType>
     static constexpr ck_tile::index_t K_Warp_Tile = sizeof(DataType) == 2 ? 32 : 128;
     static constexpr int kBlockPerCu              = 1;
 
-<<<<<<< HEAD
     static constexpr int N_Repeat =
         N_Tile / FlatmmConfig16<DataType>::N_Warp_Tile / FlatmmConfig16<DataType>::N_Warp;
     static constexpr bool TiledMMAPermuteN = N_Repeat % 4 == 0;
-=======
+};
+
 template <typename DataType>
 struct FlatmmConfig16_Wmma : public FlatmmConfig16<DataType>
 {
     static constexpr ck_tile::index_t M_Tile      = 64;
     static constexpr ck_tile::index_t K_Tile      = 64;
     static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<DataType, 16>();
->>>>>>> origin/gfx1250
 };
 
 template <typename ADataType>

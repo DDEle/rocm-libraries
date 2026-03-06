@@ -1299,19 +1299,16 @@ struct tile_window_with_static_distribution
     //   per-thread coordinate for bottom tensor
     array<tuple<typename Base::WindowAdaptorCoord, typename Base::BottomTensorCoord>, NumCoord>
         pre_computed_coords_;
-<<<<<<< HEAD
+
+    // Cached tensor computation variables
+    mutable bool tensor_cache_initialized_ = false;
+    mutable typename Base::BottomTensorIndex cached_global_strides_;
     // pre_computed_warp_coords_ exists only in the global memory tile_window
     std::conditional_t<
         Base::BottomTensorView::buffer_view::get_address_space() == address_space_enum::global,
         array<tuple<typename Base::WindowAdaptorCoord, typename Base::BottomTensorCoord>, NumCoord>,
         std::byte>
         pre_computed_warp_coords_;
-=======
-
-    // Cached tensor computation variables
-    mutable bool tensor_cache_initialized_ = false;
-    mutable typename Base::BottomTensorIndex cached_global_strides_;
->>>>>>> origin/gfx1250
 };
 
 // TODO: use strategy

@@ -94,17 +94,15 @@ struct WmmaTraitsBase<gfx12_t, ADType, BDType, CDType, K>
     using kCYs2RHsMajor  = sequence<1, 1>;
     using kCYs2RHsMinor  = sequence<0, 2>;
 
-<<<<<<< HEAD
     using kCTPs2RHssMajor = sequence<2, 1>;
     using kCTPs2RHssMinor = sequence<1, 0>;
     using kCTYs2RHsMajor  = sequence<2, 2>;
     using kCTYs2RHsMinor  = sequence<0, 2>;
-=======
+
     static constexpr index_t kABInputSize = kK / kABKLane;
     static constexpr index_t kCOutputSize = kM / kCMLane;
     using AVecType                        = ext_vector_t<ADataType, kABInputSize>;
     using BVecType                        = ext_vector_t<BDataType, kABInputSize>;
     using CVecType                        = ext_vector_t<CDataType, kCOutputSize>;
->>>>>>> origin/gfx1250
 };
 } // namespace ck_tile

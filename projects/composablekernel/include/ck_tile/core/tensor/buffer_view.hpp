@@ -7,11 +7,7 @@
 #include "ck_tile/core/arch/arch.hpp"
 #include "ck_tile/core/arch/amd_buffer_addressing_builtins.hpp"
 #include "ck_tile/core/arch/amd_buffer_addressing.hpp"
-<<<<<<< HEAD
-=======
-#endif
 #include "ck_tile/core/arch/amd_tdm_descriptor.hpp"
->>>>>>> origin/gfx1250
 #include "ck_tile/core/arch/generic_memory_space_atomic.hpp"
 #include "ck_tile/core/container/array.hpp"
 #include "ck_tile/core/numeric/integer.hpp"

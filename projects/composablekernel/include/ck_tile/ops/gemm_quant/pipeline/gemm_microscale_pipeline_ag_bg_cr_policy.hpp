@@ -7,7 +7,8 @@
 #include "ck_tile/ops/gemm/pipeline/gemm_universal_pipeline_ag_bg_cr_policy.hpp"
 #include "gemm_group_quant_utils.hpp"
 
-template<typename T> struct Debug;
+template <typename T>
+struct Debug;
 namespace ck_tile {
 
 struct GemmMicroscalePipelineAgBgCrPolicy : public UniversalGemmPipelineAgBgCrPolicy
@@ -245,17 +246,17 @@ struct GemmMicroscalePipelineAgBgCrPolicy : public UniversalGemmPipelineAgBgCrPo
     template <typename Problem>
     CK_TILE_HOST_DEVICE static constexpr auto GetBlockGemm()
     {
-        using BlockWarps      = typename Problem::BlockGemmShape::BlockWarps;
-        using WarpTile        = typename Problem::BlockGemmShape::WarpTile;
+        using BlockWarps       = typename Problem::BlockGemmShape::BlockWarps;
+        using WarpTile         = typename Problem::BlockGemmShape::WarpTile;
         using AComputeDataType = typename Problem::AComputeDataType;
         using BComputeDataType = typename Problem::BComputeDataType;
 #if defined(__gfx125__)
-        constexpr auto wg_attr_num_accessA =  WGAttrNumAccessEnum::Single;
-        constexpr auto wg_attr_num_accessB =  WGAttrNumAccessEnum::Single;
+        constexpr auto wg_attr_num_accessA = WGAttrNumAccessEnum::Single;
+        constexpr auto wg_attr_num_accessB = WGAttrNumAccessEnum::Single;
 #else
 
-        using LDSADataType  = ALdsDataType_<Problem>;
-        using LDSBDataType =  BLdsDataType_<Problem>;
+        using LDSADataType = ALdsDataType_<Problem>;
+        using LDSBDataType = BLdsDataType_<Problem>;
 
         static_assert(Problem::BQuantGroupSize::kK % WarpTile::at(I2) == 0,
                       "KPerWarpGemm must be a multiple of QuantGroupSize!");

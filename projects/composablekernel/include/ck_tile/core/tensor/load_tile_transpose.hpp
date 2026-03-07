@@ -107,7 +107,7 @@ struct DefaultTranspose
     template <index_t LaneGroupSize>
     using QuadOutputEncoding = typename Quad<LaneGroupSize, NumBitsDataType>::OutputEncoding;
 #else // now this branch just for gfx1250
-   template <index_t LaneGroupSize>
+    template <index_t LaneGroupSize>
     struct Quad16
     {
         static_assert(LaneGroupSize == 16, "LaneGroupSize must be 16");

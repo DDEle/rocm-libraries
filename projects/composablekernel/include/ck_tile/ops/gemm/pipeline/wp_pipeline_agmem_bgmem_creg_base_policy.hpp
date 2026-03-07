@@ -277,16 +277,16 @@ struct UniversalWeightPreshufflePipelineAgBgCrPolicy
         constexpr index_t KLaneBytes = KLane * sizeof(BTypeToUse);
         constexpr auto NumAccess     = static_cast<WGAttrNumAccessEnum>(max(1, KLaneBytes / 16));
 #endif
-        using WarpGemm     = WarpGemmDispatcher<ATypeToUse,
-                                                BTypeToUse,
-                                                typename Problem::CDataType,
-                                                WarpTile::at(I0),
-                                                WarpTile::at(I1),
-                                                WarpTile::at(I2),
-                                                Problem::TransposeC,
-                                                false,
-                                                false,
-                                                NumAccess>;
+        using WarpGemm = WarpGemmDispatcher<ATypeToUse,
+                                            BTypeToUse,
+                                            typename Problem::CDataType,
+                                            WarpTile::at(I0),
+                                            WarpTile::at(I1),
+                                            WarpTile::at(I2),
+                                            Problem::TransposeC,
+                                            false,
+                                            false,
+                                            NumAccess>;
 
         using BlockWeightPreshufflePolicy =
             BlockWeightPreshuffleASmemBSmemCRegV1CustomPolicy<typename Problem::ADataType,

@@ -2112,8 +2112,8 @@ inline __host__ __device__ T_F6 slowcast_to_f6_rne(T x, float scale = 1.0f)
             BaseT array[N];
         } in{x};
 
-    using array_type = NativeVectorT<uint8_t, N>;
-    array_type uint8_array;
+        using array_type = NativeVectorT<uint8_t, N>;
+        array_type uint8_array;
 
         // collect the 6-bit values into an array
         static_for<0, N, 1>{}([&](auto i) {

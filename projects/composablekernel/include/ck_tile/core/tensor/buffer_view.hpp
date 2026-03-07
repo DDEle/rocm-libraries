@@ -435,7 +435,7 @@ struct buffer_view<address_space_enum::global,
 
         constexpr index_t t_per_x = scalar_per_x_vector / scalar_per_t_vector;
 #if defined(__gfx125__) // for gfx125; there uses another instruction to do async load
-        auto p_uniform_ptr = amd_wave_read_first_lane(p_data_);
+        auto p_uniform_ptr              = amd_wave_read_first_lane(p_data_);
         constexpr index_t static_offset = linear_offset_t{}.value;
         amd_async_global_load_to_lds<remove_cvref_t<T>, t_per_x, static_offset, true, Coherence>(
             smem, p_uniform_ptr, i + wave_i, is_valid_element);

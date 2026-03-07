@@ -464,13 +464,13 @@ struct UniversalGemmBasePolicy
     template <typename Problem, typename ArchTag>
     CK_TILE_DEVICE static constexpr auto MakeBLdsBlockDescriptorImpl(ArchTag)
     {
-        using BLayout               = remove_cvref_t<typename Problem::BLayout>;
+        using BLayout                              = remove_cvref_t<typename Problem::BLayout>;
         constexpr bool IsBCastPolicyBeforeLDSWrite = IsBCastPolicyBeforeLDSWrite_v<Problem>;
         using BDataType                            = std::conditional_t<IsBCastPolicyBeforeLDSWrite,
                                                                         typename Problem::ADataType,
                                                                         BLdsDataType_<Problem>>;
-        constexpr index_t NPerBlock = Problem::BlockGemmShape::kN;
-        constexpr index_t KPerBlock = Problem::BlockGemmShape::kK;
+        constexpr index_t NPerBlock                = Problem::BlockGemmShape::kN;
+        constexpr index_t KPerBlock                = Problem::BlockGemmShape::kK;
 
         if constexpr(is_b_load_tr<Problem>)
         {
@@ -977,8 +977,10 @@ struct UniversalGemmBasePolicy
         constexpr bool IsBCastPolicyBeforeLDSWrite = IsBCastPolicyBeforeLDSWrite_v<Problem>;
         constexpr index_t VecLoadSize =
             IsBCastPolicyBeforeLDSWrite
-                ? (problem_fixed_vector_size_v<Problem> ? Problem::VectorSizeA : GetVectorSizeA<Problem>())
-                : (problem_fixed_vector_size_v<Problem> ? Problem::VectorSizeB : GetVectorSizeB<Problem>());
+                ? (problem_fixed_vector_size_v<Problem> ? Problem::VectorSizeA
+                                                        : GetVectorSizeA<Problem>())
+                : (problem_fixed_vector_size_v<Problem> ? Problem::VectorSizeB
+                                                        : GetVectorSizeB<Problem>());
         constexpr index_t NumWaveGroups = Problem::NumWaveGroups;
         using BLayout                   = remove_cvref_t<
                               std::tuple_element_t<number<0>{}, remove_cvref_t<typename Problem::BsLayoutTuple>>>;
@@ -1098,7 +1100,7 @@ struct UniversalGemmBasePolicy
         using BDataType                            = std::conditional_t<IsBCastPolicyBeforeLDSWrite,
                                                                         typename Problem::ADataType,
                                                                         BLdsDataType_<Problem>>;
-        constexpr index_t PackedSize    = numeric_traits<BDataType>::PackedSize;
+        constexpr index_t PackedSize               = numeric_traits<BDataType>::PackedSize;
         constexpr auto b_lds_block_desc = Derived::template MakeBLdsBlockDescriptor<Problem>();
         constexpr index_t smem_size_b   = integer_least_multiple(
             b_lds_block_desc.get_element_space_size() * sizeof(BDataType) / PackedSize, 16);

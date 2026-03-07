@@ -1039,14 +1039,14 @@ struct GridwiseGemm_wmma_cshuffle_v3_base
     }
 
     __host__ __device__ static constexpr bool
-    CheckValidity(const index_t M,
-                  const index_t N,
-                  const index_t K,
-                  const index_t StrideA,
-                  const index_t StrideB,
-                  const std::array<index_t, NumDTensor> StrideDs,
-                  const index_t StrideE,
-                  const index_t KBatch)
+    CheckValidityGemmKArg(const index_t M,
+                          const index_t N,
+                          const index_t K,
+                          const index_t StrideA,
+                          const index_t StrideB,
+                          const std::array<index_t, NumDTensor> StrideDs,
+                          const index_t StrideE,
+                          const index_t KBatch)
     {
 
         ignore              = StrideDs;

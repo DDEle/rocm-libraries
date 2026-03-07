@@ -293,7 +293,7 @@ struct BQuantBlockUniversalGemmAsBsCr
             constexpr index_t thread_buffer_size = nelements / UnaryOpSize_;
             const element_wise::DequantPack8 elementwise_op{};
             using SrcVectorRawType = ext_vector_t<BDataTypeRaw, UnaryOpSize_ / BPackedSize>;
-            using DstVectorType    = ext_vector_t<ComputeDataType, UnaryOpSize_>;
+            using DstVectorType    = ext_vector_t<BComputeDataType, UnaryOpSize_>;
 
             static_for<0, NIterPerWarp, 1>{}([&](auto nIter) {
                 static_for<0, Traits::QScalesPerBlockRow, 1>{}([&](auto kQScale) {

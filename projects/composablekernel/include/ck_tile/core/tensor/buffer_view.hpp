@@ -438,7 +438,8 @@ struct buffer_view<address_space_enum::global,
 #if defined(__gfx125__) // for gfx125; there uses another instruction to do async load
         auto p_uniform_ptr = amd_wave_read_first_lane(p_data_);
         amd_async_global_load_to_lds<remove_cvref_t<T>, t_per_x, static_offset, true, Coherence>(
-            smem, p_uniform_ptr, i + linear_offset, is_valid_element);
+            smem, p_uniform_ptr, i + wave_i, is_valid_element);
+        ignore = linear_offset;
 #else
         static_assert(static_offset == 0);
         const auto rsrc = make_builtin_buffer_resource(p_data_, buffer_size_ * sizeof(type));

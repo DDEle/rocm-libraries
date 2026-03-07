@@ -88,7 +88,8 @@ struct GemmQuantPipelineProblemBase
     // pk_fp4_t from LDS in registers. But without this instruction,
     // the transpose is done in register between Vmem read and LDS write and
     // the implementation does not support 4 bit types
-#ifdef __gfx950__
+    // TODO: Support gfx1250
+#ifdef  __gfx950__ 
     static constexpr auto BCastPolicy = BCastPolicy_;
 #else
     static constexpr auto BCastPolicy =

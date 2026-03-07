@@ -104,7 +104,7 @@ struct GemmWPABQuantPipelineAgBgCrPolicy : public UniversalWeightPreshufflePipel
         // When BDataType is pk_int4_t, it is internally converted to fp8 for computation.
         using BTypeToUse = mixed_prec_compute_type_from_input_t<typename Problem::BDataType,
                                                                 typename Problem::ADataType,
-                                                                typename Problem::ComputeDataType>;
+                                                                typename Problem::BComputeDataType>;
         constexpr index_t KLaneBytes = KLane * sizeof(BTypeToUse);
         constexpr auto NumAccess     = static_cast<WGAttrNumAccessEnum>(max(1, KLaneBytes / 16));
 #endif

@@ -826,7 +826,6 @@ struct UniversalGemmBasePolicy
         constexpr index_t NPerBlock = Problem::BlockGemmShape::kN;
         constexpr index_t KPerBlock = Problem::BlockGemmShape::kK;
         using BLayout               = remove_cvref_t<std::tuple_element_t<number<0>{}, BsLayout>>;
-        using BInDataType           = remove_cvref_t<std::tuple_element_t<number<0>{}, BsDataType>>;
 
         constexpr bool IsBCastPolicyBeforeLDSWrite = IsBCastPolicyBeforeLDSWrite_v<Problem>;
         using BDataType                            = std::conditional_t<IsBCastPolicyBeforeLDSWrite,

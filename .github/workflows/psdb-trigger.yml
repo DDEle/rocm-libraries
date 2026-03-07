@@ -5,6 +5,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - gfx1250
+      - gfx1260
+      - gfx1310
+      - gfx1370
 
 jobs:
   check:

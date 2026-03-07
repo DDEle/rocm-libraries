@@ -85,7 +85,6 @@ struct tensor_view
 
     // X is vector of DataType.
     // "coord" is coordinate of DataType, not X. "coord" should be aligned to X
-    // static_offset is compile-time offset for LDS access optimization
     template <typename X,
               index_t static_offset      = 0,
               bool oob_conditional_check = true,
@@ -171,7 +170,6 @@ struct tensor_view
     }
 
     template <typename X,
-              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               index_t IMM                = 0,
               typename                   = std::enable_if_t<
@@ -190,30 +188,47 @@ struct tensor_view
                                           true,
                                           bool_constant<oob_conditional_check>{});
     }
-    
+
     template <typename X,
-              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename                   = std::enable_if_t<
                                     std::is_same_v<vector_scalar_t<remove_cvref_t<X>>, vector_scalar_t<DataType_>>>>
-
     CK_TILE_HOST_DEVICE constexpr void
     async_get_vectorized_elements(CK_TILE_LDS_ADDR DataType_* smem,
                                   const TensorCoord& coord,
                                   index_t linear_offset,
                                   bool_constant<oob_conditional_check> = {}) const
     {
-        return buf_.template async_get<X, static_offset / PackedSize>(
+        return buf_.template async_get<X>(
             smem,
             coord.get_offset() / PackedSize + linear_offset / PackedSize,
             0,
-            0, // linear_offset need to be imm and is not supported currently
+            number<0>{}, // linear_offset need to be imm and is not supported currently
             coordinate_has_valid_offset_assuming_top_index_is_valid(desc_, coord),
             bool_constant<oob_conditional_check>{});
     }
 
     template <typename X,
-              index_t static_offset      = 0,
+              bool oob_conditional_check = true,
+              index_t IMM                = 0,
+              typename                   = std::enable_if_t<
+                                    std::is_same_v<typename vector_traits<remove_cvref_t<X>>::scalar_type,
+                                                   typename vector_traits<DataType_>::scalar_type>>>
+    CK_TILE_HOST_DEVICE constexpr void
+    async_get_vectorized_elements(CK_TILE_LDS_ADDR DataType_* smem,
+                                  const TensorCoord& coord,
+                                  index_t linear_offset,
+                                  number<IMM>,
+                                  bool_constant<oob_conditional_check> = {}) const
+    {
+        return buf_.template async_get<X>(smem,
+                                          coord.get_offset() / PackedSize,
+                                          linear_offset / PackedSize,
+                                          number<IMM / PackedSize>{},
+                                          bool_constant<oob_conditional_check>{});
+    }
+
+    template <typename X,
               bool oob_conditional_check = true,
               typename                   = std::enable_if_t<
                                     std::is_same_v<typename vector_traits<remove_cvref_t<X>>::scalar_type,
@@ -225,13 +240,12 @@ struct tensor_view
                                   bool is_valid_element,
                                   bool_constant<oob_conditional_check> = {}) const
     {
-        return buf_.template async_get<X, static_offset / PackedSize>(
-            smem,
-            coord.get_offset() / PackedSize,
-            0,
-            linear_offset / PackedSize,
-            is_valid_element,
-            bool_constant<oob_conditional_check>{});
+        return buf_.template async_get<X>(smem,
+                                          coord.get_offset() / PackedSize,
+                                          linear_offset / PackedSize,
+                                          number<0>{},
+                                          is_valid_element,
+                                          bool_constant<oob_conditional_check>{});
     }
 
     template <typename X,

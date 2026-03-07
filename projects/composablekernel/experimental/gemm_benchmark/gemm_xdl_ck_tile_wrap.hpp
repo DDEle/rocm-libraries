@@ -477,6 +477,7 @@ struct DeviceGemm_Xdl_CkTileWrap : public
             std::is_same_v<CLayout, ck_tile::tensor_layout::gemm::RowMajor>;
         static constexpr bool UseStructuredSparsity = false;
         static constexpr bool UseDataCachePrefetch  = false;
+        static constexpr bool DataCachePrefetchToL1 = false;
 
         static constexpr auto Scheduler = PipelineScheduler;
         // COMPUTE_V3 is mapped to BASIC_V2 in universal_gemm_invoker.hpp

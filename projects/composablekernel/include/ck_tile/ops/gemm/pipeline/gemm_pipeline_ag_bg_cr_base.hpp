@@ -69,6 +69,9 @@ struct GemmPipelineAgBgCrImplBase
 
     template <typename T>
     static constexpr bool supports_transpose_load =
+#if defined(__gfx950__)
+        std::is_same_v<T, pk_fp4_t> ||
+#endif
         std::is_same_v<T, fp16_t> || std::is_same_v<T, bf16_t> || std::is_same_v<T, fp8_t> ||
         std::is_same_v<T, bf8_t>;
 

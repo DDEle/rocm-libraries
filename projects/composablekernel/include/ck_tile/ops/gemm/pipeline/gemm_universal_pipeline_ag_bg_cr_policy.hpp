@@ -102,7 +102,9 @@ struct UniversalGemmBasePolicy
         constexpr index_t kMaxKWarpTile = (sizeof(ALdsDataType) == 1) ? 64 : 32;
         // Todo: check BLdsDataType only
         if constexpr(std::is_same_v<BDataType, pk_int4_t> ||
+#if defined(__gfx125__)
                      std::is_same_v<BLdsDataType, pk_fp4_t> ||
+#endif
                      std::is_same_v<BLdsDataType, pk_int4_t>)
             return false;
         else if constexpr(kKWarpTile > kMaxKWarpTile)
@@ -122,7 +124,9 @@ struct UniversalGemmBasePolicy
         constexpr index_t kMaxKWarpTile = (sizeof(BLdsDataType) == 1) ? 64 : 32;
         // Todo: check BLdsDataType only
         if constexpr(std::is_same_v<BDataType, pk_int4_t> ||
+#if defined(__gfx125__)
                      std::is_same_v<BLdsDataType, pk_fp4_t> ||
+#endif
                      std::is_same_v<BLdsDataType, pk_int4_t>)
             return false;
         else if constexpr(kKWarpTile > kMaxKWarpTile)

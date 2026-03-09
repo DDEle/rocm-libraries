@@ -7,8 +7,6 @@
 #include "ck_tile/ops/gemm/pipeline/gemm_universal_pipeline_ag_bg_cr_policy.hpp"
 #include "gemm_group_quant_utils.hpp"
 
-template <typename T>
-struct Debug;
 namespace ck_tile {
 
 struct GemmMicroscalePipelineAgBgCrPolicy : public UniversalGemmPipelineAgBgCrPolicy

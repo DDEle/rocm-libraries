@@ -27,11 +27,7 @@ constexpr ck_tile::index_t get_k_warp_tile()
     return 16;
 #endif
 #else
-#if defined(CK_GFX950_SUPPORT)
-    return (M_Warp_Tile == 32) ? 16 : 32;
-#else
     return Is8Bit ? 64 : 32;
-#endif
 #endif
 }
 
@@ -94,9 +90,13 @@ class TestCkTileGemmQuantBase : public ::testing::Test
     static constexpr ck_tile::index_t N_Warp_Tile = GemmConfig::N_Warp_Tile;
 
     // K_Warp_Tile is variant with respect to the compute data type and M warp tile size.
+#if defined(CK_USE_GFX1250)
     static constexpr bool is_8bit = !(std::is_same_v<ComputeDataType, ck_tile::fp16_t> ||
                                       std::is_same_v<ComputeDataType, ck_tile::bf16_t>);
     static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<is_8bit, M_Warp_Tile>();
+#else
+    static constexpr ck_tile::index_t K_Warp_Tile = GemmConfig::K_Warp_Tile;
+#endif
 
     static constexpr bool APreshuffleQuant = GemmConfig::APreshuffleQuant;
     static constexpr bool BPreshuffleQuant = GemmConfig::BPreshuffleQuant;

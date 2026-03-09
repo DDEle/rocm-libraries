@@ -78,7 +78,8 @@ struct config_mn_32x32 : public config<Datatype>
 {
     static constexpr ck_tile::index_t M_Warp_Tile = 32;
     static constexpr ck_tile::index_t N_Warp_Tile = 32;
-    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<Datatype, M_Warp_Tile>();
+    static constexpr ck_tile::index_t K_Warp_Tile =
+        ck_tile::get_k_warp_tile<Datatype, M_Warp_Tile>();
 };
 
 template <typename Datatype>
@@ -86,7 +87,8 @@ struct config_mn_16x16 : public config<Datatype>
 {
     static constexpr ck_tile::index_t M_Warp_Tile = 16;
     static constexpr ck_tile::index_t N_Warp_Tile = 16;
-    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<Datatype, M_Warp_Tile>();
+    static constexpr ck_tile::index_t K_Warp_Tile =
+        ck_tile::get_k_warp_tile<Datatype, M_Warp_Tile>();
 };
 
 template <typename Datatype>

@@ -41,20 +41,23 @@ struct GemmConfigBase
 
     static constexpr ck_tile::index_t M_Warp_Tile = 16;
     static constexpr ck_tile::index_t N_Warp_Tile = 16;
+    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<false>();
 };
 
 struct GemmConfigDecode : public GemmConfigBase
 {
-    static constexpr ck_tile::index_t M_Tile = 16;
-    static constexpr ck_tile::index_t N_Tile = 64;
-    static constexpr ck_tile::index_t K_Tile = 256;
+    static constexpr ck_tile::index_t M_Tile      = 16;
+    static constexpr ck_tile::index_t N_Tile      = 64;
+    static constexpr ck_tile::index_t K_Tile      = 256;
+    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<true>();
 };
 
 struct GemmConfigPrefill : public GemmConfigBase
 {
-    static constexpr ck_tile::index_t M_Tile = 128;
-    static constexpr ck_tile::index_t N_Tile = 128;
-    static constexpr ck_tile::index_t K_Tile = 128;
+    static constexpr ck_tile::index_t M_Tile      = 128;
+    static constexpr ck_tile::index_t N_Tile      = 128;
+    static constexpr ck_tile::index_t K_Tile      = 128;
+    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<true>();
 };
 
 struct GemmConfigPrefillIntrawave : public GemmConfigBase
@@ -133,8 +136,6 @@ struct GemmConfigPreshuffleBDecode : public GemmConfigDecode
 {
     static constexpr bool PreshuffleB      = true;
     static constexpr bool DoubleSmemBuffer = true;
-
-    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<true>();
 };
 
 struct GemmConfigPreshuffleQuantDecode : public GemmConfigDecode
@@ -146,8 +147,6 @@ struct GemmConfigPreshuffleBPrefill : public GemmConfigPrefill
 {
     static constexpr bool PreshuffleB      = true;
     static constexpr bool DoubleSmemBuffer = true;
-
-    static constexpr ck_tile::index_t K_Warp_Tile = get_k_warp_tile<true>();
 };
 
 struct GemmConfigPreshuffleQuantPrefill : public GemmConfigPrefill

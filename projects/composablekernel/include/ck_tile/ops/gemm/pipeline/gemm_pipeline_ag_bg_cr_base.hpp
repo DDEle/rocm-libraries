@@ -49,28 +49,24 @@ struct GemmPipelineAgBgCrImplBase
     // that only work for certain K warp tile sizes based on data type size:
     // - For 1-byte types (fp8/bf8): K warp tile <= 64
     // - For 2-byte types (fp16/bf16): K warp tile <= 32
+    using WarpTile                      = typename BlockGemmShape::WarpTile;
+    static constexpr index_t kKWarpTile = WarpTile::at(number<2>{});
+
+    template <typename T>
+    static constexpr bool supports_transpose_load =
+        std::is_same_v<T, fp16_t> || std::is_same_v<T, bf16_t> || std::is_same_v<T, fp8_t> ||
+        std::is_same_v<T, bf8_t>;
+
     static constexpr bool is_a_load_tr = []() {
-        using WarpTile                  = typename BlockGemmShape::WarpTile;
-        constexpr index_t kKWarpTile    = WarpTile::at(number<2>{});
         constexpr index_t kMaxKWarpTile = (sizeof(ADataType) == 1) ? 64 : 32;
-        if constexpr(std::is_same_v<BDataType, pk_int4_t>)
-            return false;
-        else if constexpr(kKWarpTile > kMaxKWarpTile)
-            return false;
-        else
-            return std::is_same_v<ALayout, tensor_layout::gemm::ColumnMajor>;
+        return supports_transpose_load<ADataType> && (kKWarpTile <= kMaxKWarpTile) &&
+               std::is_same_v<ALayout, tensor_layout::gemm::ColumnMajor>;
     }();
 
     static constexpr bool is_b_load_tr = []() {
-        using WarpTile                  = typename BlockGemmShape::WarpTile;
-        constexpr index_t kKWarpTile    = WarpTile::at(number<2>{});
         constexpr index_t kMaxKWarpTile = (sizeof(BDataType) == 1) ? 64 : 32;
-        if constexpr(std::is_same_v<BDataType, pk_int4_t>)
-            return false;
-        else if constexpr(kKWarpTile > kMaxKWarpTile)
-            return false;
-        else
-            return std::is_same_v<BLayout, tensor_layout::gemm::RowMajor>;
+        return supports_transpose_load<BDataType> && (kKWarpTile <= kMaxKWarpTile) &&
+               std::is_same_v<BLayout, tensor_layout::gemm::RowMajor>;
     }();
 #else
     static constexpr bool is_a_load_tr = false;

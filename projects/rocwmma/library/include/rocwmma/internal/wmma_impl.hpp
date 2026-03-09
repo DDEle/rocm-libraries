@@ -349,9 +349,9 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsC)>),
-                              "Inconsistent data formats"); // some other thing
+                              "Inconsistent data formats");
                 static_assert(sizeof(TypeOut) == sizeof(decay_t<DRegsT>),
-                              "Inconsistent data formats"); // some thing
+                              "Inconsistent data formats");
 
                 DRegsT result;
                 to_native_vector(reinterpret_cast<TypeOut&>(result))
@@ -1723,12 +1723,20 @@ namespace rocwmma
             ROCWMMA_DEVICE static inline auto
                 exec(ARegsT const& regsA, BRegsT const& regsB, CRegsT const& regsC) -> DRegsT
             {
+                // Built-in expects vector of signed 32-bit int
+                using TypeIn = VRegI32x2;
+
+                static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsA)>),
+                                "Inconsistent data formats");
+                static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
+                                "Inconsistent data formats");
+
                 DRegsT result;
                 to_native_vector(result)
                     = {__builtin_amdgcn_wmma_i32_16x16x16_iu8_w32_gfx12((bool)InputSign,
-                                                                        to_native_vector(regsA),
+                                                                        to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                                                                         (bool)InputSign,
-                                                                        to_native_vector(regsB),
+                                                                        to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
                                                                         to_native_vector(regsC),
                                                                         (bool)AccumSign)};
                 return result;

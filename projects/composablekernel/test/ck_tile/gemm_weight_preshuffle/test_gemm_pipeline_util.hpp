@@ -307,7 +307,7 @@ class TestCkTileGemmPipeline : public ::testing::Test
         ck_tile::DeviceMem c_m_n_dev_buf(c_m_n_dev_result.get_element_space_size_in_bytes());
 
         a_m_k_dev_buf.ToDevice(a_m_k.data());
-        ck_tile::HostTensor<BDataType> b_shuffle_host = shuffle_b<GemmConfig>(b_k_n);
+        ck_tile::HostTensor<BDataType> b_shuffle_host = shuffle_b_v0<GemmConfig>(b_k_n);
         if constexpr(std::is_same_v<BDataType, ck_tile::pk_int4_t>)
         {
             // Permute vector pk_i4x4 data for device implementation

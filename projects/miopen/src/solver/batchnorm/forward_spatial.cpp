@@ -330,8 +330,8 @@ ConvSolution BnFwdTrainingSpatial::GetSolution(const ExecutionContext& context,
         build_params.Define("MIO_BN_NHW", in_nhw);
         build_params.Define("MIO_BN_CHW", in_nstride);
         build_params.Define("MIO_BN_NCHW", in_nchw);
-      
-	      build_params.Define("HIP_ENABLE_EXTRA_WARP_SYNC_TYPES");
+
+        build_params.Define("HIP_ENABLE_EXTRA_WARP_SYNC_TYPES");
 
         kernel.kernel_file      = "MIOpenBatchNormFwdTrainSpatial.cpp";
         std::string kernel_name = "MIOpenBatchNormFwdTrainSpatial";
@@ -511,4 +511,3 @@ ConvSolution BnFwdTrainingSpatial::GetSolution(const ExecutionContext& context,
 } // namespace solver
 
 } // namespace miopen
-

@@ -27,15 +27,13 @@
 #include <vector>
 #include <cstdint>
 
-#define MIOPEN_TEST_GFX125X 1
-
 #include <miopen/fusion/solvers.hpp>
 #include <miopen/env.hpp>
 #include <miopen/generic_search.hpp>
 #include <miopen/conv/data_invoke_params.hpp>
 #include <miopen/solver/problem_description_interpreter.hpp>
 #include <miopen/solver/ck_utility_common.hpp>
-#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL && !MIOPEN_TEST_GFX125X
+#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL
 #include <miopen/solver/implicitgemm_ck_util.hpp>
 #include "ck/library/tensor_operation_instance/gpu/grouped_convolution_forward_clamp.hpp"
 #endif
@@ -47,7 +45,7 @@ namespace fusion {
 
 using ProblemDescription = miopen::conv::ProblemDescription;
 
-#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL && !MIOPEN_TEST_GFX125X
+#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL
 
 template <ck::index_t NDimSpatial>
 struct LayoutsSelector;
@@ -466,7 +464,7 @@ bool ConvCKIgemmGrpFwdActivFused::CheckCKApplicability(
 void PerformanceConfigConvCKIgemmGrpFwdActivFused::HeuristicInit(
     const FusionDescription& fdesc_problem)
 {
-#if !MIOPEN_BACKEND_HIP || !MIOPEN_USE_COMPOSABLEKERNEL || MIOPEN_TEST_GFX125X
+#if !MIOPEN_BACKEND_HIP || !MIOPEN_USE_COMPOSABLEKERNEL
     std::ignore = fdesc_problem;
 #else
     const auto conv_problem = fdesc_problem.GetConvProblem(0, miopen::conv::Direction::Forward);
@@ -490,7 +488,7 @@ void PerformanceConfigConvCKIgemmGrpFwdActivFused::HeuristicInit(
 bool PerformanceConfigConvCKIgemmGrpFwdActivFused::SetNextValue(
     const FusionDescription& fdesc_problem)
 {
-#if MIOPEN_USE_COMPOSABLEKERNEL && !MIOPEN_TEST_GFX125X
+#if MIOPEN_USE_COMPOSABLEKERNEL
     if(valid_kernels.empty())
     {
         const auto conv_problem = fdesc_problem.GetConvProblem(0, miopen::conv::Direction::Forward);
@@ -528,7 +526,7 @@ bool PerformanceConfigConvCKIgemmGrpFwdActivFused::IsValidValue() const
 bool PerformanceConfigConvCKIgemmGrpFwdActivFused::IsValid(
     const FusionContext&, const FusionDescription& fdesc_problem) const
 {
-#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL && !MIOPEN_TEST_GFX125X
+#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL
     const auto conv_problem = fdesc_problem.GetConvProblem(0, miopen::conv::Direction::Forward);
     switch(conv_problem.GetInDataType())
     {
@@ -573,7 +571,7 @@ bool ConvCKIgemmGrpFwdActivFused::IsValidPerformanceConfig(
 size_t ConvCKIgemmGrpFwdActivFused::GetWorkspaceSize(const FusionContext&,
                                                      const FusionDescription& fdesc_problem) const
 {
-#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL && !MIOPEN_TEST_GFX125X
+#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL
     const auto conv_problem = fdesc_problem.GetConvProblem(0, miopen::conv::Direction::Forward);
     return GetWorkspaceSizeLayoutTransformConv(conv_problem);
 #else
@@ -593,7 +591,7 @@ ConvCKIgemmGrpFwdActivFused::Search(const FusionContext& ctx,
 bool ConvCKIgemmGrpFwdActivFused::IsApplicable(const FusionContext& ctx,
                                                const FusionDescription& fdesc_problem) const
 {
-#if !MIOPEN_BACKEND_HIP || !MIOPEN_USE_COMPOSABLEKERNEL || MIOPEN_TEST_GFX125X
+#if !MIOPEN_BACKEND_HIP || !MIOPEN_USE_COMPOSABLEKERNEL
     std::ignore = ctx;
     std::ignore = fdesc_problem;
     return false;
@@ -653,7 +651,7 @@ bool ConvCKIgemmGrpFwdActivFused::IsApplicable(const FusionContext& ctx,
 #endif
 }
 
-#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL && !MIOPEN_TEST_GFX125X
+#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL
 template <ck::index_t NDimSpatial, typename DataType>
 ConvSolution
 GetSolutionForDimensionality(const FusionContext& ctx,
@@ -720,7 +718,7 @@ ConvSolution ConvCKIgemmGrpFwdActivFused::GetSolution(
     const FusionDescription& fdesc_problem,
     const PerformanceConfigConvCKIgemmGrpFwdActivFused& config) const
 {
-#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL && !MIOPEN_TEST_GFX125X
+#if MIOPEN_BACKEND_HIP && MIOPEN_USE_COMPOSABLEKERNEL
     const auto conv_problem = fdesc_problem.GetConvProblem(0, miopen::conv::Direction::Forward);
 
     if(conv_problem.Is3d())

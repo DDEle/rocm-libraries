@@ -121,7 +121,8 @@ __forceinline__ __device__ void lds_reduce2_2d(FloatAccumC& x,
     y = static_cast<FloatAccumC>(lcl_data[xlid * 2 + 1] * scale);
 }
 
-// Caller must ensure: SizeLclData >= (blockDim.x * blockDim.y * blockDim.z + warpSize - 1) / warpSize
+// Caller must ensure: SizeLclData >= (blockDim.x * blockDim.y * blockDim.z + warpSize - 1) /
+// warpSize
 // @warning Undefined behavior if SizeLclData is too small
 // Caller must ensure: All lanes must be active
 // @warning Undefined behavior if lanes are masked
@@ -133,12 +134,12 @@ __forceinline__ __device__ void gcn_reduce2(FloatAccum& x,
                                             FloatAccum (&lcl_data_y)[SizeLclData],
                                             unsigned int lid)
 {
-    const unsigned int ldsidx = lid / warpSize;
+    const unsigned int ldsidx         = lid / warpSize;
     constexpr unsigned long long mask = 0xFFFFFFFFFFFFFFFFull;
-    x = __reduce_add_sync(mask, x);
-    y = __reduce_add_sync(mask, y);
+    x                                 = __reduce_add_sync(mask, x);
+    y                                 = __reduce_add_sync(mask, y);
     // Last thread
-    if((lid % warpSize) == warpSize-1)
+    if((lid % warpSize) == warpSize - 1)
     {
         lcl_data_x[ldsidx] = x;
         lcl_data_y[ldsidx] = y;

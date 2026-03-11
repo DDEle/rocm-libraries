@@ -183,7 +183,7 @@ ConvSolution BnBwdTrgActivationFused::GetSolution(const FusionContext& context,
 
         if(mode == miopenBNSpatial)
         {
-	    build_params.Define("HIP_ENABLE_EXTRA_WARP_SYNC_TYPES");
+            build_params.Define("HIP_ENABLE_EXTRA_WARP_SYNC_TYPES");
         }
 
         result.construction_params.push_back(kernel);

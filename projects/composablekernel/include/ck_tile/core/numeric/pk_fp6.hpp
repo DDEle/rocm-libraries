@@ -74,7 +74,7 @@ struct pk_float6_e2m3_t
     CK_TILE_HOST_DEVICE constexpr pk_float6_e2m3_t(raw_type init);
     CK_TILE_HOST_DEVICE constexpr pk_float6_e2m3_t(storage_type init);
     CK_TILE_HOST_DEVICE explicit pk_float6_e2m3_t(float init, float scale = 1.f);
-    CK_TILE_HOST_DEVICE constexpr storage_type& get() { return data; }
+    CK_TILE_HOST_DEVICE constexpr storage_type& get() [[clang::lifetimebound]] { return data; }
     CK_TILE_HOST_DEVICE constexpr storage_type get() const { return data; }
 
     CK_TILE_HOST_DEVICE constexpr float to_float(float scale = 1.f) const;
@@ -185,7 +185,7 @@ struct pk_float6_e3m2_t
     CK_TILE_HOST_DEVICE constexpr pk_float6_e3m2_t(raw_type init);
     CK_TILE_HOST_DEVICE constexpr pk_float6_e3m2_t(storage_type init);
     CK_TILE_HOST_DEVICE explicit pk_float6_e3m2_t(float init, float scale = 1.f);
-    CK_TILE_HOST_DEVICE constexpr storage_type& get() { return data; }
+    CK_TILE_HOST_DEVICE constexpr storage_type& get() [[clang::lifetimebound]] { return data; }
     CK_TILE_HOST_DEVICE constexpr storage_type get() const { return data; }
 
     CK_TILE_HOST_DEVICE constexpr float to_float(float scale = 1.f) const;

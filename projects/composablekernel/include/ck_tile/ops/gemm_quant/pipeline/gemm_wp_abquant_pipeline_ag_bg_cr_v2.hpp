@@ -73,6 +73,9 @@ struct WPABQuantBPipelineAgBgCrV2 : public WeightPreshufflePipelineAGmemBGmemCRe
 
     using Base::m_preload;
 
+    using Base::WarpTileK;
+    using Base::WarpTileM;
+
     static constexpr index_t VectorLoadSize = Problem::VectorLoadSize;
 
     static constexpr index_t NPerBlock = BlockGemmShape::kN;
@@ -268,9 +271,30 @@ struct WPABQuantBPipelineAgBgCrV2 : public WeightPreshufflePipelineAGmemBGmemCRe
                              {0, 0},
                              a_dram_tile_distribution);
 
-        // ping-pong window for A LDS
+// ping-pong window for A LDS
+#ifdef __gfx125__
+        constexpr index_t MWarpBlock = WarpTileM / 16;
+
+        constexpr index_t KLane      = get_warp_size() / 16;
+        constexpr index_t KPerThread = WarpTileK / KLane;
+
+        constexpr index_t PackedSize    = numeric_traits<typename Problem::ADataType>::PackedSize;
+        constexpr index_t MaxVecSize    = 16 / sizeof(ADataType) * PackedSize;
+        constexpr index_t KItemsPerLoad = min(MaxVecSize, KPerThread);
+        constexpr index_t KFragment     = KPerThread / KItemsPerLoad;
+        constexpr auto a_block_inner_dstr_encoding = tile_distribution_encoding<
+            sequence<>,
+            tuple<sequence<MWarpBlock, 16>, sequence<KFragment, KLane, KItemsPerLoad>>,
+            tuple<sequence<2, 1>>,
+            tuple<sequence<1, 1>>,
+            sequence<1, 2, 2>,
+            sequence<0, 0, 2>>{};
+
+        auto a_warp_tile_distribution = make_static_tile_distribution(a_block_inner_dstr_encoding);
+#else
         auto a_warp_tile_distribution =
             make_static_tile_distribution(typename WG::AWarpDstrEncoding{});
+#endif
 
         auto a_warp_window_ping_tmp =
             make_tile_window(a_lds_block_ping,

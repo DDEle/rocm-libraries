@@ -42,8 +42,9 @@ struct LayoutFromDataType<pk_fp4_t, 128, false> : LayoutFromNon8BitMixPrec
 template <typename DataType, index_t K>
 struct LayoutFromDataType<DataType, K, false>
 {
-    static constexpr index_t kKLane     = 2;
-    static constexpr index_t kK1PerLane = 8;
+    static constexpr index_t kKLane = 2;
+    static constexpr index_t kK1PerLane =
+        (std::is_same_v<DataType, fp32_t> || std::is_same_v<DataType, fp64_t>) ? 2 : 8;
     static constexpr index_t kK0PerLane = K / (kK1PerLane * kKLane);
 };
 

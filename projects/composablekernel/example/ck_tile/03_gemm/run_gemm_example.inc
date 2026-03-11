@@ -296,7 +296,7 @@ int run_gemm_example_with_layouts(ck_tile::ArgParser& arg_parser,
             else
             {
                 std::cout << "Run without PermuteN" << std::endl;
-                return ck_tile::shuffle_b<GemmConfig>(b_k_n);
+                return ck_tile::shuffle_b_v0<GemmConfig>(b_k_n);
             }
         }();
         // shuffled buffer B for device implementation

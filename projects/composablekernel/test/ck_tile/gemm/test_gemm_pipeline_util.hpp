@@ -27,6 +27,8 @@ constexpr ck_tile::index_t get_k_warp_tile()
     constexpr bool is_8bit = std::is_same_v<PrecType, ck_tile::fp8_t> ||
                              std::is_same_v<PrecType, ck_tile::bf8_t> ||
                              std::is_same_v<PrecType, ck_tile::int8_t>;
+    constexpr bool is_highprec =
+        std::is_same_v<PrecType, ck_tile::fp32_t> || std::is_same_v<PrecType, ck_tile::fp64_t>;
     constexpr bool is_mxtype =
         std::is_same_v<PrecType, ck_tile::fp8_t> || std::is_same_v<PrecType, ck_tile::pk_fp4_t>;
     if constexpr(M_Warp_Tile == 32 && is_mxtype) // only mx data type can enter this branch
@@ -35,7 +37,7 @@ constexpr ck_tile::index_t get_k_warp_tile()
     }
     else
     {
-        return is_8bit ? 64 : 32;
+        return is_highprec ? 4 : (is_8bit ? 64 : 32);
     }
 #else
     return 16;

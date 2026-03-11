@@ -342,7 +342,7 @@ class TestCkTileGroupedGemmPreshuffle : public ::testing::Test
             ck_tile::FillUniformDistribution<BDataType>{-1.f, 1.f}(b_k_n_tensors[i]);
 
             // Host-side preshuffle of B
-            auto b_shuffle_host = ck_tile::shuffle_b<BShuffleGemmConfig>(b_k_n_tensors[i]);
+            auto b_shuffle_host = ck_tile::shuffle_b_v0<BShuffleGemmConfig>(b_k_n_tensors[i]);
 
             a_m_k_dev_buf.push_back(std::make_unique<ck_tile::DeviceMem>(
                 a_m_k_tensors[i].get_element_space_size_in_bytes()));

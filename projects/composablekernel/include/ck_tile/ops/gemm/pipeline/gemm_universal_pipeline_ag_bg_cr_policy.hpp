@@ -91,21 +91,18 @@ struct UniversalGemmBasePolicy
     // that only work for certain K warp tile sizes based on data type size:
     // - For 1-byte types (fp8/bf8): K warp tile <= 64
     // - For 2-byte types (fp16/bf16): K warp tile <= 32
+    template <typename T>
+    static constexpr bool supports_transpose_load =
+        std::is_same_v<T, fp16_t> || std::is_same_v<T, bf16_t> || std::is_same_v<T, fp8_t> ||
+        std::is_same_v<T, bf8_t>;
+
     template <typename Problem>
     static constexpr bool is_a_load_tr = []() {
-        using BDataType              = remove_cvref_t<typename Problem::BDataType>;
-        using ALdsDataType           = ALdsDataType_<Problem>;
-        using BLdsDataType           = BLdsDataType_<Problem>;
-        using WarpTile               = typename Problem::BlockGemmShape::WarpTile;
-        constexpr index_t kKWarpTile = WarpTile::at(number<2>{});
-        // Max K warp tile for transpose load based on data type size
+        using ALdsDataType              = ALdsDataType_<Problem>;
+        using WarpTile                  = typename Problem::BlockGemmShape::WarpTile;
+        constexpr index_t kKWarpTile    = WarpTile::at(number<2>{});
         constexpr index_t kMaxKWarpTile = (sizeof(ALdsDataType) == 1) ? 64 : 32;
-        // Todo: check BLdsDataType only
-        if constexpr(std::is_same_v<BDataType, pk_int4_t> ||
-#if defined(__gfx125__)
-                     std::is_same_v<BLdsDataType, pk_fp4_t> ||
-#endif
-                     std::is_same_v<BLdsDataType, pk_int4_t>)
+        if constexpr(!supports_transpose_load<ALdsDataType>)
             return false;
         else if constexpr(kKWarpTile > kMaxKWarpTile)
             return false;
@@ -116,18 +113,11 @@ struct UniversalGemmBasePolicy
 
     template <typename Problem>
     static constexpr bool is_b_load_tr = []() {
-        using BDataType              = remove_cvref_t<typename Problem::BDataType>;
-        using BLdsDataType           = BLdsDataType_<Problem>;
-        using WarpTile               = typename Problem::BlockGemmShape::WarpTile;
-        constexpr index_t kKWarpTile = WarpTile::at(number<2>{});
-        // Max K warp tile for transpose load based on data type size
+        using BLdsDataType              = BLdsDataType_<Problem>;
+        using WarpTile                  = typename Problem::BlockGemmShape::WarpTile;
+        constexpr index_t kKWarpTile    = WarpTile::at(number<2>{});
         constexpr index_t kMaxKWarpTile = (sizeof(BLdsDataType) == 1) ? 64 : 32;
-        // Todo: check BLdsDataType only
-        if constexpr(std::is_same_v<BDataType, pk_int4_t> ||
-#if defined(__gfx125__)
-                     std::is_same_v<BLdsDataType, pk_fp4_t> ||
-#endif
-                     std::is_same_v<BLdsDataType, pk_int4_t>)
+        if constexpr(!supports_transpose_load<BLdsDataType>)
             return false;
         else if constexpr(kKWarpTile > kMaxKWarpTile)
             return false;

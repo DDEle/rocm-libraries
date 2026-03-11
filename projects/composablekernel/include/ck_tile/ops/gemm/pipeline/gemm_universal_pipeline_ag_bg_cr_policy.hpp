@@ -101,11 +101,12 @@ struct UniversalGemmBasePolicy
 
     template <typename Problem>
     static constexpr bool is_a_load_tr = []() {
-        using ALdsDataType              = ALdsDataType_<Problem>;
+        using ADataType                 = remove_cvref_t<typename Problem::ADataType>;
+        using BDataType                 = remove_cvref_t<typename Problem::BDataType>;
         using WarpTile                  = typename Problem::BlockGemmShape::WarpTile;
         constexpr index_t kKWarpTile    = WarpTile::at(number<2>{});
-        constexpr index_t kMaxKWarpTile = (sizeof(ALdsDataType) == 1) ? 64 : 32;
-        if constexpr(!supports_transpose_load<ALdsDataType>)
+        constexpr index_t kMaxKWarpTile = (sizeof(ADataType) == 1) ? 64 : 32;
+        if constexpr(!supports_transpose_load<ADataType> || std::is_same_v<BDataType, pk_int4_t>)
             return false;
         else if constexpr(kKWarpTile > kMaxKWarpTile)
             return false;
@@ -117,10 +118,11 @@ struct UniversalGemmBasePolicy
     template <typename Problem>
     static constexpr bool is_b_load_tr = []() {
         using BLdsDataType              = BLdsDataType_<Problem>;
+        using BDataType                 = remove_cvref_t<typename Problem::BDataType>;
         using WarpTile                  = typename Problem::BlockGemmShape::WarpTile;
         constexpr index_t kKWarpTile    = WarpTile::at(number<2>{});
         constexpr index_t kMaxKWarpTile = (sizeof(BLdsDataType) == 1) ? 64 : 32;
-        if constexpr(!supports_transpose_load<BLdsDataType>)
+        if constexpr(!supports_transpose_load<BLdsDataType> || std::is_same_v<BDataType, pk_int4_t>)
             return false;
         else if constexpr(kKWarpTile > kMaxKWarpTile)
             return false;

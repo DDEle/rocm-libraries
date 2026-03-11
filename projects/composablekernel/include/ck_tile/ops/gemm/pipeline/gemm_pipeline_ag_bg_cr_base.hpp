@@ -77,13 +77,15 @@ struct GemmPipelineAgBgCrImplBase
 
     static constexpr bool is_a_load_tr = []() {
         constexpr index_t kMaxKWarpTile = (sizeof(ADataType) == 1) ? 64 : 32;
-        return supports_transpose_load<ADataType> && (kKWarpTile <= kMaxKWarpTile) &&
+        return supports_transpose_load<ADataType> && !std::is_same_v<BDataType, pk_int4_t> &&
+               (kKWarpTile <= kMaxKWarpTile) &&
                std::is_same_v<ALayout, tensor_layout::gemm::ColumnMajor>;
     }();
 
     static constexpr bool is_b_load_tr = []() {
         constexpr index_t kMaxKWarpTile = (sizeof(BDataType) == 1) ? 64 : 32;
-        return supports_transpose_load<BDataType> && (kKWarpTile <= kMaxKWarpTile) &&
+        return supports_transpose_load<BDataType> && !std::is_same_v<BDataType, pk_int4_t> &&
+               (kKWarpTile <= kMaxKWarpTile) &&
                std::is_same_v<BLayout, tensor_layout::gemm::RowMajor>;
     }();
 #else

@@ -166,6 +166,13 @@ struct GemmConfigComputeV3_WMMA : public GemmConfigBase
 };
 
 template <typename PrecType>
+struct GemmConfigComputeV3_WMMA_ClusterLaunch : public GemmConfigComputeV3_WMMA<PrecType>
+{
+    static constexpr ck_tile::index_t kClusterSizeM = 2;
+    static constexpr ck_tile::index_t kClusterSizeN = 2;
+};
+
+template <typename PrecType>
 struct GemmConfigComputeV4 : public GemmConfigBase
 {
     // Compute V4 only support Intrawave scheduler

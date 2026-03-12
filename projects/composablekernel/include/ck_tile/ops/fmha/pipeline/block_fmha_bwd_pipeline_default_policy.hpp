@@ -1676,6 +1676,9 @@ struct BlockFmhaBwdPipelineDefaultPolicy
     CK_TILE_DEVICE static constexpr void PTFromGemm0CToGemm1A(PTOutTensor& pt_out,
                                                               const PInTensor& p_in)
     {
+#if defined(__gfx125__)
+        pt_out.get_thread_buffer() = p_in.get_thread_buffer();
+#else
         if constexpr(Problem::BlockFmhaShape::Gemm1WarpTile::at(number<0>{}) == 16)
         {
             using BlockGemm       = remove_cvref_t<decltype(GetPTOGradTBlockGemm<Problem>())>;
@@ -1720,12 +1723,16 @@ struct BlockFmhaBwdPipelineDefaultPolicy
         {
             pt_out.get_thread_buffer() = p_in.get_thread_buffer();
         }
+#endif // defined(__gfx125__)
     }
 
     template <typename Problem, typename SGradTOutTensor, typename SGradInTensor>
     CK_TILE_DEVICE static constexpr void SGradTFromGemm2CToGemm3A(SGradTOutTensor& dst_out,
                                                                   const SGradInTensor& ds_in)
     {
+#if defined(__gfx125__)
+        dst_out.get_thread_buffer() = ds_in.get_thread_buffer();
+#else
         if constexpr(Problem::BlockFmhaShape::Gemm3WarpTile::at(number<0>{}) == 16)
         {
             using BlockGemm       = remove_cvref_t<decltype(GetSGradTQTBlockGemm<Problem>())>;
@@ -1770,6 +1777,7 @@ struct BlockFmhaBwdPipelineDefaultPolicy
         {
             dst_out.get_thread_buffer() = ds_in.get_thread_buffer();
         }
+#endif // defined(__gfx125__)
     }
 
     template <typename Problem>

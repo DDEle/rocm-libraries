@@ -1289,12 +1289,10 @@ def get_factory(target: str):
         return KernelComponentFactoryGfx950
     if target.startswith("gfx9"):
         return KernelComponentFactoryGfx9
-
     if target.startswith("gfx11"):
         return KernelComponentFactoryGfx11
     if target.startswith("gfx125"):
         return KernelComponentFactoryGfx125
-
     if target.startswith("gfx12"):
         return KernelComponentFactoryGfx12
 

@@ -408,6 +408,10 @@ class KernelComponentFactoryGfx12(KernelComponentFactoryBase):
     arch = ArchTrait("gfx12")
 
 
+class KernelComponentFactoryGfx125(KernelComponentFactoryBase):
+    arch = ArchTrait("gfx125")
+
+
 def get_factory(target: str):
     # Place more specific architectures first
 
@@ -416,6 +420,9 @@ def get_factory(target: str):
 
     if target.startswith("gfx11"):
         return KernelComponentFactoryGfx11
+    if target.startswith("gfx125"):
+        return KernelComponentFactoryGfx125
+
     if target.startswith("gfx12"):
         return KernelComponentFactoryGfx12
 

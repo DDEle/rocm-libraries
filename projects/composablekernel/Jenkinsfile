@@ -13,7 +13,7 @@ def show_node_info() {
 }
 
 def cloneUpdateRefRepo() {
-    def refRepoPath = "/var/jenkins/ref-repo/rocm-libraries"
+    def refRepoPath = "/var/jenkins/ref-repo-internal/rocm-libraries"
     def lockLabel = "git ref repo lock - ${env.NODE_NAME}"
     def folderExists = sh(
         script: "test -d ${refRepoPath}/refs",
@@ -27,7 +27,7 @@ def cloneUpdateRefRepo() {
             def cloneCommand = """
                 set -ex
                 rm -rf ${refRepoPath} && mkdir -p ${refRepoPath}
-                git clone --mirror https://github.com/AMD-ROCm-Internal/rocm-libraries.git ${refRepoPath}
+                git clone --mirror git@github.com:AMD-ROCm-Internal/rocm-libraries.git ${refRepoPath}
             """
             sh(script: cloneCommand, label: "clone ref repo")
         }
@@ -50,7 +50,9 @@ def cloneUpdateRefRepo() {
 def checkoutComposableKernel()
 {
     //update ref repo
-    cloneUpdateRefRepo()
+    gitStatusWrapper(credentialsId: "${ck_githubemu_creds}", gitHubContext: "${env.STAGE_NAME}", account: 'AMD-ROCm-Internal', repo: 'rocm-libraries') {
+       cloneUpdateRefRepo()
+    }
     // checkout project
     checkout scm
 }
@@ -494,7 +496,7 @@ def get_docker_options(){
     // on some machines the group ids for video and render groups may not be the same as in the docker image!
     def video_id = sh(returnStdout: true, script: 'getent group video | cut -d: -f3')
     def render_id = sh(returnStdout: true, script: 'getent group render | cut -d: -f3')
-    dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} -v /var/jenkins/ref-repo/:/var/jenkins/ref-repo/ "
+    dockerOpts = dockerOpts + " --group-add=${video_id} --group-add=${render_id} -v /var/jenkins/ref-internal-repo/:/var/jenkins/ref-internal-repo/ "
     echo "Docker flags: ${dockerOpts}"
     return dockerOpts
 }
@@ -733,7 +735,9 @@ def cmake_build(Map conf=[:]){
                 // do not run unit tests when building instances only
                 if(!params.BUILD_INSTANCES_ONLY){
                     if (!runAllUnitTests){
-                        sh "../script/launch_tests.sh"
+                        gitStatusWrapper(credentialsId: "${ck_githubemu_creds}", gitHubContext: "${env.STAGE_NAME}", account: 'AMD-ROCm-Internal', repo: 'rocm-libraries') {
+                            sh "../script/launch_tests.sh"
+                        }
                     }
                     else{
                         sh "ninja check"
@@ -760,7 +764,9 @@ def cmake_build(Map conf=[:]){
                 // run unit tests unless building library for all targets
                 if (!params.BUILD_INSTANCES_ONLY){
                     if (!runAllUnitTests){
-                        sh "../script/launch_tests.sh"
+                        gitStatusWrapper(credentialsId: "${ck_githubemu_creds}", gitHubContext: "${env.STAGE_NAME}", account: 'AMD-ROCm-Internal', repo: 'rocm-libraries') {
+                            sh "../script/launch_tests.sh"
+                        }
                     }
                     else{
                         sh "ninja check"
@@ -1306,8 +1312,8 @@ pipeline {
             description: "Run CK_BUILDER tests (default: ON)")
         booleanParam(
             name: "RUN_ALL_UNIT_TESTS",
-            defaultValue: false,
-            description: "Run all unit tests (default: OFF)")
+            defaultValue: true,
+            description: "Run all unit tests (default: ON)")
         booleanParam(
             name: "RUN_PYTORCH_TESTS",
             defaultValue: false,

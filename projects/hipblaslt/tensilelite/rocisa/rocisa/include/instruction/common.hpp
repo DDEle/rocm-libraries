@@ -1420,6 +1420,8 @@ namespace rocisa
 
         std::string toString() const override
         {
+            std::string kStr;
+            setMsb(kStr, {}, nullptr);
             return formatWithComment(instStr + " " + std::to_string(waitState));
         }
 
@@ -1713,6 +1715,8 @@ namespace rocisa
 
         std::string toString() const override
         {
+            std::string kStr;
+            setMsb(kStr, {}, nullptr);
             int maxStorecnt = getAsmCaps()["MaxStorecnt"];
             return formatWithComment("s_wait_storecnt " + std::to_string(std::min(storecnt, maxStorecnt)));
         }
@@ -1747,6 +1751,8 @@ namespace rocisa
 
         std::string toString() const override
         {
+            std::string kStr;
+            setMsb(kStr, {}, nullptr);
             int maxLoadcnt = getAsmCaps()["MaxLoadcnt"];
             return formatWithComment("s_wait_loadcnt " + std::to_string(std::min(loadcnt, maxLoadcnt)));
         }
@@ -1781,6 +1787,8 @@ namespace rocisa
 
         std::string toString() const override
         {
+            std::string kStr;
+            setMsb(kStr, {}, nullptr);
             int maxKmcnt = getAsmCaps()["MaxKmcnt"];
             return formatWithComment("s_wait_kmcnt " + std::to_string(std::min(kmcnt, maxKmcnt)));
         }
@@ -1815,6 +1823,8 @@ namespace rocisa
 
         std::string toString() const override
         {
+            std::string kStr;
+            setMsb(kStr, {}, nullptr);
             int maxDscnt = getAsmCaps()["MaxDscnt"];
             return formatWithComment("s_wait_dscnt " + std::to_string(std::min(dscnt, maxDscnt)));
         }

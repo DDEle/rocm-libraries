@@ -61,7 +61,7 @@ struct Packed4Scale
     }
 
     CK_TILE_HOST_DEVICE constexpr operator raw_type() const { return data_; }
-    CK_TILE_HOST_DEVICE constexpr raw_type& data() { return data_; }
+    CK_TILE_HOST_DEVICE constexpr raw_type& data() [[clang::lifetimebound]] { return data_; }
     CK_TILE_HOST_DEVICE constexpr raw_type data() const { return data_; }
 
     /**

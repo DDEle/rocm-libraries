@@ -19,7 +19,7 @@ types:
   scale_B: Separate
   scaleType_B: E8M0
   scaleBlockSize: 32
-  scaleSkipPermlane: false
+  scaleSkipPermlane: None
   scaleShuffleTileA:
     []
   scaleShuffleTileB:
@@ -31,6 +31,7 @@ architecture:
   ArchString: gfx950
   Xnack: false
   Sramecc: true
+  AsicRevisionId: -1
 mac_m: 256
 mac_n: 256
 mac_k: 128
@@ -43,11 +44,9 @@ workgroup_size_y: 2
 workgroupMappingDim: 0
 workgroupRemapXCC: false
 workgroupRemapXCCValue: -1
-unroll_x: 0
-unroll_y: 0
 load_A: BufferToLDS
 load_B: BufferToLDS
-storeLDS_D: false
+store: VGPRToGlobalMemoryWithBuffer
 prefetch: true
 prefetchInFlight: 4
 prefetchLDSFactor: 1
@@ -55,7 +54,6 @@ prefetchMixMemOps: true
 betaInFma: true
 scheduler: Priority
 schedulerCost: LinearWeightedSimple
-matchMemoryAccess: true
 types:
   type_A: fp4
   type_B: fp4
@@ -69,7 +67,7 @@ types:
   scale_B: Separate
   scaleType_B: E8M0
   scaleBlockSize: 32
-  scaleSkipPermlane: false
+  scaleSkipPermlane: None
   scaleShuffleTileA:
     []
   scaleShuffleTileB:

@@ -273,10 +273,9 @@ struct UniversalWeightPreshufflePipelineAgBgCrPolicy
 #else
         constexpr index_t WaveSize = get_warp_size();
         constexpr index_t KLane    = WarpTile::at(I2) * WarpTile::at(I0) / WaveSize;
-        using BDataType            = typename Problem::BDataType;
-        constexpr index_t KLaneBytes =
-            KLane / numeric_traits<BDataType>::PackedSize * sizeof(BDataType);
-        constexpr auto NumAccess = static_cast<WGAttrNumAccessEnum>(max(1, KLaneBytes / 16));
+        // When BDataType is pk_int4_t, it is internally converted to fp8 for computation.
+        constexpr index_t KLaneBytes = KLane * sizeof(BTypeToUse);
+        constexpr auto NumAccess     = static_cast<WGAttrNumAccessEnum>(max(1, KLaneBytes / 16));
 #endif
         using WarpGemm = WarpGemmDispatcher<ATypeToUse,
                                             BTypeToUse,

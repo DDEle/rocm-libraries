@@ -526,8 +526,8 @@ struct StreamKKernel
             {
                 BaseGemm(kargs, tile_idx, num_loop_sk, i_k_a, i_k_b, k_size, smem_ptr_0);
             }
-            else if(TilePartitioner::ReductionStrategy == StreamKReductionStrategy::Reduction ||
-                    TilePartitioner::ReductionStrategy == StreamKReductionStrategy::TreeReduction)
+            else if(TilePartitioner::ReductionStrategy == StreamKReductionStrategy::Linear ||
+                    TilePartitioner::ReductionStrategy == StreamKReductionStrategy::Tree)
             {
                 const auto c_macro_tile_idx =
                     kargs.tile_partitioner.get_output_tile_index(tile_idx);
@@ -566,8 +566,7 @@ struct StreamKKernel
                 auto tile_started = iter_start == tile_iter_start;
                 auto tile_ended   = iter_end >= tile_iter_end;
 
-                if constexpr(TilePartitioner::ReductionStrategy ==
-                             StreamKReductionStrategy::Reduction)
+                if constexpr(TilePartitioner::ReductionStrategy == StreamKReductionStrategy::Linear)
                 {
                     if(!tile_started)
                     {

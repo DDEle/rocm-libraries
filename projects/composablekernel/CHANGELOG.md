@@ -16,6 +16,7 @@ Documentation for Composable Kernel available at [https://rocm.docs.amd.com/proj
 * Added FMHA batch prefill kernel support for several KV cache layouts, flexible page sizes, and different lookup table configurations.
 * Added persistent async input scheduler for CK Tile universal GEMM kernels to support asynchronous input streaming.
 * Added FP8 block scale quantization for FMHA forward kernel.
+* Added gfx11 support for FMHA.
 
 ### Changed
 

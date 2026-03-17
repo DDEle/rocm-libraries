@@ -413,15 +413,16 @@ struct buffer_view<address_space_enum::global,
 
     // i is offset of T, not X. i should be aligned to X
     template <typename X,
-              index_t static_offset      = 0,
               bool oob_conditional_check = true,
               typename std::enable_if<
                   std::is_same<typename vector_traits<remove_cvref_t<X>>::scalar_type,
                                typename vector_traits<remove_cvref_t<T>>::scalar_type>::value,
-                  bool>::type = false>
+                  bool>::type = false,
+              typename linear_offset_t>
     CK_TILE_DEVICE constexpr auto async_get(CK_TILE_LDS_ADDR remove_cvref_t<T>* smem,
                                             index_t i,
-                                            index_t linear_offset,
+                                            index_t wave_i,
+                                            linear_offset_t&& linear_offset,
                                             bool is_valid_element,
                                             bool_constant<oob_conditional_check> = {}) const
     {
@@ -434,19 +435,20 @@ struct buffer_view<address_space_enum::global,
 
         constexpr index_t t_per_x = scalar_per_x_vector / scalar_per_t_vector;
 #if defined(__gfx125__) // for gfx125; there uses another instruction to do async load
-        auto p_uniform_ptr = amd_wave_read_first_lane(p_data_);
+        auto p_uniform_ptr              = amd_wave_read_first_lane(p_data_);
+        constexpr index_t static_offset = linear_offset_t{}.value;
         amd_async_global_load_to_lds<remove_cvref_t<T>, t_per_x, static_offset, true, Coherence>(
-            smem, p_uniform_ptr, i + linear_offset, is_valid_element);
+            smem, p_uniform_ptr, i + wave_i, is_valid_element);
+        ignore = linear_offset;
 #else
-        static_assert(static_offset == 0);
-        const int32x4_t src_wave_buffer_resource =
-            make_wave_buffer_resource(p_data_, (buffer_size_) * sizeof(type));
+        const auto rsrc = make_builtin_buffer_resource(p_data_, buffer_size_ * sizeof(type));
 
         amd_async_buffer_load_with_oob<remove_cvref_t<T>, t_per_x, Coherence>(
             smem,
-            src_wave_buffer_resource,
+            rsrc,
             i,
-            linear_offset,
+            wave_i,
+            std::forward<linear_offset_t>(linear_offset),
             is_valid_element,
             bool_constant<oob_conditional_check>{});
 #endif

@@ -16,6 +16,7 @@ enum struct GemmPipeline
     BASIC_V1,
     BASIC_V2,
     PRESHUFFLE_V2,
+    BASIC_ASYNC_V1,
     COMPUTE_TDM_V1,
     COMPUTE_TDM_V2,
     COMPUTE_ASYNC_V2,

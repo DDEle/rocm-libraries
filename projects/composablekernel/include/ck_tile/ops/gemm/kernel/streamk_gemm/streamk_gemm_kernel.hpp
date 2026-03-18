@@ -324,8 +324,8 @@ struct StreamKKernel
                                                index_t cta_idx) const
     {
         auto* sk_flags_ptr = static_cast<index_t*>(kargs.workspace_ptr);
-        index_t offset     = cta_idx * sizeof(index_t);
-
+#if defined(__gfx9__)
+        index_t offset = cta_idx * sizeof(index_t);
         asm volatile("s_mov_b32 m0, %2\n\t"
                      // Depending on the architecture, the GLC flag will bypass the approproriate
                      // cache level(s) to ensure the write is visible to other workgroups. See the
@@ -335,6 +335,12 @@ struct StreamKKernel
                      :
                      : "s"(1), "s"(sk_flags_ptr), "s"(offset)
                      : "memory");
+#else
+        if(threadIdx.x == 0)
+        {
+            __atomic_store_n(&sk_flags_ptr[cta_idx], 1, __ATOMIC_RELAXED);
+        }
+#endif
     }
 
     /**
@@ -346,12 +352,13 @@ struct StreamKKernel
      */
     CK_TILE_DEVICE void WaitStorePartialDone(const StreamKKernelArgs& kargs, index_t cta_idx) const
     {
-        auto* sk_flags_ptr = static_cast<index_t*>(kargs.workspace_ptr);
         index_t result;
+        auto* sk_flags_ptr = static_cast<index_t*>(kargs.workspace_ptr);
+#if defined(__gfx9__)
         index_t offset = cta_idx * sizeof(index_t);
-
         do
         {
+
             asm volatile("s_mov_b32 m0, %2\n\t"
                          // Depending on the architecture, the GLC flag will bypass the
                          // approproriate cache level(s) to avoid reading stale flags. See the
@@ -361,7 +368,18 @@ struct StreamKKernel
                          : "=s"(result)
                          : "s"(sk_flags_ptr), "s"(offset)
                          : "memory");
+
         } while(result != 1);
+#else
+        if(threadIdx.x == 0)
+        {
+            do
+            {
+                result = __atomic_load_n(&sk_flags_ptr[cta_idx], __ATOMIC_ACQUIRE);
+            } while(result != 1);
+        }
+        __builtin_amdgcn_s_barrier();
+#endif
     }
 
     /**
@@ -870,4 +888,5 @@ struct StreamKKernel
         return max(occupancy, 1);
     }
 };
+
 } // namespace ck_tile

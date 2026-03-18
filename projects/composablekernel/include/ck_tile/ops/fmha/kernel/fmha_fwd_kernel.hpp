@@ -89,7 +89,6 @@ struct FmhaFwdKernel
         const void* k_ptr;
         const void* v_ptr;
         void* o_ptr;
-        const void* sink_ptr;
 
         ck_tile::index_t seqlen_q;
         ck_tile::index_t seqlen_k;
@@ -411,14 +410,12 @@ struct FmhaFwdKernel
                   ck_tile::index_t block_scale_size_q,
                   ck_tile::index_t block_scale_size_kv,
                   const void* cu_seqlen_q_ptr = nullptr,
-                  const void* cu_seqlen_k_ptr = nullptr,
-                  const void* sink_ptr        = nullptr)
+                  const void* cu_seqlen_k_ptr = nullptr)
     {
         Kargs kargs{{q_ptr,
                      k_ptr,
                      v_ptr,
                      o_ptr,
-                     sink_ptr,
                      seqlen_q,
                      seqlen_k,
                      hdim_q,
@@ -606,8 +603,7 @@ struct FmhaFwdKernel
               ck_tile::index_t block_scale_size_q,
               ck_tile::index_t block_scale_size_kv,
               const void* cu_seqlen_q_ptr = nullptr,
-              const void* cu_seqlen_k_ptr = nullptr,
-              const void* sink_ptr        = nullptr)
+              const void* cu_seqlen_k_ptr = nullptr)
     {
         return MakeKargsImpl(
             q_ptr,
@@ -667,8 +663,7 @@ struct FmhaFwdKernel
             block_scale_size_q,
             block_scale_size_kv,
             cu_seqlen_q_ptr,
-            cu_seqlen_k_ptr,
-            sink_ptr);
+            cu_seqlen_k_ptr);
     }
 
     // std::variant<> can't take in a list initializer, overload for backward compatibility
@@ -731,8 +726,7 @@ struct FmhaFwdKernel
               ck_tile::index_t block_scale_size_q,
               ck_tile::index_t block_scale_size_kv,
               const void* cu_seqlen_q_ptr = nullptr,
-              const void* cu_seqlen_k_ptr = nullptr,
-              const void* sink_ptr        = nullptr)
+              const void* cu_seqlen_k_ptr = nullptr)
     {
         return MakeKargsImpl(
             q_ptr,
@@ -792,8 +786,7 @@ struct FmhaFwdKernel
             block_scale_size_q,
             block_scale_size_kv,
             cu_seqlen_q_ptr,
-            cu_seqlen_k_ptr,
-            sink_ptr);
+            cu_seqlen_k_ptr);
     }
 
     template <bool Cond = kIsGroupMode>
@@ -852,14 +845,12 @@ struct FmhaFwdKernel
                   ck_tile::index_t block_scale_size_q,
                   ck_tile::index_t block_scale_size_kv,
                   const void* cu_seqlen_q_ptr = nullptr,
-                  const void* cu_seqlen_k_ptr = nullptr,
-                  const void* sink_ptr        = nullptr)
+                  const void* cu_seqlen_k_ptr = nullptr)
     {
         Kargs kargs{{q_ptr,
                      k_ptr,
                      v_ptr,
                      o_ptr,
-                     sink_ptr,
                      -1, // seqlen will be updated by another pointer
                      -1, //
                      hdim_q,
@@ -1043,8 +1034,7 @@ struct FmhaFwdKernel
               ck_tile::index_t block_scale_size_q,
               ck_tile::index_t block_scale_size_kv,
               const void* cu_seqlen_q_ptr = nullptr,
-              const void* cu_seqlen_k_ptr = nullptr,
-              const void* sink_ptr        = nullptr)
+              const void* cu_seqlen_k_ptr = nullptr)
     {
         return MakeKargsImpl(
             q_ptr,
@@ -1099,8 +1089,7 @@ struct FmhaFwdKernel
             block_scale_size_q,
             block_scale_size_kv,
             cu_seqlen_q_ptr,
-            cu_seqlen_k_ptr,
-            sink_ptr);
+            cu_seqlen_k_ptr);
     }
 
     // std::variant<> can't take in a list initializer, overload for backward compatibility
@@ -1158,8 +1147,7 @@ struct FmhaFwdKernel
               ck_tile::index_t block_scale_size_q,
               ck_tile::index_t block_scale_size_kv,
               const void* cu_seqlen_q_ptr = nullptr,
-              const void* cu_seqlen_k_ptr = nullptr,
-              const void* sink_ptr        = nullptr)
+              const void* cu_seqlen_k_ptr = nullptr)
     {
         return MakeKargsImpl(
             q_ptr,
@@ -1214,8 +1202,7 @@ struct FmhaFwdKernel
             block_scale_size_q,
             block_scale_size_kv,
             cu_seqlen_q_ptr,
-            cu_seqlen_k_ptr,
-            sink_ptr);
+            cu_seqlen_k_ptr);
     }
 
     CK_TILE_HOST static constexpr auto GridSize(ck_tile::index_t batch_size_,
@@ -1337,8 +1324,10 @@ struct FmhaFwdKernel
         {
             // allocate LDS
             __shared__ char smem_ptr[GetSmemSize()];
+
             // divide problem
             const auto [i_tile_m, i_tile_n, i_nhead, i_batch] = GetTileIndex(kargs);
+
             const index_t i_m0 = amd_wave_read_first_lane(i_tile_m * FmhaPipeline::kM0);
             const index_t i_n1 = amd_wave_read_first_lane(i_tile_n * FmhaPipeline::kN1);
 
@@ -1352,10 +1341,6 @@ struct FmhaFwdKernel
             long_index_t batch_offset_q_descale = 0;
             long_index_t batch_offset_k_descale = 0;
             long_index_t batch_offset_v_descale = 0;
-            const float sink_value =
-                kargs.sink_ptr != nullptr
-                    ? (*(static_cast<const float*>(kargs.sink_ptr) + i_nhead)) / kargs.scale_s
-                    : -numeric<float>::infinity();
 
             if constexpr(kIsGroupMode)
             {
@@ -2053,8 +2038,7 @@ struct FmhaFwdKernel
                                           variant_params,
                                           block_indices,
                                           smem_ptr,
-                                          dropout,
-                                          sink_value);
+                                          dropout);
                 }
             }();
 
@@ -2094,10 +2078,6 @@ struct FmhaFwdKernel
             constexpr bool PrefillCase = FmhaPipeline::kM0 > 64;
             // divide problem
             const auto [i_tile_m, i_tile_n, i_nhead, i_batch] = GetTileIndex(kargs);
-            const float sink_value =
-                kargs.sink_ptr != nullptr
-                    ? (*(static_cast<const float*>(kargs.sink_ptr) + i_nhead)) / kargs.scale_s
-                    : -numeric<float>::infinity();
 
             const index_t i_m0 = i_tile_m * FmhaPipeline::kM0;
             const index_t i_n1 = i_tile_n * FmhaPipeline::kN1;
@@ -2756,7 +2736,6 @@ struct FmhaFwdKernel
                                           mask,
                                           position_encoding,
                                           kargs.scale_s,
-                                          sink_value,
                                           smem_ptrk0,
                                           smem_ptrk1,
                                           smem_ptrv0,
@@ -2773,8 +2752,7 @@ struct FmhaFwdKernel
                                           mask,
                                           position_encoding,
                                           kargs.scale_s,
-                                          smem_ptr,
-                                          sink_value);
+                                          smem_ptr);
                 }
             }();
 

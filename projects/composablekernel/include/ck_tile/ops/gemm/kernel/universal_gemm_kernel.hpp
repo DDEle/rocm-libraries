@@ -224,7 +224,21 @@ struct UniversalGemmKernel
     };
     static constexpr bool PersistentKernel = has_persistent_kernel::value;
 
-    // Detect custom output offset support for advanced partitioning schemes
+    struct has_cluster_launch
+    {
+        template <typename T>
+        using has_cluster_launch_type = decltype(T::UseClusterLaunch);
+
+        static constexpr bool value = []() {
+            if constexpr(is_detected<has_cluster_launch_type, GemmPipeline>{})
+                return GemmPipeline::UseClusterLaunch;
+            else
+                return false;
+        }();
+    };
+    static constexpr bool ClusterLaunch = has_cluster_launch::value;
+
+    // Check if TilePartitioner has GetOutputOffset method with kargs and k_id
     struct has_tile_partitioner_output_offset_impl
     {
         template <typename T, typename KernelArgs>
@@ -253,6 +267,9 @@ struct UniversalGemmKernel
     using ADataType = remove_cvref_t<std::tuple_element_t<I0, AsDataType>>;
     using BDataType = remove_cvref_t<std::tuple_element_t<I0, BsDataType>>;
 
+    static constexpr index_t APackedSize = numeric_traits<ADataType>::PackedSize;
+    static constexpr index_t BPackedSize = numeric_traits<BDataType>::PackedSize;
+
     static_assert(AsLayout::size() == AsDataType::size(),
                   "The size of AsLayout and AsDataType should be the same");
 
@@ -276,7 +293,26 @@ struct UniversalGemmKernel
 
     CK_TILE_HOST static constexpr auto GridSize(index_t M, index_t N, index_t KBatch)
     {
-        return dim3(TilePartitioner::GridSize(M, N), 1, KBatch);
+
+        auto grid = TilePartitioner::GridSize(M, N);
+        if constexpr(std::is_same_v<decltype(grid), dim3>)
+        {
+            // GridSize returns dim3: preserve x, y dimensions and add z for batch; used in cluster
+            // launch
+            return dim3(grid.x, grid.y, KBatch);
+        }
+        else
+        {
+            // GridSize returns index_t: use as 1D grid
+            return dim3(grid, 1, KBatch);
+        }
+    }
+
+    CK_TILE_HOST static constexpr auto ClusterSize()
+    {
+        return dim3(TilePartitioner::BlockGemmShape::kclusterM,
+                    TilePartitioner::BlockGemmShape::kclusterN,
+                    TilePartitioner::BlockGemmShape::kclusterK);
     }
 
     /**
@@ -293,7 +329,7 @@ struct UniversalGemmKernel
         ck_tile::hip_check_error(
             hipOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, kernel, BlockSize().x, 0));
 
-        const int grid_size = get_available_compute_units(s) * occupancy;
+        const int grid_size = get_available_compute_units(s) * max(occupancy, 1);
         return dim3(grid_size, 1, 1);
     }
 
@@ -403,8 +439,26 @@ struct UniversalGemmKernel
         index_t splitted_k;
     };
 
+    // for skipping validation of launch parameters especially for TDM where padding is unused
+    struct has_skip_check_valid_launch_params
+    {
+        template <typename T>
+        using has_skip_check_type = decltype(T::skipCheckValidLaunchParams);
+
+        static constexpr bool value = []() {
+            if constexpr(is_detected<has_skip_check_type, GemmPipeline>{})
+                return GemmPipeline::skipCheckValidLaunchParams;
+            else
+                return false;
+        }();
+    };
+
     CK_TILE_HOST static bool IsSupportedArgument(const KernelArgs& kargs)
     {
+        if constexpr(has_skip_check_valid_launch_params::value)
+        {
+            return true;
+        }
         if constexpr(EpiloguePipeline::GetVectorSizeC() % 2 != 0 &&
                      is_any_of<EDataType, fp16_t, bf16_t>::value)
         {
@@ -447,9 +501,7 @@ struct UniversalGemmKernel
                 }
                 if(kargs.K % vectorSizeA != 0)
                 {
-                    const auto remainder = kargs.K % vectorSizeA;
-                    constexpr ck_tile::index_t APackedSize =
-                        ck_tile::numeric_traits<ADataType>::PackedSize;
+                    const auto remainder          = kargs.K % vectorSizeA;
                     const auto remainder_in_bytes = remainder * sizeof(ADataType) / APackedSize;
                     // oob can support to dword level
                     if(remainder_in_bytes % 4 == 0)
@@ -479,14 +531,11 @@ struct UniversalGemmKernel
                 }
                 if(kargs.M % vectorSizeA != 0)
                 {
-                    const auto remainder = kargs.M % vectorSizeA;
-                    constexpr ck_tile::index_t APackedSize =
-                        ck_tile::numeric_traits<ADataType>::PackedSize;
+                    const auto remainder          = kargs.M % vectorSizeA;
                     const auto remainder_in_bytes = remainder * sizeof(ADataType) / APackedSize;
                     // oob can support to dword level
                     if(remainder_in_bytes % 4 == 0)
                     {
-
                         AsTensorIsValid = true;
                     }
                     else
@@ -519,9 +568,7 @@ struct UniversalGemmKernel
                 }
                 if(kargs.N % vectorSizeB != 0)
                 {
-                    const auto remainder = kargs.N % vectorSizeB;
-                    constexpr ck_tile::index_t BPackedSize =
-                        ck_tile::numeric_traits<BDataType>::PackedSize;
+                    const auto remainder          = kargs.N % vectorSizeB;
                     const auto remainder_in_bytes = remainder * sizeof(BDataType) / BPackedSize;
                     // oob can support to dword level
                     if(remainder_in_bytes % 4 == 0)
@@ -537,39 +584,36 @@ struct UniversalGemmKernel
                         BsTensorIsValid = false;
                     }
                 }
-                else
+            }
+            else
+            {
+                if(kargs.K % (TilePartitioner::KPerBlock * kargs.k_batch) != 0 &&
+                   GemmPipeline::kPadK == false)
                 {
-                    if(kargs.K % (TilePartitioner::KPerBlock * kargs.k_batch) != 0 &&
-                       GemmPipeline::kPadK == false)
+                    if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
+                    {
+                        CK_TILE_ERROR(
+                            "Can't support K that is not a multiple of k_batch * KPerBlock "
+                            "without padding!");
+                    }
+                    BsTensorIsValid = false;
+                }
+                if(kargs.K % vectorSizeB != 0)
+                {
+                    const auto remainder          = kargs.K % vectorSizeB;
+                    const auto remainder_in_bytes = remainder * sizeof(BDataType) / BPackedSize;
+                    // oob can support to dword level
+                    if(remainder_in_bytes % 4 == 0)
+                    {
+                        BsTensorIsValid = true;
+                    }
+                    else
                     {
                         if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
                         {
-                            CK_TILE_ERROR(
-                                "Can't support K that is not a multiple of k_batch * KPerBlock "
-                                "without padding!");
+                            CK_TILE_ERROR("K is not a multiple of vector load size for B tensor!");
                         }
                         BsTensorIsValid = false;
-                    }
-                    if(kargs.K % vectorSizeB != 0)
-                    {
-                        const auto remainder = kargs.K % vectorSizeB;
-                        constexpr ck_tile::index_t BPackedSize =
-                            ck_tile::numeric_traits<BDataType>::PackedSize;
-                        const auto remainder_in_bytes = remainder * sizeof(BDataType) / BPackedSize;
-                        // oob can support to dword level
-                        if(remainder_in_bytes % 4 == 0)
-                        {
-                            BsTensorIsValid = true;
-                        }
-                        else
-                        {
-                            if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
-                            {
-                                CK_TILE_ERROR(
-                                    "K is not a multiple of vector load size for B tensor!");
-                            }
-                            BsTensorIsValid = false;
-                        }
                     }
                 }
             }
@@ -1132,6 +1176,16 @@ struct UniversalGemmKernel
                                        const index_t block_idx_m,
                                        const index_t block_idx_n)
     {
+
+        // cluster launch GridDim is aligned to clusterDim, need to skip out-of-bound blocks
+        if constexpr(ClusterLaunch && (TilePartitioner::BlockGemmShape::kclusterM *
+                                           TilePartitioner::BlockGemmShape::kclusterN *
+                                           TilePartitioner::BlockGemmShape::kclusterK >
+                                       1))
+        {
+            if(block_idx_m >= kargs.M || block_idx_n >= kargs.N)
+                return;
+        }
         // Create block windows using specialized methods
         const auto& as_block_window =
             MakeABlockWindows(as_ptr, kargs, splitk_batch_offset.splitted_k, block_idx_m);
@@ -1171,11 +1225,25 @@ struct UniversalGemmKernel
     {
         index_t iM, iN;
 
-        // Regular launch: use 1D block indexing
-        const auto blockId          = amd_wave_read_first_lane(blockIdx.x);
-        const auto [tile_m, tile_n] = TilePartitioner{kargs.M, kargs.N}.GetOutputTileIndex(blockId);
-        iM                          = tile_m;
-        iN                          = tile_n;
+        if constexpr(ClusterLaunch)
+        {
+            // Cluster launch: use 2D block indexing
+            const auto blockIdX = amd_wave_read_first_lane(blockIdx.x);
+            const auto blockIdY = amd_wave_read_first_lane(blockIdx.y);
+            const auto [tile_m, tile_n] =
+                TilePartitioner{kargs.M, kargs.N}.GetOutputTileIndex(blockIdX, blockIdY);
+            iM = tile_m;
+            iN = tile_n;
+        }
+        else
+        {
+            // Regular launch: use 1D block indexing
+            const auto blockId = amd_wave_read_first_lane(blockIdx.x);
+            const auto [tile_m, tile_n] =
+                TilePartitioner{kargs.M, kargs.N}.GetOutputTileIndex(blockId);
+            iM = tile_m;
+            iN = tile_n;
+        }
 
         const index_t i_m = amd_wave_read_first_lane(iM * TilePartitioner::MPerBlock);
         const index_t i_n = amd_wave_read_first_lane(iN * TilePartitioner::NPerBlock);
@@ -1183,17 +1251,36 @@ struct UniversalGemmKernel
         return make_tuple(i_m, i_n);
     }
 
-    // Helper functions
+    // Helper functions for persistent kernel with cluster support
     CK_TILE_DEVICE static auto GetBlockId() -> index_t
     {
-        // For 1D regular launch
-        return amd_wave_read_first_lane(get_block_id());
+        if constexpr(ClusterLaunch)
+        {
+            // For 2D cluster launch: convert 2D block index to 1D
+            const auto blockIdX = amd_wave_read_first_lane(blockIdx.x);
+            const auto blockIdY = amd_wave_read_first_lane(blockIdx.y);
+            const auto gridDimX = amd_wave_read_first_lane(gridDim.x);
+            return blockIdY * gridDimX + blockIdX;
+        }
+        else
+        {
+            // For 1D regular launch
+            return amd_wave_read_first_lane(get_block_id());
+        }
     }
 
     CK_TILE_DEVICE static auto GetGridSize() -> index_t
     {
-        // For 1D regular launch
-        return amd_wave_read_first_lane(get_grid_size());
+        if constexpr(ClusterLaunch)
+        {
+            // For 2D cluster launch: total blocks = gridDim.x * gridDim.y
+            return amd_wave_read_first_lane(gridDim.x * gridDim.y);
+        }
+        else
+        {
+            // For 1D regular launch
+            return amd_wave_read_first_lane(get_grid_size());
+        }
     }
 
     // Helper to get total number of tiles, handling both dim3 and index_t return types
@@ -1220,10 +1307,7 @@ struct UniversalGemmKernel
     template <bool U = !PersistentKernel, typename = std::enable_if_t<U>>
     CK_TILE_DEVICE void operator()(KernelArgs kargs) const
     {
-        const auto blockId  = amd_wave_read_first_lane(blockIdx.x);
-        const auto [iM, iN] = TilePartitioner{kargs.M, kargs.N}.GetOutputTileIndex(blockId);
-        const index_t i_m   = amd_wave_read_first_lane(iM * TilePartitioner::MPerBlock);
-        const index_t i_n   = amd_wave_read_first_lane(iN * TilePartitioner::NPerBlock);
+        const auto [i_m, i_n] = GetTileCoordinates(kargs);
 
         const SplitKBatchOffset splitk_batch_offset(kargs);
 
@@ -1231,13 +1315,13 @@ struct UniversalGemmKernel
         std::array<const ADataType*, NumATensor> as_ptr;
         static_for<0, NumATensor, 1>{}([&](auto i) {
             as_ptr[i] = static_cast<const ADataType*>(kargs.as_ptr[i]) +
-                        splitk_batch_offset.as_k_split_offset[i];
+                        splitk_batch_offset.as_k_split_offset[i] / APackedSize;
         });
 
         std::array<const BDataType*, NumBTensor> bs_ptr;
         static_for<0, NumBTensor, 1>{}([&](auto i) {
             bs_ptr[i] = static_cast<const BDataType*>(kargs.bs_ptr[i]) +
-                        splitk_batch_offset.bs_k_split_offset[i];
+                        splitk_batch_offset.bs_k_split_offset[i] / BPackedSize;
         });
 
         // Calculate output offset from tile partitioner and apply to output pointer
@@ -1259,11 +1343,10 @@ struct UniversalGemmKernel
     template <bool U = PersistentKernel, typename = std::enable_if_t<U>, typename = void>
     CK_TILE_DEVICE void operator()(KernelArgs kargs) const
     {
-        const auto grid_size = amd_wave_read_first_lane(get_grid_size());
-        const auto num_tiles =
-            amd_wave_read_first_lane(TilePartitioner::GridSize(kargs.M, kargs.N));
-        const auto num_work = amd_wave_read_first_lane(num_tiles * kargs.k_batch);
-        auto block_id       = amd_wave_read_first_lane(get_block_id());
+        const auto grid_size = GetGridSize();
+        const auto num_tiles = GetNumTiles(kargs.M, kargs.N);
+        const auto num_work  = amd_wave_read_first_lane(num_tiles * kargs.k_batch);
+        auto block_id        = GetBlockId();
 
         while(block_id < num_work)
         {
@@ -1299,13 +1382,13 @@ struct UniversalGemmKernel
             std::array<const ADataType*, NumATensor> as_ptr;
             static_for<0, NumATensor, 1>{}([&](auto i) {
                 as_ptr[i] = static_cast<const ADataType*>(kargs.as_ptr[i]) +
-                            splitk_batch_offset.as_k_split_offset[i];
+                            splitk_batch_offset.as_k_split_offset[i] / APackedSize;
             });
 
             std::array<const BDataType*, NumBTensor> bs_ptr;
             static_for<0, NumBTensor, 1>{}([&](auto i) {
                 bs_ptr[i] = static_cast<const BDataType*>(kargs.bs_ptr[i]) +
-                            splitk_batch_offset.bs_k_split_offset[i];
+                            splitk_batch_offset.bs_k_split_offset[i] / BPackedSize;
             });
 
             // Calculate output offset from tile partitioner and apply to output pointer
@@ -1319,7 +1402,6 @@ struct UniversalGemmKernel
             // allocate LDS
             __shared__ char smem_ptr[GetSmemSize()];
             // Run the GEMM
-
             RunGemm(as_ptr,
                     bs_ptr,
                     kargs.ds_ptr,

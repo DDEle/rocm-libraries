@@ -151,6 +151,45 @@ struct DynamicBuffer
         }
     }
 
+    struct GlobalPrefetchDataOp
+    {
+        // addr needs to point to global memory!
+        __device__ __forceinline__ void operator()([[maybe_unused]] const void* addr) const
+        {
+#if defined(__gfx125__)
+            // NOTE: There's a bug in AM/GOPHER for gfx1250 when prefetching into L1, so we disable
+            // it for now!
+            __builtin_amdgcn_global_prefetch(
+                addr,
+                static_cast<index_t>(
+                    AmdBufferCoherenceEnum::
+                        SE_RT)); // static_cast<index_t>(AmdBufferCoherenceEnum::CU_RT));
+#endif
+        }
+    };
+
+    template <typename X,
+              typename enable_if<is_same<typename scalar_type<remove_cvref_t<X>>::type,
+                                         typename scalar_type<remove_cvref_t<T>>::type>::value ||
+                                     !is_native_type<X>(),
+                                 bool>::type = false>
+    __host__ __device__ constexpr void Prefetch(IndexType i, bool is_valid_element) const
+    {
+        // X contains multiple T
+        constexpr index_t scalar_per_t_vector = scalar_type<remove_cvref_t<T>>::vector_size;
+
+        constexpr index_t scalar_per_x_vector = scalar_type<remove_cvref_t<X>>::vector_size;
+
+        static_assert(scalar_per_x_vector % scalar_per_t_vector == 0,
+                      "wrong! X should contain multiple T");
+
+        if(is_valid_element) // if not valid element then do not prefetch
+        {
+            // call prefetch here
+            GlobalPrefetchDataOp{}(c_style_pointer_cast<const void*>(&(p_data_[i])));
+        }
+    }
+
     template <InMemoryDataOperationEnum Op,
               typename X,
               typename enable_if<is_same<typename scalar_type<remove_cvref_t<X>>::type,
@@ -223,6 +262,29 @@ struct DynamicBuffer
                                                             dst_offset,
                                                             is_valid_element,
                                                             element_space_size_ / PackedSize);
+    }
+
+    template <typename DstBuffer, index_t NumElemsPerThread, index_t static_dst_offset>
+    __host__ __device__ void AsyncCopyToLds(DstBuffer& dst_buf,
+                                            IndexType src_offset,
+                                            IndexType dst_offset,
+                                            bool is_valid_element) const
+    {
+        // Copy data from global to LDS memory using direct loads.
+        static_assert(GetAddressSpace() == AddressSpaceEnum::Global,
+                      "Source data must come from a global memory buffer.");
+        static_assert(DstBuffer::GetAddressSpace() == AddressSpaceEnum::Lds,
+                      "Destination data must be stored in an LDS memory buffer.");
+        static_assert(is_same_v<remove_cvref_t<typename DstBuffer::type>, remove_cvref_t<T>>,
+                      "Source and destination buffer must have the same data type.");
+
+        auto p_uniform_ptr = amd_wave_read_first_lane(p_data_);
+        amd_async_load_global_to_lds<remove_cvref_t<typename DstBuffer::type>,
+                                     NumElemsPerThread,
+                                     static_dst_offset,
+                                     true,
+                                     coherence>(
+            p_uniform_ptr, src_offset, dst_buf.p_data_, dst_offset, is_valid_element);
     }
 
     template <typename X,

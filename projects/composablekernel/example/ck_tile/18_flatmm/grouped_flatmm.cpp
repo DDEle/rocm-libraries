@@ -157,8 +157,8 @@ float grouped_flatmm(const KernelArguments& args, const ck_tile::stream_config& 
 
         auto kargs = Kernel::MakeKernelArgs(args);
 
-        const dim3 grids      = Kernel::GridSize(kargs);
-        constexpr dim3 blocks = Kernel::BlockSize();
+        const dim3 grids  = Kernel::GridSize(kargs);
+        const dim3 blocks = Kernel::BlockSize();
 
         if(!Kernel::IsSupportedArgument(kargs))
         {
@@ -319,6 +319,9 @@ int main(int argc, char* argv[])
 
     try
     {
+#if CK_TILE_USE_WMMA
+        return !run_grouped_flatmm_example<FlatmmConfig16_Wmma>(argc, argv);
+#else
         int warp_tile = arg_parser.get_int("warp_tile");
         if(warp_tile == 0)
         {
@@ -336,6 +339,7 @@ int main(int argc, char* argv[])
         // {
         //     return !run_grouped_flatmm_example<FlatmmConfig32_950>(argc, argv);
         // }
+#endif
     }
     catch(const std::runtime_error& e)
     {

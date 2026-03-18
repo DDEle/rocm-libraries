@@ -24,7 +24,7 @@ namespace rocRoller
     {
         auto context = m_context.lock();
 
-        std::shared_ptr<ExecutableKernel> result = std::make_shared<ExecutableKernel>();
+        std::shared_ptr<ExecutableKernel> result = std::make_shared<ExecutableKernel>(context);
         result->loadKernel(
             toString(), context->targetArchitecture().target(), context->kernel()->kernelName());
 

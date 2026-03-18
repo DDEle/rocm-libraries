@@ -123,7 +123,6 @@ struct FmhaFwdPagedKVKernel
         const void* k_ptr;
         const void* v_ptr;
         void* o_ptr;
-        const void* sink_ptr;
 
         ck_tile::index_t seqlen_q;
         ck_tile::index_t seqlen_k;
@@ -329,14 +328,12 @@ struct FmhaFwdPagedKVKernel
                   ck_tile::index_t window_size_left,
                   ck_tile::index_t window_size_right,
                   ck_tile::index_t sink_size,
-                  ck_tile::index_t mask_type,
-                  const void* sink_ptr = nullptr)
+                  ck_tile::index_t mask_type)
     {
         Kargs kargs{{q_ptr,
                      k_ptr,
                      v_ptr,
                      o_ptr,
-                     sink_ptr,
                      seqlen_q,
                      seqlen_k,
                      hdim_q,
@@ -460,8 +457,7 @@ struct FmhaFwdPagedKVKernel
               ck_tile::index_t window_size_left,
               ck_tile::index_t window_size_right,
               ck_tile::index_t sink_size,
-              ck_tile::index_t mask_type,
-              const void* sink_ptr = nullptr)
+              ck_tile::index_t mask_type)
     {
         return MakeKargsImpl(q_ptr,
                              k_ptr,
@@ -504,8 +500,7 @@ struct FmhaFwdPagedKVKernel
                              window_size_left,
                              window_size_right,
                              sink_size,
-                             mask_type,
-                             sink_ptr);
+                             mask_type);
     }
 
     template <bool Cond = kIsGroupMode>
@@ -548,14 +543,12 @@ struct FmhaFwdPagedKVKernel
                   ck_tile::index_t window_size_right,
                   ck_tile::index_t sink_size,
                   ck_tile::index_t mask_type,
-                  ck_tile::index_t min_seqlen_q,
-                  const void* sink_ptr = nullptr)
+                  ck_tile::index_t min_seqlen_q)
     {
         Kargs kargs{{q_ptr,
                      k_ptr,
                      v_ptr,
                      o_ptr,
-                     sink_ptr,
                      -1, // seqlen will be updated by another pointer
                      -1, //
                      hdim_q,
@@ -676,8 +669,7 @@ struct FmhaFwdPagedKVKernel
               ck_tile::index_t window_size_right,
               ck_tile::index_t sink_size,
               ck_tile::index_t mask_type,
-              ck_tile::index_t min_seqlen_q,
-              const void* sink_ptr = nullptr)
+              ck_tile::index_t min_seqlen_q)
     {
         return MakeKargsImpl(q_ptr,
                              k_ptr,
@@ -717,8 +709,7 @@ struct FmhaFwdPagedKVKernel
                              window_size_right,
                              sink_size,
                              mask_type,
-                             min_seqlen_q,
-                             sink_ptr);
+                             min_seqlen_q);
     }
 
     CK_TILE_HOST static void PrintParameters(const Kargs& kargs, int num_batches)
@@ -907,6 +898,7 @@ struct FmhaFwdPagedKVKernel
 
         // divide problem
         const auto [i_tile_m, i_tile_n, i_nhead, i_batch] = GetTileIndex(kargs);
+
         const index_t i_m0 = amd_wave_read_first_lane(i_tile_m * FmhaPipeline::kM0);
         const index_t i_n1 = amd_wave_read_first_lane(i_tile_n * FmhaPipeline::kN1);
 
@@ -917,10 +909,6 @@ struct FmhaFwdPagedKVKernel
         long_index_t batch_offset_lse  = 0;
         long_index_t batch_offset_o    = 0;
         index_t kv_l2p_offset          = 0;
-        const float sink_value =
-            kargs.sink_ptr != nullptr
-                ? (*(static_cast<const float*>(kargs.sink_ptr) + i_nhead)) / kargs.scale_s
-                : -numeric<float>::infinity();
 
         if constexpr(kIsGroupMode)
         {
@@ -1362,8 +1350,7 @@ struct FmhaFwdPagedKVKernel
                                       variant_params,
                                       block_indices,
                                       kv_l2p_offset,
-                                      smem_ptr,
-                                      sink_value);
+                                      smem_ptr);
             }
             else
             {
@@ -1381,8 +1368,7 @@ struct FmhaFwdPagedKVKernel
                                       variant_params,
                                       block_indices,
                                       kv_l2p_offset,
-                                      smem_ptr,
-                                      sink_value);
+                                      smem_ptr);
             }
         }();
 

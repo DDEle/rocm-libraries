@@ -24,3 +24,11 @@ else()
     message(DEBUG "Skipping ck_tile_gemm tests for current target")
 endif()
 
+# TestCkTileGemmPipelineWeightPreshuffleTDM: gfx125 only
+if(GPU_TARGETS MATCHES "gfx125")
+    add_wp_test(
+        TestCkTileGemmPipelineWeightPreshuffleTDM
+        KernelTypesWeightPreshuffleTDM
+        wp_tdm
+    )
+endif()

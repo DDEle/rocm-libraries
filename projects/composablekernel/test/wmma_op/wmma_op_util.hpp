@@ -379,7 +379,6 @@ __global__ void matmul(const srcA_t* a, const srcB_t* b, dst_t* c)
 
     constexpr int QUADRANT_SIZE = ROW_SIZE / 4;
 
-    constexpr int BLOCK_SIZE = 4 * QUADRANT_SIZE;
     __shared__ srcA_cast_type p_shared[LDS_DIM];
 
     // strongly-type compile time index value of 0 for template containers
@@ -429,6 +428,7 @@ __global__ void matmul(const srcA_t* a, const srcB_t* b, dst_t* c)
         });
 
         // Load A into LDS with quadrants
+        constexpr int BLOCK_SIZE = 4 * QUADRANT_SIZE;
         static_for<0, QUADRANT_SIZE, 1>{}([&](auto ele) {
             int rowIdx = lIdx % 16;
             int hi     = lIdx / 16;
@@ -810,7 +810,9 @@ __global__ void matmul(const src_t* a, const src_t* b, dst_t* c)
     using acc_vec = StaticBufferTupleOfVector<AddressSpaceEnum::Vgpr, acc_t, 1, acc_num, true>;
     acc_vec c_thread_buf_;
 
-    // lane is (0-31) mod 16 instead of 0-31 due to matrix replication
+    // lane is (0-31) mod 16 instead of 0-31 due to matrix replication in gfx11
+    // see https://atlvsp3.amd.com/sp3_gfx11_5_instructions.pdf page 482
+    // TODO: remove this dependency in gfx12 https://ontrack-internal.amd.com/browse/DEGFXSP3-101
     const int lane    = lIdx % 16;
     const int lane_lo = lIdx / 2;
     const int lane_hi = lIdx % 2;
@@ -1054,6 +1056,9 @@ struct TestWmma
 
     auto operator()(const DeviceWmma& wmma_kernel)
     {
+        std::cout << "ALayout = " << ALayout{}.name << ", BLayout = " << BLayout{}.name
+                  << ", CLayout = " << CLayout{}.name << std::endl;
+
         // Arrange
         ck::wmma_op_util::GemmParams params;
         params.M       = 16;

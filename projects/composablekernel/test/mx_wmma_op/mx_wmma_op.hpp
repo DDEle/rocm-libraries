@@ -26,56 +26,6 @@ enum class WMMA_SCALE
         MfmaInstr::wmma_scale16_f32_16x16x128_f8f6f4_gfx125), // V_WMMA_SCALE16_F32_16X16X128_F8F6F4
 };
 
-// WMMA scale type selector for 16x16 blocks
-template <int32_t BLOCK_M,
-          int32_t BLOCK_N,
-          int32_t BLOCK_X,
-          typename ScaleTypeA,
-          typename ScaleTypeB>
-struct wmma_scale_type_selector;
-
-// specialization for scale block size 32
-template <typename ScaleTypeA, typename ScaleTypeB>
-struct wmma_scale_type_selector<16, 16, 32, ScaleTypeA, ScaleTypeB>
-{
-    template <typename AFragT,
-              typename AScaleFragT,
-              typename BFragT,
-              typename BScaleFragT,
-              typename AccumFragT>
-    __device__ static void run(AFragT const& fragA,
-                               AScaleFragT const& scale_a,
-                               BFragT const& fragB,
-                               BScaleFragT const& scale_b,
-                               AccumFragT& fragAcc)
-    {
-        auto op = mfma_type<MfmaInstr::wmma_scale_f32_16x16x128_f8f6f4_gfx125>{};
-        op.template run<16, 16, 1, 0, AFragT, AScaleFragT, BFragT, BScaleFragT, AccumFragT>(
-            fragA, scale_a, fragB, scale_b, fragAcc);
-    }
-};
-
-// specialization for scale block size 16
-template <typename ScaleTypeA, typename ScaleTypeB>
-struct wmma_scale_type_selector<16, 16, 16, ScaleTypeA, ScaleTypeB>
-{
-    template <typename AFragT,
-              typename AScaleFragT,
-              typename BFragT,
-              typename BScaleFragT,
-              typename AccumFragT>
-    __device__ static void run(AFragT const& fragA,
-                               AScaleFragT const& scale_a,
-                               BFragT const& fragB,
-                               BScaleFragT const& scale_b,
-                               AccumFragT& fragAcc)
-    {
-        auto op = mfma_type<MfmaInstr::wmma_scale16_f32_16x16x128_f8f6f4_gfx125>{};
-        op.template run<16, 16, 1, 0, AFragT, AScaleFragT, BFragT, BScaleFragT, AccumFragT>(
-            fragA, scale_a, fragB, scale_b, fragAcc);
-    }
-};
-
 template <typename VecT>
 static constexpr int32_t vectorSize(const VecT&)
 {
@@ -126,10 +76,11 @@ __device__ AFragT load_A_row_major(AType const* input_ptr)
 
     constexpr index_t num_chunks = is_packed_type_v<AType> ? 2 : 4;
 
-    // Here we want to load from rows of A in chunks of 32 or 16 elements each.
-    constexpr uint32_t chunk_size = is_packed_type_v<AType> ? 32 : 16;
+    constexpr bool is_single_rate = ((BLOCK_K / WAVE_SIZE) > 2) ? false : true;
+    constexpr uint32_t chunk_size = is_single_rate ? (is_packed_type_v<AType> ? 16u : 8u)
+                                                   : (is_packed_type_v<AType> ? 32u : 16u);
 
-    // each chunk is separated by offset
+    // each chunk is separated by offset (for K)
     static constexpr uint32_t chunk_offset = chunk_size * WAVE_SIZE / BLOCK_M; // 64 or 32
 
     auto startCoord2D = std::make_pair(threadIdx.x % BLOCK_M, (threadIdx.x / BLOCK_M) * chunk_size);
@@ -140,7 +91,7 @@ __device__ AFragT load_A_row_major(AType const* input_ptr)
 
     using ARawT = typename scalar_type<AFragT>::type;
     using AScalarChunkT =
-        typename vector_type<ARawT, scalar_type<AFragT>::vector_size / num_chunks>::type;
+        typename vector_type<ARawT, scalar_type<AFragT>::vector_size / (num_chunks)>::type;
 
     union
     {
@@ -150,7 +101,6 @@ __device__ AFragT load_A_row_major(AType const* input_ptr)
 
     const AScalarChunkT* fragPtr;
 
-    // BLOCK_K is a stride in A matrix
     auto startOffset  = row_major(startCoord2D, BLOCK_K) / packed_size_v<AType>;
     auto kMajorOffset = row_major(majorStepCoord2D, BLOCK_K) / packed_size_v<AType>;
 
@@ -205,18 +155,20 @@ __device__ BFragT load_B_col_major(BType const* input_ptr)
 
     constexpr index_t num_chunks = is_packed_type_v<BType> ? 2 : 4;
 
-    // Here we want to load from cols of B in chunks of 32 or 16 elements each.
-    constexpr uint32_t chunk_size = is_packed_type_v<BType> ? 32 : 16;
+    // Use is_single_rate to control 16x64 vs 16x128 instruction variants
+    constexpr bool is_single_rate = ((BLOCK_K / WAVE_SIZE) > 2) ? false : true;
+    constexpr uint32_t chunk_size = is_single_rate ? (is_packed_type_v<BType> ? 16u : 8u)
+                                                   : (is_packed_type_v<BType> ? 32u : 16u);
 
     // each chunk is separated by an offset
     static constexpr uint32_t chunk_offset = chunk_size * WAVE_SIZE / BLOCK_N; // 64 or 32
 
     auto startCoord2D = std::make_pair((threadIdx.x / BLOCK_N) * chunk_size, threadIdx.x % BLOCK_N);
 
+    auto majorStepCoord2D = std::make_pair(chunk_offset, 0);
+
     // Flatten to 1D col_major offsets.
     auto col_major = [](auto const& coord, auto ld) { return coord.first + coord.second * ld; };
-
-    auto majorStepCoord2D = std::make_pair(chunk_offset, 0);
 
     using BRawT = typename scalar_type<BFragT>::type;
     using BScalarChunkT =
@@ -230,7 +182,6 @@ __device__ BFragT load_B_col_major(BType const* input_ptr)
 
     const BScalarChunkT* fragPtr;
 
-    // BLOCK_K is a stride in B matrix
     auto startOffset  = col_major(startCoord2D, BLOCK_K) / packed_size_v<BType>;
     auto kMajorOffset = col_major(majorStepCoord2D, BLOCK_K) / packed_size_v<BType>;
 
@@ -321,7 +272,6 @@ __device__ AFragT load_mx_A_row_major(AType const* input_ptr,
 
     index_t startOffset = startCoord2D.first * (BLOCK_K / BLOCK_X);
 
-    // Verify ScaleOpselA == 1
     if(threadIdx.x >= 16)
     {
         auto& scale_vec = fragX.template AsType<ScaleType>();
@@ -408,7 +358,6 @@ __device__ BFragT load_mx_B_col_major(BType const* input_ptr,
     auto col_major    = [](auto const& coord, auto ld) { return coord.second * ld; };
     auto startOffset  = col_major(startCoord2D, BLOCK_K / BLOCK_X);
 
-    // Verify ScaleOpselB == 0
     if(threadIdx.x < 16)
     {
         auto& scale_vec = fragX.template AsType<ScaleType>();
@@ -441,7 +390,8 @@ struct store_C_row_major<CType, CFragT, 16, 16>
 
         for(uint32_t i = 0; i < vectorSize(cFrag); ++i)
         {
-            output[startOffset + i * kOffset] = cFrag[i];
+            CType* out_addr = output + startOffset + i * kOffset;
+            *out_addr       = cFrag[i];
         }
     }
 };
@@ -473,7 +423,6 @@ __global__ void matmul(const packed_type_t<AType>* a,
 
     constexpr int WAVE_SIZE = 32; // WMMA uses wave32
     assert(threadIdx.x < WAVE_SIZE);
-    assert(blockDim.x == 1 && blockDim.y == 1 && blockDim.z == 1);
 
     using AFragT =
         typename vector_type<PackedAType, BLOCK_M * BLOCK_K / WAVE_SIZE / packed_size_a>::type;
@@ -482,12 +431,8 @@ __global__ void matmul(const packed_type_t<AType>* a,
     using CFragT        = typename vector_type<CType, BLOCK_M * BLOCK_N / WAVE_SIZE>::type;
     using AccumFragT    = vector_type<AccType, BLOCK_M * BLOCK_N / WAVE_SIZE>;
     using RawAccumFragT = typename vector_type<AccType, BLOCK_M * BLOCK_N / WAVE_SIZE>::type;
-    using AScaleFragT =
-        typename vector_type<AScaleType,
-                             BLOCK_K / BLOCK_X>::type; // packed BLOCK_K / BLOCK_X scale values
-    using BScaleFragT =
-        typename vector_type<BScaleType,
-                             BLOCK_K / BLOCK_X>::type; // packed BLOCK_K / BLOCK_X scale values
+    using AScaleFragT   = typename vector_type<AScaleType, BLOCK_K / BLOCK_X>::type;
+    using BScaleFragT   = typename vector_type<BScaleType, BLOCK_K / BLOCK_X>::type;
 
     // Create frags
     auto fragA   = AFragT{};
@@ -510,12 +455,13 @@ __global__ void matmul(const packed_type_t<AType>* a,
     }
     else
     {
-        printf("This layout is not implemented\n");
+        static_assert(!is_same_v<ALayout, ALayout>, "ALayout must be RowMajor for matmul kernel");
     }
 
     if constexpr(is_same_v<BLayout, tensor_layout::gemm::RowMajor>)
     {
-        printf("This layout is not implemented\n");
+        static_assert(!is_same_v<BLayout, BLayout>,
+                      "BLayout must be ColumnMajor for matmul kernel");
     }
     else
     {
@@ -529,8 +475,19 @@ __global__ void matmul(const packed_type_t<AType>* a,
     }
 
     // Scaled Matrix multiply-accumulate using WMMA scale units
-    using wmma = wmma_scale_type_selector<BLOCK_M, BLOCK_N, BLOCK_X, AScaleFragT, BScaleFragT>;
-    wmma::template run<>(fragA, fragXa, fragB, fragXb, fragAcc);
+    constexpr auto mfma_type_obj = ck::MfmaSelector<AType,
+                                                    BLOCK_M,
+                                                    BLOCK_N,
+                                                    BType,
+                                                    false,
+                                                    true,
+                                                    AccType,
+                                                    BLOCK_X,
+                                                    AScaleType,
+                                                    BScaleType>::selected_mfma;
+    mfma_type_obj
+        .template run<BLOCK_M, BLOCK_N, 1, 0, AFragT, AScaleFragT, BFragT, BScaleFragT, AccumFragT>(
+            fragA, fragXa, fragB, fragXb, fragAcc);
 
     for(int i = 0; i < vectorSize(fragC); ++i)
     {
@@ -543,7 +500,92 @@ __global__ void matmul(const packed_type_t<AType>* a,
     }
     else
     {
-        printf("This layout is not implemented\n");
+        static_assert(!is_same_v<CLayout, CLayout>, "CLayout must be RowMajor for matmul kernel");
+    }
+}
+
+// Unscaled WMMA kernel for new instructions (no scale type)
+template <typename AType,
+          typename BType,
+          typename CType,
+          typename AccType,
+          int32_t BLOCK_M,
+          int32_t BLOCK_N,
+          int32_t BLOCK_K,
+          typename ALayout,
+          typename BLayout,
+          typename CLayout>
+__global__ void
+matmul_unscaled(const packed_type_t<AType>* a, const packed_type_t<BType>* b, CType* c)
+{
+    using PackedAType = packed_type_t<AType>;
+    using PackedBType = packed_type_t<BType>;
+
+    constexpr int WAVE_SIZE = 32;
+    assert(threadIdx.x < WAVE_SIZE);
+
+    using AFragT =
+        typename vector_type<PackedAType,
+                             BLOCK_M * BLOCK_K / WAVE_SIZE / packed_size_v<PackedAType>>::type;
+    using BFragT =
+        typename vector_type<PackedBType,
+                             BLOCK_K * BLOCK_N / WAVE_SIZE / packed_size_v<PackedBType>>::type;
+    using CFragT        = typename vector_type<CType, BLOCK_M * BLOCK_N / WAVE_SIZE>::type;
+    using AccumFragT    = vector_type<AccType, BLOCK_M * BLOCK_N / WAVE_SIZE>;
+    using RawAccumFragT = typename vector_type<AccType, BLOCK_M * BLOCK_N / WAVE_SIZE>::type;
+
+    auto fragA   = AFragT{};
+    auto fragB   = BFragT{};
+    auto fragC   = CFragT{};
+    auto fragAcc = AccumFragT{0};
+
+    // Load the inputs
+    if constexpr(is_same_v<ALayout, tensor_layout::gemm::RowMajor>)
+    {
+        fragA = load_A_row_major<PackedAType, AFragT, BLOCK_M, BLOCK_K>(a);
+    }
+    else
+    {
+        static_assert(!is_same_v<ALayout, ALayout>,
+                      "ALayout must be RowMajor for matmul_unscaled kernel");
+    }
+
+    if constexpr(is_same_v<BLayout, tensor_layout::gemm::ColumnMajor>)
+    {
+        fragB = load_B_col_major<PackedBType, BFragT, BLOCK_K, BLOCK_N>(b);
+    }
+    else
+    {
+        static_assert(!is_same_v<BLayout, BLayout>,
+                      "BLayout must be ColumnMajor for matmul_unscaled kernel");
+    }
+
+    // Select the correct MFMA/WMMA instruction using MfmaSelector::selected_mfma (auto-deduced)
+    constexpr bool is_single_rate = ((BLOCK_K / WAVE_SIZE) > 2) ? false : true;
+
+    constexpr auto mfma_type_obj = ck::
+        MfmaSelector<AType, BLOCK_M, BLOCK_N, BType, is_single_rate, false, AccType>::selected_mfma;
+    mfma_type_obj.template run<BLOCK_M, BLOCK_N, AFragT, BFragT, AccumFragT>(fragA, fragB, fragAcc);
+
+    for(int i = 0; i < vectorSize(fragC); ++i)
+    {
+        auto val = type_convert<CType>(fragAcc.template AsType<RawAccumFragT>()[Number<0>{}][i]);
+        fragC[i] = val;
+    }
+
+    if constexpr(is_same_v<CLayout, tensor_layout::gemm::ColumnMajor>)
+    {
+        static_assert(!is_same_v<CLayout, CLayout>,
+                      "ColumnMajor CLayout is not implemented for matmul_unscaled kernel");
+    }
+    else if constexpr(is_same_v<CLayout, tensor_layout::gemm::RowMajor>)
+    {
+        store_C_row_major<CType, CFragT, BLOCK_M, BLOCK_N>{}(c, fragC);
+    }
+    else
+    {
+        static_assert(!is_same_v<CLayout, CLayout>,
+                      "CLayout must be RowMajor or ColumnMajor for matmul_unscaled kernel");
     }
 }
 
@@ -583,6 +625,27 @@ void RunHostGEMM(const Tensor<ADataType>& A,
     ref_invoker.Run(ref_argument);
 }
 
+template <typename GemmInstance,
+          typename ADataType,
+          typename BDataType,
+          typename CDataType,
+          typename AElementwiseOperation,
+          typename BElementwiseOperation,
+          typename CElementwiseOperation>
+void RunHostGEMMUnscaled(const Tensor<ADataType>& A,
+                         const Tensor<BDataType>& B,
+                         Tensor<CDataType>& C,
+                         AElementwiseOperation a_element_op,
+                         BElementwiseOperation b_element_op,
+                         CElementwiseOperation c_element_op)
+{
+    auto ref_gemm     = GemmInstance{};
+    auto ref_invoker  = ref_gemm.MakeInvoker();
+    auto ref_argument = ref_gemm.MakeArgument(A, B, C, a_element_op, b_element_op, c_element_op);
+
+    ref_invoker.Run(ref_argument);
+}
+
 template <typename KernelType,
           typename ADataType,
           typename BDataType,
@@ -612,6 +675,43 @@ bool RunDeviceGEMM(KernelType kernel,
                       static_cast<const BDataType*>(b_n_k_device_buf.GetDeviceBuffer()),
                       static_cast<const BScaleType*>(b_scales_device_buf.GetDeviceBuffer()),
                       static_cast<CDataType*>(c_m_n_device_buf.GetDeviceBuffer()));
+
+    hipError_t err = hipGetLastError();
+    if(err != hipSuccess)
+    {
+        std::cerr << "HIP kernel launch error: " << hipGetErrorString(err) << std::endl;
+        return false;
+    }
+
+    c_m_n_device_buf.FromDevice(C.mData.data());
+
+    return true;
+}
+
+// RunDeviceGemmUnscaled: Launches the unscaled WMMA kernel (no scale types)
+template <typename KernelType, typename ADataType, typename BDataType, typename CDataType>
+bool RunDeviceGemmUnscaled(KernelType kernel,
+                           const Tensor<ADataType>& A,
+                           const Tensor<BDataType>& B,
+                           Tensor<CDataType>& C)
+{
+    DeviceMem a_m_k_device_buf(sizeof(ADataType) * A.mDesc.GetElementSpaceSize());
+    DeviceMem b_n_k_device_buf(sizeof(BDataType) * B.mDesc.GetElementSpaceSize());
+    DeviceMem c_m_n_device_buf(sizeof(CDataType) * C.mDesc.GetElementSpaceSize());
+
+    a_m_k_device_buf.ToDevice(A.mData.data());
+    b_n_k_device_buf.ToDevice(B.mData.data());
+
+    kernel<<<1, 32>>>(static_cast<const ADataType*>(a_m_k_device_buf.GetDeviceBuffer()),
+                      static_cast<const BDataType*>(b_n_k_device_buf.GetDeviceBuffer()),
+                      static_cast<CDataType*>(c_m_n_device_buf.GetDeviceBuffer()));
+
+    hipError_t err = hipGetLastError();
+    if(err != hipSuccess)
+    {
+        std::cerr << "HIP kernel launch error: " << hipGetErrorString(err) << std::endl;
+        return false;
+    }
 
     c_m_n_device_buf.FromDevice(C.mData.data());
 
@@ -698,6 +798,35 @@ struct TestMXWMMA
             b_n_k.GenerateTensorValue(GeneratorTensor_3<PackedBType>{-2.0, 2.0});
             b_scales.GenerateTensorValue(GeneratorTensor_2<BScaleType>{0, 4});
             break;
+        case 3:
+            // All-ones scales: neutral scaling (scale factor = 1.0), exercises raw arithmetic
+            a_m_k.GenerateTensorValue(GeneratorTensor_2<PackedAType>{-6, 7});
+            a_scales.GenerateTensorValue(GeneratorTensor_1<AScaleType>{1.0f});
+            b_n_k.GenerateTensorValue(GeneratorTensor_2<PackedBType>{-6, 7});
+            b_scales.GenerateTensorValue(GeneratorTensor_1<BScaleType>{1.0f});
+            break;
+        case 4:
+            // All-zeros scales: forces zero output regardless of data content
+            a_m_k.GenerateTensorValue(GeneratorTensor_2<PackedAType>{-6, 7});
+            a_scales.GenerateTensorValue(GeneratorTensor_1<AScaleType>{0.0f});
+            b_n_k.GenerateTensorValue(GeneratorTensor_2<PackedBType>{-6, 7});
+            b_scales.GenerateTensorValue(GeneratorTensor_1<BScaleType>{0.0f});
+            break;
+        case 5:
+            // All-ones scales, all ones input: neutral scaling (scale factor = 1.0), exercises raw
+            // arithmetic
+            a_m_k.GenerateTensorValue(GeneratorTensor_1<PackedAType>{1.0f});
+            a_scales.GenerateTensorValue(GeneratorTensor_1<AScaleType>{1.0f});
+            b_n_k.GenerateTensorValue(GeneratorTensor_1<PackedBType>{1.0f});
+            b_scales.GenerateTensorValue(GeneratorTensor_1<BScaleType>{1.0f});
+            break;
+        case 6:
+            // All-zeros scales, all one inputs forces zero output regardless of data content
+            a_m_k.GenerateTensorValue(GeneratorTensor_1<PackedAType>{1.0f});
+            a_scales.GenerateTensorValue(GeneratorTensor_1<AScaleType>{0.0f});
+            b_n_k.GenerateTensorValue(GeneratorTensor_1<PackedBType>{1.0f});
+            b_scales.GenerateTensorValue(GeneratorTensor_1<BScaleType>{0.0f});
+            break;
         default:
             a_m_k.GenerateTensorValue(GeneratorTensor_2<PackedAType>{-6, 7});
             a_scales.GenerateTensorValue(GeneratorTensor_3<AScaleType>{0.0625f, 8.0f});
@@ -708,6 +837,63 @@ struct TestMXWMMA
 
         return std::make_tuple(
             a_m_k, a_scales, b_n_k, b_scales, c_m_n_host_result, c_m_n_device_result);
+    }
+
+    template <typename DataType>
+    void dump_tensor(Tensor<DataType> mat)
+    {
+        std::cout << "mat [ " << std::endl;
+
+        auto len = mat.GetLengths();
+        for(uint32_t i = 0; i < len[0]; i++)
+        {
+            std::cout << "    [";
+            for(uint32_t j = 0; j < len[1]; j++)
+            {
+                std::vector<std::size_t> idx({i, j});
+                if constexpr(is_same_v<DataType, f4x2_pk_t>)
+                {
+                    // f4x2_pk_t packs two f4 values — print both
+                    auto pack = mat(idx);
+                    std::cout << ck::type_convert<float>(f4_t(pack.template unpack<>(Number<0>{})))
+                              << "/" // lo/hi separator within a packed element
+                              << ck::type_convert<float>(f4_t(pack.template unpack<>(Number<1>{})))
+                              << ", ";
+                }
+                else if constexpr(is_same_v<DataType, f6x16_pk_t> ||
+                                  is_same_v<DataType, f6x32_pk_t>)
+                {
+                    // f6_pk_t packs packed_size f6_t values — print all
+                    auto pack = mat(idx);
+                    for(index_t k = 0; k < DataType::packed_size; ++k)
+                    {
+                        std::cout << ck::type_convert<float>(pack.unpack(k));
+                        if(k < DataType::packed_size - 1)
+                            std::cout << "/";
+                    }
+                    std::cout << ", ";
+                }
+                else if constexpr(is_same_v<DataType, bf6x16_pk_t> ||
+                                  is_same_v<DataType, bf6x32_pk_t>)
+                {
+                    // bf6_pk_t packs packed_size bf6_t values — print all
+                    auto pack = mat(idx);
+                    for(index_t k = 0; k < DataType::packed_size; ++k)
+                    {
+                        std::cout << ck::type_convert<float>(pack.unpack(k));
+                        if(k < DataType::packed_size - 1)
+                            std::cout << "/";
+                    }
+                    std::cout << ", ";
+                }
+                else
+                {
+                    std::cout << ck::type_convert<float>(mat(idx)) << ", ";
+                }
+            }
+            std::cout << "]" << std::endl;
+        }
+        std::cout << "]" << std::endl;
     }
 
     auto operator()(const DeviceWMMA& wmma_kernel, index_t init)
@@ -751,7 +937,6 @@ struct TestMXWMMA
         Tensor<CDataType>& c_device        = std::get<5>(host_tensors);
 
         RunHostGEMM(a, a_scales, b, b_scales, c_host);
-
         RunDeviceGEMM(wmma_kernel, a, a_scales, b, b_scales, c_device);
 
         bool res = false;
@@ -764,6 +949,200 @@ struct TestMXWMMA
             std::cout << "UNSUPPORTED CDataType" << std::endl;
         }
 
+        return res;
+    }
+};
+
+// Test structure for unscaled WMMA operations (no scale types)
+template <typename DeviceWMMA,
+          typename ADataType,
+          typename BDataType,
+          typename CDataType,
+          typename ALayout,
+          typename BLayout,
+          typename CLayout,
+          index_t BLOCK_M,
+          index_t BLOCK_N,
+          index_t BLOCK_K,
+          typename AElementwiseOperation,
+          typename BElementwiseOperation,
+          typename CElementwiseOperation>
+struct TestMXWMMAUnscaled
+{
+    using PackedAType                   = packed_type_t<ADataType>;
+    static constexpr auto packed_size_a = packed_size_v<PackedAType>;
+    using PackedBType                   = packed_type_t<BDataType>;
+    static constexpr auto packed_size_b = packed_size_v<PackedBType>;
+
+    struct GemmParams
+    {
+        ck::index_t M = BLOCK_M;
+        ck::index_t N = BLOCK_N;
+        ck::index_t K = BLOCK_K;
+
+        ck::index_t StrideA = -1;
+        ck::index_t StrideB = -1;
+        ck::index_t StrideC = -1;
+    };
+
+    auto PrepareGemmTensors(const GemmParams& params, index_t init)
+    {
+        auto f_host_tensor_descriptor =
+            [](std::size_t row, std::size_t col, std::size_t stride, auto layout) {
+                if(std::is_same<decltype(layout), ck::tensor_layout::gemm::RowMajor>::value)
+                {
+                    return HostTensorDescriptor(std::vector<std::size_t>({row, col}),
+                                                std::vector<std::size_t>({stride, 1}));
+                }
+                else
+                {
+                    return HostTensorDescriptor(std::vector<std::size_t>({row, col}),
+                                                std::vector<std::size_t>({1, stride}));
+                }
+            };
+
+        Tensor<PackedAType> a_m_k(
+            f_host_tensor_descriptor(params.M, params.K, params.StrideA, ALayout{}));
+        Tensor<PackedBType> b_n_k(
+            f_host_tensor_descriptor(params.K, params.N, params.StrideB, BLayout{}));
+        Tensor<CDataType> c_m_n_host_result(
+            f_host_tensor_descriptor(params.M, params.N, params.StrideC, CLayout{}));
+        Tensor<CDataType> c_m_n_device_result(
+            f_host_tensor_descriptor(params.M, params.N, params.StrideC, CLayout{}));
+
+        switch(init)
+        {
+        case 0:
+            a_m_k.GenerateTensorValue(GeneratorTensor_1<PackedAType>{1.0f});
+            b_n_k.GenerateTensorValue(GeneratorTensor_Sequential<PackedBType, 1>{});
+            break;
+        case 1:
+            a_m_k.GenerateTensorValue(GeneratorTensor_1<PackedAType>{1.0f});
+            b_n_k.GenerateTensorValue(GeneratorTensor_1<PackedBType>{1.0f});
+            break;
+        case 2:
+            a_m_k.GenerateTensorValue(GeneratorTensor_3<PackedAType>{-2.0, 2.0});
+            b_n_k.GenerateTensorValue(GeneratorTensor_3<PackedBType>{-2.0, 2.0});
+            break;
+        default:
+            a_m_k.GenerateTensorValue(GeneratorTensor_2<PackedAType>{-6, 7});
+            b_n_k.GenerateTensorValue(GeneratorTensor_2<PackedBType>{-6, 7});
+            break;
+        }
+
+        return std::make_tuple(a_m_k, b_n_k, c_m_n_host_result, c_m_n_device_result);
+    }
+
+    template <typename DataType>
+    void dump_tensor(Tensor<DataType> mat)
+    {
+        std::cout << "mat [ " << std::endl;
+
+        auto len = mat.GetLengths();
+        for(uint32_t i = 0; i < len[0]; i++)
+        {
+            std::cout << "    [";
+            for(uint32_t j = 0; j < len[1]; j++)
+            {
+                std::vector<std::size_t> idx({i, j});
+                std::cout << ck::type_convert<float>(mat(idx)) << ", ";
+            }
+            std::cout << "]" << std::endl;
+        }
+        std::cout << "]" << std::endl;
+    }
+
+    template <typename DataType>
+    void dump_tensor_hex(Tensor<DataType> mat)
+    {
+        std::cout << "mat (hex) [ " << std::endl;
+        auto len = mat.GetLengths();
+        for(uint32_t i = 0; i < len[0]; i++)
+        {
+            std::cout << "    [";
+            for(uint32_t j = 0; j < len[1]; j++)
+            {
+                std::vector<std::size_t> idx({i, j});
+                union
+                {
+                    float f;
+                    uint32_t u;
+                } uval;
+                uval.f = ck::type_convert<float>(mat(idx));
+                std::cout << "0x" << std::hex << uval.u << std::dec << ", ";
+            }
+            std::cout << "]" << std::endl;
+        }
+        std::cout << "]" << std::endl;
+    }
+
+    auto operator()(const DeviceWMMA& wmma_kernel, index_t init)
+    {
+        // Arrange
+        GemmParams params;
+        params.M = BLOCK_M;
+        params.N = BLOCK_N;
+        params.K = BLOCK_K;
+
+        auto f_get_default_stride = [](std::size_t row,
+                                       std::size_t col,
+                                       ck::index_t stride,
+                                       auto layout) {
+            if(stride == -1)
+            {
+                if constexpr(std::is_same_v<decltype(layout), ck::tensor_layout::gemm::RowMajor>)
+                {
+                    return static_cast<std::size_t>(col);
+                }
+                else
+                {
+                    return static_cast<std::size_t>(row);
+                }
+            }
+            else
+                return static_cast<std::size_t>(stride);
+        };
+
+        params.StrideA = f_get_default_stride(BLOCK_M, BLOCK_K, params.StrideA, ALayout{});
+        params.StrideB = f_get_default_stride(BLOCK_K, BLOCK_N, params.StrideB, BLayout{});
+        params.StrideC = f_get_default_stride(BLOCK_M, BLOCK_N, params.StrideC, CLayout{});
+
+        auto host_tensors = PrepareGemmTensors(params, init);
+
+        const Tensor<PackedAType>& a = std::get<0>(host_tensors);
+        const Tensor<PackedBType>& b = std::get<1>(host_tensors);
+        Tensor<CDataType>& c_host    = std::get<2>(host_tensors);
+        Tensor<CDataType>& c_device  = std::get<3>(host_tensors);
+
+        auto a_element_op = AElementwiseOperation{};
+        auto b_element_op = BElementwiseOperation{};
+        auto c_element_op = CElementwiseOperation{};
+
+        using ReferenceGemmInstance =
+            ck::tensor_operation::host::ReferenceGemm<ADataType,
+                                                      BDataType,
+                                                      CDataType,
+                                                      CDataType,
+                                                      AElementwiseOperation,
+                                                      BElementwiseOperation,
+                                                      CElementwiseOperation>;
+        RunHostGEMMUnscaled<ReferenceGemmInstance>(
+            a, b, c_host, a_element_op, b_element_op, c_element_op);
+        RunDeviceGemmUnscaled(wmma_kernel, a, b, c_device);
+
+        bool res = false;
+        if constexpr(std::is_same<CDataType, float>::value)
+        {
+            res = ck::utils::check_err(c_device.mData, c_host.mData);
+        }
+        else if(std::is_same<CDataType, ck::half_t>::value)
+        {
+            res = ck::utils::check_err(c_device.mData, c_host.mData);
+        }
+        else
+        {
+            std::cout << "UNSUPPORTED CDataType" << std::endl;
+        }
         return res;
     }
 };

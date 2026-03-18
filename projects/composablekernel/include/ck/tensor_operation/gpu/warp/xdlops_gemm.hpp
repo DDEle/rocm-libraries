@@ -111,6 +111,7 @@ enum struct MfmaInstr
     wmma_i32_16x16x64_iu8_gfx125,
 
     wmma_f32_16x16x128_f8f6f4_gfx125, // not implemented
+    wmma_f32_32x16x128_f4_gfx125,     // not implemented
     wmma_scale16_f32_16x16x128_f8f6f4_gfx125,
     wmma_scale_f32_16x16x128_f8f6f4_gfx125,
     wmma_scale16_f32_32x16x128_f4_gfx125,
@@ -118,7 +119,19 @@ enum struct MfmaInstr
 
     wmma_f32_16x16x4_f32_gfx125,
 
-    wmma_f64_16x16x4_f64_gfx1251
+    wmma_f64_16x16x4_f64_gfx1251,
+    wmma_f16_16x16x128_bf8bf8_gfx125,
+    wmma_f16_16x16x128_bf8f8_gfx125,
+    wmma_f16_16x16x128_f8bf8_gfx125,
+    wmma_f16_16x16x128_f8f8_gfx125,
+    wmma_f16_16x16x64_f8f8_gfx125,
+    wmma_f16_16x16x64_f8bf8_gfx125,
+    wmma_f16_16x16x64_bf8f8_gfx125,
+    wmma_f16_16x16x64_bf8bf8_gfx125,
+    wmma_f32_16x16x128_bf8bf8_gfx125,
+    wmma_f32_16x16x128_bf8f8_gfx125,
+    wmma_f32_16x16x128_f8bf8_gfx125,
+    wmma_f32_16x16x128_f8f8_gfx125
 };
 
 template <MfmaInstr instr>
@@ -1548,6 +1561,162 @@ struct mfma_type<MfmaInstr::wmma_scale16_f32_32x16x128_f4_gfx125> : public mfma_
     }
 };
 
+// wmma_f16_16x16x128_bf8bf8_gfx125: result type f16, 16x16 tile, k=128, a/b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x128_bf8bf8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 128;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x128_bf8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f32_16x16x128_bf8bf8_gfx125: result type f16, 16x16 tile, k=128, a/b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f32_16x16x128_bf8bf8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 128;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f32_16x16x128_bf8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x128_bf8f8_gfx125: result type f16, 16x16 tile, k=128, a type bf8, b type fp8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x128_bf8f8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 128;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x128_bf8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f32_16x16x128_bf8f8_gfx125: result type f16, 16x16 tile, k=128, a type bf8, b type fp8
+template <>
+struct mfma_type<MfmaInstr::wmma_f32_16x16x128_bf8f8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 128;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f32_16x16x128_bf8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x128_f8bf8_gfx125: result type f16, 16x16 tile, k=128, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x128_f8bf8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 128;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x128_f8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f32_16x16x128_f8bf8_gfx125: result type f16, 16x16 tile, k=128, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f32_16x16x128_f8bf8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 128;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f32_16x16x128_f8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x128_f8f8_gfx125: result type f16, 16x16 tile, k=128, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x128_f8f8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 128;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x128_f8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f32_16x16x128_f8f8_gfx125: result type f16, 16x16 tile, k=128, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f32_16x16x128_f8f8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 128;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f32_16x16x128_f8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x64_f8f8_gfx125: result type f16, 16x16 tile, k=64, a type fp8, b type fp8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x64_f8f8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 64;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x64_f8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x64_f8bf8_gfx125: result type f16, 16x16 tile, k=64, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x64_f8bf8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 64;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x64_f8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x64_bf8f8_gfx125: result type f16, 16x16 tile, k=64, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x64_bf8f8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 64;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x64_bf8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x64_bf8bf8_gfx125: result type f16, 16x16 tile, k=64, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x64_bf8bf8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 64;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x64_bf8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
 /**
  * @class MfmaSelector
  * @brief Selects the appropriate MFMA instruction type and configuration for given data types
@@ -1567,7 +1736,11 @@ template <typename base_type,
           index_t NPerXdlops,
           typename additional_type = base_type,
           bool is_single_rate_mfma = false,
-          bool is_scale_mfma       = false>
+          bool is_scale_mfma       = false,
+          typename AccType         = float,
+          index_t ScaleBlkSize     = (is_scale_mfma ? 32 : 0),
+          typename AScaleDataType  = void,
+          typename BScaleDataType  = void>
 struct MfmaSelector
 {
     template <typename base_type_,
@@ -1575,7 +1748,11 @@ struct MfmaSelector
               index_t NPerXdlops_,
               typename additional_type_ = base_type_,
               bool is_single_rate_mfma_ = false,
-              bool is_scale_mfma_       = false>
+              bool is_scale_mfma_       = false,
+              typename AccType_         = float,
+              index_t ScaleBlkSize_     = (is_scale_mfma_ ? 32 : 0),
+              typename AScaleDataType_  = void,
+              typename BScaleDataType_  = void>
     static constexpr auto GetMfma();
 
     template <>
@@ -2164,12 +2341,292 @@ struct MfmaSelector
 #endif
     }
 
+    // Specialization for wmma_f16_16x16x128_bf8bf8_gfx125
+    template <>
+    constexpr auto GetMfma<bf8_t, 16, 16, bf8_t, false, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x128_bf8bf8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f32_16x16x128_bf8bf8_gfx125
+    template <>
+    constexpr auto GetMfma<bf8_t, 16, 16, bf8_t, false, false, float>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f32_16x16x128_bf8bf8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x128_bf8f8_gfx125
+    template <>
+    constexpr auto GetMfma<bf8_t, 16, 16, f8_t, false, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x128_bf8f8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f32_16x16x128_bf8f8_gfx125
+    template <>
+    constexpr auto GetMfma<bf8_t, 16, 16, f8_t, false, false, float>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f32_16x16x128_bf8f8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x128_f8bf8_gfx125
+    template <>
+    constexpr auto GetMfma<f8_t, 16, 16, bf8_t, false, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x128_f8bf8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f32_16x16x128_f8bf8_gfx125
+    template <>
+    constexpr auto GetMfma<f8_t, 16, 16, bf8_t, false, false, float>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f32_16x16x128_f8bf8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x128_f8f8_gfx125
+    template <>
+    constexpr auto GetMfma<f8_t, 16, 16, f8_t, false, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x128_f8f8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f32_16x16x128_f8f8_gfx125
+    template <>
+    constexpr auto GetMfma<f8_t, 16, 16, f8_t, false, false, float>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f32_16x16x128_f8f8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x64_f8f8_gfx125
+    template <>
+    constexpr auto GetMfma<f8_t, 16, 16, f8_t, true, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x64_f8f8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x64_f8bf8_gfx125
+    template <>
+    constexpr auto GetMfma<f8_t, 16, 16, bf8_t, true, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x64_f8bf8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x64_bf8f8_gfx125
+    template <>
+    constexpr auto GetMfma<bf8_t, 16, 16, f8_t, true, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x64_bf8f8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x64_bf8bf8_gfx125
+    template <>
+    constexpr auto GetMfma<bf8_t, 16, 16, bf8_t, true, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x64_bf8bf8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx11;
+#endif
+    }
+
+    // ScaleBlkSize=32: wmma_scale_f32_16x16x128_f8f6f4_gfx125
+    // Valid A/B pairings: {f8,f6,f4} x {f8,f6,f4} with e8m0; {f8,f6} x f4 with e5m3/e4m3; f4 x
+    // {f8,f6} with e5m3/e4m3; f4 x f4 with e5m3/e4m3
+#define CK_GETMFMA_SCALE32(ATYPE, BTYPE, ASCALE, BSCALE)                                   \
+    template <>                                                                            \
+    constexpr auto GetMfma<ATYPE, 16, 16, BTYPE, false, true, float, 32, ASCALE, BSCALE>() \
+    {                                                                                      \
+        return MfmaInstr::wmma_scale_f32_16x16x128_f8f6f4_gfx125;                          \
+    }
+
+    // ScaleBlkSize=16: wmma_scale16_f32_16x16x128_f8f6f4_gfx125
+#define CK_GETMFMA_SCALE16(ATYPE, BTYPE, ASCALE, BSCALE)                                   \
+    template <>                                                                            \
+    constexpr auto GetMfma<ATYPE, 16, 16, BTYPE, false, true, float, 16, ASCALE, BSCALE>() \
+    {                                                                                      \
+        return MfmaInstr::wmma_scale16_f32_16x16x128_f8f6f4_gfx125;                        \
+    }
+
+    // --- F8 (f8_t) x {F8, F6, F4} ---
+    CK_GETMFMA_SCALE32(
+        f8_t,
+        f8_t,
+        e8m0_bexp_t,
+        e8m0_bexp_t) // F8/E8M0 x F8/E8M0          [TESTED: MXWMMA/MXFP8WMMA16x16x128_E8M0]
+
+    CK_GETMFMA_SCALE32(
+        f8_t,
+        f4_t,
+        e8m0_bexp_t,
+        e8m0_bexp_t) // F8/E8M0 x F4/E8M0          [TESTED: MXWMMA/MXFP8FP4WMMA16x16x128_E8M0]
+
+    // --- F8 (bf8_t) x {F8, F6, F4} ---
+    CK_GETMFMA_SCALE32(
+        bf8_t,
+        bf8_t,
+        e8m0_bexp_t,
+        e8m0_bexp_t) // F8/E8M0 x F8/E8M0 (both = F8) [TESTED: MXWMMA/MXBF8WMMA16x16x128_E8M0]
+
+    // --- F6 (f6_t) x {F8, F6, F4} ---
+    CK_GETMFMA_SCALE32(
+        f6_t,
+        f6_t,
+        e8m0_bexp_t,
+        e8m0_bexp_t) // F6/E8M0 x F6/E8M0             [TESTED: MXWMMA/MXFP6WMMA16x16x128_E8M0]
+
+    // --- F6 (bf6_t) x {F8, F6, F4} ---
+    CK_GETMFMA_SCALE32(
+        bf6_t,
+        bf6_t,
+        e8m0_bexp_t,
+        e8m0_bexp_t) // F6/E8M0 x F6/E8M0 (both = F6) [TESTED: MXWMMA/MXBF6WMMA16x16x128_E8M0]
+
+    // --- F4 (f4_t) x {F8, F6, F4} ---
+    CK_GETMFMA_SCALE32(
+        f4_t,
+        f4_t,
+        e8m0_bexp_t,
+        e8m0_bexp_t) // F4/E8M0 x F4/E8M0             [TESTED: MXWMMA/MXFP4WMMA16x16x128_E8M0]
+    CK_GETMFMA_SCALE32(
+        f4_t,
+        f4_t,
+        e5m3_scale_t,
+        e5m3_scale_t) // F4/E5M3 x F4/E5M3             [TESTED: MXWMMA/MXFP4WMMA16x16x128_E5M3]
+    CK_GETMFMA_SCALE32(
+        f4_t,
+        f4_t,
+        e4m3_scale_t,
+        e4m3_scale_t) // F4/E4M3 x F4/E4M3             [TESTED: MXWMMA/MXFP4WMMA16x16x128_E4M3]
+    CK_GETMFMA_SCALE32(f4_t,
+                       f4_t,
+                       e5m3_scale_t,
+                       e4m3_scale_t) // F4/E5M3 x F4/E4M3 — asymmetric scale [TESTED:
+                                     // MXWMMA/MXFP4WMMA16x16x128_E5M3_E4M3]
+    CK_GETMFMA_SCALE32(f4_t,
+                       f4_t,
+                       e4m3_scale_t,
+                       e5m3_scale_t) // F4/E4M3 x F4/E5M3 — asymmetric scale [TESTED:
+                                     // MXWMMA/MXFP4WMMA16x16x128_E4M3_E5M3]
+
+    // ScaleBlkSize=16 — same pairings as ScaleBlkSize=32 above
+
+    // --- F8 (f8_t) x {F8, F6, F4} ---
+    CK_GETMFMA_SCALE16(
+        f8_t,
+        f8_t,
+        e8m0_bexp_t,
+        e8m0_bexp_t) //  F8/E8M0 x F8/E8M0          [TESTED: MXWMMA/MXFP8WMMA16x16x128_SCALE16_E8M0]
+    CK_GETMFMA_SCALE16(f8_t,
+                       f4_t,
+                       e8m0_bexp_t,
+                       e8m0_bexp_t) //  F8/E8M0 x F4/E8M0          [TESTED:
+                                    //  MXWMMA/MXFP8FP4WMMA16x16x128_SCALE16_E8M0]
+
+    // --- F8 (bf8_t) x {F8, F6, F4} ---
+    CK_GETMFMA_SCALE16(bf8_t,
+                       bf8_t,
+                       e8m0_bexp_t,
+                       e8m0_bexp_t) //  F8/E8M0 x F8/E8M0 (both = F8)
+                                    //  [TESTED:MXWMMA/MXBF8WMMA16x16x128_SCALE16_E8M0]
+
+    // --- F6 (f6_t) x {F8, F6, F4} ---
+    CK_GETMFMA_SCALE16(f6_t,
+                       f6_t,
+                       e8m0_bexp_t,
+                       e8m0_bexp_t) //  F6/E8M0 x F6/E8M0             [TESTED:
+                                    //  MXWMMA/MXFP6WMMA16x16x128_SCALE16_E8M0]
+
+    // --- F6 (bf6_t) x {F8, F6, F4} ---
+    CK_GETMFMA_SCALE16(bf6_t,
+                       bf6_t,
+                       e8m0_bexp_t,
+                       e8m0_bexp_t) //  F6/E8M0 x F6/E8M0 (both = F6) [TESTED:
+                                    //  MXWMMA/MXBF6WMMA16x16x128_SCALE16_E8M0]
+
+    // --- F4 (f4_t) x {F8, F6, F4} ---
+    CK_GETMFMA_SCALE16(f4_t,
+                       f4_t,
+                       e8m0_bexp_t,
+                       e8m0_bexp_t) //  F4/E8M0 x F4/E8M0             [TESTED:
+                                    //  MXWMMA/MXFP4WMMA16x16x128_SCALE16_E8M0]
+    CK_GETMFMA_SCALE16(f4_t,
+                       f4_t,
+                       e5m3_scale_t,
+                       e5m3_scale_t) // F4/E5M3 x F4/E5M3             [TESTED:
+                                     // MXWMMA/MXFP4WMMA16x16x128_SCALE16_E5M3]
+    CK_GETMFMA_SCALE16(f4_t,
+                       f4_t,
+                       e4m3_scale_t,
+                       e4m3_scale_t) // F4/E4M3 x F4/E4M3             [TESTED:
+                                     // MXWMMA/MXFP4WMMA16x16x128_SCALE16_E4M3]
+    CK_GETMFMA_SCALE16(f4_t,
+                       f4_t,
+                       e5m3_scale_t,
+                       e4m3_scale_t) // F4/E5M3 x F4/E4M3 — asymmetric scale [TESTED:
+                                     // MXWMMA/MXFP4WMMA16x16x128_SCALE16_E5M3_E4M3]
+    CK_GETMFMA_SCALE16(f4_t,
+                       f4_t,
+                       e4m3_scale_t,
+                       e5m3_scale_t) // F4/E4M3 x F4/E5M3 — asymmetric scale [TESTED:
+                                     // MXWMMA/MXFP4WMMA16x16x128_SCALE16_E4M3_E5M3]
+
+#undef CK_GETMFMA_SCALE32
+#undef CK_GETMFMA_SCALE16
+
     static constexpr auto selected_mfma = mfma_type<GetMfma<element_type_t<base_type>,
                                                             MPerXdlops,
                                                             NPerXdlops,
                                                             element_type_t<additional_type>,
                                                             is_single_rate_mfma,
-                                                            is_scale_mfma>()>{};
+                                                            is_scale_mfma,
+                                                            element_type_t<AccType>,
+                                                            ScaleBlkSize,
+                                                            AScaleDataType,
+                                                            BScaleDataType>()>{}; // default init
 
     __host__ __device__ constexpr MfmaSelector()
     {

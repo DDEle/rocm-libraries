@@ -1861,10 +1861,11 @@ TEST_F(Bf16PlatformTest, PlatformSummary)
 #endif
 
     std::cout << "Vector types supported: bf16x2_t, bf16x4_t, bf16x8_t, etc." << std::endl;
-    // FIXME: CK_TILE_USE_CUSTOM_DATA_TYPE is broken - always reports "Not available"
+#if defined(CK_TILE_USE_CUSTOM_DATA_TYPE)
     std::cout << "Arithmetic operators: "
               << (CK_TILE_USE_CUSTOM_DATA_TYPE ? "Available (BROKEN)" : "Not available")
               << std::endl;
+#endif
     std::cout << "===================================" << std::endl;
 }
 

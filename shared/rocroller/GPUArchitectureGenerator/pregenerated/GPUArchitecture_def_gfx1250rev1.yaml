@@ -58,6 +58,7 @@ Architectures:
       MaxExpcnt: 7
       MaxLdsSize: 65536
       MaxLgkmcnt: 31
+      MaxPreloadedKernargs: 32
       MaxTensorcnt: 63
       MaxVmcnt: 63
       PackedWorkitemIDs: 0

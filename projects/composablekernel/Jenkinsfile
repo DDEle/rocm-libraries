@@ -24,12 +24,14 @@ def cloneUpdateRefRepo() {
         echo "rocm-libraries repo does not exist at ${refRepoPath}, creating mirror clone..."
         echo "locking on label: ${lockLabel}"
         lock(lockLabel) {
+          withCredentials([usernamePassword(credentialsId: "${env.ck_githubemu_creds}", usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
             def cloneCommand = """
-                set -ex
-                rm -rf ${refRepoPath} && mkdir -p ${refRepoPath}
-                git clone --mirror git@github.com:AMD-ROCm-Internal/rocm-libraries.git ${refRepoPath}
+              set -ex
+              rm -rf ${refRepoPath} && mkdir -p ${refRepoPath}
+              git clone --mirror https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/AMD-ROCm-Internal/rocm-libraries.git /var/jenkins/ref-repo-internal/rocm-libraries
             """
             sh(script: cloneCommand, label: "clone ref repo")
+           }
         }
         echo "Completed git clone, lock released"
     }

@@ -1145,16 +1145,11 @@ CK_TILE_DEVICE void s_wait_tensorcnt()
 #endif
 }
 
-template <index_t tensorcnt = 0>
+template <index_t tensorcnt = 0, index_t lgkmcnt = waitcnt_arg::kMaxLgkmCnt>
 CK_TILE_DEVICE void s_wait_tensorcnt_barrier()
 {
     s_wait_tensorcnt<tensorcnt>();
-#if defined(__gfx12__)
-    __builtin_amdgcn_s_barrier_signal(-1);
-    __builtin_amdgcn_s_barrier_wait(-1);
-#else
-    __builtin_amdgcn_s_barrier();
-#endif
+    block_sync_lds<lgkmcnt>();
 }
 
 template <index_t vmcnt = 0>

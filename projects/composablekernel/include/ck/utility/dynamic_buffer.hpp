@@ -14,6 +14,7 @@
 #endif
 #include "amd_transpose_load.hpp"
 #include "generic_memory_space_atomic.hpp"
+#include "data_cache_prefetch.hpp"
 
 namespace ck {
 
@@ -151,28 +152,12 @@ struct DynamicBuffer
         }
     }
 
-    struct GlobalPrefetchDataOp
-    {
-        // addr needs to point to global memory!
-        __device__ __forceinline__ void operator()([[maybe_unused]] const void* addr) const
-        {
-#if defined(__gfx125__)
-            // NOTE: There's a bug in AM/GOPHER for gfx1250 when prefetching into L1, so we disable
-            // it for now!
-            __builtin_amdgcn_global_prefetch(
-                addr,
-                static_cast<index_t>(
-                    AmdBufferCoherenceEnum::
-                        SE_RT)); // static_cast<index_t>(AmdBufferCoherenceEnum::CU_RT));
-#endif
-        }
-    };
-
     template <typename X,
+              AmdBufferCoherenceEnum Coherence_ = coherence,
               typename enable_if<is_same<typename scalar_type<remove_cvref_t<X>>::type,
                                          typename scalar_type<remove_cvref_t<T>>::type>::value ||
                                      !is_native_type<X>(),
-                                 bool>::type = false>
+                                 bool>::type    = false>
     __host__ __device__ constexpr void Prefetch(IndexType i, bool is_valid_element) const
     {
         // X contains multiple T
@@ -186,7 +171,7 @@ struct DynamicBuffer
         if(is_valid_element) // if not valid element then do not prefetch
         {
             // call prefetch here
-            GlobalPrefetchDataOp{}(c_style_pointer_cast<const void*>(&(p_data_[i])));
+            GlobalPrefetchDataOp<Coherence_>{}(c_style_pointer_cast<const void*>(&(p_data_[i])));
         }
     }
 

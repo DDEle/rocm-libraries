@@ -439,7 +439,13 @@ struct ThreadwiseTensorSliceTransfer_v3r1
                     using src_vector_container   = vector_type_maker_t<SrcData, VectorLoadSize>;
                     using src_vector_container_t = typename src_vector_container::type;
 
-                    src_buf.template Prefetch<src_vector_container_t>(
+#if defined(__gfx125__)
+                    const auto prefetch_coherence = AmdBufferCoherenceEnum::SE_RT;
+#else
+                    const auto prefetch_coherence = src_buf.coherence;
+#endif
+
+                    src_buf.template Prefetch<src_vector_container_t, prefetch_coherence>(
                         src_coord_.GetOffset() / PackedSize + LoadOffset, true);
                 });
 

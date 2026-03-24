@@ -1105,6 +1105,27 @@ CK_TILE_DEVICE void s_waitcnt_lgkm()
     s_waitcnt<waitcnt_arg::kMaxVmCnt, waitcnt_arg::kMaxExpCnt, lgkmcnt>();
 }
 
+template <index_t N = 0>
+CK_TILE_DEVICE void s_wait_dscnt()
+{
+#if defined(__gfx12__)
+    constexpr index_t dscnt_val = waitcnt_arg::from_lgkmcnt<N>();
+    llvm_amdgcn_s_wait_dscnt(dscnt_val);
+#else
+    __builtin_amdgcn_s_waitcnt(waitcnt_arg::from_lgkmcnt<N>());
+#endif
+}
+
+template <index_t N = 0>
+CK_TILE_DEVICE void s_wait_asynccnt()
+{
+#if defined(__gfx125__)
+    __builtin_amdgcn_s_wait_asynccnt(N);
+#else
+    (void)N;
+#endif
+}
+
 template <index_t vmcnt   = waitcnt_arg::kMaxVmCnt,
           index_t expcnt  = waitcnt_arg::kMaxExpCnt,
           index_t lgkmcnt = waitcnt_arg::kMaxLgkmCnt>

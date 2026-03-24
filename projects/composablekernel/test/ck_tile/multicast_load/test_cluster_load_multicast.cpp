@@ -4,12 +4,15 @@
 #include "gtest/gtest.h"
 
 #include <hip/hip_runtime.h>
+
+#include "ck_tile/host/device_prop.hpp"
 #include <cstring>
 #include <vector>
 
 #include "ck/host_utility/hip_check_error.hpp"
 #include "ck_tile/core/arch/amd_cluster_load.hpp"
 #include "ck_tile/core/arch/arch.hpp"
+#include "ck_tile/host/device_memory.hpp"
 #include "ck_tile/host/kernel_launch.hpp"
 #include "ck_tile/host/stream_config.hpp"
 
@@ -35,34 +38,37 @@ void run_single_wgp_test(const std::vector<T>& h_src, int mask, const char* test
 {
     std::vector<T> h_dst(NUM_LANES);
 
-    T *d_src, *d_dst;
-    ASSERT_EQ(hipMalloc(&d_src, NUM_LANES * sizeof(T)), hipSuccess);
-    ASSERT_EQ(hipMalloc(&d_dst, NUM_LANES * sizeof(T)), hipSuccess);
-    ASSERT_EQ(hipMemset(d_dst, 0xFF, NUM_LANES * sizeof(T)), hipSuccess);
-    ASSERT_EQ(hipMemcpy(d_src, h_src.data(), NUM_LANES * sizeof(T), hipMemcpyHostToDevice),
-              hipSuccess);
+    ck_tile::DeviceMem d_src(NUM_LANES * sizeof(T));
+    ck_tile::DeviceMem d_dst(NUM_LANES * sizeof(T));
+    d_src.ToDevice(h_src.data());
+    d_dst.SetBytePattern(0xFF);
 
     ck_tile::stream_config sc{};
-    auto kernel = ck_tile::make_kernel(
-        ClusterLoadKernel<T>{}, dim3(1), dim3(NUM_LANES), 0, d_src, d_dst, mask);
+    auto kernel = ck_tile::make_kernel(ClusterLoadKernel<T>{},
+                                       dim3(1),
+                                       dim3(NUM_LANES),
+                                       0,
+                                       static_cast<const T*>(d_src.GetDeviceBuffer()),
+                                       static_cast<T*>(d_dst.GetDeviceBuffer()),
+                                       mask);
     ck_tile::launch_and_check(sc, kernel);
     ASSERT_EQ(hipDeviceSynchronize(), hipSuccess);
 
-    ASSERT_EQ(hipMemcpy(h_dst.data(), d_dst, NUM_LANES * sizeof(T), hipMemcpyDeviceToHost),
-              hipSuccess);
+    d_dst.FromDevice(h_dst.data());
 
     for(int i = 0; i < NUM_LANES; i++)
         EXPECT_EQ(std::memcmp(&h_dst[i], &h_src[i], sizeof(T)), 0)
             << test_name << " mismatch at lane " << i;
-
-    EXPECT_EQ(hipFree(d_src), hipSuccess);
-    EXPECT_EQ(hipFree(d_dst), hipSuccess);
 }
 
 // --- Group 1: Bit-width correctness (B32, B64, B128), single WGP, mask=0x1 ---
 
 TEST(SingleWGP, B32_AllLanes)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     std::vector<int> src(NUM_LANES);
     for(int i = 0; i < NUM_LANES; i++)
         src[i] = 100 + i;
@@ -71,6 +77,10 @@ TEST(SingleWGP, B32_AllLanes)
 
 TEST(SingleWGP, B64_AllLanes)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     std::vector<int2> src(NUM_LANES);
     for(int i = 0; i < NUM_LANES; i++)
         src[i] = {100 + i, 200 + i};
@@ -79,6 +89,10 @@ TEST(SingleWGP, B64_AllLanes)
 
 TEST(SingleWGP, B128_AllLanes)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     std::vector<int4> src(NUM_LANES);
     for(int i = 0; i < NUM_LANES; i++)
         src[i] = {100 + i, 200 + i, 300 + i, 400 + i};
@@ -90,6 +104,10 @@ TEST(SingleWGP, B128_AllLanes)
 
 TEST(M0Mask, ZeroMask_NonMulticast) // mask=0x0: non-multicast path
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     std::vector<int> src(NUM_LANES);
     for(int i = 0; i < NUM_LANES; i++)
         src[i] = 100 + i;
@@ -98,6 +116,10 @@ TEST(M0Mask, ZeroMask_NonMulticast) // mask=0x0: non-multicast path
 
 TEST(M0Mask, SingleBit_WGP0) // mask=0x1: only WGP 0 participates
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     std::vector<int> src(NUM_LANES);
     for(int i = 0; i < NUM_LANES; i++)
         src[i] = 200 + i;
@@ -140,18 +162,14 @@ void run_broadcast_test(int num_wgs, const T& src_val, const char* test_name)
     const int total_threads = num_wgs * NUM_LANES;
 
     std::vector<T> h_dst(total_threads);
+    std::vector<int> h_diag_ids(num_wgs);
 
-    T* d_src;
-    T* d_dst;
-    int* d_diag_ids;
-
-    ASSERT_EQ(hipMalloc(&d_src, sizeof(T)), hipSuccess);
-    ASSERT_EQ(hipMalloc(&d_dst, total_threads * sizeof(T)), hipSuccess);
-    ASSERT_EQ(hipMemset(d_dst, 0xFF, total_threads * sizeof(T)), hipSuccess);
-    ASSERT_EQ(hipMalloc(&d_diag_ids, num_wgs * sizeof(int)), hipSuccess);
-
-    ASSERT_EQ(hipMemcpy(d_src, &src_val, sizeof(T), hipMemcpyHostToDevice), hipSuccess);
-    ASSERT_EQ(hipMemset(d_diag_ids, 0, num_wgs * sizeof(int)), hipSuccess);
+    ck_tile::DeviceMem d_src(sizeof(T));
+    ck_tile::DeviceMem d_dst(total_threads * sizeof(T));
+    ck_tile::DeviceMem d_diag_ids(num_wgs * sizeof(int));
+    d_src.ToDevice(&src_val);
+    d_dst.SetBytePattern(0xFF);
+    d_diag_ids.SetZero();
 
     ck_tile::stream_config sc{};
     auto kernel = ck_tile::make_kernel(MulticastBroadcastKernel<T>{},
@@ -159,20 +177,15 @@ void run_broadcast_test(int num_wgs, const T& src_val, const char* test_name)
                                        dim3(num_wgs),
                                        dim3(NUM_LANES),
                                        static_cast<std::size_t>(0),
-                                       d_src,
-                                       d_dst,
-                                       d_diag_ids,
+                                       static_cast<const T*>(d_src.GetDeviceBuffer()),
+                                       static_cast<T*>(d_dst.GetDeviceBuffer()),
+                                       static_cast<int*>(d_diag_ids.GetDeviceBuffer()),
                                        num_wgs);
     ASSERT_EQ(kernel(sc), hipSuccess);
     ASSERT_EQ(hipDeviceSynchronize(), hipSuccess);
 
-    ASSERT_EQ(hipMemcpy(h_dst.data(), d_dst, total_threads * sizeof(T), hipMemcpyDeviceToHost),
-              hipSuccess);
-
-    std::vector<int> h_diag_ids(num_wgs);
-    ASSERT_EQ(
-        hipMemcpy(h_diag_ids.data(), d_diag_ids, num_wgs * sizeof(int), hipMemcpyDeviceToHost),
-        hipSuccess);
+    d_dst.FromDevice(h_dst.data());
+    d_diag_ids.FromDevice(h_diag_ids.data());
 
     printf("  %s: flat IDs = {", test_name);
     for(int i = 0; i < num_wgs; i++)
@@ -185,41 +198,61 @@ void run_broadcast_test(int num_wgs, const T& src_val, const char* test_name)
     for(int i = 0; i < total_threads; i++)
         EXPECT_EQ(std::memcmp(&h_dst[i], &src_val, sizeof(T)), 0)
             << "Broadcast mismatch at thread " << i;
-
-    EXPECT_EQ(hipFree(d_src), hipSuccess);
-    EXPECT_EQ(hipFree(d_dst), hipSuccess);
-    EXPECT_EQ(hipFree(d_diag_ids), hipSuccess);
 }
 
 TEST(MultiWGP, Broadcast_2WGP_B32)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     run_broadcast_test<int>(2, static_cast<int>(0x13579BDF), "Broadcast_2WGP_B32");
 }
 
 TEST(MultiWGP, Broadcast_4WGP_B32)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     run_broadcast_test<int>(4, static_cast<int>(0x13579BDF), "Broadcast_4WGP_B32");
 }
 
 TEST(MultiWGP, Broadcast_5WGP_B32)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     run_broadcast_test<int>(5, static_cast<int>(0x13579BDF), "Broadcast_5WGP_B32");
 }
 
 TEST(MultiWGP, Broadcast_2WGP_B64)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     int2 src = {static_cast<int>(0x13579BDF), static_cast<int>(0x2468ACE0)};
     run_broadcast_test<int2>(2, src, "Broadcast_2WGP_B64");
 }
 
 TEST(MultiWGP, Broadcast_4WGP_B64)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     int2 src = {static_cast<int>(0x13579BDF), static_cast<int>(0x2468ACE0)};
     run_broadcast_test<int2>(4, src, "Broadcast_4WGP_B64");
 }
 
 TEST(MultiWGP, Broadcast_4WGP_B128)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     int4 src = {static_cast<int>(0x13579BDF),
                 static_cast<int>(0x2468ACE0),
                 0x12345678,
@@ -229,6 +262,10 @@ TEST(MultiWGP, Broadcast_4WGP_B128)
 
 TEST(MultiWGP, Broadcast_6WGP_B128)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     int4 src = {static_cast<int>(0x13579BDF),
                 static_cast<int>(0x2468ACE0),
                 0x12345678,
@@ -271,24 +308,24 @@ struct PartialBroadcastKernel
 
 TEST(PartialBroadcast, NonContiguous_4WGP_Mask0x5) // mask=0x5: WGPs 0 & 2
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     const int num_wgs       = 4;
     const int mask          = 0x5; // binary 0101
     const int total_threads = num_wgs * NUM_LANES;
     const int src_val       = static_cast<int>(0x13579BDF);
 
     std::vector<int> h_dst(total_threads);
+    std::vector<int> h_diag_ids(num_wgs);
 
-    int* d_src;
-    int* d_dst;
-    int* d_diag_ids;
-
-    ASSERT_EQ(hipMalloc(&d_src, sizeof(int)), hipSuccess);
-    ASSERT_EQ(hipMalloc(&d_dst, total_threads * sizeof(int)), hipSuccess);
-    ASSERT_EQ(hipMemset(d_dst, 0xFF, total_threads * sizeof(int)), hipSuccess);
-    ASSERT_EQ(hipMalloc(&d_diag_ids, num_wgs * sizeof(int)), hipSuccess);
-
-    ASSERT_EQ(hipMemcpy(d_src, &src_val, sizeof(int), hipMemcpyHostToDevice), hipSuccess);
-    ASSERT_EQ(hipMemset(d_diag_ids, 0, num_wgs * sizeof(int)), hipSuccess);
+    ck_tile::DeviceMem d_src(sizeof(int));
+    ck_tile::DeviceMem d_dst(total_threads * sizeof(int));
+    ck_tile::DeviceMem d_diag_ids(num_wgs * sizeof(int));
+    d_src.ToDevice(&src_val);
+    d_dst.SetBytePattern(0xFF);
+    d_diag_ids.SetZero();
 
     ck_tile::stream_config sc{};
     auto kernel = ck_tile::make_kernel(PartialBroadcastKernel<int>{},
@@ -296,20 +333,15 @@ TEST(PartialBroadcast, NonContiguous_4WGP_Mask0x5) // mask=0x5: WGPs 0 & 2
                                        dim3(num_wgs),
                                        dim3(NUM_LANES),
                                        static_cast<std::size_t>(0),
-                                       d_src,
-                                       d_dst,
-                                       d_diag_ids,
+                                       static_cast<const int*>(d_src.GetDeviceBuffer()),
+                                       static_cast<int*>(d_dst.GetDeviceBuffer()),
+                                       static_cast<int*>(d_diag_ids.GetDeviceBuffer()),
                                        mask);
     ASSERT_EQ(kernel(sc), hipSuccess);
     ASSERT_EQ(hipDeviceSynchronize(), hipSuccess);
 
-    ASSERT_EQ(hipMemcpy(h_dst.data(), d_dst, total_threads * sizeof(int), hipMemcpyDeviceToHost),
-              hipSuccess);
-
-    std::vector<int> h_diag_ids(num_wgs);
-    ASSERT_EQ(
-        hipMemcpy(h_diag_ids.data(), d_diag_ids, num_wgs * sizeof(int), hipMemcpyDeviceToHost),
-        hipSuccess);
+    d_dst.FromDevice(h_dst.data());
+    d_diag_ids.FromDevice(h_diag_ids.data());
 
     printf("  PartialBroadcast: flat IDs = {");
     for(int i = 0; i < num_wgs; i++)
@@ -321,10 +353,6 @@ TEST(PartialBroadcast, NonContiguous_4WGP_Mask0x5) // mask=0x5: WGPs 0 & 2
 
     for(int i = 0; i < total_threads; i++)
         EXPECT_EQ(std::memcmp(&h_dst[i], &src_val, sizeof(int)), 0) << "Mismatch at thread " << i;
-
-    EXPECT_EQ(hipFree(d_src), hipSuccess);
-    EXPECT_EQ(hipFree(d_dst), hipSuccess);
-    EXPECT_EQ(hipFree(d_diag_ids), hipSuccess);
 }
 
 // --- Group 5: Concurrent multicast groups ---
@@ -369,20 +397,17 @@ void run_concurrent_groups_test(const T& val_a, const T& val_b, const char* test
     const int num_wgs       = 4;
     const int total_threads = num_wgs * NUM_LANES;
 
-    T* d_src_a;
-    T* d_src_b;
-    T* d_dst;
-    int* d_diag_ids;
+    std::vector<T> h_dst(total_threads);
+    std::vector<int> h_diag_ids(num_wgs);
 
-    ASSERT_EQ(hipMalloc(&d_src_a, sizeof(T)), hipSuccess);
-    ASSERT_EQ(hipMalloc(&d_src_b, sizeof(T)), hipSuccess);
-    ASSERT_EQ(hipMalloc(&d_dst, total_threads * sizeof(T)), hipSuccess);
-    ASSERT_EQ(hipMemset(d_dst, 0xFF, total_threads * sizeof(T)), hipSuccess);
-    ASSERT_EQ(hipMalloc(&d_diag_ids, num_wgs * sizeof(int)), hipSuccess);
-
-    ASSERT_EQ(hipMemcpy(d_src_a, &val_a, sizeof(T), hipMemcpyHostToDevice), hipSuccess);
-    ASSERT_EQ(hipMemcpy(d_src_b, &val_b, sizeof(T), hipMemcpyHostToDevice), hipSuccess);
-    ASSERT_EQ(hipMemset(d_diag_ids, 0, num_wgs * sizeof(int)), hipSuccess);
+    ck_tile::DeviceMem d_src_a(sizeof(T));
+    ck_tile::DeviceMem d_src_b(sizeof(T));
+    ck_tile::DeviceMem d_dst(total_threads * sizeof(T));
+    ck_tile::DeviceMem d_diag_ids(num_wgs * sizeof(int));
+    d_src_a.ToDevice(&val_a);
+    d_src_b.ToDevice(&val_b);
+    d_dst.SetBytePattern(0xFF);
+    d_diag_ids.SetZero();
 
     ck_tile::stream_config sc{};
     auto kernel = ck_tile::make_kernel(ConcurrentGroupsKernel<T>{},
@@ -390,21 +415,15 @@ void run_concurrent_groups_test(const T& val_a, const T& val_b, const char* test
                                        dim3(num_wgs),
                                        dim3(NUM_LANES),
                                        static_cast<std::size_t>(0),
-                                       d_src_a,
-                                       d_src_b,
-                                       d_dst,
-                                       d_diag_ids);
+                                       static_cast<const T*>(d_src_a.GetDeviceBuffer()),
+                                       static_cast<const T*>(d_src_b.GetDeviceBuffer()),
+                                       static_cast<T*>(d_dst.GetDeviceBuffer()),
+                                       static_cast<int*>(d_diag_ids.GetDeviceBuffer()));
     ASSERT_EQ(kernel(sc), hipSuccess);
     ASSERT_EQ(hipDeviceSynchronize(), hipSuccess);
 
-    std::vector<T> h_dst(total_threads);
-    ASSERT_EQ(hipMemcpy(h_dst.data(), d_dst, total_threads * sizeof(T), hipMemcpyDeviceToHost),
-              hipSuccess);
-
-    std::vector<int> h_diag_ids(num_wgs);
-    ASSERT_EQ(
-        hipMemcpy(h_diag_ids.data(), d_diag_ids, num_wgs * sizeof(int), hipMemcpyDeviceToHost),
-        hipSuccess);
+    d_dst.FromDevice(h_dst.data());
+    d_diag_ids.FromDevice(h_diag_ids.data());
 
     printf("  %s: flat IDs = {", test_name);
     for(int i = 0; i < num_wgs; i++)
@@ -425,21 +444,24 @@ void run_concurrent_groups_test(const T& val_a, const T& val_b, const char* test
                 << "WGP " << wg << " lane " << lane << " mismatch";
         }
     }
-
-    EXPECT_EQ(hipFree(d_src_a), hipSuccess);
-    EXPECT_EQ(hipFree(d_src_b), hipSuccess);
-    EXPECT_EQ(hipFree(d_dst), hipSuccess);
-    EXPECT_EQ(hipFree(d_diag_ids), hipSuccess);
 }
 
 TEST(ConcurrentGroups, TwoGroups_4WGP_B32)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     run_concurrent_groups_test<int>(
         static_cast<int>(0x13579BDF), static_cast<int>(0x2468ACE0), "TwoGroups_4WGP_B32");
 }
 
 TEST(ConcurrentGroups, TwoGroups_4WGP_B64)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     int2 val_a = {static_cast<int>(0x13579BDF), static_cast<int>(0x11111111)};
     int2 val_b = {static_cast<int>(0x2468ACE0), static_cast<int>(0x22222222)};
     run_concurrent_groups_test<int2>(val_a, val_b, "TwoGroups_4WGP_B64");
@@ -450,6 +472,10 @@ TEST(ConcurrentGroups, TwoGroups_4WGP_B64)
 
 TEST(EarlyTimeout, SingleWGP_TimeoutBit)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     // mask=0x3 says 2 WGPs but only 1 launched; M0[16] prevents deadlock
     const int mask = 0x3 | (1 << 16);
 
@@ -482,6 +508,10 @@ struct BroadcastWithMaskKernel
 
 TEST(EarlyTimeout, MultiWGP_TimeoutBit)
 {
+    if(ck_tile::get_device_revision() == 0)
+    {
+        GTEST_SKIP() << "Cluster multicast load is not supported on asicRevision=0";
+    }
     // 2 WGPs launched, mask=0xF claims 4; M0[16] prevents deadlock waiting for WGPs 2&3
     const int num_wgs       = 2;
     const int mask          = 0xF | (1 << 16);
@@ -489,18 +519,14 @@ TEST(EarlyTimeout, MultiWGP_TimeoutBit)
     const int src_val       = static_cast<int>(0x13579BDF);
 
     std::vector<int> h_dst(total_threads);
+    std::vector<int> h_diag_ids(num_wgs);
 
-    int* d_src;
-    int* d_dst;
-    int* d_diag_ids;
-
-    ASSERT_EQ(hipMalloc(&d_src, sizeof(int)), hipSuccess);
-    ASSERT_EQ(hipMalloc(&d_dst, total_threads * sizeof(int)), hipSuccess);
-    ASSERT_EQ(hipMemset(d_dst, 0xFF, total_threads * sizeof(int)), hipSuccess);
-    ASSERT_EQ(hipMalloc(&d_diag_ids, num_wgs * sizeof(int)), hipSuccess);
-
-    ASSERT_EQ(hipMemcpy(d_src, &src_val, sizeof(int), hipMemcpyHostToDevice), hipSuccess);
-    ASSERT_EQ(hipMemset(d_diag_ids, 0, num_wgs * sizeof(int)), hipSuccess);
+    ck_tile::DeviceMem d_src(sizeof(int));
+    ck_tile::DeviceMem d_dst(total_threads * sizeof(int));
+    ck_tile::DeviceMem d_diag_ids(num_wgs * sizeof(int));
+    d_src.ToDevice(&src_val);
+    d_dst.SetBytePattern(0xFF);
+    d_diag_ids.SetZero();
 
     ck_tile::stream_config sc{};
     auto kernel = ck_tile::make_kernel(BroadcastWithMaskKernel<int>{},
@@ -508,20 +534,15 @@ TEST(EarlyTimeout, MultiWGP_TimeoutBit)
                                        dim3(num_wgs),
                                        dim3(NUM_LANES),
                                        static_cast<std::size_t>(0),
-                                       d_src,
-                                       d_dst,
-                                       d_diag_ids,
+                                       static_cast<const int*>(d_src.GetDeviceBuffer()),
+                                       static_cast<int*>(d_dst.GetDeviceBuffer()),
+                                       static_cast<int*>(d_diag_ids.GetDeviceBuffer()),
                                        mask);
     ASSERT_EQ(kernel(sc), hipSuccess);
     ASSERT_EQ(hipDeviceSynchronize(), hipSuccess);
 
-    ASSERT_EQ(hipMemcpy(h_dst.data(), d_dst, total_threads * sizeof(int), hipMemcpyDeviceToHost),
-              hipSuccess);
-
-    std::vector<int> h_diag_ids(num_wgs);
-    ASSERT_EQ(
-        hipMemcpy(h_diag_ids.data(), d_diag_ids, num_wgs * sizeof(int), hipMemcpyDeviceToHost),
-        hipSuccess);
+    d_dst.FromDevice(h_dst.data());
+    d_diag_ids.FromDevice(h_diag_ids.data());
 
     printf("  EarlyTimeout_MultiWGP: flat IDs = {");
     for(int i = 0; i < num_wgs; i++)
@@ -533,8 +554,4 @@ TEST(EarlyTimeout, MultiWGP_TimeoutBit)
 
     for(int i = 0; i < total_threads; i++)
         EXPECT_EQ(std::memcmp(&h_dst[i], &src_val, sizeof(int)), 0) << "Mismatch at thread " << i;
-
-    EXPECT_EQ(hipFree(d_src), hipSuccess);
-    EXPECT_EQ(hipFree(d_dst), hipSuccess);
-    EXPECT_EQ(hipFree(d_diag_ids), hipSuccess);
 }

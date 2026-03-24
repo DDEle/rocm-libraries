@@ -1894,7 +1894,12 @@ struct MfmaSelector
         return MfmaInstr::mfma_scale_f32_32x32x64f8f6f4;
     }
     template <>
-    constexpr auto GetMfma<f4_t, 16, 16, f4_t, is_single_rate_mfma, true>()
+    constexpr auto GetMfma<element_type_t<base_type>,
+                           16,
+                           16,
+                           element_type_t<additional_type>,
+                           is_single_rate_mfma,
+                           true>()
     {
 #if defined(__gfx125__)
         return MfmaInstr::wmma_scale_f32_16x16x128_f8f6f4_gfx125;
@@ -1938,92 +1943,15 @@ struct MfmaSelector
     }
 
     template <>
-    constexpr auto GetMfma<f8_t, 16, 16, f8_t, is_single_rate_mfma, true>()
-    {
-#if defined(__gfx125__)
-        return MfmaInstr::wmma_scale_f32_16x16x128_f8f6f4_gfx125;
-#elif defined(__gfx120__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx12;
-#elif defined(__gfx11__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx11;
-#else
-        return MfmaInstr::mfma_scale_f32_16x16x128f8f6f4;
-#endif
-    }
-
-    template <>
-    constexpr auto GetMfma<bf8_t, 16, 16, bf8_t, is_single_rate_mfma, true>()
-    {
-#if defined(__gfx125__)
-        return MfmaInstr::wmma_scale_f32_16x16x128_f8f6f4_gfx125;
-#elif defined(__gfx120__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx12;
-#elif defined(__gfx11__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx11;
-#else
-        return MfmaInstr::mfma_scale_f32_16x16x128f8f6f4;
-#endif
-    }
-
-    template <>
-    constexpr auto GetMfma<f8_t, 16, 16, bf8_t, is_single_rate_mfma, true>()
-    {
-#if defined(__gfx12__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx12;
-#elif defined(__gfx11__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx11;
-#else
-        return MfmaInstr::mfma_scale_f32_16x16x128f8f6f4;
-#endif
-    }
-
-    template <>
-    constexpr auto GetMfma<bf8_t, 16, 16, f8_t, is_single_rate_mfma, true>()
-    {
-#if defined(__gfx12__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx12;
-#elif defined(__gfx11__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx11;
-#else
-        return MfmaInstr::mfma_scale_f32_16x16x128f8f6f4;
-#endif
-    }
-
-    template <>
     constexpr auto GetMfma<f6_t, 32, 32, f6_t, is_single_rate_mfma, true>()
     {
         return MfmaInstr::mfma_scale_f32_32x32x64f8f6f4;
     }
-    template <>
-    constexpr auto GetMfma<f6_t, 16, 16, f6_t, is_single_rate_mfma, true>()
-    {
-#if defined(__gfx125__)
-        return MfmaInstr::wmma_scale_f32_16x16x128_f8f6f4_gfx125;
-#elif defined(__gfx120__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx12;
-#elif defined(__gfx11__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx11;
-#else
-        return MfmaInstr::mfma_scale_f32_16x16x128f8f6f4;
-#endif
-    }
+
     template <>
     constexpr auto GetMfma<bf6_t, 32, 32, bf6_t, is_single_rate_mfma, true>()
     {
         return MfmaInstr::mfma_scale_f32_32x32x64f8f6f4;
-    }
-    template <>
-    constexpr auto GetMfma<bf6_t, 16, 16, bf6_t, is_single_rate_mfma, true>()
-    {
-#if defined(__gfx125__)
-        return MfmaInstr::wmma_scale_f32_16x16x128_f8f6f4_gfx125;
-#elif defined(__gfx120__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx12;
-#elif defined(__gfx11__)
-        return MfmaInstr::wmma_unsupport_16x16_gfx11;
-#else
-        return MfmaInstr::mfma_scale_f32_16x16x128f8f6f4;
-#endif
     }
 
     template <>

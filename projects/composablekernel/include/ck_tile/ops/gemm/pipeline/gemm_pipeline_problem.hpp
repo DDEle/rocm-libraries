@@ -355,6 +355,7 @@ struct FlatmmPipelineProblem
     using BLayout = remove_cvref_t<typename Traits::BsLayout>;
     using CLayout = remove_cvref_t<typename Traits::CLayout>;
 
+    static constexpr bool FixedVectorSize       = false;
     static constexpr bool TransposeC            = Traits::TransposeC;
     static constexpr index_t NumWaveGroups      = Traits::NumWaveGroups;
     static constexpr bool UseStructuredSparsity = Traits::UseStructuredSparsity;

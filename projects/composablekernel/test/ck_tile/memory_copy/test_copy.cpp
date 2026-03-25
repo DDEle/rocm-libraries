@@ -154,6 +154,9 @@ TEST_P(TestCkTileMemoryCopyF6x16Async, TestCorrectness)
     auto [M, N, warp_id] = GetParam();
     this->Run({M, N, warp_id});
 }
+#else
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TestCkTileMemoryCopyF6x16);
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TestCkTileMemoryCopyF6x16Async);
 #endif
 
 TEST_P(TestCkTileMemoryCopyHalfAsync, TestCorrectness)

@@ -299,6 +299,7 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
 
 #if CK_TILE_FMHA_FWD_FAST_EXP2
     static constexpr auto R_LOG2E = 1.0 / log2e_v<SaccDataType>;
+    static constexpr auto LOG2E   = log2e_v<SaccDataType>;
 #endif
 
     static constexpr index_t kBlockPerCu = []() {
@@ -406,6 +407,7 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                const index_t page_stride_k,
                const index_t page_stride_v,
                DropoutType& dropout,
+               const float sink_v,
                // KV_BLOCKSCALE parameters (only used when QScaleEnum == KV_BLOCKSCALE)
                const float* k_descale_ptr             = nullptr,
                const float* v_descale_ptr             = nullptr,
@@ -503,8 +505,24 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
         auto l     = MLBlockTileType{};
 
         clear_tile(o_acc);
-        set_tile(m, -numeric<SMPLComputeDataType>::infinity());
-        clear_tile(l);
+        if(__builtin_isinf_sign(sink_v) >= 0)
+        {
+#if CK_TILE_FMHA_FWD_FAST_EXP2
+            if constexpr(BiasEnum == BlockAttentionBiasEnum::ELEMENTWISE_BIAS ||
+                         BiasEnum == BlockAttentionBiasEnum::ALIBI)
+                set_tile(m, sink_v * LOG2E * scale_s);
+            else
+                set_tile(m, sink_v * LOG2E);
+#else
+            set_tile(m, sink_v);
+#endif
+            set_tile(l, SMPLComputeDataType{1.0f});
+        }
+        else
+        {
+            set_tile(m, -numeric<SMPLComputeDataType>::infinity());
+            clear_tile(l);
+        }
 
         __builtin_amdgcn_sched_barrier(0);
         const auto q_origin = q_dram_window.get_window_origin();
@@ -523,7 +541,14 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                     auto lse =
                         make_static_distributed_tensor<LSEDataType>(m.get_tile_distribution());
 
-                    set_tile(lse, -numeric<SMPLComputeDataType>::infinity());
+                    if(__builtin_isinf_sign(sink_v) >= 0)
+                    {
+                        set_tile(lse, SMPLComputeDataType{sink_v * scale_s});
+                    }
+                    else
+                    {
+                        set_tile(lse, -numeric<SMPLComputeDataType>::infinity());
+                    }
 
                     store_tile(lse_dram_window_tmp, tile_elementwise_in(lse_element_func, lse));
                 }
@@ -1466,7 +1491,8 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                const index_t stride_v,
                const index_t page_stride_k,
                const index_t page_stride_v,
-               DropoutType& dropout) const
+               DropoutType& dropout,
+               float sink_v) const
     {
         return operator()(q_dram_block_window_tmp,
                           identity{},
@@ -1494,7 +1520,8 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                           stride_v,
                           page_stride_k,
                           page_stride_v,
-                          dropout);
+                          dropout,
+                          sink_v);
     }
 
     // Overload for KV_BLOCKSCALE: K/V descale is per-page
@@ -1560,6 +1587,77 @@ struct BlockFmhaBatchPrefillPipelineQRKSVSAsync
                           page_stride_k,
                           page_stride_v,
                           dropout,
+                          k_descale_ptr,
+                          v_descale_ptr,
+                          nblock_stride_kv_block_descale,
+                          nhead_stride_kv_block_descale);
+    }
+
+    // Overload for KV_BLOCKSCALE: K/V descale is per-page
+    // This is a convenience overload that forwards to the main operator() with kv_scale parameters
+    template <typename QDramBlockWindowTmp,
+              typename KDramBlockWindowTmp,
+              typename VDramBlockWindowTmp,
+              typename BiasDramBlockWindowTmp,
+              typename RandValDramBlockWindowTmp,
+              typename LSEDramBlockWindowTmp,
+              typename PositionEncoding,
+              typename AttentionVariantParams,
+              typename BlockIndices>
+    CK_TILE_HOST_DEVICE auto
+    operator()(const QDramBlockWindowTmp& q_dram_block_window_tmp,       // M0*K0 tile
+               const KDramBlockWindowTmp& k_dram_block_window_tmp,       // N0*K0 tile
+               const VDramBlockWindowTmp& v_dram_block_window_tmp,       // N1*K1 tile
+               const BiasDramBlockWindowTmp& bias_dram_block_window_tmp, // M0*N0 tile
+               RandValDramBlockWindowTmp& randval_dram_block_window_tmp, // M0*N0 tile
+               LSEDramBlockWindowTmp& lse_dram_block_window_tmp,         // M0*1 tile
+               FmhaMask mask,
+               PositionEncoding position_encoding,
+               float scale_s,
+               const AttentionVariant& variant,
+               const AttentionVariantParams& variant_params,
+               const BlockIndices& block_indices,
+               void* smem_ptr,
+               const index_t* page_idx,
+               const index_t stride_k,
+               const index_t stride_v,
+               const index_t page_stride_k,
+               const index_t page_stride_v,
+               DropoutType& dropout,
+               float sink_v,
+               const float* k_descale_ptr,
+               const float* v_descale_ptr,
+               index_t nblock_stride_kv_block_descale,
+               index_t nhead_stride_kv_block_descale) const
+    {
+        return operator()(q_dram_block_window_tmp,
+                          identity{},
+                          k_dram_block_window_tmp,
+                          identity{},
+                          v_dram_block_window_tmp,
+                          identity{},
+                          bias_dram_block_window_tmp,
+                          identity{},
+                          randval_dram_block_window_tmp,
+                          lse_dram_block_window_tmp,
+                          identity{},
+                          identity{},
+                          identity{},
+                          identity{},
+                          mask,
+                          position_encoding,
+                          scale_s,
+                          variant,
+                          variant_params,
+                          block_indices,
+                          smem_ptr,
+                          page_idx,
+                          stride_k,
+                          stride_v,
+                          page_stride_k,
+                          page_stride_v,
+                          dropout,
+                          sink_v,
                           k_descale_ptr,
                           v_descale_ptr,
                           nblock_stride_kv_block_descale,

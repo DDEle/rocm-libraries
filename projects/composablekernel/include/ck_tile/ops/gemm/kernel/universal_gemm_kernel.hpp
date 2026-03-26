@@ -157,12 +157,17 @@ struct UniversalGemmKernelArgs
 ///                             multiplication implementation. It is responsible for storing
 ///                             results calculated by @ref GemmPipeline_ "GemmPipeline" to
 ///                             the output E tensor in global memory.
-template <typename TilePartitioner_, typename GemmPipeline_, typename EpiloguePipeline_>
+template <typename TilePartitioner_,
+          typename GemmPipeline_,
+          typename EpiloguePipeline_,
+          typename Derived_ = void>
 struct UniversalGemmKernel
 {
     using TilePartitioner  = remove_cvref_t<TilePartitioner_>;
     using GemmPipeline     = remove_cvref_t<GemmPipeline_>;
     using EpiloguePipeline = remove_cvref_t<EpiloguePipeline_>;
+
+    using SelfType = std::conditional_t<std::is_void_v<Derived_>, UniversalGemmKernel, Derived_>;
 
     static constexpr bool ADataTypeIsTuple =
         is_detected<is_tuple, typename GemmPipeline::AsDataType>::value;
@@ -323,8 +328,7 @@ struct UniversalGemmKernel
      */
     CK_TILE_HOST static auto MaxOccupancyGridSize(const stream_config& s) -> dim3
     {
-        using Kernel      = UniversalGemmKernel<TilePartitioner, GemmPipeline, EpiloguePipeline>;
-        const auto kernel = kentry<1, Kernel, KernelArgs>;
+        const auto kernel = kentry<1, SelfType, typename SelfType::KernelArgs>;
         int occupancy;
         ck_tile::hip_check_error(
             hipOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, kernel, BlockSize().x, 0));
@@ -1300,8 +1304,8 @@ struct UniversalGemmKernel
     }
 
     // Non-persistent kernel entry point
-    template <bool U = !PersistentKernel, typename = std::enable_if_t<U>>
-    CK_TILE_DEVICE void operator()(KernelArgs kargs) const
+    template <bool U = !PersistentKernel, typename = std::enable_if_t<U>, typename KArgs>
+    CK_TILE_DEVICE void operator()(KArgs kargs) const
     {
         const auto [i_m, i_n] = GetTileCoordinates(kargs);
 
@@ -1331,13 +1335,16 @@ struct UniversalGemmKernel
         // allocate LDS
         __shared__ char smem_ptr[GetSmemSize()];
 
-        RunGemm(
+        SelfType::RunGemm(
             as_ptr, bs_ptr, kargs.ds_ptr, e_ptr, smem_ptr, kargs, splitk_batch_offset, i_m, i_n);
     }
 
     // Persistent kernel entry point
-    template <bool U = PersistentKernel, typename = std::enable_if_t<U>, typename = void>
-    CK_TILE_DEVICE void operator()(KernelArgs kargs) const
+    template <bool U   = PersistentKernel,
+              typename = std::enable_if_t<U>,
+              typename = void,
+              typename KArgs>
+    CK_TILE_DEVICE void operator()(KArgs kargs) const
     {
         const auto grid_size = GetGridSize();
         const auto num_tiles = GetNumTiles(kargs.M, kargs.N);
@@ -1398,15 +1405,15 @@ struct UniversalGemmKernel
             // allocate LDS
             __shared__ char smem_ptr[GetSmemSize()];
             // Run the GEMM
-            RunGemm(as_ptr,
-                    bs_ptr,
-                    kargs.ds_ptr,
-                    e_ptr,
-                    smem_ptr,
-                    kargs,
-                    splitk_batch_offset,
-                    i_m,
-                    i_n);
+            SelfType::RunGemm(as_ptr,
+                              bs_ptr,
+                              kargs.ds_ptr,
+                              e_ptr,
+                              smem_ptr,
+                              kargs,
+                              splitk_batch_offset,
+                              i_m,
+                              i_n);
 
             // Advance to the next work item
             block_id += grid_size;

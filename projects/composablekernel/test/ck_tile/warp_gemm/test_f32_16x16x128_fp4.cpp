@@ -186,7 +186,7 @@ TYPED_TEST(WGRuntimeTest, Compare_Dispatcher_MakeWG)
 
     ck_tile::HostTensor<CType> C_ref({M, N});
     C_ref.SetZero();
-    ck_tile::reference_mx_gemm<AType, BType, e8m0_t, CType, CType>(
+    ck_tile::reference_mx_gemm<AType, BType, e8m0_t, e8m0_t, CType, CType>(
         A, B.transpose(), C_ref, sA, sB.transpose());
 
     EXPECT_TRUE(ck_tile::check_err(C, C_ref, "Warp gemm result error."));

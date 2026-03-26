@@ -60,7 +60,10 @@ class TestCkTileGroupedGemm : public ::testing::Test
         static const ck_tile::index_t M_Warp_Tile = 16;
         static const ck_tile::index_t N_Warp_Tile = 16;
 #if defined(CK_USE_GFX1250)
-        static const ck_tile::index_t K_Warp_Tile = 32;
+        static constexpr ck_tile::index_t K_Warp_Tile =
+            (std::is_same_v<ADataType, ck_tile::fp8_t> && std::is_same_v<BDataType, ck_tile::fp8_t>)
+                ? 64
+                : 32;
 #else
         static const ck_tile::index_t K_Warp_Tile = 16;
 #endif
@@ -347,7 +350,7 @@ class TestCkTileGroupedGemm : public ::testing::Test
             const ck_tile::index_t N = Ns[i];
             const ck_tile::index_t K = Ks[i];
 
-            stride_As[i] = f_get_default_stride(M, N, stride_As[i], ALayout{});
+            stride_As[i] = f_get_default_stride(M, K, stride_As[i], ALayout{});
             stride_Bs[i] = f_get_default_stride(K, N, stride_Bs[i], BLayout{});
             stride_Cs[i] = f_get_default_stride(M, N, stride_Cs[i], CLayout{});
 

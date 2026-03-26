@@ -229,19 +229,10 @@ struct UniversalGemmKernel
     };
     static constexpr bool PersistentKernel = has_persistent_kernel::value;
 
-    struct has_cluster_launch
-    {
-        template <typename T>
-        using has_cluster_launch_type = decltype(T::UseClusterLaunch);
-
-        static constexpr bool value = []() {
-            if constexpr(is_detected<has_cluster_launch_type, GemmPipeline>{})
-                return GemmPipeline::UseClusterLaunch;
-            else
-                return false;
-        }();
-    };
-    static constexpr bool ClusterLaunch = has_cluster_launch::value;
+    static constexpr bool ClusterLaunch =
+        (TilePartitioner::BlockGemmShape::kclusterM * TilePartitioner::BlockGemmShape::kclusterN *
+             TilePartitioner::BlockGemmShape::kclusterK >
+         1);
 
     // Check if TilePartitioner has GetOutputOffset method with kargs and k_id
     struct has_tile_partitioner_output_offset_impl
@@ -1182,10 +1173,7 @@ struct UniversalGemmKernel
     {
 
         // cluster launch GridDim is aligned to clusterDim, need to skip out-of-bound blocks
-        if constexpr(ClusterLaunch && (TilePartitioner::BlockGemmShape::kclusterM *
-                                           TilePartitioner::BlockGemmShape::kclusterN *
-                                           TilePartitioner::BlockGemmShape::kclusterK >
-                                       1))
+        if constexpr(ClusterLaunch)
         {
             if(block_idx_m >= kargs.M || block_idx_n >= kargs.N)
                 return;

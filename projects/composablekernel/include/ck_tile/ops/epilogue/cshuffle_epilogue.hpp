@@ -873,6 +873,8 @@ struct CShuffleEpilogue
             }
         }();
 
+        s_wait_tensorcnt_barrier();
+
         static_for<0, num_access, 1>{}([&](auto iAccess) {
             block_sync_lds();
             slice_acc_tile<iAccess>(o_acc_tile, lds_tile);

@@ -6,6 +6,7 @@
 #include "ck_tile/core/config.hpp"
 #include "ck_tile/core/arch/arch.hpp"
 #include "ck_tile/core/arch/amd_buffer_addressing_builtins.hpp"
+#include "ck_tile/core/arch/amd_cluster_load.hpp"
 #include "ck_tile/core/arch/amd_buffer_addressing.hpp"
 #include "ck_tile/core/arch/amd_tdm_descriptor.hpp"
 #include "ck_tile/core/arch/generic_memory_space_atomic.hpp"
@@ -427,13 +428,18 @@ struct buffer_view<address_space_enum::global,
                                             bool_constant<oob_conditional_check> = {}) const
     {
         // X is vector of T
-        constexpr index_t scalar_per_t_vector = vector_traits<remove_cvref_t<T>>::vector_size;
-        constexpr index_t scalar_per_x_vector = vector_traits<remove_cvref_t<X>>::vector_size;
 
+        // If T is already a vector, how many elements are in T?
+        constexpr index_t scalar_per_t_vector = vector_traits<remove_cvref_t<T>>::vector_size;
+        // If X is a vector, how many elements are in X?
+        constexpr index_t scalar_per_x_vector = vector_traits<remove_cvref_t<X>>::vector_size;
+        // X should be a multiple of T for X to exactly contain every T.
         static_assert(scalar_per_x_vector % scalar_per_t_vector == 0,
                       "wrong! X should contain multiple T");
 
+        // how many chunks of T are in one X?
         constexpr index_t t_per_x = scalar_per_x_vector / scalar_per_t_vector;
+
 #if defined(__gfx125__) // for gfx125; there uses another instruction to do async load
         auto p_uniform_ptr              = amd_wave_read_first_lane(p_data_);
         constexpr index_t static_offset = linear_offset_t{}.value;
@@ -451,6 +457,44 @@ struct buffer_view<address_space_enum::global,
             std::forward<linear_offset_t>(linear_offset),
             is_valid_element,
             bool_constant<oob_conditional_check>{});
+#endif
+    }
+
+    // i is offset of T, not X. i should be aligned to X.
+    // mask — M0[15:0] WGP participation mask; M0[16] sets early-timeout.
+    template <typename X,
+              index_t inst_offset = 0,
+              typename std::enable_if<
+                  std::is_same<typename vector_traits<remove_cvref_t<X>>::scalar_type,
+                               typename vector_traits<remove_cvref_t<T>>::scalar_type>::value,
+                  bool>::type = false>
+    CK_TILE_DEVICE constexpr void
+    cluster_async_get(remove_cvref_t<T>* smem, index_t i, index_t linear_offset, int mask) const
+    {
+        constexpr index_t scalar_per_t_vector = vector_traits<remove_cvref_t<T>>::vector_size;
+        constexpr index_t scalar_per_x_vector = vector_traits<remove_cvref_t<X>>::vector_size;
+
+        static_assert(scalar_per_x_vector % scalar_per_t_vector == 0,
+                      "wrong! X should contain multiple T");
+
+#ifdef __gfx1250__
+        auto p_uniform_ptr = amd_wave_read_first_lane(p_data_);
+
+        const remove_cvref_t<X>* g_src =
+            reinterpret_cast<const remove_cvref_t<X>*>(p_uniform_ptr + i + linear_offset);
+
+        // reinterpret_cast changes only the element type (generic→generic, no address-space
+        // change). to_lds then converts generic→address_space(3) using a pragma-guarded
+        // C-style cast, matching the pattern used by the rest of the codebase.
+        auto* lds_ptr = to_lds(reinterpret_cast<remove_cvref_t<X>*>(smem));
+
+        cluster_multicast_load_async_to_lds<remove_cvref_t<X>, inst_offset>(g_src, lds_ptr, mask);
+#else
+        (void)smem;
+        (void)i;
+        (void)linear_offset;
+        (void)mask;
+        static_assert(sizeof(X) == 0, "cluster_async_get is only supported on gfx1250");
 #endif
     }
 

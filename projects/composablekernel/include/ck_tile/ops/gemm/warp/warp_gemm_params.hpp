@@ -7,6 +7,34 @@
 
 namespace ck_tile {
 
+enum class ScaleDataType
+{
+    E8M0, // 0
+    E5M3, // 1
+    E4M3  // 2
+};
+
+template <typename T>
+struct ScaleDataTypeToEnum;
+
+template <>
+struct ScaleDataTypeToEnum<e8m0_t>
+{
+    static constexpr index_t value = static_cast<index_t>(ScaleDataType::E8M0);
+};
+
+template <>
+struct ScaleDataTypeToEnum<e5m3_t>
+{
+    static constexpr index_t value = static_cast<index_t>(ScaleDataType::E5M3);
+};
+
+template <>
+struct ScaleDataTypeToEnum<e4m3_t>
+{
+    static constexpr index_t value = static_cast<index_t>(ScaleDataType::E4M3);
+};
+
 template <bool Value>
 struct Clamp : bool_constant<Value>
 {
@@ -19,6 +47,16 @@ struct ReuseA : bool_constant<Value>
 
 template <bool Value>
 struct ReuseB : bool_constant<Value>
+{
+};
+
+template <index_t Value>
+struct AScaleDataType : number<Value>
+{
+};
+
+template <index_t Value>
+struct BScaleDataType : number<Value>
 {
 };
 
@@ -53,6 +91,8 @@ struct WarpGemmDefaultParams
     using op_sel_a   = number<0>;
     using op_sel_b   = number<0>;
     using swap_reuse = bool_constant<false>; // internal use only
+    using scale_a    = number<0>;
+    using scale_b    = number<0>;
 };
 
 template <typename T, template <index_t> class Tag>
@@ -102,6 +142,10 @@ class WarpGemmParamsParser
     static constexpr bool raw_reuse_b = extract<ReuseB, WarpGemmDefaultParams::reuse_b>();
     static constexpr index_t raw_op_sel_a = extract<OpSelA, WarpGemmDefaultParams::op_sel_a>();
     static constexpr index_t raw_op_sel_b = extract<OpSelB, WarpGemmDefaultParams::op_sel_b>();
+    static constexpr index_t raw_scale_a =
+        extract<AScaleDataType, WarpGemmDefaultParams::scale_a>();
+    static constexpr index_t raw_scale_b =
+        extract<BScaleDataType, WarpGemmDefaultParams::scale_b>();
 
     public:
     static constexpr bool clamp       = extract<Clamp, WarpGemmDefaultParams::clamp>();
@@ -110,6 +154,8 @@ class WarpGemmParamsParser
     static constexpr bool reuse_b     = swap_reuse ? raw_reuse_a : raw_reuse_b;
     static constexpr index_t op_sel_a = swap_reuse ? raw_op_sel_b : raw_op_sel_a;
     static constexpr index_t op_sel_b = swap_reuse ? raw_op_sel_a : raw_op_sel_b;
+    static constexpr index_t scale_a  = swap_reuse ? raw_scale_b : raw_scale_a;
+    static constexpr index_t scale_b  = swap_reuse ? raw_scale_a : raw_scale_b;
 };
 
 } // namespace ck_tile

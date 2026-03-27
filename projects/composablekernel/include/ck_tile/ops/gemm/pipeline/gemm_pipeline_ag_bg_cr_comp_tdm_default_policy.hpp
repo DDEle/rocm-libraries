@@ -360,6 +360,68 @@ struct GemmPipelineAgBgCrCompTDMDefaultPolicy
     }
 
     template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakeScaleADramTileDistribution()
+    {
+        using TileShape  = typename Problem::BlockGemmShape;
+        using BlockWarps = typename TileShape::BlockWarps;
+
+        constexpr index_t MWarps     = BlockWarps::at(Base::I0);
+        constexpr index_t NWarps     = BlockWarps::at(Base::I1);
+        constexpr index_t kMPerBlock = TileShape::kM;
+        constexpr index_t kKPerBlock = TileShape::kK;
+
+        constexpr index_t ScaleSize = 32;
+
+        // for gfx1250 mx gemm supports 32x32x128
+        static_assert(TileShape::WarpTile::at(Base::I0) == 32);
+
+        constexpr index_t MIterPerWarp = kMPerBlock / MWarps / TileShape::WarpTile::at(Base::I0);
+
+        return make_static_tile_distribution(
+            tile_distribution_encoding<
+                sequence<NWarps>,
+                tuple<sequence<MIterPerWarp, MWarps, get_warp_size()>,
+                      sequence<kKPerBlock / ScaleSize / 4, 1>>, // 4 is because scale tensor is
+                                                                // int32_t data type, each int32_t
+                                                                // exists 4 fp8 scale values
+                tuple<sequence<1, 0>, sequence<1>>,
+                tuple<sequence<1, 0>, sequence<2>>,
+                sequence<1, 2, 2>,
+                sequence<0, 0, 1>>{});
+    }
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakeScaleBDramTileDistribution()
+    {
+        using TileShape  = typename Problem::BlockGemmShape;
+        using BlockWarps = typename TileShape::BlockWarps;
+
+        constexpr index_t MWarps     = BlockWarps::at(Base::I0);
+        constexpr index_t NWarps     = BlockWarps::at(Base::I1);
+        constexpr index_t kNPerBlock = TileShape::kN;
+        constexpr index_t kKPerBlock = TileShape::kK;
+
+        constexpr index_t ScaleSize = 32;
+
+        // for gfx1250 mx gemm supports 32x32x128
+        static_assert(TileShape::WarpTile::at(Base::I1) == 32);
+
+        constexpr index_t NIterPerWarp = kNPerBlock / NWarps / TileShape::WarpTile::at(Base::I1);
+
+        return make_static_tile_distribution(
+            tile_distribution_encoding<
+                sequence<MWarps>,
+                tuple<sequence<NIterPerWarp, NWarps, get_warp_size()>,
+                      sequence<kKPerBlock / ScaleSize / 4, 1>>, // 4 is because scale tensor is
+                                                                // int32_t data type, each int32_t
+                                                                // exists 4 fp8 scale values
+                tuple<sequence<0, 1>, sequence<1>>,
+                tuple<sequence<0, 1>, sequence<2>>,
+                sequence<1, 2, 2>,
+                sequence<0, 0, 1>>{});
+    }
+
+    template <typename Problem>
     CK_TILE_DEVICE static constexpr auto GetBlockGemm()
     {
         using BlockWarps = typename Problem::BlockGemmShape::BlockWarps;

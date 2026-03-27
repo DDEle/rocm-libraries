@@ -8,6 +8,7 @@
 #include "ck_tile/host.hpp"
 #include "test_grouped_gemm_util.hpp"
 
+using F8    = ck_tile::fp8_t;
 using F16   = ck_tile::half_t;
 using F32   = float;
 using BF16  = ck_tile::bf16_t;
@@ -37,6 +38,16 @@ using KernelTypes = ::testing::Types<
     std::tuple<    Row,     Row,     Row,       BF16,      BF16,         F32,       BF16,      False>,
     std::tuple<    Col,     Row,     Row,       BF16,      BF16,         F32,       BF16,       True>,
     std::tuple<    Col,     Row,     Row,       BF16,      BF16,         F32,       BF16,      False>
+
+#ifdef CK_USE_GFX1250
+    ,
+    std::tuple<    Col,     Col,     Row,       F8,        F8,           F32,       BF16,       True>,
+    std::tuple<    Col,     Col,     Row,       F8,        F8,           F32,       BF16,      False>,
+    std::tuple<    Row,     Row,     Row,       F8,        F8,           F32,       BF16,       True>,
+    std::tuple<    Row,     Row,     Row,       F8,        F8,           F32,       BF16,      False>,
+    std::tuple<    Col,     Row,     Row,       F8,        F8,           F32,       BF16,       True>,
+    std::tuple<    Col,     Row,     Row,       F8,        F8,           F32,       BF16,      False>
+#endif
     >;
 // clang-format on
 

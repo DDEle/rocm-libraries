@@ -746,6 +746,8 @@ struct WmmaTraits<gfx125_t, AType, BType, float, 32, 32, 128>
         auto&& b_buffer = bit_cast<b_buf>(b_vec);
         auto&& c_result = bit_cast<c_buf>(c_vec);
 
+        using P = WarpGemmParamsParser<Params...>;
+
         static_for<0, kCNBlock, 1>{}([&](auto n) {
             static_for<0, kCMBlock, 1>{}([&](auto m) {
                 constexpr index_t c_idx = m * kCNBlock + n;
@@ -761,11 +763,11 @@ struct WmmaTraits<gfx125_t, AType, BType, float, 32, 32, 128>
                     BTraits::to_wmma_vec(bit_cast<typename BTraits::VecType>(b_slice)),
                     0,
                     c_slice,
-                    m.value, // OPSEL[0]
-                    0,       // OPSEL_HI[0]
+                    m.value,    // OPSEL[0]
+                    P::scale_a, // OPSEL_HI[0]
                     a_scale,
-                    n.value, // OPSEL[1]
-                    0,       // OPSEL_HI[1]
+                    n.value,    // OPSEL[1]
+                    P::scale_b, // OPSEL_HI[1]
                     b_scale,
                     0,  // NEG
                     0); // NEG_HI

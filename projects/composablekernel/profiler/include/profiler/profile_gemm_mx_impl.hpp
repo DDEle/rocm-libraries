@@ -504,13 +504,18 @@ bool profile_gemm_mx_impl(int do_verification,
 
                 if(do_log > 0)
                     std::cout << "Run device GEMM..." << std::endl;
-                invoker_ptr->Run(argument_ptr.get(),
-                                 StreamConfig{nullptr, false, 0, n_warmup, n_iter});
+
+                float ave_time = invoker_ptr->Run(
+                    argument_ptr.get(), StreamConfig{nullptr, false, 0, n_warmup, n_iter});
+
                 if(do_log > 0)
                     std::cout << "Done." << std::endl;
 
                 if(do_verification)
                 {
+                    if(do_log > 0)
+                        std::cout << "Verification ..." << std::endl;
+
                     c_device_buf.FromDevice(c_m_n_device_result.mData.data());
 
                     if(do_log)
@@ -553,24 +558,43 @@ bool profile_gemm_mx_impl(int do_verification,
                                 << std::endl;
                         }
                     }
+
+                    const float rtol = 1e-2;
+                    const float atol = 1e-2;
                     if(do_log > 0)
-                        std::cout << "Check error..." << std::endl;
-                    pass = pass & ck::utils::check_err(c_m_n_device_result, c_m_n_host_result);
+                    {
+                        std::cout << "Relative error threshold: " << rtol
+                                  << " Absolute error threshold: " << atol << std::endl;
+                    }
+                    pass = pass & ck::utils::check_err(c_m_n_device_result,
+                                                       c_m_n_host_result,
+                                                       "Error: Incorrect results!",
+                                                       rtol,
+                                                       atol);
                     if(do_log > 0)
-                        std::cout << "Pass: " << pass << std::endl;
+                    {
+                        std::cout << "Verification: " << (pass ? "CORRECT" : "FAILED") << std::endl;
+                    }
                 }
 
                 std::string op_name                    = op_ptr->GetTypeString();
                 std::optional<std::string> op_obj_name = op_ptr->GetObjectName();
 
-                float ave_time = invoker_ptr->Run(argument_ptr.get(),
-                                                  StreamConfig{nullptr,
-                                                               time_kernel,
-                                                               0,
-                                                               n_warmup,
-                                                               n_iter,
-                                                               rotating_count > 1,
-                                                               rotating_count});
+                if(time_kernel)
+                {
+                    if(do_log > 0)
+                        std::cout << "Run benchmark ..." << std::endl;
+                    ave_time = invoker_ptr->Run(argument_ptr.get(),
+                                                StreamConfig{nullptr,
+                                                             time_kernel,
+                                                             0,
+                                                             n_warmup,
+                                                             n_iter,
+                                                             rotating_count > 1,
+                                                             rotating_count});
+                    if(do_log > 0)
+                        std::cout << "Done." << std::endl;
+                }
 
                 // Output size(M*N) * [dot product(2K) + product of scales(K/ScaleBlockSize) +
                 // scaling of partial sums(K/ScaleBlockSize)]

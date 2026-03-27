@@ -102,6 +102,7 @@ struct FmhaBatchPrefillWithPagedKVCacheKernel
         const void* k_ptr;
         const void* v_ptr;
         void* o_ptr;
+        const void* sink_ptr;
 
         ck_tile::index_t seqlen_q;
         ck_tile::index_t seqlen_k;
@@ -376,6 +377,7 @@ struct FmhaBatchPrefillWithPagedKVCacheKernel
               bool s_randval,
               std::variant<std::pair<uint64_t, uint64_t>, std::pair<const void*, const void*>>
                   drop_seed_offset,
+              const void* sink_ptr                            = nullptr,
               ck_tile::index_t nblock_stride_kv_block_descale = 0,
               ck_tile::index_t nhead_stride_kv_block_descale  = 0)
     {
@@ -383,6 +385,7 @@ struct FmhaBatchPrefillWithPagedKVCacheKernel
                      k_ptr,
                      v_ptr,
                      o_ptr,
+                     sink_ptr,
                      seqlen_q,
                      -1,
                      hdim_q,
@@ -545,6 +548,7 @@ struct FmhaBatchPrefillWithPagedKVCacheKernel
               bool s_randval,
               std::variant<std::pair<uint64_t, uint64_t>, std::pair<const void*, const void*>>
                   drop_seed_offset,
+              const void* sink_ptr                            = nullptr,
               ck_tile::index_t nblock_stride_kv_block_descale = 0,
               ck_tile::index_t nhead_stride_kv_block_descale  = 0)
     {
@@ -552,6 +556,7 @@ struct FmhaBatchPrefillWithPagedKVCacheKernel
                      k_ptr,
                      v_ptr,
                      o_ptr,
+                     sink_ptr,
                      -1, // seqlen will be updated by another pointer
                      -1, //
                      hdim_q,
@@ -778,7 +783,10 @@ struct FmhaBatchPrefillWithPagedKVCacheKernel
         long_index_t batch_offset_randval = 0;
         long_index_t batch_offset_lse     = 0;
         long_index_t batch_offset_o       = 0;
-
+        const float sink_value =
+            kargs.sink_ptr != nullptr
+                ? (*(static_cast<const float*>(kargs.sink_ptr) + i_nhead)) / kargs.scale_s
+                : -numeric<float>::infinity();
         const index_t seqlen_k = [&]() {
             if constexpr(kKVLookupTable ==
                          BlockAttentionKVCacheLookupTableEnum::SGLANG_PAGE_TABLE_1D)
@@ -1313,7 +1321,8 @@ struct FmhaBatchPrefillWithPagedKVCacheKernel
                     stride_v_for_pipeline,
                     kargs.batch_stride_k,
                     kargs.batch_stride_v,
-                    dropout);
+                    dropout,
+                    sink_value);
             }
             else if constexpr(QScaleEnum == BlockAttentionQuantScaleEnum::KV_BLOCKSCALE)
             {
@@ -1342,6 +1351,7 @@ struct FmhaBatchPrefillWithPagedKVCacheKernel
                                       kargs.batch_stride_k,
                                       kargs.batch_stride_v,
                                       dropout,
+                                      sink_value,
                                       k_descale_ptr,
                                       v_descale_ptr,
                                       kargs.nblock_stride_kv_block_descale,
@@ -1367,7 +1377,8 @@ struct FmhaBatchPrefillWithPagedKVCacheKernel
                                       stride_v_for_pipeline,
                                       kargs.batch_stride_k,
                                       kargs.batch_stride_v,
-                                      dropout);
+                                      dropout,
+                                      sink_value);
             }
         }();
 

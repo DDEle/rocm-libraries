@@ -13,49 +13,10 @@
 
 #include <hip/hip_runtime.h>
 
-#if __clang_major__ >= 20
-#include "ck/utility/amd_buffer_addressing_builtins.hpp"
-#else
-#include "ck/utility/amd_buffer_addressing.hpp"
-#endif
+#include "ck/utility/data_cache_prefetch.hpp"
 
 namespace ck {
 namespace prefetch_op_util {
-
-// template <AmdBufferCoherenceEnum coherence = AmdBufferCoherenceEnum::DefaultCoherence>
-struct GlobalPrefetchDataOp
-{
-    // addr needs to point to global memory!
-    __device__ __forceinline__ void operator()([[maybe_unused]] const void* addr) const
-    {
-#if defined(__gfx125__)
-        // NOTE: There's a bug in AM/GOPHER for gfx1250 when prefetching into L1, so we disable it
-        // for now!
-        __builtin_amdgcn_global_prefetch(
-            addr,
-            static_cast<index_t>(
-                AmdBufferCoherenceEnum::
-                    SE_RT)); // static_cast<index_t>(AmdBufferCoherenceEnum::CU_RT));
-#endif
-    }
-};
-
-// template <AmdBufferCoherenceEnum coherence = AmdBufferCoherenceEnum::DefaultCoherence>
-struct FlatPrefetchDataOp
-{
-    __device__ __forceinline__ void operator()([[maybe_unused]] const void* addr) const
-    {
-#if defined(__gfx125__)
-        // NOTE: There's a bug in AM/GOPHER for gfx1250 when prefetching into L1, so we disable it
-        // for now!
-        __builtin_amdgcn_flat_prefetch(
-            addr,
-            static_cast<index_t>(AmdBufferCoherenceEnum::GLC)
-                << 3); // static_cast<index_t>(coherence) << 3); bits 0..2 are for Temporal Hints,
-                       // bits 3..4 are for scope
-#endif
-    }
-};
 
 template <typename T>
 struct KernelArgs
@@ -193,8 +154,7 @@ bool test_prefetch_impl(bool time_kernels,
 
     constexpr index_t grid_size = (num_elements + block_size - 1) / block_size;
 
-    std::cout << "Testing " << kernel_name << " to L1/L2 cache for type: " << typeid(T).name()
-              << std::endl;
+    std::cout << "Testing " << kernel_name << " for type: " << typeid(T).name() << std::endl;
     std::cout << "Elements: " << num_elements << ", Scalars: " << num_scalars << std::endl;
 
     // Host data

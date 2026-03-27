@@ -6,7 +6,7 @@
 using ReferenceGemmInstance = ck::tensor_operation::host::
     ReferenceGemm<ADataType, BDataType, CDataType, AccDataType, AElementOp, BElementOp, CElementOp>;
 
-template <typename ProblemType>
+template <bool BPreShuffle, typename ProblemType>
 bool run_gemm(const ProblemType& problem_size, const ExecutionConfig& config)
 {
     using namespace ck::literals;
@@ -98,14 +98,50 @@ bool run_gemm(const ProblemType& problem_size, const ExecutionConfig& config)
     std::cout << "a_m_k: " << a_m_k.mDesc << std::endl;
     std::cout << "b_k_n: " << b_k_n.mDesc << std::endl;
     std::cout << "c_m_n: " << c_m_n_host_result.mDesc << std::endl;
+    auto gemm    = DeviceGemmV2Instance{};
+    auto invoker = gemm.MakeInvoker();
+    Tensor<BDataType> b_preshuffled(
+        f_host_tensor_descriptor(K, N, StrideB, BLayout{})); // use laout only for size
+    bool isCkTileWpMm = (gemm.GetKPerBlock() & IsPreShuffleMM) ? true : false;
+    if constexpr(BPreShuffle)
+    {
+        static_assert(std::is_same_v<BLayout, ck::tensor_layout::gemm::RowMajor> == false);
 
+        if(isCkTileWpMm)
+        {
+            struct GemmConfig
+            {
+                ck_tile::index_t M_Warp_Tile;
+                ck_tile::index_t N_Warp_Tile;
+                ck_tile::index_t K_Warp_Tile;
+            } gemm_config = {16, 16, 32};
+            ck_tile::HostTensor<BDataType> tmp(
+                ck_tile::host_tensor_descriptor(K, N, StrideB, ck_tile::bool_constant<false>{}));
+            tmp.mData            = b_k_n.mData;
+            auto tmp_preshuffled = ck_tile::shuffle_b(tmp, gemm_config);
+            b_preshuffled.mData  = tmp_preshuffled.mData;
+        }
+        else
+        {
+            static constexpr ck::index_t KPack = ck::math::max(
+                static_cast<ck::index_t>(16 / sizeof(BDataType)), static_cast<ck::index_t>(8));
+            constexpr int NPerXdl = 16;
+            preShuffleBuffer(b_k_n.mData.data(), b_preshuffled.mData.data(), N, K, NPerXdl, KPack);
+        }
+    }
     DeviceMem a_m_k_device_buf(sizeof(ADataType) * a_m_k.mDesc.GetElementSpaceSize());
     DeviceMem b_k_n_device_buf(sizeof(BDataType) * b_k_n.mDesc.GetElementSpaceSize());
     DeviceMem c_m_n_device_buf(sizeof(CDataType) * c_m_n_device_result.mDesc.GetElementSpaceSize());
 
     a_m_k_device_buf.ToDevice(a_m_k.mData.data());
-    b_k_n_device_buf.ToDevice(b_k_n.mData.data());
-
+    if constexpr(BPreShuffle)
+    {
+        b_k_n_device_buf.ToDevice(b_preshuffled.mData.data());
+    }
+    else
+    {
+        b_k_n_device_buf.ToDevice(b_k_n.mData.data());
+    }
     DeviceMem workspace;
 
     auto a_element_op = AElementOp{};
@@ -113,8 +149,7 @@ bool run_gemm(const ProblemType& problem_size, const ExecutionConfig& config)
     auto c_element_op = CElementOp{};
 
     // do GEMM
-    auto gemm      = DeviceGemmV2Instance{};
-    auto invoker   = gemm.MakeInvoker();
+
     float ave_time = 0;
 
     auto argument = gemm.MakeArgument(static_cast<ADataType*>(a_m_k_device_buf.GetDeviceBuffer()),
@@ -215,10 +250,12 @@ bool run_gemm(const ProblemType& problem_size, const ExecutionConfig& config)
     return pass;
 }
 
+template <bool BPreShuffle = false>
 bool run_gemm_splitk_example(int argc, char* argv[])
 {
     ProblemSizeSplitK problem_size;
     ExecutionConfig config;
 
-    return !parse_cmd_args(argc, argv, problem_size, config) || run_gemm(problem_size, config);
+    return !parse_cmd_args(argc, argv, problem_size, config) ||
+           run_gemm<BPreShuffle>(problem_size, config);
 }

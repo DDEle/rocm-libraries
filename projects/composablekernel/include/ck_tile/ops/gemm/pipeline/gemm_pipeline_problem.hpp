@@ -329,6 +329,55 @@ struct UniversalGemmPipelineProblem
     }
 };
 
+template <typename AsDataType_,
+          typename BsDataType_,
+          typename EDataType_,
+          typename BlockGemmShape_,
+          typename Traits_,
+          GemmPipelineScheduler Scheduler_ = GemmPipelineScheduler::Intrawave,
+          typename AElementWise_           = ck_tile::element_wise::PassThrough,
+          typename BElementWise_           = ck_tile::element_wise::PassThrough,
+          typename AComputeDataType_       = AsDataType_,
+          typename BComputeDataType_       = BsDataType_,
+          typename AScaleDataType_         = e8m0_t,
+          typename BScaleDataType_         = e8m0_t,
+          index_t ScaleBlockSize_          = 32,
+          bool FixedVectorSize_            = false,
+          index_t VectorSizeA_             = 1,
+          index_t VectorSizeB_             = 1>
+struct MxGemmPipelineProblem : UniversalGemmPipelineProblem<AsDataType_,
+                                                            BsDataType_,
+                                                            EDataType_,
+                                                            BlockGemmShape_,
+                                                            Traits_,
+                                                            Scheduler_,
+                                                            AElementWise_,
+                                                            BElementWise_,
+                                                            AComputeDataType_,
+                                                            BComputeDataType_,
+                                                            FixedVectorSize_,
+                                                            VectorSizeA_,
+                                                            VectorSizeB_>
+{
+    using AScaleDataType = remove_cvref_t<AScaleDataType_>;
+    using BScaleDataType = remove_cvref_t<BScaleDataType_>;
+
+    static constexpr index_t ScaleBlockSize = ScaleBlockSize_;
+
+    static_assert(std::is_same_v<AScaleDataType, e8m0_t> ||
+                      std::is_same_v<AScaleDataType, e5m3_t> ||
+                      std::is_same_v<AScaleDataType, e4m3_t>,
+                  "Only e8m0_t, e5m3_t, and e4m3_t are supported as AScaleDataType");
+
+    static_assert(std::is_same_v<BScaleDataType, e8m0_t> ||
+                      std::is_same_v<BScaleDataType, e5m3_t> ||
+                      std::is_same_v<BScaleDataType, e4m3_t>,
+                  "Only e8m0_t, e5m3_t, and e4m3_t are supported as BScaleDataType");
+
+    static_assert(ScaleBlockSize == 32 || ScaleBlockSize == 16,
+                  "Only 32 and 16 are supported as ScaleBlockSize");
+};
+
 template <typename ADataType_,
           typename BDataType_,
           typename CDataType_,
@@ -355,6 +404,7 @@ struct FlatmmPipelineProblem
     using BLayout = remove_cvref_t<typename Traits::BsLayout>;
     using CLayout = remove_cvref_t<typename Traits::CLayout>;
 
+    static constexpr bool FixedVectorSize       = false;
     static constexpr bool TransposeC            = Traits::TransposeC;
     static constexpr index_t NumWaveGroups      = Traits::NumWaveGroups;
     static constexpr bool UseStructuredSparsity = Traits::UseStructuredSparsity;

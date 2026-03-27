@@ -149,7 +149,7 @@ struct TdmEpilogue
                              {0, 0},
                              outLdsTileDistr);
 
-        block_sync_lds();
+        s_wait_tensorcnt_barrier<0 /*tensor_cnt*/, 0 /*lgkmcnt*/>();
 
         cast_lds_tile(o_acc_tile, in_lds_window);
         block_sync_lds();

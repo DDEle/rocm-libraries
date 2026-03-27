@@ -177,6 +177,23 @@
 #define CK_USE_AMD_LDS_DIRECT_LOAD_INLINE_ASM 0
 #endif
 
+// cluster launch support for gfx1250
+#ifndef CK_ENABLE_CLUSTER_LAUNCH
+#ifdef __HIP_DEVICE_COMPILE__ // for device code
+#if defined(__gfx125__)
+#define CK_ENABLE_CLUSTER_LAUNCH 1
+#else
+#define CK_ENABLE_CLUSTER_LAUNCH 0
+#endif
+#else // for host code
+#if defined(CK_USE_GFX1250)
+#define CK_ENABLE_CLUSTER_LAUNCH 1
+#else
+#define CK_ENABLE_CLUSTER_LAUNCH 0
+#endif
+#endif
+#endif
+
 // use llvm builtin bf16 data type after ROCm 6.5
 #ifndef CK_USE_LLVM_BUILTIN_BF16
 #if(HIP_VERSION_MAJOR == 6 && HIP_VERSION_MINOR == 5 && HIP_VERSION_PATCH >= 50421) || \

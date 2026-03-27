@@ -341,6 +341,9 @@ if(SUPPORTED_GPU_TARGETS MATCHES "gfx125")
     add_subdirectory(prefetch_op)
 endif()
 
+add_subdirectory(cluster_load)
+add_subdirectory(cluster_launch)
+
 add_subdirectory(position_embedding)
 add_subdirectory(scatter_gather)
 add_subdirectory(synchronization)

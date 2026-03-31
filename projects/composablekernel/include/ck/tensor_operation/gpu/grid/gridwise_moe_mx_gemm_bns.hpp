@@ -269,8 +269,10 @@ struct GridwiseMoeGemmMXBNS
 
     using Base::AK0Number;
     using Base::AK1Number;
+    using Base::AKPerBlock;
     using Base::BK0Number;
     using Base::BK1Number;
+    using Base::BKPerBlock;
     using Base::CShuffleBlockTransferScalarPerVector_NPerBlock;
     using Base::GetABlockDescriptor_AK0PerBlock_MPerBlock_AK1;
     using Base::GetBBlockDescriptor_BK0PerBlock_NPerBlock_BK1;
@@ -294,7 +296,7 @@ struct GridwiseMoeGemmMXBNS
 
     static constexpr index_t APackedSize = packed_size_v<ADataType>;
     static constexpr index_t BPackedSize = packed_size_v<BDataType>;
-
+    static constexpr auto lcm_AK1_BK1 = math::lcm(AK1Number * APackedSize, BK1Number* BPackedSize);
     static constexpr bool is_single_rate_mfma = false;
     static constexpr auto is_scale_mfma       = true;
     using mfma_selector                       = MfmaSelector<ComputeTypeA,
@@ -303,8 +305,8 @@ struct GridwiseMoeGemmMXBNS
                                                              ComputeTypeB,
                                                              is_single_rate_mfma,
                                                              is_scale_mfma>;
-    static constexpr index_t KPack            = math::max(
-        math::lcm(AK1Number, BK1Number), mfma_selector::selected_mfma.k_per_blk / APackedSize);
+    static constexpr index_t KPack =
+        math::max(lcm_AK1_BK1, mfma_selector::selected_mfma.k_per_blk) / APackedSize;
 
     // static constexpr index_t NumTokens = 1;
     static constexpr index_t SortedTileSize = MPerBlock;
@@ -350,13 +352,13 @@ struct GridwiseMoeGemmMXBNS
     __host__ static auto CalculateAK0Padded(index_t K, index_t K_Batch = 1)
     {
         auto K_t = K_Batch * KPerBlock;
-        return (K + K_t - 1) / K_t * (KPerBlock / AK1Value);
+        return (K + K_t - 1) / K_t * (AKPerBlock / AK1Value);
     }
 
     __host__ static auto CalculateBK0Padded(index_t K, index_t K_Batch = 1)
     {
         auto K_t = K_Batch * KPerBlock;
-        return (K + K_t - 1) / K_t * (KPerBlock / BK1Value);
+        return (K + K_t - 1) / K_t * (BKPerBlock / BK1Value);
     }
 
     __host__ static auto CalculateKPadded(index_t K, index_t K_Batch = 1)
@@ -488,14 +490,16 @@ struct GridwiseMoeGemmMXBNS
     __host__ __device__ static auto MakeBGridDescriptor_BK0_N_BK1(
         index_t K, index_t KPad, index_t N, index_t NPad, index_t StrideB, index_t BK0)
     {
+        index_t BK                       = K * APackedSize / BPackedSize;
+        index_t BKPad                    = KPad * APackedSize / BPackedSize;
         const auto b_grid_desc_nraw_kraw = [&]() {
             if constexpr(is_same<tensor_layout::gemm::RowMajor, BLayout>::value)
             {
-                return make_naive_tensor_descriptor(make_tuple(N, K), make_tuple(I1, StrideB));
+                return make_naive_tensor_descriptor(make_tuple(N, BK), make_tuple(I1, StrideB));
             }
             else if constexpr(is_same<tensor_layout::gemm::ColumnMajor, BLayout>::value)
             {
-                return make_naive_tensor_descriptor(make_tuple(N, K), make_tuple(StrideB, I1));
+                return make_naive_tensor_descriptor(make_tuple(N, BK), make_tuple(StrideB, I1));
             }
         }();
 
@@ -515,7 +519,7 @@ struct GridwiseMoeGemmMXBNS
             const auto b_grid_desc_n_k =
                 transform_tensor_descriptor(b_grid_desc_nraw_kraw,
                                             make_tuple(make_right_pad_transform(N, NPad - N),
-                                                       make_right_pad_transform(K, KPad - K)),
+                                                       make_right_pad_transform(BK, BKPad - BK)),
                                             make_tuple(Sequence<0>{}, Sequence<1>{}),
                                             make_tuple(Sequence<0>{}, Sequence<1>{}));
 
@@ -545,11 +549,12 @@ struct GridwiseMoeGemmMXBNS
                           GemmSpec == GemmSpecialization::MKPadding)
         {
             // pad K, but not N
-            const auto b_grid_desc_n_k = transform_tensor_descriptor(
-                b_grid_desc_nraw_kraw,
-                make_tuple(make_pass_through_transform(N), make_right_pad_transform(K, KPad - K)),
-                make_tuple(Sequence<0>{}, Sequence<1>{}),
-                make_tuple(Sequence<0>{}, Sequence<1>{}));
+            const auto b_grid_desc_n_k =
+                transform_tensor_descriptor(b_grid_desc_nraw_kraw,
+                                            make_tuple(make_pass_through_transform(N),
+                                                       make_right_pad_transform(BK, BKPad - BK)),
+                                            make_tuple(Sequence<0>{}, Sequence<1>{}),
+                                            make_tuple(Sequence<0>{}, Sequence<1>{}));
 
             const auto b_grid_desc_bk0_n_bk1 = transform_tensor_descriptor(
                 b_grid_desc_n_k,
@@ -837,23 +842,23 @@ struct GridwiseMoeGemmMXBNS
             // Calculate A scale offset
             if constexpr(is_same_v<tensor_layout::gemm::RowMajor, ALayout>)
             {
-                a_scale_k_split_offset = k_id * karg.KRead / (ScaleBlockSize / APackedSize);
+                a_scale_k_split_offset = k_id * karg.KRead * APackedSize / ScaleBlockSize;
             }
             else if constexpr(is_same_v<tensor_layout::gemm::ColumnMajor, ALayout>)
             {
                 a_scale_k_split_offset =
-                    k_id * karg.KRead / (ScaleBlockSize / APackedSize) * karg.StrideScaleA;
+                    k_id * karg.KRead * APackedSize / ScaleBlockSize * karg.StrideScaleA;
             }
 
             // Calculate B scale offset
             if constexpr(is_same_v<tensor_layout::gemm::RowMajor, BLayout>)
             {
                 b_scale_k_split_offset =
-                    k_id * (karg.KRead / (ScaleBlockSize / BPackedSize)) * karg.StrideScaleB;
+                    k_id * karg.KRead * APackedSize / ScaleBlockSize * karg.StrideScaleB;
             }
             else if constexpr(is_same_v<tensor_layout::gemm::ColumnMajor, BLayout>)
             {
-                b_scale_k_split_offset = k_id * karg.KRead / (ScaleBlockSize / BPackedSize);
+                b_scale_k_split_offset = k_id * karg.KRead * APackedSize / ScaleBlockSize;
             }
 
             if(k_id < karg.KBatch - 1)
@@ -917,7 +922,7 @@ struct GridwiseMoeGemmMXBNS
                           (NPerBlock % (NXdlPerWave * NPerXdl)) == 0,
                       "Invalid tuning param!");
 
-        static_assert(KPerBlock % (ScaleBlockSize / BPackedSize) == 0,
+        static_assert(BKPerBlock % (ScaleBlockSize / BPackedSize) == 0,
                       "KPerBlock should be multiple of ScaleBlockSize");
 
         if constexpr(!(GemmSpec == tensor_operation::device::GemmSpecialization::MPadding ||
@@ -1167,13 +1172,13 @@ struct GridwiseMoeGemmMXBNS
 
         const auto a_scale_grid_desc_am_ak = make_naive_tensor_descriptor_packed(
             make_tuple(problem.M / (MXdlPack * MPerXdl),
-                       math::integer_divide_ceil(problem.K, (ScaleBlockSize / APackedSize)) /
+                       math::integer_divide_ceil(problem.K * APackedSize, ScaleBlockSize) /
                            (KXdlPack * BlockwiseGemmPipe::WaveSize / MPerXdl),
                        BlockwiseGemmPipe::WaveSize * KXdlPack * MXdlPack / scale_pack_size_a));
 
         const auto b_scale_grid_desc_bn_ak = make_naive_tensor_descriptor_packed(
             make_tuple(problem.N / (NXdlPack * NPerXdl),
-                       math::integer_divide_ceil(problem.K, (ScaleBlockSize / BPackedSize)) /
+                       math::integer_divide_ceil(problem.K * APackedSize, ScaleBlockSize) /
                            (KXdlPack * BlockwiseGemmPipe::WaveSize / NPerXdl),
                        BlockwiseGemmPipe::WaveSize * KXdlPack * NXdlPack / scale_pack_size_b));
 
@@ -1235,11 +1240,11 @@ struct GridwiseMoeGemmMXBNS
             gather_offsets(m0) = static_cast<IndexType>(token_offset) * problem.K;
         });
 
-        const index_t expert_stride =
-            __builtin_amdgcn_readfirstlane(problem.N * problem.K * (IsInputGemm ? 2 : 1));
+        const index_t expert_stride = __builtin_amdgcn_readfirstlane(
+            problem.N * problem.K * APackedSize / BPackedSize * (IsInputGemm ? 2 : 1));
         const index_t expert_scale_stride = __builtin_amdgcn_readfirstlane(
             problem.N * (IsInputGemm ? 2 : 1) *
-            math::integer_divide_ceil(problem.K, ScaleBlockSize / BPackedSize));
+            math::integer_divide_ceil(problem.K * APackedSize, ScaleBlockSize));
 
         // N0, K0, Blocksize*KPack
         const index_t n_block_data_idx_on_grid =
@@ -1346,8 +1351,8 @@ struct GridwiseMoeGemmMXBNS
                                          a_block_space_size_aligned * sizeof(ADataType)),
             b_block_desc_bk0_n_bk1.GetElementSpaceSize());
 
-        constexpr auto a_block_slice_copy_step = make_multi_index(KPerBlock / AK1Number, 0, 0);
-        constexpr auto b_block_slice_copy_step = make_multi_index(KPerBlock / BK1Number, 0, 0);
+        constexpr auto a_block_slice_copy_step = make_multi_index(AK0Number, 0, 0);
+        constexpr auto b_block_slice_copy_step = make_multi_index(BK0Number, 0, 0);
 
         // Blockwise GEMM pipeline
         static_assert(std::is_default_constructible_v<BlockwiseGemmPipe>);
@@ -1698,13 +1703,13 @@ struct GridwiseMoeGemmMXBNS
 
         const auto a_scale_grid_desc_am_ak = make_naive_tensor_descriptor_packed(
             make_tuple((IsInputGemm ? problem.NumTokens : problem.M) / (MXdlPack * MPerXdl),
-                       math::integer_divide_ceil(problem.K, (ScaleBlockSize / APackedSize)) /
+                       math::integer_divide_ceil(problem.K * APackedSize, ScaleBlockSize) /
                            (KXdlPack * BlockwiseGemmPipe::WaveSize / MPerXdl),
                        BlockwiseGemmPipe::WaveSize * KXdlPack * MXdlPack / scale_pack_size_a));
 
         const auto b_scale_grid_desc_bn_ak = make_naive_tensor_descriptor_packed(
             make_tuple(problem.N / (NXdlPack * NPerXdl),
-                       math::integer_divide_ceil(problem.K, (ScaleBlockSize / BPackedSize)) /
+                       math::integer_divide_ceil(problem.K * APackedSize, ScaleBlockSize) /
                            (KXdlPack * BlockwiseGemmPipe::WaveSize / NPerXdl),
                        BlockwiseGemmPipe::WaveSize * KXdlPack * NXdlPack / scale_pack_size_b));
 
@@ -1766,9 +1771,9 @@ struct GridwiseMoeGemmMXBNS
         });
 
         const index_t expert_stride =
-            __builtin_amdgcn_readfirstlane(problem.N * problem.K * (IsInputGemm ? 2 : 1));
+            __builtin_amdgcn_readfirstlane(problem.N * problem.K * APackedSize / BPackedSize * (IsInputGemm ? 2 : 1));
         const index_t expert_scale_stride = __builtin_amdgcn_readfirstlane(
-            problem.N * math::integer_divide_ceil(problem.K, ScaleBlockSize / BPackedSize));
+            problem.N * math::integer_divide_ceil(problem.K * APackedSize, ScaleBlockSize));
 
         // N0, K0, Blocksize*KPack
         const index_t n_block_data_idx_on_grid =
@@ -1863,7 +1868,7 @@ struct GridwiseMoeGemmMXBNS
             static_cast<ADataType*>(p_shared1), a_block_desc_ak0_m_ak1.GetElementSpaceSize());
         auto a_block_bufs = make_tuple(a_block_buf_ping, a_block_buf_pong);
 
-        constexpr auto a_block_slice_copy_step = make_multi_index(KPerBlock / AK1Number, 0, 0);
+        constexpr auto a_block_slice_copy_step = make_multi_index(AK0Number, 0, 0);
         constexpr auto b_block_slice_copy_step = make_multi_index(0, 0, 0, KRepeat, 0);
 
         // Blockwise GEMM pipeline

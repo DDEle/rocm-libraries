@@ -4,7 +4,7 @@
 #include "gemm_mx_common.hpp"
 #include "ck/tensor_operation/gpu/device/impl/device_moe_mx_gemm_bpreshuffle.hpp"
 #include "ck/library/reference_tensor_operation/cpu/reference_moe_mx_gemm1.hpp"
-
+using F8              = ck::f8_t;
 using F4              = ck::f4x2_pk_t;
 using F16             = ck::half_t;
 using BF16            = ck::bhalf_t;
@@ -13,9 +13,17 @@ using XDataType       = ck::e8m0_bexp_t;
 using XPackedDataType = int32_t; // 4 packed e8m0_bexp_t
 using I64             = int64_t;
 
-using A0DataType       = F4;
+#if defined(A_DATATYPE)
+using A0DataType = A_DATATYPE;
+#else
+using A0DataType = F4;
+#endif
+#if defined(B_DATATYPE)
+using B0DataType = B_DATATYPE;
+#else
+using B0DataType = F4;
+#endif
 using A1DataType       = XPackedDataType;
-using B0DataType       = F4;
 using B1DataType       = XPackedDataType;
 using EDataType        = F16;
 using AccDataType      = F32;
@@ -63,38 +71,6 @@ struct MulABScaleExpertWeight
     }
 };
 
-// B preshuffle
-void preShuffleBuffer(const F4* src, F4* dst, int N, int K, int NXdl)
-{
-    int KPack = 16;
-    int NLane = NXdl;
-    int KLane = ck::get_warp_size() / NLane;
-    int K_pk  = K / 2;
-    int K0    = K_pk / (KLane * KPack);
-    // K -> K0 KLane KPack
-    // N -> N0 NLane
-    // N, K -> N0 K0 KLane NLane KPack
-    I64 tempk;
-    for(I64 n = 0; n < N; ++n)
-    {
-        for(I64 k = 0; k < K_pk; ++k)
-        {
-            I64 n0 = n / NLane;
-            I64 n1 = n % NLane;
-
-            I64 k0 = k / (KLane * KPack);
-            tempk  = k % (KLane * KPack);
-            I64 k1 = tempk / KPack;
-            I64 k2 = tempk % KPack;
-
-            I64 outputIndex = n0 * KPack * NLane * KLane * K0 + k0 * KPack * NLane * KLane +
-                              k1 * KPack * NLane + n1 * KPack + k2;
-
-            dst[outputIndex] = src[n * K_pk + k];
-        }
-    }
-}
-
 using PassThrough = ck::tensor_operation::element_wise::PassThrough;
 
 using AElementOp   = PassThrough;
@@ -103,9 +79,8 @@ using CDEElementOp = MulABScaleExpertWeight;
 
 static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
 
-constexpr ck::index_t DataPackedSize   = 2;                    // Packed representation of data
-constexpr ck::index_t ScaleBlockSize   = 32;                   // scaling block size
-constexpr ck::index_t KPerBlock        = 256 / DataPackedSize; // 256 f4 = 128 fp4x2
+constexpr ck::index_t ScaleBlockSize   = 32; // scaling block size
+constexpr ck::index_t KPerBlock        = 128;
 static constexpr ck::index_t Nswizzle  = false;
 static constexpr ck::index_t ActOP     = 0; // 0: gelu_and_mul, 1: silu_and_mul
 static constexpr ck::index_t MPerBlock = 32;
@@ -122,7 +97,7 @@ using DeviceOpInstance = ck::tensor_operation::device::DeviceMoeGemmMXBPreShuffl
     16,   16,
     2,    4,
     S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 1,
-    S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 1,
+    S<4, 64, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 1,
     2,    2,   S<1, 32, 1, 8>, S<8, 1, 1, 1>,
     ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v3, ActOP, Nswizzle, true, MulRoutedWeight, ck::index_t, A0DataType>;
 // clang-format on
@@ -505,7 +480,6 @@ int main(int argc, char* argv[])
         }
 
         e_device_buf.FromDevice(e_t_k_n_device_result.mData.data());
-
         auto status =
             ck::utils::check_err(
                 e_t_k_n_device_result, e_t_k_n_host_result, "Error: Incorrect results!", 1e-3, 5e-1)

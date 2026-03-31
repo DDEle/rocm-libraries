@@ -243,6 +243,7 @@ struct ThreadGroupTensorSliceTransfer_DirectLoad
         constexpr auto num_access = SpaceFillingCurve::GetNumOfAccess();
 
         // loop over space-filling curve
+        static_assert(num_access > 0);
         static_for<0, num_access, 1>{}([&](auto idx_1d) {
             const auto src_offset = src_coord_.GetOffset();
             const bool is_src_valid =

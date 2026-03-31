@@ -158,6 +158,7 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx_bprehuffle<BlockGemmPipelineScheduler:
 
     using Base::AMmaKStride;
     using Base::APackedSize;
+    using Base::BKPack;
     using Base::BMmaKStride;
     using Base::BPackedSize;
     using Base::KThreadChunk;
@@ -541,8 +542,8 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx_bprehuffle<BlockGemmPipelineScheduler:
 
         static_for<0, LocalPrefetchStages, 1>{}([&](auto m0) {
             static_for<0, KRepeat, 1>{}([&](auto k) {
-                constexpr auto k_step = k * xdlops_gemm.KPerXdlops / APackedSize *
-                                        (APackedSize * KPack / xdlops_gemm.K1PerXdlops);
+                constexpr auto k_step =
+                    k * xdlops_gemm.KPerXdlops * KPack / xdlops_gemm.K1PerXdlops;
                 static_for<0, xdlops_gemm.K1PerXdlops / (APackedSize * KThreadChunk), 1>{}(
                     [&](auto chunk) {
                         constexpr auto a_k_step_chunk =
@@ -667,12 +668,14 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx_bprehuffle<BlockGemmPipelineScheduler:
                                 });
 
                                 vector_type<ComputeTypeA, KPack> a_thread_vec;
-                                vector_type<ComputeTypeB, KPack> b_thread_vec;
+                                vector_type<ComputeTypeB, BKPack> b_thread_vec;
 
                                 static_for<0, KPack, 1>{}([&](auto ik) {
                                     a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                                         a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                                             make_tuple(I0, I0, im_minor, k0, ik))>{}];
+                                });
+                                static_for<0, BKPack, 1>{}([&](auto ik) {
                                     b_thread_vec.template AsType<ComputeTypeB>()(ik) = b_thread_bufs
                                         [scale_comp_buf][Number<b_thread_desc_.CalculateOffset(
                                             make_tuple(in_major, I0, in_minor, k0, ik))>{}];
@@ -730,8 +733,8 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx_bprehuffle<BlockGemmPipelineScheduler:
                             m0.value >= SwitchM ? scale_mem_buf : scale_comp_buf;
 
                         static_for<0, KRepeat, 1>{}([&](auto k) {
-                            constexpr auto k_step = k * xdlops_gemm.KPerXdlops / APackedSize *
-                                                    (APackedSize * KPack / xdlops_gemm.K1PerXdlops);
+                            constexpr auto k_step =
+                                k * xdlops_gemm.KPerXdlops * KPack / xdlops_gemm.K1PerXdlops;
                             static_for<0,
                                        xdlops_gemm.K1PerXdlops / (APackedSize * KThreadChunk),
                                        1>{}([&](auto chunk) {
@@ -839,12 +842,14 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx_bprehuffle<BlockGemmPipelineScheduler:
                         });
 
                         vector_type<ComputeTypeA, KPack> a_thread_vec;
-                        vector_type<ComputeTypeB, KPack> b_thread_vec;
+                        vector_type<ComputeTypeB, BKPack> b_thread_vec;
 
                         static_for<0, KPack, 1>{}([&](auto ik) {
                             a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                                 a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                                     make_tuple(I0, I0, im_minor, k0, ik))>{}];
+                        });
+                        static_for<0, BKPack, 1>{}([&](auto ik) {
                             b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                                 b_thread_bufs[I0][Number<b_thread_desc_.CalculateOffset(
                                     make_tuple(in_major, I0, in_minor, k0, ik))>{}];
@@ -944,12 +949,14 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx_bprehuffle<BlockGemmPipelineScheduler:
                         });
 
                         vector_type<ComputeTypeA, KPack> a_thread_vec;
-                        vector_type<ComputeTypeB, KPack> b_thread_vec;
+                        vector_type<ComputeTypeB, BKPack> b_thread_vec;
 
                         static_for<0, KPack, 1>{}([&](auto ik) {
                             a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                                 a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                                     make_tuple(I0, I0, im_minor, k0, ik))>{}];
+                        });
+                        static_for<0, BKPack, 1>{}([&](auto ik) {
                             b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                                 b_thread_bufs[I1][Number<b_thread_desc_.CalculateOffset(
                                     make_tuple(in_major, I0, in_minor, k0, ik))>{}];
@@ -1044,12 +1051,14 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx_bprehuffle<BlockGemmPipelineScheduler:
                         });
 
                         vector_type<ComputeTypeA, KPack> a_thread_vec;
-                        vector_type<ComputeTypeB, KPack> b_thread_vec;
+                        vector_type<ComputeTypeB, BKPack> b_thread_vec;
 
                         static_for<0, KPack, 1>{}([&](auto ik) {
                             a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                                 a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                                     make_tuple(I0, I0, im_minor, k0, ik))>{}];
+                        });
+                        static_for<0, BKPack, 1>{}([&](auto ik) {
                             b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                                 b_thread_bufs[I0][Number<b_thread_desc_.CalculateOffset(
                                     make_tuple(in_major, I0, in_minor, k0, ik))>{}];

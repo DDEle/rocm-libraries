@@ -6,15 +6,24 @@
 #include "ck/library/reference_tensor_operation/cpu/reference_moe_mx_gemm1.hpp"
 
 using F4              = ck::f4x2_pk_t;
+using F8              = ck::f8_t;
 using F16             = ck::half_t;
 using BF16            = ck::bhalf_t;
 using F32             = float;
 using XDataType       = ck::e8m0_bexp_t;
 using XPackedDataType = int32_t; // 4 packed e8m0_bexp_t
 
-using A0DataType       = F4;
+#if defined(A_DATATYPE)
+using A0DataType = A_DATATYPE;
+#else
+using A0DataType = F4;
+#endif
+#if defined(B_DATATYPE)
+using B0DataType = B_DATATYPE;
+#else
+using B0DataType = F4;
+#endif
 using A1DataType       = XPackedDataType;
-using B0DataType       = F4;
 using B1DataType       = XPackedDataType;
 using EDataType        = F16;
 using AccDataType      = F32;
@@ -68,15 +77,19 @@ using CDEElementOp = MulABScaleExpertWeight;
 
 static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
 
-constexpr ck::index_t DataPackedSize   = 2;                    // Packed representation of data
-constexpr ck::index_t ScaleBlockSize   = 32;                   // scaling block size
-constexpr ck::index_t KPerBlock        = 256 / DataPackedSize; // 256 f4 = 128 fp4x2
+constexpr ck::index_t ScaleBlockSize   = 32; // scaling block size
+constexpr ck::index_t KPerBlock        = 128;
 static constexpr ck::index_t Nswizzle  = false;
 static constexpr ck::index_t ActOP     = 0; // 0: gelu_and_mul, 1: silu_and_mul
 static constexpr ck::index_t MPerBlock = 128;
 static constexpr ck::index_t NPerBlock = 64;
 static constexpr ck::index_t BlockSize = 256;
 static constexpr bool MulRoutedWeight  = true;
+
+static constexpr ck::index_t ClusterLengths_BK0 =
+    ck::is_same_v<B0DataType, F4> && ck::is_same_v<A0DataType, F4> ? 8 : 4;
+static constexpr ck::index_t ClusterLengths_N =
+    ck::is_same_v<B0DataType, F4> && ck::is_same_v<A0DataType, F4> ? 32 : 64;
 
 // clang-format off
 using DeviceOpInstance                     = ck::tensor_operation::device::DeviceMoeGemmMX<      
@@ -89,7 +102,7 @@ using DeviceOpInstance                     = ck::tensor_operation::device::Devic
     16,   16,
     2,     4,
     S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 1,
-    S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 1,
+    S<ClusterLengths_BK0, ClusterLengths_N, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 1,
     2,    2,     S<1, 32, 1, 8>, S<4, 1, 1, 1>,
     ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v3, 
     ActOP, Nswizzle, true, MulRoutedWeight, ck::index_t, A0DataType>;
@@ -293,6 +306,9 @@ int main(int argc, char* argv[])
     DeviceMem b1_device_buf(sizeof(XDataType) * b1_e_n_k.GetElementSpaceSize());
     DeviceMem d2_device_buf(sizeof(D2DataType) * d2_e_n.GetElementSpaceSize());
     DeviceMem e_device_buf(sizeof(EDataType) * e_t_k_n_device_result.GetElementSpaceSize());
+
+    // a0_t_k.savetxt("a.txt", "float", 128);
+    // b0_e_n_k.savetxt("b.txt", "float", 128);
 
     // A scale sorted
     for(int i = 0; i < sorted_size; i++)

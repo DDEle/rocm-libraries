@@ -4,7 +4,7 @@
 #include "gemm_mx_common.hpp"
 #include "ck/tensor_operation/gpu/device/impl/device_moe_mx_gemm_bpreshuffle.hpp"
 #include "ck/library/reference_tensor_operation/cpu/reference_moe_mx_gemm2.hpp"
-
+using F8              = ck::f8_t;
 using F4              = ck::f4x2_pk_t;
 using F16             = ck::half_t;
 using BF16            = ck::bhalf_t;
@@ -13,10 +13,19 @@ using XDataType       = ck::e8m0_bexp_t;
 using XPackedDataType = int32_t; // 4 packed e8m0_bexp_t
 using I64             = int64_t;
 
-using A0DataType       = F4;
-using A1DataType       = XPackedDataType;
-using B0DataType       = F4;
-using B1DataType       = XPackedDataType;
+#if defined(A_DATATYPE)
+using A0DataType = A_DATATYPE;
+#else
+using A0DataType = F4;
+#endif
+#if defined(B_DATATYPE)
+using B0DataType = B_DATATYPE;
+#else
+using B0DataType = F4;
+#endif
+using A1DataType = XPackedDataType;
+using B1DataType = XPackedDataType;
+
 using EDataType        = F16;
 using AccDataType      = F32;
 using CShuffleDataType = F16;
@@ -98,9 +107,8 @@ using CDEElementOp = MulABScaleExpertWeight;
 
 static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
 
-constexpr ck::index_t DataPackedSize = 2;                    // Packed representation of data
-constexpr ck::index_t ScaleBlockSize = 32;                   // scaling block size
-constexpr ck::index_t KPerBlock      = 256 / DataPackedSize; // 256 f4 = 128 fp4x2
+constexpr ck::index_t ScaleBlockSize = 32; // scaling block size
+constexpr ck::index_t KPerBlock      = 128;
 
 static constexpr ck::index_t MPerBlock = 128;
 static constexpr bool MulRoutedWeight  = true;
@@ -116,7 +124,7 @@ using DeviceOpInstance                     = ck::tensor_operation::device::Devic
     16,   16,
     8,    4,
     S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 1,
-    S<8, 32, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 1,
+    S<4, 64, 1>, S<1, 0, 2>, S<1, 0, 2>, 2, 16, 16, 1,
     2,    2,   S<1, 4, 1, 64>, S<2, 1, 1, 1>,
     ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v3, 0, false, false, MulRoutedWeight, ck::index_t, A0DataType>;
 // clang-format on

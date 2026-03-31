@@ -92,8 +92,20 @@ struct GridwiseGemm_xdl_cshuffle_base
     static constexpr auto I9 = Number<9>{};
 
     // K1 should be Number<...>
-    static constexpr auto AK0Number = Number<KPerBlock / AK1Value>{};
-    static constexpr auto BK0Number = Number<KPerBlock / BK1Value>{};
+    static constexpr auto AKPerBlock = KPerBlock;
+    static constexpr auto BKPerBlock = []() {
+        if constexpr(IsMxGemm)
+        {
+            // KPerBlock is based on packed data type in MxGemm
+            return KPerBlock * packed_size_v<ADataType> / packed_size_v<BDataType>;
+        }
+        else
+        {
+            return KPerBlock;
+        }
+    }();
+    static constexpr auto AK0Number = Number<AKPerBlock / AK1Value>{};
+    static constexpr auto BK0Number = Number<BKPerBlock / BK1Value>{};
     static constexpr auto AK1Number = Number<AK1Value>{};
     static constexpr auto BK1Number = Number<BK1Value>{};
 
@@ -143,7 +155,7 @@ struct GridwiseGemm_xdl_cshuffle_base
         constexpr index_t MWave           = MPerBlock / (MXdlPerWave * MPerXdl);
         constexpr index_t NWave           = NPerBlock / (NXdlPerWave * NPerXdl);
         constexpr index_t WaveSize        = BlockSize / (MWave * NWave);
-        constexpr index_t KPerBlockInByte = KPerBlock * sizeof(ADataType) / APackedSize;
+        constexpr index_t KPerBlockInByte = AKPerBlock * sizeof(ADataType) / APackedSize;
 
         // A matrix in LDS memory, dst of blockwise copy
         if constexpr(DirectLoad &&
@@ -160,7 +172,7 @@ struct GridwiseGemm_xdl_cshuffle_base
             {
                 return make_naive_tensor_descriptor(
                     make_tuple(AK0Number, Number<MPerBlock>{}, AK1Number),
-                    make_tuple(AK1Number, Number<KPerBlock>{}, I1));
+                    make_tuple(AK1Number, Number<AKPerBlock>{}, I1));
             }
         }
         else if constexpr(ABlockLdsExtraM || ForceNaiveLdsLayout)
@@ -180,7 +192,7 @@ struct GridwiseGemm_xdl_cshuffle_base
             constexpr auto a_lds_block_desc = make_naive_tensor_descriptor(
                 make_tuple(
                     AK0Number * Number<MLdsLayer>{}, Number<MPerBlock / MLdsLayer>{}, AK1Number),
-                make_tuple(AK1Number, Number<KPerBlock * MLdsLayer>{}, I1));
+                make_tuple(AK1Number, Number<AKPerBlock * MLdsLayer>{}, I1));
 
             constexpr auto a_lds_block_desc_permuted = transform_tensor_descriptor(
                 a_lds_block_desc,
@@ -302,7 +314,7 @@ struct GridwiseGemm_xdl_cshuffle_base
     __device__ __host__ constexpr auto
     GetABlockDescriptor_AK0PerBlock_MPerBlock_AK1<gfx125_t>(gfx125_t)
     {
-        constexpr index_t KPerBlockInByte = KPerBlock * sizeof(ADataType) / APackedSize;
+        constexpr index_t KPerBlockInByte = AKPerBlock * sizeof(ADataType) / APackedSize;
         constexpr index_t LdsSize         = get_n_lds_banks(gfx125_t{}) * 4 / KPerBlockInByte;
         constexpr bool EnableLdsLayer     = ABlockTransferThreadClusterLengths_AK0_M_AK1{}[0] *
                                             ABlockTransferThreadClusterLengths_AK0_M_AK1{}[1] *
@@ -337,7 +349,7 @@ struct GridwiseGemm_xdl_cshuffle_base
             {
                 return make_naive_tensor_descriptor(
                     make_tuple(AK0Number, Number<MPerBlock>{}, AK1Number),
-                    make_tuple(AK1Number, Number<KPerBlock + PaddingSize>{}, I1));
+                    make_tuple(AK1Number, Number<AKPerBlock + PaddingSize>{}, I1));
             }
             else
             {
@@ -348,9 +360,9 @@ struct GridwiseGemm_xdl_cshuffle_base
                                Number<MLdsLayer>{},
                                AK1Number),
                     make_tuple(AK1Number,
-                               Number<(KPerBlock * MLdsLayer + PaddingSize) * MPerThreadLayer>{},
-                               Number<KPerBlock * MLdsLayer + PaddingSize>{},
-                               Number<KPerBlock>{},
+                               Number<(AKPerBlock * MLdsLayer + PaddingSize) * MPerThreadLayer>{},
+                               Number<AKPerBlock * MLdsLayer + PaddingSize>{},
+                               Number<AKPerBlock>{},
                                I1));
 
                 return transform_tensor_descriptor(
@@ -372,7 +384,7 @@ struct GridwiseGemm_xdl_cshuffle_base
             constexpr auto a_lds_block_desc = make_naive_tensor_descriptor(
                 make_tuple(
                     AK0Number * Number<MLdsLayer>{}, Number<MPerBlock / MLdsLayer>{}, AK1Number),
-                make_tuple(AK1Number, Number<KPerBlock * MLdsLayer>{}, I1));
+                make_tuple(AK1Number, Number<AKPerBlock * MLdsLayer>{}, I1));
 
             constexpr auto a_lds_block_desc_permuted = transform_tensor_descriptor(
                 a_lds_block_desc,
@@ -508,7 +520,7 @@ struct GridwiseGemm_xdl_cshuffle_base
     __device__ __host__ static constexpr auto
     GetBBlockDescriptor_BK0PerBlock_NPerBlock_BK1(DeviceArch)
     {
-        constexpr index_t KPerBlockInByte = KPerBlock * sizeof(BDataType) / BPackedSize;
+        constexpr index_t KPerBlockInByte = BKPerBlock * sizeof(BDataType) / BPackedSize;
         constexpr index_t MWave           = MPerBlock / (MXdlPerWave * MPerXdl);
         constexpr index_t NWave           = NPerBlock / (NXdlPerWave * NPerXdl);
         constexpr index_t WaveSize        = BlockSize / (MWave * NWave);
@@ -527,7 +539,7 @@ struct GridwiseGemm_xdl_cshuffle_base
             {
                 return make_naive_tensor_descriptor(
                     make_tuple(BK0Number, Number<NPerBlock>{}, BK1Number),
-                    make_tuple(BK1Number, Number<KPerBlock>{}, I1));
+                    make_tuple(BK1Number, Number<BKPerBlock>{}, I1));
             }
         }
         else if constexpr(BBlockLdsExtraN || ForceNaiveLdsLayout)
@@ -546,7 +558,7 @@ struct GridwiseGemm_xdl_cshuffle_base
             constexpr auto b_lds_block_desc = make_naive_tensor_descriptor(
                 make_tuple(
                     BK0Number * Number<NLdsLayer>{}, Number<NPerBlock / NLdsLayer>{}, BK1Number),
-                make_tuple(BK1Number, Number<KPerBlock * NLdsLayer>{}, I1));
+                make_tuple(BK1Number, Number<BKPerBlock * NLdsLayer>{}, I1));
 
             constexpr auto b_lds_block_desc_permuted = transform_tensor_descriptor(
                 b_lds_block_desc,
@@ -665,7 +677,7 @@ struct GridwiseGemm_xdl_cshuffle_base
     __device__ __host__ constexpr auto
     GetBBlockDescriptor_BK0PerBlock_NPerBlock_BK1<gfx125_t>(gfx125_t)
     {
-        constexpr index_t KPerBlockInByte = KPerBlock * sizeof(BDataType) / BPackedSize;
+        constexpr index_t KPerBlockInByte = BKPerBlock * sizeof(BDataType) / BPackedSize;
         // NLdsLayer * K0 as logical Bank
         constexpr index_t LdsSize     = get_n_lds_banks(gfx125_t{}) * 4 / KPerBlockInByte;
         constexpr bool EnableLdsLayer = BBlockTransferThreadClusterLengths_BK0_N_BK1::Size() == 3 &&
@@ -703,7 +715,7 @@ struct GridwiseGemm_xdl_cshuffle_base
             {
                 return make_naive_tensor_descriptor(
                     make_tuple(BK0Number, Number<NPerBlock>{}, BK1Number),
-                    make_tuple(BK1Number, Number<KPerBlock + PaddingSize>{}, I1));
+                    make_tuple(BK1Number, Number<BKPerBlock + PaddingSize>{}, I1));
             }
             else
             {
@@ -714,9 +726,9 @@ struct GridwiseGemm_xdl_cshuffle_base
                                Number<NLdsLayer>{},
                                BK1Number),
                     make_tuple(BK1Number,
-                               Number<(KPerBlock * NLdsLayer + PaddingSize) * NPerThreadLayer>{},
-                               Number<KPerBlock * NLdsLayer + PaddingSize>{},
-                               Number<KPerBlock>{},
+                               Number<(BKPerBlock * NLdsLayer + PaddingSize) * NPerThreadLayer>{},
+                               Number<BKPerBlock * NLdsLayer + PaddingSize>{},
+                               Number<BKPerBlock>{},
                                I1));
 
                 return transform_tensor_descriptor(
@@ -736,7 +748,7 @@ struct GridwiseGemm_xdl_cshuffle_base
             constexpr auto b_lds_block_desc = make_naive_tensor_descriptor(
                 make_tuple(
                     BK0Number * Number<NLdsLayer>{}, Number<NPerBlock / NLdsLayer>{}, BK1Number),
-                make_tuple(BK1Number, Number<KPerBlock * NLdsLayer>{}, I1));
+                make_tuple(BK1Number, Number<BKPerBlock * NLdsLayer>{}, I1));
 
             constexpr auto b_lds_block_desc_permuted = transform_tensor_descriptor(
                 b_lds_block_desc,

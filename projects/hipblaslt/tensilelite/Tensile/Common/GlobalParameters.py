@@ -123,6 +123,7 @@ globalParameters["CpuThreads"] = (
 )  # How many CPU threads to use for kernel generation.  0=no threading, -1 == nproc, N=min(nproc,N).  TODO - 0 sometimes fails with a kernel name error?  0 does not check error codes correctly
 globalParameters["NumWarmups"] = 0
 globalParameters["TimingInstrumentation"] = False  # Enable detailed timing instrumentation output
+globalParameters["ParallelGpuExecution"] = 1  # Number of GPUs for parallel client execution (0=auto-detect, 1=serial, N=use N GPUs)
 
 globalParameters["PythonProfile"] = False  # Enable python profiling
 
@@ -177,6 +178,8 @@ globalParameters["DataInitTypeScaleC"] = 2
 globalParameters["DataInitTypeScaleD"] = 2
 globalParameters["DataInitTypeScaleAlphaVec"] = 3
 globalParameters["DataInitValueActivationArgs"] = [2.0, 2.0]
+globalParameters["DataInitTypeMXSA"] = 1
+globalParameters["DataInitTypeMXSB"] = 1
 globalParameters["CEqualD"] = (
     False  # Set to true if testing for the case where the pointer to C is the same as D.
 )
@@ -299,13 +302,11 @@ globalParameters["AsmDebug"] = (
     False  # Set to True to keep debug information for compiled code objects
 )
 
-# if ROCmAgentEnumeratorPath is "rocm_agent_enumerator", the arch path is /opt/rocm/bin/rocm_agent_enumerator ;
-# otherwise it is /opt/rocm/llvm/bin/amdgpu-arch
-globalParameters["ROCmAgentEnumeratorPath"] = None
-
 globalParameters["UseEffLike"] = True  # Set to False to use winnerGFlops as the performance metric
 
 globalParameters["DisableAsmComments"] = False  # Set to True to disable assembly comments in generated assembly code
+
+globalParameters["RocProfCounter"] = None # No rocprof counter
 
 # Save a copy - since pytest doesn't re-run this initialization code and YAML files can override global settings - odd things can happen
 # we should do this here...
@@ -342,10 +343,14 @@ defaultBenchmarkCommonParameters = [
     {"InnerUnroll": [1]},
     {"KernelLanguage": ["Assembly"]},
     {"LdsPadA": [-1]},
+    {"LdsPadMXSA": [ 0 ] },
     {"LdsPadB": [-1]},
+    {"LdsPadMXSB": [ 0 ] },
     {"LdsPadMetadata": [0]},
     {"LdsBlockSizePerPadA": [-1]},
+    {"LdsBlockSizePerPadMXSA": [ 0 ] },
     {"LdsBlockSizePerPadB": [-1]},
+    {"LdsBlockSizePerPadMXSB": [ 0 ] },
     {"LdsBlockSizePerPadMetadata": [0]},
     {"TransposeLDS": [-1]},
     {"TransposeLDSMetadata": [-1]},
@@ -358,6 +363,8 @@ defaultBenchmarkCommonParameters = [
     {"GlobalReadVectorWidthA": [-1]},
     {"GlobalReadVectorWidthB": [-1]},
     {"LocalReadVectorWidth": [-1]},
+    {"LocalReadVectorWidthA": [-1]},
+    {"LocalReadVectorWidthB": [-1]},
     {"WaveSeparateGlobalReadA": [0]},
     {"WaveSeparateGlobalReadB": [0]},
     {"WaveSeparateGlobalReadMetadata": [0]},
@@ -378,6 +385,8 @@ defaultBenchmarkCommonParameters = [
     {"BufferStore": [True]},
     {"DirectToVgprA": [False]},
     {"DirectToVgprB": [False]},
+    {"DirectToVgprMXSA": [False]},
+    {"DirectToVgprMXSB": [False]},
     {"DirectToVgprSparseMetadata": [False]},
     # Restricted address remap features (default off unless explicitly enabled in the solution config):
     {"BAddrInterleave": [False]},
@@ -405,7 +414,7 @@ defaultBenchmarkCommonParameters = [
     {"GlobalSplitUAlgorithm": ["MultipleBuffer"]},
     {"GlobalSplitUCoalesced": [False]},
     {"GlobalSplitUWorkGroupMappingRoundRobin": [False]},
-    {"Use64bShadowLimit": [1]},
+    {"Use64bShadowLimit": [True]},
     {"NumLoadsCoalescedA": [1]},
     {"NumLoadsCoalescedB": [1]},
     {"WorkGroup": [[16, 16, 1]]},
@@ -421,7 +430,9 @@ defaultBenchmarkCommonParameters = [
     {"NonTemporalD": [0]},
     {"NonTemporalC": [0]},
     {"NonTemporalA": [0]},
+    {"NonTemporalMXSA": [ 0 ] },
     {"NonTemporalB": [0]},
+    {"NonTemporalMXSB": [ 0 ] },
     {"NonTemporalWS": [0]},
     {"NonTemporalMetadata": [0]},
     {"NonTemporal": [-1]},
@@ -460,7 +471,8 @@ defaultBenchmarkCommonParameters = [
     {"ScheduleGROverBarrier": [-1]},
     {"DtlPlusLdsBuf": [-1]},
     {"MinGRIncPerMfma": [-1]},
-    {"UsePLRPack": [0]}
+    {"UsePLRPack": [0]},
+    {"TDMInst": [0]},
 ]
 
 # dictionary of defaults comprised of default option for each parameter
@@ -610,9 +622,6 @@ def assignGlobalParameters(config, isaInfoMap: Dict[IsaVersion, IsaInfo]):
 
     if "CodeObjectVersion" in config:
         globalParameters["CodeObjectVersion"] = config["CodeObjectVersion"]
-
-    if "ROCmAgentEnumeratorPath" in config:
-        globalParameters["ROCmAgentEnumeratorPath"] = config["ROCmAgentEnumeratorPath"]
 
     if getVerbosity() >= 1:
         printCapabilitiesTable(isaInfoMap)

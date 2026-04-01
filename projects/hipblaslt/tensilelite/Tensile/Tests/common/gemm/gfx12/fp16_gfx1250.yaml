@@ -1,36 +1,19 @@
 TestParameters:
-  marks: [skip-gfx900, skip-gfx906, skip-gfx908, skip-gfx90a, skip-gfx940, skip-gfx941, skip-gfx942, skip-gfx950, skip-gfx1010, skip-gfx1011, skip-gfx1012, skip-gfx1030, skip-gfx1100, skip-gfx1101, skip-gfx1102, skip-gfx1200, skip-gfx1201] # not supported by arch
+  marks: [skip-gfx900, skip-gfx906, skip-gfx908, skip-gfx90a, skip-gfx940, skip-gfx941, skip-gfx942, skip-gfx950, skip-gfx1010, skip-gfx1011, skip-gfx1012, skip-gfx1030, skip-gfx1100, skip-gfx1101, skip-gfx1102, skip-gfx1200, skip-gfx1201]
 
 GlobalParameters:
   NumElementsToValidate: -1
   KernelTime: True
   NewClient: 2
   BoundsCheck: False
-  PrintSolutionRejectionReason: True
-  ValidationMaxToPrint: 4      # maximum number of mismatches to print
-  ValidationPrintValids: False # print matches too
-  DataInitTypeA: 3 #3
-  DataInitTypeB: 2 #3
-  DataInitTypeC: 0
-  # DataInitTypeD: 0
-  # DataInitTypeE: 0
-  DataInitTypeAlpha: 1
-  DataInitTypeBeta: 0
-  # Tensor printing controls:
-  # PrintTensorA: 1          # Print TensorA after initialization
-  # PrintTensorB: 1          # Print TensorB after initialization
-  # PrintTensorC: 0x3          # Print TensorC.  0x1=after init; 0x2=after copy-back; 0x3=both
-  # PrintTensorD: 0x3          # Print TensorD.  0x1=after init; 0x2=after copy-back; 0x3=both
-  #PrintTensorRef: 1
-  # print logs
-  PrintLevel: 2                # how much info to print in generator. 0=none, 1=standard, 2=verbose
+  ValidationMaxToPrint: 4
+  ValidationPrintValids: False
+  DataInitTypeA: 3
+  DataInitTypeB: 3
   NumWarmups: 1
   EnqueuesPerSync: 1
-  PrintWinnersOnly: True
   MinKForGSU: 1
   Architecture: gfx1250
-  CpuThreads: 1
-  ROCmAgentEnumeratorPath: rocm_agent_enumerator
 
 BenchmarkProblems:
   #######################################
@@ -48,10 +31,9 @@ BenchmarkProblems:
       UseBeta: True
       Batched: True
       SupportUserArgs: True
-      UseBias: 1
+      UseBias: 0
       Activation: True
-      #UseScaleAB: Scalar #SAB
-      UseScaleAlphaVec: 1 #SAV
+      UseScaleAlphaVec: 1
       BiasDataTypeList: ['s', 'h']
       ActivationType:  hipblaslt_all
 
@@ -60,18 +42,14 @@ BenchmarkProblems:
       BenchmarkCommonParameters:
         - KernelLanguage: ["Assembly"]
       ForkParameters:
-          # Putting it all together:
-          #  - [32, 32, 1, 2,  1,  4, 1,  2, 2]
-          #     ^^^^^^^^^^^^   ^   ^^^^   ^^^^
-          #      MatrixInst  BlkM   WT    Wave
         - MatrixInstruction:
           - [16, 16, 32, 1,  1,  2, 1,  1, 2 ]
           - [16, 16, 32, 1,  1,  1, 1,  2, 1 ]
           - [16, 16, 32, 1,  1,  1, 1,  2, 1 ]
           - [16, 16, 32, 1,  1,  1, 1,  1, 1]
-
         - DepthU: [32]
-        - TransposeLDS: [-1]
+        - TransposeLDS: [-1, 1]
+        - LDSTrInst: [True, False]
         - LdsPadA: [-1]
         - LdsPadB: [-1]
         - LdsPadMetadata: [0]
@@ -80,11 +58,13 @@ BenchmarkProblems:
         - PrefetchLocalRead: [0]
         - PrefetchGlobalRead: [2]
         - StoreRemapVectorWidth: [0]
-        - GlobalSplitU: [1]
+        - GlobalSplitU: [1,2,3]
         - GlobalSplitUAlgorithm: [MultipleBuffer]
         - GlobalReadVectorWidthA: [-1]
         - GlobalReadVectorWidthB: [-1]
-        - 1LDSBuffer: [-1]
+        - 1LDSBuffer: [-1, 1]
+        - VectorWidthA: [1, 2]
+        - SourceSwap: [0, 1]
         - DirectToVgprSparseMetadata: [0]
         - WorkGroupMapping: [1]
         - StoreVectorWidth: [-1]
@@ -92,7 +72,6 @@ BenchmarkProblems:
         - WavefrontSize: [32]
         - AssertFree0ElementMultiple: [1]
         - AssertFree1ElementMultiple: [1]
-        # - AssertSummationElementMultiple: [32]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:
@@ -123,8 +102,7 @@ BenchmarkProblems:
       SupportUserArgs: True
       UseBias: 1
       Activation: True
-      #UseScaleAB: Scalar #SAB
-      UseScaleAlphaVec: 1 #SAV
+      UseScaleAlphaVec: 1
       BiasDataTypeList: ['s', 'h']
       ActivationType:  hipblaslt_all
 
@@ -133,10 +111,6 @@ BenchmarkProblems:
       BenchmarkCommonParameters:
         - KernelLanguage: ["Assembly"]
       ForkParameters:
-          # Putting it all together:
-          #  - [32, 32, 1, 2,  1,  4, 1,  2, 2]
-          #     ^^^^^^^^^^^^   ^   ^^^^   ^^^^
-          #      MatrixInst  BlkM   WT    Wave
         - MatrixInstruction:
           - [16, 16, 32, 1,  1,  2, 1,  1, 2 ]
           - [16, 16, 32, 1,  1,  1, 1,  2, 1 ]
@@ -145,6 +119,7 @@ BenchmarkProblems:
 
         - DepthU: [32]
         - TransposeLDS: [-1]
+        - LDSTrInst: [True, False]
         - LdsPadA: [-1]
         - LdsPadB: [-1]
         - LdsPadMetadata: [0]
@@ -157,7 +132,7 @@ BenchmarkProblems:
         - GlobalSplitUAlgorithm: [MultipleBuffer]
         - GlobalReadVectorWidthA: [-1]
         - GlobalReadVectorWidthB: [-1]
-        - 1LDSBuffer: [-1]
+        - 1LDSBuffer: [-1, 1]
         - DirectToVgprSparseMetadata: [0]
         - WorkGroupMapping: [1]
         - StoreVectorWidth: [-1]
@@ -165,7 +140,6 @@ BenchmarkProblems:
         - WavefrontSize: [32]
         - AssertFree0ElementMultiple: [1]
         - AssertFree1ElementMultiple: [1]
-        # - AssertSummationElementMultiple: [32]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:
@@ -196,8 +170,7 @@ BenchmarkProblems:
       SupportUserArgs: True
       UseBias: 1
       Activation: True
-      #UseScaleAB: Scalar #SAB
-      UseScaleAlphaVec: 1 #SAV
+      UseScaleAlphaVec: 1
       BiasDataTypeList: ['s', 'h']
       ActivationType:  hipblaslt_all
 
@@ -206,10 +179,6 @@ BenchmarkProblems:
       BenchmarkCommonParameters:
         - KernelLanguage: ["Assembly"]
       ForkParameters:
-          # Putting it all together:
-          #  - [32, 32, 1, 2,  1,  4, 1,  2, 2]
-          #     ^^^^^^^^^^^^   ^   ^^^^   ^^^^
-          #      MatrixInst  BlkM   WT    Wave
         - MatrixInstruction:
           - [16, 16, 32, 1,  1,  2, 1,  1, 2 ]
           - [16, 16, 32, 1,  1,  1, 1,  2, 1 ]
@@ -218,6 +187,7 @@ BenchmarkProblems:
 
         - DepthU: [32]
         - TransposeLDS: [-1]
+        - LDSTrInst: [True, False]
         - LdsPadA: [-1]
         - LdsPadB: [-1]
         - LdsPadMetadata: [0]
@@ -230,7 +200,7 @@ BenchmarkProblems:
         - GlobalSplitUAlgorithm: [MultipleBuffer]
         - GlobalReadVectorWidthA: [-1]
         - GlobalReadVectorWidthB: [-1]
-        - 1LDSBuffer: [-1]
+        - 1LDSBuffer: [-1, 1]
         - DirectToVgprSparseMetadata: [0]
         - WorkGroupMapping: [1]
         - StoreVectorWidth: [-1]
@@ -269,8 +239,7 @@ BenchmarkProblems:
       SupportUserArgs: True
       UseBias: 1
       Activation: True
-      #UseScaleAB: Scalar #SAB
-      UseScaleAlphaVec: 1 #SAV
+      UseScaleAlphaVec: 1
       BiasDataTypeList: ['s', 'h']
       ActivationType:  hipblaslt_all
 
@@ -279,10 +248,6 @@ BenchmarkProblems:
       BenchmarkCommonParameters:
         - KernelLanguage: ["Assembly"]
       ForkParameters:
-          # Putting it all together:
-          #  - [32, 32, 1, 2,  1,  4, 1,  2, 2]
-          #     ^^^^^^^^^^^^   ^   ^^^^   ^^^^
-          #      MatrixInst  BlkM   WT    Wave
         - MatrixInstruction:
           - [16, 16, 32, 1,  1,  2, 1,  1, 2 ]
           - [16, 16, 32, 1,  1,  1, 1,  2, 1 ]
@@ -291,6 +256,7 @@ BenchmarkProblems:
 
         - DepthU: [32]
         - TransposeLDS: [-1]
+        - LDSTrInst: [True, False]
         - LdsPadA: [-1]
         - LdsPadB: [-1]
         - LdsPadMetadata: [0]
@@ -303,7 +269,7 @@ BenchmarkProblems:
         - GlobalSplitUAlgorithm: [MultipleBuffer]
         - GlobalReadVectorWidthA: [-1]
         - GlobalReadVectorWidthB: [-1]
-        - 1LDSBuffer: [-1]
+        - 1LDSBuffer: [-1, 1]
         - DirectToVgprSparseMetadata: [0]
         - WorkGroupMapping: [1]
         - StoreVectorWidth: [-1]
@@ -311,7 +277,6 @@ BenchmarkProblems:
         - WavefrontSize: [32]
         - AssertFree0ElementMultiple: [1]
         - AssertFree1ElementMultiple: [1]
-        # - AssertSummationElementMultiple: [32]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:

@@ -23,7 +23,7 @@ set(SUPPORTED_ARCHITECTURES
     "gfx90a:xnack+"
     "gfx90a:xnack-"
     "gfx942:xnack+"
-    "gfx950:xnack+"    
+    "gfx950:xnack+"
     "gfx1250:xnack+"
 )
 
@@ -44,7 +44,8 @@ if(HIPBLASLT_ENABLE_ASAN OR THEROCK_SANITIZER STREQUAL "ASAN")
         "gfx90a:xnack+"
         "gfx942:xnack+"
         "gfx950:xnack+"
-        "gfx1250:xnack+")
+        "gfx1250:xnack+"
+        )
 else()
     # For non address sanitizer builds, "all" is non-xnack architectures.
     set(BASE_ARCHITECTURES

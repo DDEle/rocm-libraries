@@ -396,6 +396,7 @@ def choose_multiplier(d, N, p):
     return mhigh, shPost, l
 
 def wmmaV3InputVgprLayout(wmma: Sequence[int], dtypeBitWidth: Optional[int] = None) -> Tuple[int]:
+    # wmmaV3InputVgprLayout: (numReadsUnroll, numVecTile, numVecUnroll, NumElementPerRead)
     wmma = tuple(wmma)
     if wmma == (16, 16, 4, 1):
         return (1, 16, 2, 2)
@@ -403,10 +404,12 @@ def wmmaV3InputVgprLayout(wmma: Sequence[int], dtypeBitWidth: Optional[int] = No
         return (2, 16, 2, 8)
     elif wmma == (16, 16, 64, 1):
         return (2, 16, 2, 16)
-    elif wmma == (16, 16, 128, 1):
+    elif wmma == (16, 16, 128, 1) or wmma == (32, 16, 128, 1):
         assert dtypeBitWidth
         if dtypeBitWidth == 8:
             return (4, 16, 2, 16)
+        if dtypeBitWidth == 4 or dtypeBitWidth == 6:
+            return (2, 16, 2, 32)
         assert False, f"Unsupported datatype bitwidth: {dtypeBitWidth}"
     else:
         assert False, f"Unhandled WMMA: {wmma}"

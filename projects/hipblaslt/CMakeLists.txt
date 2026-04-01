@@ -15,6 +15,7 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+include(hipblaslt_shim)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(GenerateExportHeader)
@@ -74,10 +75,11 @@ if(HIPBLASLT_ENABLE_HOST OR TENSILELITE_ENABLE_HOST)
     option(HIPBLASLT_ENABLE_ASAN "Build hipBLASLt with address sanitizer enabled." OFF)
     option(HIPBLASLT_ENABLE_TSAN "Build hipBLASLt with thread sanitizer enabled." OFF)
     option(HIPBLASLT_ENABLE_LAZY_LOAD "Enable lazy loading of runtime code oject files to reduce ram usage." ON)
-    option(HIPBLASLT_ENABLE_MSGPACK "Use msgpack for parsing configuration files." ON)
+    option(HIPBLASLT_ENABLE_YAML "Use YAML for parsing configuration files." OFF)
     option(HIPBLASLT_ENABLE_OPENMP "Use OpenMP to improve performance." ON)
-    option(HIPBLASLT_ENABLE_LLVM "Use msgpack for parsing configuration files." OFF)
 endif()
+
+set(HIPBLASLT_ENABLE_ROCROLLER OFF)
 
 if(HIPBLASLT_ENABLE_HOST)
     option(HIPBLASLT_BUILD_SHARED_LIBS "Build the hipblaslt library as shared vs static" ON)
@@ -154,7 +156,7 @@ if(HIPBLASLT_ENABLE_OPENMP)
     find_package(OpenMP REQUIRED)
 endif()
 
-if(HIPBLASLT_ENABLE_LLVM)
+if(HIPBLASLT_ENABLE_YAML)
     find_package(LLVM REQUIRED)
 endif()
 
@@ -223,7 +225,7 @@ if(HIPBLASLT_ENABLE_ROCROLLER)
     endif()
 endif()
 
-if(HIPBLASLT_ENABLE_MSGPACK)
+if(NOT HIPBLASLT_ENABLE_YAML)
     # See: https://github.com/msgpack/msgpack-c/wiki/Q%26A#how-to-support-both-msgpack-c-c-version-5x-and-6x-
     # Prefer 6.x (msgpack-cxx)
     find_package(msgpack-cxx CONFIG)
@@ -265,7 +267,7 @@ if(HIPBLASLT_ENABLE_HOST)
     if(HIPBLASLT_ENABLE_ROCROLLER)
         target_compile_definitions(hipblaslt PUBLIC HIPBLASLT_USE_ROCROLLER)
     endif()
-    if(HIPBLASLT_ENABLE_MSGPACK)
+    if(NOT HIPBLASLT_ENABLE_YAML)
         target_link_libraries(hipblaslt PRIVATE ${hipblaslt_msgpack_target})
     endif()
     rocm_set_soversion(hipblaslt "${hipblaslt_SOVERSION}")
@@ -321,6 +323,8 @@ if(HIPBLASLT_ENABLE_HOST)
     set_target_properties(hipblaslt
         PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/library"
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
     )
     add_subdirectory(library)
 endif()
@@ -392,7 +396,7 @@ if(HIPBLASLT_ENABLE_HOST)
 endif()
 
 # Both the device-library contents and custom kernels in the rocroller directory should be installed if selected for
-if((HIPBLASLT_ENABLE_DEVICE OR HIPBLASLT_ENABLE_ROCROLLER) AND NOT HIPBLASLT_IS_SUBPROJECT)
+if(HIPBLASLT_ENABLE_DEVICE OR HIPBLASLT_ENABLE_ROCROLLER)
     if(WIN32)
         # Put files used at runtime adjacent to '.dll's and '.exe's in bin/.
         set(HIPBLASLT_TENSILE_LIBRARY_DIR "\${CPACK_PACKAGING_INSTALL_PREFIX}${CMAKE_INSTALL_BINDIR}/hipblaslt" CACHE PATH "path to tensile library")
@@ -436,7 +440,7 @@ if(HIPBLASLT_ENABLE_CLIENT)
             hipblaslt-bench-extop-amax
         COMPONENT benchmarks
     )
-    if(HIPBLASLT_ENABLE_LLVM)
+    if(HIPBLASLT_ENABLE_YAML)
         rocm_install(
             TARGETS
                 hipblaslt-sequence

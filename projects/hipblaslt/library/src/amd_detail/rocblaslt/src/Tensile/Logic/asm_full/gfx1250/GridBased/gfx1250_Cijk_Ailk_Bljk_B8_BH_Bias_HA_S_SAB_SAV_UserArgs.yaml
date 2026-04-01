@@ -564,7 +564,7 @@
     _DepthUB: 64
     _DepthUMetadata: 64
     _GlobalAccumulation: MultipleBuffer
-    _UseSgprForGRO: false
+    _UseSgprForGRO: 0
     _VectorStore: 1
     _WorkspaceSizePerElemBias: 0
     _WorkspaceSizePerElemC: 4

@@ -16,7 +16,7 @@ else()
 
     set(SUPPORTED_ARCHITECTURES ${BASE_ARCHITECTURES})
     list(APPEND SUPPORTED_ARCHITECTURES "gfx942:xnack+" "gfx942:xnack-" "gfx950:xnack+"
-         "gfx950:xnack-"
+         "gfx950:xnack-" "gfx1250:xnack+" "gfx1250:xnack-"
     )
 endif()
 

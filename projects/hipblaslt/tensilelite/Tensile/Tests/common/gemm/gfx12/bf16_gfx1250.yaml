@@ -29,8 +29,6 @@ GlobalParameters:
   PrintWinnersOnly: True
   MinKForGSU: 1
   Architecture: gfx1250
-  CpuThreads: 1
-  ROCmAgentEnumeratorPath: rocm_agent_enumerator
 
 BenchmarkProblems:
   #######################################
@@ -72,6 +70,7 @@ BenchmarkProblems:
 
         - DepthU: [32]
         - TransposeLDS: [-1]
+        - LDSTrInst: [True, False]
         - LdsPadA: [-1]
         - LdsPadB: [-1]
         - LdsPadMetadata: [0]
@@ -84,7 +83,7 @@ BenchmarkProblems:
         - GlobalSplitUAlgorithm: [MultipleBuffer]
         - GlobalReadVectorWidthA: [-1]
         - GlobalReadVectorWidthB: [-1]
-        - 1LDSBuffer: [-1]
+        - 1LDSBuffer: [-1, 1]
         - DirectToVgprSparseMetadata: [0]
         - WorkGroupMapping: [1]
         - StoreVectorWidth: [-1]
@@ -145,6 +144,7 @@ BenchmarkProblems:
 
         - DepthU: [32]
         - TransposeLDS: [-1]
+        - LDSTrInst: [True, False]
         - LdsPadA: [-1]
         - LdsPadB: [-1]
         - LdsPadMetadata: [0]
@@ -157,7 +157,7 @@ BenchmarkProblems:
         - GlobalSplitUAlgorithm: [MultipleBuffer]
         - GlobalReadVectorWidthA: [-1]
         - GlobalReadVectorWidthB: [-1]
-        - 1LDSBuffer: [-1]
+        - 1LDSBuffer: [-1, 1]
         - DirectToVgprSparseMetadata: [0]
         - WorkGroupMapping: [1]
         - StoreVectorWidth: [-1]
@@ -218,6 +218,7 @@ BenchmarkProblems:
 
         - DepthU: [32]
         - TransposeLDS: [-1]
+        - LDSTrInst: [True, False]
         - LdsPadA: [-1]
         - LdsPadB: [-1]
         - LdsPadMetadata: [0]
@@ -230,7 +231,7 @@ BenchmarkProblems:
         - GlobalSplitUAlgorithm: [MultipleBuffer]
         - GlobalReadVectorWidthA: [-1]
         - GlobalReadVectorWidthB: [-1]
-        - 1LDSBuffer: [-1]
+        - 1LDSBuffer: [-1, 1]
         - DirectToVgprSparseMetadata: [0]
         - WorkGroupMapping: [1]
         - StoreVectorWidth: [-1]
@@ -291,6 +292,7 @@ BenchmarkProblems:
 
         - DepthU: [32]
         - TransposeLDS: [-1]
+        - LDSTrInst: [True, False]
         - LdsPadA: [-1]
         - LdsPadB: [-1]
         - LdsPadMetadata: [0]
@@ -303,7 +305,7 @@ BenchmarkProblems:
         - GlobalSplitUAlgorithm: [MultipleBuffer]
         - GlobalReadVectorWidthA: [-1]
         - GlobalReadVectorWidthB: [-1]
-        - 1LDSBuffer: [-1]
+        - 1LDSBuffer: [-1, 1]
         - DirectToVgprSparseMetadata: [0]
         - WorkGroupMapping: [1]
         - StoreVectorWidth: [-1]

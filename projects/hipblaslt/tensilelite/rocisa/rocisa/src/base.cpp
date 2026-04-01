@@ -119,11 +119,11 @@ void init_base(nb::module_ m)
         .def("getArchCaps", &rocisa::rocIsa::getArchCaps, "Get arch capabilities.")
         .def("getAsmBugs", &rocisa::rocIsa::getAsmBugs, "Get asm bugs.")
         .def("getData", &rocisa::rocIsa::getData, "Get data for pickling.")
+        .def("setData", &rocisa::rocIsa::setData, "Set data for pickling.")
+        .def("getOutputOptions", &rocisa::rocIsa::getOutputOptions, "Get output options.")
         .def("getVgprIdx", &rocisa::rocIsa::getVgprIdx, "Get vgpr idx.")
         .def("getVgprMsb", &rocisa::rocIsa::getVgprMsb, "Get vgpr msb.")
-        .def("getOutputOptions", &rocisa::rocIsa::getOutputOptions, "Get output options.")
         .def("setOutputOptions", &rocisa::rocIsa::setOutputOptions, "Set output options.")
-        .def("setData", &rocisa::rocIsa::setData, "Set data for pickling.")
         .def("setVgprIdx", &rocisa::rocIsa::setVgprIdx, "Set vgpr idx.")
         .def("setVgprMsb", &rocisa::rocIsa::setVgprMsb, "Set vgpr msb.");
 

@@ -221,6 +221,7 @@ def addCommonArguments(argParser):
     argParser.add_argument("--prebuilt-client", default=str(TENSILE_CLIENT_PATH),
         type=os.path.abspath, help="Specify the full path to a pre-built tensilelite-client executable")
     argParser.add_argument("--rocm-agent-enumerator", default=None, action="store", dest="rocm_agent_enumerator")
+
     argParser.add_argument("--global-parameters", nargs="+", type=splitExtraParameters, default=[])
 
 
@@ -568,9 +569,6 @@ def Tensile(userArgs):
     device_id = config["GlobalParameters"].get("Device", int(args.device))
     UseEffLike = config["GlobalParameters"].get("UseEffLike", globalParameters["UseEffLike"])
     UseEffLike = False if isRhel8() else UseEffLike
-
-    if 'ROCmAgentEnumeratorPath' in config.get("GlobalParameters"):
-        args.rocm_agent_enumerator = config.get("GlobalParameters").get("ROCmAgentEnumeratorPath")
 
     if 'LibraryLogic' in config and UseEffLike:
         max_frequency = get_gpu_max_frequency(device_id)

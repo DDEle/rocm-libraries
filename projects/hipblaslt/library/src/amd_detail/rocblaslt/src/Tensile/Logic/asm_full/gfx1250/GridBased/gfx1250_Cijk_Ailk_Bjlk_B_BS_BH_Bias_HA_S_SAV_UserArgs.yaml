@@ -1,4 +1,4 @@
-- {MinimumRequiredVersion: 4.33.0}
+- {MinimumRequiredVersion: 5.0.0}
 - gfx1250
 - gfx1250
 - [Device 73f0]
@@ -276,7 +276,7 @@
     UnrollMajorLDSB: 0
     UnrollMajorLDSMetadata: true
     Use64bShadowLimit: 1
-    UseCustomMainLoopSchedule: -1
+    UseCustomMainLoopSchedule: 0
     UseDotInstruction: false
     UseF32XEmulation: false
     UseInstOffsetForGRO: 0

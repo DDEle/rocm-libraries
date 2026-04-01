@@ -79,6 +79,8 @@ if(HIPBLASLT_ENABLE_HOST OR TENSILELITE_ENABLE_HOST)
     option(HIPBLASLT_ENABLE_OPENMP "Use OpenMP to improve performance." ON)
 endif()
 
+set(HIPBLASLT_ENABLE_ROCROLLER OFF)
+
 if(HIPBLASLT_ENABLE_HOST)
     option(HIPBLASLT_BUILD_SHARED_LIBS "Build the hipblaslt library as shared vs static" ON)
     option(HIPBLASLT_ENABLE_ROCROLLER "Use RocRoller library." ON)
@@ -321,6 +323,8 @@ if(HIPBLASLT_ENABLE_HOST)
     set_target_properties(hipblaslt
         PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/library"
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
     )
     add_subdirectory(library)
 endif()
@@ -392,7 +396,7 @@ if(HIPBLASLT_ENABLE_HOST)
 endif()
 
 # Both the device-library contents and custom kernels in the rocroller directory should be installed if selected for
-if((HIPBLASLT_ENABLE_DEVICE OR HIPBLASLT_ENABLE_ROCROLLER) AND NOT HIPBLASLT_IS_SUBPROJECT)
+if(HIPBLASLT_ENABLE_DEVICE OR HIPBLASLT_ENABLE_ROCROLLER)
     if(WIN32)
         # Put files used at runtime adjacent to '.dll's and '.exe's in bin/.
         set(HIPBLASLT_TENSILE_LIBRARY_DIR "\${CPACK_PACKAGING_INSTALL_PREFIX}${CMAKE_INSTALL_BINDIR}/hipblaslt" CACHE PATH "path to tensile library")

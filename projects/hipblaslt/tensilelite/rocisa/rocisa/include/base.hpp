@@ -212,7 +212,6 @@ namespace rocisa
         std::mutex                            m_mutex;
         std::map<std::thread::id, KernelInfo> m_threads;
         std::map<IsaVersion, IsaInfo>         m_isainfo;
-
         std::map<std::thread::id, OutputOptions> m_outputOptions;
         std::map<std::thread::id, std::map<std::string, int>> m_vgpridx;
         std::map<std::thread::id, int>        m_vgprmsb;

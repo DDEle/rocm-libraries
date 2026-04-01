@@ -125,7 +125,7 @@ class SoftmaxKernelGenerator:
 
     @property
     def lds_usage_byte(self) -> int:
-        return self.num_cols * self.num_rows * self.io_type.numBytes()
+        return self.num_cols * self.num_rows * int(self.io_type.numBytes())
 
     @property
     def func_name(self):
@@ -227,7 +227,19 @@ class SoftmaxKernelGenerator:
 
     @property
     def bpe(self) -> int:
-        return self.io_type.numBytes()
+        return int(self.io_type.numBytes())
+
+    def shiftSrd(self, srdIdx):
+        module = Module()
+        if self.isa[0] == 12 and self.isa[1] == 5:
+            stmp = self.sgpr_pool.checkOutAligned(1, 1)
+            module.add(ri.SAndB32(sgpr(stmp), sgpr(srdIdx+2), 0x7F))
+            module.add(ri.SLShiftLeftB32(sgpr(stmp), 25, sgpr(stmp)))
+            module.add(ri.SAndB32(sgpr(srdIdx+1), sgpr(srdIdx+1), 0x1FFFFFF))
+            module.add(ri.SOrB32(sgpr(srdIdx+1), sgpr(srdIdx+1), sgpr(stmp)))
+            module.add(ri.SLShiftRightB32(sgpr(srdIdx+2), 7, sgpr(srdIdx+2)))
+            self.sgpr_pool.checkIn(stmp)
+        return module
 
     def shiftSrd(self, srdIdx):
         module = Module()

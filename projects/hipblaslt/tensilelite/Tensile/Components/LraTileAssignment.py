@@ -907,13 +907,6 @@ class LraTileAssignmentMFMA(LraTileAssignment):
                                                "1. apply VectorWidth: bnOffset = bnOffset * vw(%u)" % vectorWidth))
                perpPerm(tReg)
 
-            applyVWCalcEarly = perpStride > 1 and kernel["ProblemType"]["TLU%s"%tc] == 0 and kernel["ProblemType"]["DataType"].numBytes() != 2
-            if applyVWCalcEarly:
-               # Apply vector width calc before we apply permutation to perp dim
-               module.add(vectorStaticMultiply(vgpr(tReg), vgpr(tReg), vectorWidth, tmpSgprInfo, \
-                                               "1. apply VectorWidth: bnOffset = bnOffset * vw(%u)" % vectorWidth))
-               perpPerm(tReg)
-
             module.add(vectorStaticMultiply(vgpr(tReg), vgpr(tReg), strideTile, tmpSgprInfo, \
                 "1. N offset: nOffset = nIdx * nStride(%u)" % strideTile))
             if enableLDSTr:

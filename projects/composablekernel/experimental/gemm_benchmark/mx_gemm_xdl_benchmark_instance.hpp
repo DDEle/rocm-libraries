@@ -2,7 +2,8 @@
 // Copyright (c) Advanced Micro Devices, Inc., or its affiliates.
 
 #include "ck/tensor_operation/gpu/device/impl/device_gemm_xdl_cshuffle_v3_mx.hpp"
-// #include "gemm_xdl_ck_tile_wrap.hpp"
+#define CK_TILE_WARP_ENABLE_MX 1
+#include "gemm_xdl_ck_tile_wrap.hpp"
 
 template <ck::index_t... Is>
 using S = ck::Sequence<Is...>;
@@ -64,10 +65,11 @@ using ALayout = A_LAYOUT;
 using BLayout = B_LAYOUT;
 using CLayout = Row;
 
-using AElementOp               = PassThrough;
-using BElementOp               = PassThrough;
-using CElementOp               = PassThrough;
-static constexpr auto DataSize = sizeof(ADataType);
+using AElementOp                 = PassThrough;
+using BElementOp                 = PassThrough;
+using CElementOp                 = PassThrough;
+static constexpr auto DataSize   = sizeof(ADataType);
+static constexpr auto PackedSize = ck::packed_size_v<ADataType>;
 
 static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
 template <index_t BlockSize,
@@ -149,12 +151,52 @@ using GemmV3 = ck::tensor_operation::device::DeviceGemmMX_Xdl_CShuffleV3<
     ComputeDataType,
     MinimumOccupancy>;
 
+template <index_t MPerBlock,
+          index_t NPerBlock,
+          index_t KPerBlock,
+          index_t MPerXDL,
+          index_t NPerXDL,
+          index_t KPerXDL,
+          index_t MWarp,
+          index_t NWarp,
+          index_t CShuffleNXdlPerWavePerShuffle,
+          ck_tile::GemmPipelineScheduler PipelineScheduler,
+          ck_tile::GemmPipeline PipelineVer,
+          index_t ClusterSizeM,
+          index_t ClusterSizeN,
+          index_t MinimumOccupancy>
+using GemmCkTile =
+    ck::tensor_operation::device::DeviceGemm_Xdl_CkTileWrap<ALayout,
+                                                            BLayout,
+                                                            CLayout,
+                                                            ADataType,
+                                                            BDataType,
+                                                            CDataType,
+                                                            AccDataType,
+                                                            CShuffleDataType,
+                                                            PassThrough,
+                                                            PassThrough,
+                                                            PassThrough,
+                                                            ck_tile::sequence<false, false, false>,
+                                                            MPerBlock,
+                                                            NPerBlock,
+                                                            KPerBlock,
+                                                            MPerXDL,
+                                                            NPerXDL,
+                                                            KPerXDL,
+                                                            MWarp,
+                                                            NWarp,
+                                                            1,
+                                                            CShuffleNXdlPerWavePerShuffle,
+                                                            ComputeDataType,
+                                                            ClusterSizeM,
+                                                            ClusterSizeN,
+                                                            PipelineScheduler,
+                                                            PipelineVer,
+                                                            MinimumOccupancy>;
+
 #if CK_TILE_USE_WMMA
-#if defined(CK_USE_GFX1250)
-static constexpr ck::index_t KPerXDL = 64 / DataSize;
-#else
-static constexpr ck::index_t KPerXDL = 16;
-#endif
+static constexpr ck::index_t KPerXDL = 128;
 #else
 #if defined(CK_GFX950_SUPPORT)
 static constexpr ck::index_t KPerXDL =
@@ -222,21 +264,25 @@ static constexpr ck::index_t KPack = AB_K1;
 
         //MPerBlock NPerBlock KPerBlock MPerXDL NPerXDL KPerXDL MWarp NWarp CShuffleNXdlPerWavePerShuffle PipelineScheduler PipelineVer ClusterSizeM ClusterSizeN Occupancy
 #define GEMM_CK_TILE_INSTANCE(GemmClass, Scheduler, Version, ClusterSizeM, ClusterSizeN, Occupancy)  \
-        GemmClass<256,   256,  128 / DataSize,  16,   16,  KPerXDL,  2,   4,   2, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-        GemmClass<128,   256,  128 / DataSize,  16,   16,  KPerXDL,  2,   4,   2, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-        GemmClass<128,   128,  128 / DataSize,  16,   16,  KPerXDL,  2,   4,   2, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-        GemmClass<128,   128,  256 / DataSize,  16,   16,  KPerXDL,  2,   4,   2, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-        GemmClass<256,   256,  256 / DataSize,  16,   16,  KPerXDL,  2,   2,   4, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-        GemmClass<256,   256,  128 / DataSize,  16,   16,  KPerXDL,  2,   2,   4, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-        GemmClass<128,   128,  256 / DataSize,  16,   16,  KPerXDL,  2,   2,   4, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-        GemmClass<128,   256,  128 / DataSize,  16,   16,  KPerXDL,  2,   2,   4, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-        GemmClass<128,   128,  128 / DataSize,  16,   16,  KPerXDL,  2,   2,   4, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-        GemmClass<64,    128,  128 / DataSize,  16,   16,  KPerXDL,  2,   2,   2, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>
+        GemmClass<256,   256,  128 / DataSize * PackedSize,  32,  32,  KPerXDL,  2,   4,   2, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+        GemmClass<128,   256,  128 / DataSize * PackedSize,  32,  32,  KPerXDL,  2,   4,   2, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+        GemmClass<128,   128,  128 / DataSize * PackedSize,  32,  32,  KPerXDL,  2,   4,   1, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+        GemmClass<128,   128,  256 / DataSize * PackedSize,  32,  32,  KPerXDL,  2,   4,   1, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+        GemmClass<256,   256,  256 / DataSize * PackedSize,  32,  32,  KPerXDL,  2,   2,   4, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+        GemmClass<256,   256,  128 / DataSize * PackedSize,  32,  32,  KPerXDL,  2,   2,   4, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+        GemmClass<128,   128,  256 / DataSize * PackedSize,  32,  32,  KPerXDL,  2,   2,   2, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+        GemmClass<128,   256,  128 / DataSize * PackedSize,  32,  32,  KPerXDL,  2,   2,   4, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+        GemmClass<128,   128,  128 / DataSize * PackedSize,  32,  32,  KPerXDL,  2,   2,   2, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+        GemmClass<64,    128,  128 / DataSize * PackedSize,  32,  32,  KPerXDL,  2,   2,   2, Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>
 
 // NOTE: please increase NUM_SHARDS in cmake once you change the instance number.
 using gemm_rcr_instances = std::tuple<  
     GEMM_RCR_INSTANCE(GemmV3,          ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v1, 1),           // 0
-    GEMM_RCR_INSTANCE(GemmV3,          ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v3, 1)            // 10
+    GEMM_RCR_INSTANCE(GemmV3,          ck::BlockGemmPipelineScheduler::Intrawave, ck::BlockGemmPipelineVersion::v3, 1),           // 10
+    GEMM_CK_TILE_INSTANCE(GemmCkTile,  ck_tile::GemmPipelineScheduler::Intrawave, ck_tile::GemmPipeline::COMPUTE_TDM_V1, 1, 1, 1),// 20
+    GEMM_CK_TILE_INSTANCE(GemmCkTile,  ck_tile::GemmPipelineScheduler::Intrawave, ck_tile::GemmPipeline::COMPUTE_TDM_V1, 2, 2, 1),// 30
+    GEMM_CK_TILE_INSTANCE(GemmCkTile,  ck_tile::GemmPipelineScheduler::Intrawave, ck_tile::GemmPipeline::COMPUTE_TDM_V2, 1, 1, 1),// 40
+    GEMM_CK_TILE_INSTANCE(GemmCkTile,  ck_tile::GemmPipelineScheduler::Intrawave, ck_tile::GemmPipeline::COMPUTE_TDM_V2, 2, 2, 1) // 50
     >;
 
 using gemm_rrr_instances = std::tuple<

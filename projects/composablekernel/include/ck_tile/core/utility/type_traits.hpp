@@ -223,7 +223,6 @@ using tuple_element_or_default_t =
 CK_TILE_DEFINE_HAS_TYPE_MEMBER(has_as_data_type_tuple, AsDataTypeTuple);
 CK_TILE_DEFINE_HAS_TYPE_MEMBER(has_as_layout_tuple, AsLayoutTuple);
 CK_TILE_DEFINE_HAS_VALUE_MEMBER(has_fixed_vector_size, FixedVectorSize);
-CK_TILE_DEFINE_HAS_VALUE_MEMBER(has_is_flatmm, isFlatMM);
 
 #undef CK_TILE_DEFINE_HAS_TYPE_MEMBER
 #undef CK_TILE_DEFINE_HAS_VALUE_MEMBER
@@ -277,14 +276,6 @@ template <typename Problem>
 inline constexpr bool problem_fixed_vector_size_v = []() {
     if constexpr(has_fixed_vector_size_v<Problem>)
         return Problem::FixedVectorSize;
-    else
-        return false;
-}();
-
-template <typename Problem>
-inline constexpr bool problem_is_flatmm_v = []() {
-    if constexpr(has_is_flatmm_v<Problem>)
-        return Problem::isFlatMM;
     else
         return false;
 }();

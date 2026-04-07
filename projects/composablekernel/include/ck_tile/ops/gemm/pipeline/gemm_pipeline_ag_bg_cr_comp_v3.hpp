@@ -46,6 +46,7 @@ struct BaseGemmPipelineAgBgCrCompV3
     CK_TILE_HOST_DEVICE static auto
     TailHandler(const RunFunction& run_func, bool has_hot_loop, TailNumber tail_number)
     {
+#if !defined(CK_TILE_FORCE_SINGLE_TAIL_HANDLER)
         // Use amd_wave_read_first_lane to avoid higher resource usage.
         // It forces to store these values in SGPR.
         // Compiler cannot deduce if one path is used for all threads
@@ -74,6 +75,12 @@ struct BaseGemmPipelineAgBgCrCompV3
         else if constexpr(I + 1 < scenarios.size())
             return TailHandler<I + 1>(run_func, has_hot_loop, tail_number);
 
+#else
+        ignore = has_hot_loop;
+        ignore = tail_number;
+        return run_func(bool_constant<true>{},
+                        integral_constant<TailNumber, ck_tile::TailNumber::Odd>{});
+#endif
 #if defined(__HIP_DEVICE_COMPILE__)
         // This path should be unreachable in device code if tail_number is valid.
         __builtin_unreachable();

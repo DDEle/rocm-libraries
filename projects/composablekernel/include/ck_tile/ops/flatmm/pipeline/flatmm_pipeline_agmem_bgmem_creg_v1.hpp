@@ -41,18 +41,24 @@ struct BaseFlatmmPipelineAGmemBGmemCRegV1
     template <bool DispatchHotloop = false, TailNumber tail_num, typename RunFunction>
     CK_TILE_HOST_DEVICE static auto TailHandler(const RunFunction& run_func, bool has_hot_loop)
     {
+#if !defined(CK_TILE_FORCE_SINGLE_TAIL_HANDLER)
         if constexpr(!DispatchHotloop)
             return run_func(bool_constant<true>{}, integral_constant<TailNumber, tail_num>{});
         else if(has_hot_loop)
             return run_func(bool_constant<true>{}, integral_constant<TailNumber, tail_num>{});
         else
             return run_func(bool_constant<false>{}, integral_constant<TailNumber, tail_num>{});
+#else
+        ignore = has_hot_loop;
+        return run_func(bool_constant<true>{}, integral_constant<TailNumber, tail_num>{});
+#endif
     }
 
     template <bool DispatchHotloop = false, typename RunFunction>
     CK_TILE_HOST_DEVICE static auto
     TailHandler(const RunFunction& run_func, bool has_hot_loop, TailNumber tail_num)
     {
+#if !defined(CK_TILE_FORCE_SINGLE_TAIL_HANDLER)
         if(TailNumber::Even == tail_num)
             return TailHandler<DispatchHotloop, TailNumber::Even>(run_func, has_hot_loop);
         else if(TailNumber::Odd == tail_num)
@@ -62,6 +68,10 @@ struct BaseFlatmmPipelineAGmemBGmemCRegV1
             assert(false && "Wrong TailNumber!");
             return TailHandler<DispatchHotloop, TailNumber::Even>(run_func, has_hot_loop);
         }
+#else
+        ignore = tail_num;
+        return TailHandler<DispatchHotloop, TailNumber::Even>(run_func, has_hot_loop);
+#endif
     }
 };
 

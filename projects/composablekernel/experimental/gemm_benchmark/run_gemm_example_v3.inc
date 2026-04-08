@@ -100,31 +100,13 @@ bool run_gemm(GemmInstance& op_ptrs, const ProblemType& problem_size, const Exec
     std::cout << "b_k_n: " << b_k_n.mDesc << std::endl;
     std::cout << "c_m_n: " << c_m_n_host_result.mDesc << std::endl;
 
-    ck::index_t first_index =
-        (config.instance_index != -1 && config.instance_index < static_cast<int>(op_ptrs.size()))
-            ? config.instance_index
-            : 0;
     Tensor<BDataType> b_preshuffled(
         f_host_tensor_descriptor(K, N, StrideB, BLayout{})); // use laout only for size
-    Tensor<BDataType> b_preshuffled_ck_tile(
-        f_host_tensor_descriptor(K, N, StrideB, BLayout{})); // use laout only for size
-    bool isCkTileWpMm = (op_ptrs[first_index]->GetKPerBlock() & IsPreShuffleMM) ? true : false;
     if constexpr(BPreShuffle)
     {
         static_assert(std::is_same_v<BLayout, ck::tensor_layout::gemm::RowMajor> == false);
-        if(config.instance_index == -1 || isCkTileWpMm)
-        {
-            ck_tile::HostTensor<BDataType> tmp(
-                ck_tile::host_tensor_descriptor(K, N, StrideB, ck_tile::bool_constant<false>{}));
-            tmp.mData                   = b_k_n.mData;
-            auto tmp_preshuffled        = ck_tile::shuffle_b<GemmConfig>(tmp);
-            b_preshuffled_ck_tile.mData = tmp_preshuffled.mData;
-        }
-        if(config.instance_index == -1 || !isCkTileWpMm)
-        {
-            constexpr int NPerXdl = GemmConfig::N_Warp_Tile;
-            preShuffleBuffer(b_k_n.mData.data(), b_preshuffled.mData.data(), N, K, NPerXdl, KPack);
-        }
+        constexpr int NPerXdl = GemmConfig::N_Warp_Tile;
+        preShuffleBuffer(b_k_n.mData.data(), b_preshuffled.mData.data(), N, K, NPerXdl, KPack);
     }
 
     DeviceMem a_m_k_device_buf(sizeof(ADataType) * a_m_k.mDesc.GetElementSpaceSize());
@@ -134,8 +116,7 @@ bool run_gemm(GemmInstance& op_ptrs, const ProblemType& problem_size, const Exec
     a_m_k_device_buf.ToDevice(a_m_k.mData.data());
     if constexpr(BPreShuffle)
     {
-        b_k_n_device_buf.ToDevice(isCkTileWpMm ? b_preshuffled_ck_tile.mData.data()
-                                               : b_preshuffled.mData.data());
+        b_k_n_device_buf.ToDevice(b_preshuffled.mData.data());
     }
     else
     {
@@ -210,14 +191,6 @@ bool run_gemm(GemmInstance& op_ptrs, const ProblemType& problem_size, const Exec
         if(config.instance_index != -1 && config.instance_index != static_cast<int>(i))
         {
             continue;
-        }
-
-        bool isCkTileWpMm_new = (gemm->GetKPerBlock() & IsPreShuffleMM) ? true : false;
-        if(BPreShuffle && isCkTileWpMm_new != isCkTileWpMm)
-        {
-            isCkTileWpMm = isCkTileWpMm_new;
-            b_k_n_device_buf.ToDevice(isCkTileWpMm ? b_preshuffled_ck_tile.mData.data()
-                                                   : b_preshuffled.mData.data());
         }
 
         auto argument_ptr =

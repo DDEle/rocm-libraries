@@ -344,6 +344,10 @@ struct GemmPipelineAgBgCrCompTDMDefaultPolicy
     template <typename Problem>
     CK_TILE_DEVICE static constexpr auto GetPipelineSubTileNum()
     {
+        constexpr index_t KPerBlock        = Problem::BlockGemmShape::kK;
+        constexpr index_t KPerTile         = Problem::BlockGemmShape::WarpTile::at(Base::I2);
+        constexpr index_t max_sub_tile_num = KPerBlock / KPerTile;
+
         constexpr auto estimated_vgpr = GetEstimatedVgprCount<Problem>();
 
         constexpr auto acc_vgpr_num   = estimated_vgpr.at(number<0>{});
@@ -356,7 +360,7 @@ struct GemmPipelineAgBgCrCompTDMDefaultPolicy
                                              ? 2
                                              : 4;
 
-        return number<sub_tile_num>{};
+        return number<min(sub_tile_num, max_sub_tile_num)>{};
     }
 
     template <typename Problem>

@@ -889,6 +889,7 @@ struct FlatmmKernel
                                                                     scale_m_window,
                                                                     scale_n_window);
             }
+#if !defined(CK_TILE_FORCE_SINGLE_TAIL_HANDLER)
             else
             {
                 auto e_block_window = MakeEBlockWindow<memory_operation_enum::atomic_add>(
@@ -903,6 +904,7 @@ struct FlatmmKernel
                                                                     scale_m_window,
                                                                     scale_n_window);
             }
+#endif
         }
         else if(UseDefaultScheduler || (get_warp_id() == 0))
         {
@@ -916,6 +918,7 @@ struct FlatmmKernel
                                          decltype(ds_block_window)>(
                         e_block_window, c_block_tile, ds_block_window, smem_ptr);
             }
+#if !defined(CK_TILE_FORCE_SINGLE_TAIL_HANDLER)
             else
             {
                 auto e_block_window = MakeEBlockWindow<memory_operation_enum::atomic_add>(
@@ -926,6 +929,7 @@ struct FlatmmKernel
                                          decltype(ds_block_window)>(
                         e_block_window, c_block_tile, ds_block_window, smem_ptr);
             }
+#endif
         }
     }
 

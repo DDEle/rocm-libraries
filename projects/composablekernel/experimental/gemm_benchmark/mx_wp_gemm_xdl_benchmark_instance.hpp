@@ -68,10 +68,11 @@ using ALayout = A_LAYOUT;
 using BLayout = B_LAYOUT;
 using CLayout = Row;
 
-using AElementOp               = PassThrough;
-using BElementOp               = PassThrough;
-using CElementOp               = PassThrough;
-static constexpr auto DataSize = sizeof(ADataType);
+using AElementOp                 = PassThrough;
+using BElementOp                 = PassThrough;
+using CElementOp                 = PassThrough;
+static constexpr auto DataSize   = sizeof(ADataType);
+static constexpr auto PackedSize = ck::packed_size_v<ADataType>;
 
 static constexpr auto GemmSpec = ck::tensor_operation::device::GemmSpecialization::Default;
 template <index_t BlockSize,
@@ -246,16 +247,16 @@ static constexpr ck::index_t GetCShuffleNXdlPerWave()
 }
         //MPerBlock NPerBlock KPerBlock MPerXDL NPerXDL KPerXDL MWarp NWarp CShuffleNXdlPerWavePerShuffle PipelineScheduler PipelineVer ClusterSizeM ClusterSizeN Occupancy
 #define GEMM_CK_TILE_INSTANCE(GemmClass, Scheduler, Version, ClusterSizeM, ClusterSizeN, Occupancy)  \
-    GemmClass<128,   256,  128 / DataSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  2,   4,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-    GemmClass<128,   256,  128 / DataSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   8,   GetCShuffleNXdlPerWave<Version, 2>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-    GemmClass<64,    256,  256 / DataSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   8,   GetCShuffleNXdlPerWave<Version, 2>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-    GemmClass<32,    512,  256 / DataSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   8,   GetCShuffleNXdlPerWave<Version, 2>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-    GemmClass<128,   128,  256 / DataSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  2,   2,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-    GemmClass<128,   128,  256 / DataSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   4,   GetCShuffleNXdlPerWave<Version, 2>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-    GemmClass<64,    256,  256 / DataSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   4,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-    GemmClass<64,    256,  512 / DataSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   4,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-    GemmClass<32,    512,  256 / DataSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   4,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
-    GemmClass<32,    256,  512 / DataSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   4,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>
+    GemmClass<128,   256,  128 / DataSize * PackedSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  2,   4,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+    GemmClass<128,   256,  128 / DataSize * PackedSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   8,   GetCShuffleNXdlPerWave<Version, 2>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+    GemmClass<64,    256,  256 / DataSize * PackedSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   8,   GetCShuffleNXdlPerWave<Version, 2>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+    GemmClass<32,    512,  256 / DataSize * PackedSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   8,   GetCShuffleNXdlPerWave<Version, 2>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+    GemmClass<128,   128,  256 / DataSize * PackedSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  2,   2,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+    GemmClass<128,   128,  256 / DataSize * PackedSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   4,   GetCShuffleNXdlPerWave<Version, 2>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+    GemmClass<64,    256,  256 / DataSize * PackedSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   4,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+    GemmClass<64,    256,  512 / DataSize * PackedSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   4,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+    GemmClass<32,    512,  256 / DataSize * PackedSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   4,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>, \
+    GemmClass<32,    256,  512 / DataSize * PackedSize,  GetMNPerXdl<Version>(),   GetMNPerXdl<Version>(),  KPerXDL,  1,   4,   GetCShuffleNXdlPerWave<Version, 4>(), Scheduler,       Version, ClusterSizeM, ClusterSizeN, Occupancy>
 
 // NOTE: please increase NUM_SHARDS in cmake once you change the instance number.
 using gemm_rcr_instances = std::tuple<

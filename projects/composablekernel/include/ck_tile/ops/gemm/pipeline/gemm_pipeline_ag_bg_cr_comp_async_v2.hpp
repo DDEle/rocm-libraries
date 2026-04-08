@@ -40,6 +40,7 @@ struct BaseGemmPipelineAgBgCrCompAsyncV2
     CK_TILE_HOST_DEVICE static auto
     TailHandler(const RunFunction& run_func, bool has_hot_loop, TailNumber tail_number)
     {
+#if !defined(CK_TILE_FORCE_SINGLE_TAIL_HANDLER)
         // Handle all the valid cases.
         if(has_hot_loop)
         {
@@ -67,6 +68,11 @@ struct BaseGemmPipelineAgBgCrCompAsyncV2
                                  integral_constant<TailNumber, TailNumber::One>{}));
             }
         }
+#else
+        ignore = has_hot_loop;
+        ignore = tail_number;
+        return run_func(bool_constant<true>{}, integral_constant<TailNumber, TailNumber::Two>{});
+#endif
         // If execution reaches here, it's an invalid tail_number because it wasn't handled above.
 #if defined(__HIP_DEVICE_COMPILE__)
         __builtin_unreachable();

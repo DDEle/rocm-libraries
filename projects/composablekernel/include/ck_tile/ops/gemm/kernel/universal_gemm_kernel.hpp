@@ -1200,6 +1200,7 @@ struct UniversalGemmKernel
                 e_ptr, kargs, block_idx_m, block_idx_n);
             EpiloguePipeline{}(c_block_window, c_block_tile, ds_block_window, smem_ptr);
         }
+#if !defined(CK_TILE_FORCE_SINGLE_TAIL_HANDLER)
         else
         {
             if constexpr(EpiloguePipeline::GetVectorSizeC() % 2 == 0 ||
@@ -1210,6 +1211,7 @@ struct UniversalGemmKernel
                 EpiloguePipeline{}(c_block_window, c_block_tile, ds_block_window, smem_ptr);
             }
         }
+#endif
     }
 
     CK_TILE_DEVICE static auto

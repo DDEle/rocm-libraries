@@ -102,32 +102,13 @@ bool run_gemm(const ProblemType& problem_size, const ExecutionConfig& config)
     auto invoker = gemm.MakeInvoker();
     Tensor<BDataType> b_preshuffled(
         f_host_tensor_descriptor(K, N, StrideB, BLayout{})); // use laout only for size
-    bool isCkTileWpMm = (gemm.GetKPerBlock() & IsPreShuffleMM) ? true : false;
     if constexpr(BPreShuffle)
     {
         static_assert(std::is_same_v<BLayout, ck::tensor_layout::gemm::RowMajor> == false);
-
-        if(isCkTileWpMm)
-        {
-            struct GemmConfig
-            {
-                ck_tile::index_t M_Warp_Tile;
-                ck_tile::index_t N_Warp_Tile;
-                ck_tile::index_t K_Warp_Tile;
-            } gemm_config = {16, 16, 32};
-            ck_tile::HostTensor<BDataType> tmp(
-                ck_tile::host_tensor_descriptor(K, N, StrideB, ck_tile::bool_constant<false>{}));
-            tmp.mData            = b_k_n.mData;
-            auto tmp_preshuffled = ck_tile::shuffle_b(tmp, gemm_config);
-            b_preshuffled.mData  = tmp_preshuffled.mData;
-        }
-        else
-        {
-            static constexpr ck::index_t KPack = ck::math::max(
-                static_cast<ck::index_t>(16 / sizeof(BDataType)), static_cast<ck::index_t>(8));
-            constexpr int NPerXdl = 16;
-            preShuffleBuffer(b_k_n.mData.data(), b_preshuffled.mData.data(), N, K, NPerXdl, KPack);
-        }
+        static constexpr ck::index_t KPack = ck::math::max(
+            static_cast<ck::index_t>(16 / sizeof(BDataType)), static_cast<ck::index_t>(8));
+        constexpr int NPerXdl = 16;
+        preShuffleBuffer(b_k_n.mData.data(), b_preshuffled.mData.data(), N, K, NPerXdl, KPack);
     }
     DeviceMem a_m_k_device_buf(sizeof(ADataType) * a_m_k.mDesc.GetElementSpaceSize());
     DeviceMem b_k_n_device_buf(sizeof(BDataType) * b_k_n.mDesc.GetElementSpaceSize());

@@ -34,7 +34,7 @@ generate_sharded_instantiations(
 generate_sharded_instantiations(
   INSTANCES_NAME mx_gemm_xdl_benchmark_instances
   TEMPLATE_FILE mx_gemm_xdl_benchmark_instances.in
-  NUM_SHARDS 50
+  NUM_SHARDS 60
   SRC_LIST MX_GEMM_XDL_BENCHMARK_SRC
   OUTPUT_DIR ${GENERATED_DIR}
 )

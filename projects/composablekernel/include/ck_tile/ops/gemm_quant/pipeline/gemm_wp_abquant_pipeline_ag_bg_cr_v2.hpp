@@ -438,8 +438,6 @@ struct WPABQuantBPipelineAgBgCrV2 : public WeightPreshufflePipelineAGmemBGmemCRe
         block_sync_lds();
 
         // preload A00,A10 from lds
-        using ATypeToUse =
-            mixed_prec_compute_type_from_input_t<ADataType, BDataType, AComputeDataType>;
         using ATileType =
             decltype(make_static_distributed_tensor<BTypeToUse>(a_warp_tile_distribution));
         statically_indexed_array<ATileType, m_preload> a_warp_tensor;

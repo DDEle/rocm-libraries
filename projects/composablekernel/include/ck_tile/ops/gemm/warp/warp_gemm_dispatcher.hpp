@@ -180,8 +180,6 @@ template<> struct Dispatcher<fp8_t, fp8_t, float, 32, 32,  32, false, false, fal
 template<> struct Dispatcher<bf8_t, bf8_t, float, 32, 32,  32, false> { using Type = WarpGemmMfma_f32_32x32x32_bf8_bf8<>; };
 template<> struct Dispatcher<bf8_t, bf8_t, float, 32, 32,  32, false, false, false, EDouble> { using Type = WarpGemmMfma_f32_32x32x32_bf8_bf8<EDouble>; };
 
-template<> struct Dispatcher<fp8_t, fp8_t, float, 16, 16,  64,  true> { using Type = WarpGemmMfma_f32_16x16x64_fp8_fp8_CTransposed; };
-template<> struct Dispatcher<fp8_t, fp8_t, float, 16, 16,  64, false> { using Type = WarpGemmMfma_f32_16x16x64_fp8_fp8<>; };
 template<> struct Dispatcher<fp8_t, fp8_t, float, 16, 16,  64, false, false, false, EDouble> { using Type = WarpGemmMfma_f32_16x16x64_fp8_fp8<EDouble>; };
 
 //WMMA cases
@@ -207,7 +205,7 @@ template<bool TransposeC> struct Dispatcher<bf8_t, fp8_t, float, 16, 16,  128, T
 template<typename A, typename B, bool TransposeC>
 struct Dispatcher<A, B, float, 16, 16, 128, TransposeC, false> { using Type = WarpGemmWmma_f32_16x16x128_f8f6f4<A, B, TransposeC>; };
 #else
-template<> struct Dispatcher<fp8_t, fp8_t, float, 16, 16,  64, false> { using Type = WarpGemmMfma_f32_16x16x64_fp8_fp8; };
+template<> struct Dispatcher<fp8_t, fp8_t, float, 16, 16,  64, false> { using Type = WarpGemmMfma_f32_16x16x64_fp8_fp8<>; };
 template<> struct Dispatcher<bf8_t, bf8_t, float, 16, 16,  64, false> { using Type = WarpGemmMfma_f32_16x16x64_bf8_bf8; };
 template<> struct Dispatcher<fp8_t, fp8_t, float, 16, 16,  64, true> { using Type = WarpGemmMfma_f32_16x16x64_fp8_fp8_CTransposed; };
 template<> struct Dispatcher<bf8_t, bf8_t, float, 16, 16,  64, true> { using Type = WarpGemmMfma_f32_16x16x64_bf8_bf8_CTransposed; };

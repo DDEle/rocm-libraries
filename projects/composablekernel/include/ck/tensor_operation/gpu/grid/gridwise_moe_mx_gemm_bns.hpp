@@ -1240,10 +1240,11 @@ struct GridwiseMoeGemmMXBNS
             gather_offsets(m0) = static_cast<IndexType>(token_offset) * problem.K;
         });
 
-        const index_t expert_stride = __builtin_amdgcn_readfirstlane(
-            problem.N * problem.K * APackedSize / BPackedSize * (IsInputGemm ? 2 : 1));
-        const index_t expert_scale_stride = __builtin_amdgcn_readfirstlane(
-            problem.N * (IsInputGemm ? 2 : 1) *
+        const long_index_t expert_stride =
+            __builtin_amdgcn_readfirstlane(static_cast<long_index_t>(problem.N) * problem.K *
+                                           APackedSize / BPackedSize * (IsInputGemm ? 2 : 1));
+        const long_index_t expert_scale_stride = __builtin_amdgcn_readfirstlane(
+            static_cast<long_index_t>(problem.N) * (IsInputGemm ? 2 : 1) *
             math::integer_divide_ceil(problem.K * APackedSize, ScaleBlockSize));
 
         // N0, K0, Blocksize*KPack

@@ -326,7 +326,7 @@ struct UniversalGemmBasePolicy
             }
             else // A is in RowMajor
             {
-                constexpr index_t KPack = Derived::template GetSmemPackA<Problem>();
+                constexpr index_t KPack     = Derived::template GetSmemPackA<Problem>();
                 constexpr auto DataTypeSize = sizeof(ADataType);
                 constexpr index_t MLdsLayerRequired =
                     get_n_lds_banks() * get_n_dwords_per_128b() / KPerBlock / DataTypeSize;

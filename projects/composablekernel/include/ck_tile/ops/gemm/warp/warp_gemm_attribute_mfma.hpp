@@ -442,17 +442,15 @@ struct WarpGemmAttributeMfmaTransposedCDistribution
         Impl{}.template operator()<Params..., SwapReuse_<true>>(c_vec, b_vec, a_vec);
     }
 
-    template <index_t opselA, index_t opselB, bool post_nop_ = false>
+    template <typename... Params>
     CK_TILE_DEVICE void operator()(CVecType& c_vec,
                                    const AVecType& a_vec,
                                    const int32_t& a_scale,
                                    const BVecType& b_vec,
-                                   const int32_t& b_scale,
-                                   bool_constant<post_nop_> = {}) const
+                                   const int32_t& b_scale) const
     {
         // swap A and B
-        Impl{}.template operator()<opselB, opselA>(
-            c_vec, b_vec, b_scale, a_vec, a_scale, bool_constant<post_nop_>{});
+        Impl{}.template operator()<Params...>(c_vec, b_vec, b_scale, a_vec, a_scale);
     }
 
     // c_vec = a_vec * b_vec
@@ -549,17 +547,15 @@ struct WarpGemmAttributeMfmaTransposedCDistribution_SwizzleB
         Impl{}.template operator()<Params..., SwapReuse_<true>>(c_vec, b_vec, a_vec);
     }
 
-    template <index_t opselA, index_t opselB, bool post_nop_ = false>
+    template <typename... Params>
     CK_TILE_DEVICE void operator()(CVecType& c_vec,
                                    const AVecType& a_vec,
                                    const int32_t& a_scale,
                                    const BVecType& b_vec,
-                                   const int32_t& b_scale,
-                                   bool_constant<post_nop_> = {}) const
+                                   const int32_t& b_scale) const
     {
         // swap A and B
-        Impl{}.template operator()<opselB, opselA>(
-            c_vec, b_vec, b_scale, a_vec, a_scale, bool_constant<post_nop_>{});
+        Impl{}.template operator()<Params...>(c_vec, b_vec, b_scale, a_vec, a_scale);
     }
 
     // c_vec = a_vec * b_vec

@@ -1665,14 +1665,14 @@ struct WarpGemmAttributeMfmaImpl_f32_16x16x128_f8f6f4
     CK_TILE_DEVICE void
     operator()(CVecType& c_vec, const AVecType& a_vec, const BVecType& b_vec) const
     {
-        operator()<0, 0>(c_vec, a_vec, kDefaultScale, b_vec, kDefaultScale);
+        operator()<Params...>(c_vec, a_vec, kDefaultScale, b_vec, kDefaultScale);
     }
 
     // c_vec = a_vec * b_vec
     template <typename... Params>
     CK_TILE_DEVICE CVecType operator()(const AVecType& a_vec, const BVecType& b_vec) const
     {
-        return operator()<0, 0>(a_vec, kDefaultScale, b_vec, kDefaultScale);
+        return operator()<Params...>(a_vec, kDefaultScale, b_vec, kDefaultScale);
     }
 };
 
@@ -1708,15 +1708,15 @@ struct WarpGemmAttributeMfmaImpl_f32_32x32x64_f8f6f4
     static constexpr index_t kScaleGranularity = 32;
 
     // c_vec += a_vec * b_vec
-    template <index_t opselA, index_t opselB, bool post_nop_ = false>
+    template <typename... Params>
     CK_TILE_DEVICE void operator()(CVecType& c_vec,
                                    const AVecType& a_vec,
                                    const int32_t& a_scale,
                                    const BVecType& b_vec,
-                                   const int32_t& b_scale,
-                                   bool_constant<post_nop_> = {}) const
+                                   const int32_t& b_scale) const
     {
 #if defined(__gfx950__)
+        using P         = WarpGemmParamsParser<Params...>;
         auto dtype2conf = [](auto dtype) {
             if constexpr(std::is_same_v<decltype(dtype), fp8_t>)
                 return make_tuple(number<0>{}, int32x8_t{});
@@ -1747,8 +1747,15 @@ struct WarpGemmAttributeMfmaImpl_f32_32x32x64_f8f6f4
         auto arg_b         = bit_cast<decltype(dtype2vec(BDataType{}))>(b_vec);
         constexpr int cbsz = decltype(dtype2code(ADataType{}))::value;
         constexpr int blgp = decltype(dtype2code(BDataType{}))::value;
-        c_vec              = __builtin_amdgcn_mfma_scale_f32_32x32x64_f8f6f4(
-            arg256(arg_a), arg256(arg_b), c_vec, cbsz, blgp, opselA, a_scale, opselB, b_scale);
+        c_vec              = __builtin_amdgcn_mfma_scale_f32_32x32x64_f8f6f4(arg256(arg_a),
+                                                                arg256(arg_b),
+                                                                c_vec,
+                                                                cbsz,
+                                                                blgp,
+                                                                P::op_sel_a,
+                                                                a_scale,
+                                                                P::op_sel_b,
+                                                                b_scale);
 #else
         ck_tile::ignore = c_vec;
         ck_tile::ignore = a_vec;
@@ -1759,14 +1766,14 @@ struct WarpGemmAttributeMfmaImpl_f32_32x32x64_f8f6f4
     }
 
     // c_vec = a_vec * b_vec
-    template <index_t opselA, index_t opselB>
+    template <typename... Params>
     CK_TILE_DEVICE CVecType operator()(const AVecType& a_vec,
                                        const int32_t& a_scale,
                                        const BVecType& b_vec,
                                        const int32_t& b_scale) const
     {
         CVecType c_vec{0.f};
-        operator()<opselA, opselB>(c_vec, a_vec, a_scale, b_vec, b_scale);
+        operator()<Params...>(c_vec, a_vec, a_scale, b_vec, b_scale);
         return c_vec;
     }
 
@@ -1775,14 +1782,14 @@ struct WarpGemmAttributeMfmaImpl_f32_32x32x64_f8f6f4
     CK_TILE_DEVICE void
     operator()(CVecType& c_vec, const AVecType& a_vec, const BVecType& b_vec) const
     {
-        operator()<0, 0>(c_vec, a_vec, 0, b_vec, 0);
+        operator()<Params...>(c_vec, a_vec, 0, b_vec, 0);
     }
 
     // c_vec = a_vec * b_vec
     template <typename... Params>
     CK_TILE_DEVICE CVecType operator()(const AVecType& a_vec, const BVecType& b_vec) const
     {
-        return operator()<0, 0>(a_vec, 0, b_vec, 0);
+        return operator()<Params...>(a_vec, 0, b_vec, 0);
     }
 };
 

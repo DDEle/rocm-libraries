@@ -420,7 +420,7 @@ bool profile_grouped_conv_fwd_impl(int do_verification,
         std::cout << "\nValid instances for this problem:" << std::endl;
     }
 
-    for(auto& op_ptr : op_ptrs)
+    for(size_t i = 0; i < op_ptrs.size(); i++)
     {
         if((instance_index != -1) && (instance_index != static_cast<int>(i)))
         {

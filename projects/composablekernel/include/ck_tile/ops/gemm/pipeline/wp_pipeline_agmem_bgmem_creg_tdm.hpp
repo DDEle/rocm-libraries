@@ -4,7 +4,6 @@
 #pragma once
 
 #include "ck_tile/core.hpp"
-#include "ck_tile/ops/common/load_interleaved_pk_type.hpp"
 #include "ck_tile/host/concat.hpp"
 #include "ck_tile/ops/gemm/pipeline/wp_pipeline_agmem_bgmem_creg_tdm_policy.hpp"
 
@@ -360,8 +359,7 @@ struct WeightPreshufflePipelineAGmemBGmemCRegTDM
             Base::GlobalPrefetchTDM(
                 tdm_config_a, a_copy_lds_windows[I0], a_copy_dram_window, a_dram_tile_window_step);
 
-            Base::template GlobalPrefetch<BDataType, BTypeToUse, UnaryOpSize_>(
-                b_global_tile[0], b_flat_dram_window, b_dram_tile_window_step);
+            Base::GlobalPrefetch(b_global_tile[0], b_flat_dram_window, b_dram_tile_window_step);
 
             Base::GlobalPrefetchTDM(
                 tdm_config_a, a_copy_lds_windows[I1], a_copy_dram_window, a_dram_tile_window_step);
@@ -382,7 +380,7 @@ struct WeightPreshufflePipelineAGmemBGmemCRegTDM
                 do
                 {
                     {
-                        Base::template GlobalPrefetch<BDataType, BTypeToUse, UnaryOpSize_>(
+                        Base::GlobalPrefetch(
                             b_global_tile[1], b_flat_dram_window, b_dram_tile_window_step);
                         block_weight_preshuffle(c_block_tile,
                                                 a_load_windows[I0],
@@ -399,7 +397,7 @@ struct WeightPreshufflePipelineAGmemBGmemCRegTDM
                         HotLoopScheduler();
                     }
                     {
-                        Base::template GlobalPrefetch<BDataType, BTypeToUse, UnaryOpSize_>(
+                        Base::GlobalPrefetch(
                             b_global_tile[0], b_flat_dram_window, b_dram_tile_window_step);
                         block_weight_preshuffle(c_block_tile,
                                                 a_load_windows[I1],
@@ -423,7 +421,7 @@ struct WeightPreshufflePipelineAGmemBGmemCRegTDM
             if constexpr(TailNum == TailNumber::Even)
             {
                 {
-                    Base::template GlobalPrefetch<BDataType, BTypeToUse, UnaryOpSize_>(
+                    Base::GlobalPrefetch(
                         b_global_tile[1], b_flat_dram_window, b_dram_tile_window_step);
 
                     block_weight_preshuffle(
@@ -597,8 +595,7 @@ struct WeightPreshufflePipelineAGmemBGmemCRegTDM
             Base::GlobalPrefetchTDM(
                 tdm_config_a, a_copy_lds_windows[I0], a_copy_dram_window, a_dram_tile_window_step);
 
-            Base::template GlobalPrefetch<BDataType, BTypeToUse, UnaryOpSize_>(
-                b_global_tile[0], b_flat_dram_window, b_dram_tile_window_step);
+            Base::GlobalPrefetch(b_global_tile[0], b_flat_dram_window, b_dram_tile_window_step);
 
             Base::GlobalPrefetch(
                 a_scale_tile[0], scale_a_dram_window, a_scale_dram_tile_window_step);
@@ -623,7 +620,7 @@ struct WeightPreshufflePipelineAGmemBGmemCRegTDM
                 do
                 {
                     {
-                        Base::template GlobalPrefetch<BDataType, BTypeToUse, UnaryOpSize_>(
+                        Base::GlobalPrefetch(
                             b_global_tile[1], b_flat_dram_window, b_dram_tile_window_step);
                         Base::GlobalPrefetch(
                             a_scale_tile[1], scale_a_dram_window, a_scale_dram_tile_window_step);
@@ -645,7 +642,7 @@ struct WeightPreshufflePipelineAGmemBGmemCRegTDM
                         block_weight_preshuffle.LocalPrefetch(a_load_windows[I1]);
                     }
                     {
-                        Base::template GlobalPrefetch<BDataType, BTypeToUse, UnaryOpSize_>(
+                        Base::GlobalPrefetch(
                             b_global_tile[0], b_flat_dram_window, b_dram_tile_window_step);
                         Base::GlobalPrefetch(
                             a_scale_tile[0], scale_a_dram_window, a_scale_dram_tile_window_step);
@@ -674,7 +671,7 @@ struct WeightPreshufflePipelineAGmemBGmemCRegTDM
             if constexpr(TailNum == TailNumber::Even)
             {
                 {
-                    Base::template GlobalPrefetch<BDataType, BTypeToUse, UnaryOpSize_>(
+                    Base::GlobalPrefetch(
                         b_global_tile[1], b_flat_dram_window, b_dram_tile_window_step);
                     Base::GlobalPrefetch(
                         a_scale_tile[1], scale_a_dram_window, a_scale_dram_tile_window_step);

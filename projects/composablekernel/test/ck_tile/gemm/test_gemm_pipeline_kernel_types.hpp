@@ -300,7 +300,6 @@ using CompAsyncConfig16x16x128 = std::tuple<ALayout,
                                             I128,      // KBlockTileSize
                                             I16,       // MWarpTileSize
                                             I16,       // NWarpTileSize
-                                            I128,      // KWarpTileSize
                                             Intrawave,
                                             CompAsync>;
 

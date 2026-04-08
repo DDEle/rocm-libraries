@@ -433,6 +433,7 @@ struct GemmTypeConfig<ck_tile::pk_fp4_t, ck_tile::pk_fp4_t, ck_tile::half_t>
     using CDataType   = ck_tile::half_t;
 };
 
+template <>
 struct GemmTypeConfig<ck_tile::fp8_t, ck_tile::pk_fp4_t, ck_tile::half_t>
 {
     using ADataType   = ck_tile::fp8_t;
@@ -507,8 +508,6 @@ struct PipelineTypeTraits<ck_tile::GemmPipeline::COMPUTE_ASYNC>
 {
     template <typename PipelineProblem>
     using GemmPipeline = ck_tile::GemmPipelineAgBgCrCompAsync<PipelineProblem>;
-    template <typename PipelineProblem>
-    using UniversalGemmPipeline = ck_tile::BaseGemmPipelineAgBgCrCompAsync<PipelineProblem>;
 };
 
 template <>
@@ -516,13 +515,6 @@ struct PipelineTypeTraits<ck_tile::GemmPipeline::PRESHUFFLE_V2>
 {
     template <typename PipelineProblem>
     using GemmPipeline = ck_tile::WeightPreshufflePipelineAGmemBGmemCRegV2<PipelineProblem>;
-};
-
-template <>
-struct PipelineTypeTraits<ck_tile::GemmPipeline::COMPUTE_ASYNC>
-{
-    template <typename PipelineProblem>
-    using GemmPipeline = ck_tile::GemmPipelineAgBgCrCompAsync<PipelineProblem>;
 };
 
 template <>

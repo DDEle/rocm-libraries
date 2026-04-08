@@ -274,7 +274,7 @@ def shouldRunCICheck() {
     
     try {
         // Always run if this is a base branch build
-        def baseBranch = "develop"
+        def baseBranch = "gfx1250"
         def isBaseBranchBuild = (env.CHANGE_ID == null && env.BRANCH_NAME == baseBranch)
 
         if (isBaseBranchBuild) {
@@ -286,7 +286,7 @@ def shouldRunCICheck() {
         def changedFiles = sh(
             returnStdout: true,
             script: '''
-                BASE_BRANCH="develop"
+                BASE_BRANCH="gfx1250"
 
                 if [ "$CHANGE_ID" != "" ]; then
                     # For PR builds, get all files touched in any commit

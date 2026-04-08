@@ -248,3 +248,28 @@ constexpr ck_tile::core::arch::TargetId GetCurrentTargetId()
     return ck_tile::core::arch::TargetId::GFX950; // Default fallback
 #endif
 }
+
+using MXFlatmm_GFX1250_FP4FP4_Traits =
+    MXFlatmmArchTraits<ck_tile::core::arch::TargetId::GFX950, MXFlatmmConfigBase32TDM>;
+using MXFlatmm_GFX1250_FP8FP8_Traits =
+    MXFlatmmArchTraits<ck_tile::core::arch::TargetId::GFX950, MXFlatmmConfigBase32TDM>;
+using MXFlatmm_GFX1250_FP6FP6_Traits =
+    MXFlatmmArchTraits<ck_tile::core::arch::TargetId::GFX950, MXFlatmmConfigBase32TDM>;
+using MXFlatmm_GFX1250_FP8FP4_Traits =
+    MXFlatmmArchTraits<ck_tile::core::arch::TargetId::GFX950, MXFlatmmConfigBase32TDM>;
+using MXFlatmm_GFX1250_FP4FP8_Traits =
+    MXFlatmmArchTraits<ck_tile::core::arch::TargetId::GFX950, MXFlatmmConfigBase32TDM>;
+
+#if defined(CK_USE_GFX1250)
+using MXFlatmm_FP4FP4_Traits = MXFlatmm_GFX1250_FP4FP4_Traits;
+using MXFlatmm_FP8FP8_Traits = MXFlatmm_GFX1250_FP8FP8_Traits;
+using MXFlatmm_FP6FP6_Traits = MXFlatmm_GFX1250_FP6FP6_Traits;
+using MXFlatmm_FP8FP4_Traits = MXFlatmm_GFX1250_FP8FP4_Traits;
+using MXFlatmm_FP4FP8_Traits = MXFlatmm_GFX1250_FP4FP8_Traits;
+#else
+using MXFlatmm_FP4FP4_Traits = MXFlatmm_GFX950_FP4FP4_Traits;
+using MXFlatmm_FP8FP8_Traits = MXFlatmm_GFX950_FP8FP8_Traits;
+using MXFlatmm_FP6FP6_Traits = MXFlatmm_GFX950_FP6FP6_Traits;
+using MXFlatmm_FP8FP4_Traits = MXFlatmm_GFX950_FP8FP4_Traits;
+using MXFlatmm_FP4FP8_Traits = MXFlatmm_GFX950_FP4FP8_Traits;
+#endif

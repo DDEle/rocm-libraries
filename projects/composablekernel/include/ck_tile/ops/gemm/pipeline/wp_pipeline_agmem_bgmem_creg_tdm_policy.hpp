@@ -4,21 +4,32 @@
 #pragma once
 
 #include "ck_tile/core.hpp"
+#include "ck_tile/core/utility/data_cache_prefetch.hpp"
 #include "ck_tile/ops/gemm/warp/warp_gemm_dispatcher.hpp"
 
 namespace ck_tile {
 
+template <DataCachePrefetchKind DataCachePrefetchA_ = DataCachePrefetchKind::None,
+          DataCachePrefetchKind DataCachePrefetchB_ = DataCachePrefetchKind::None>
 struct UniversalWeightPreshufflePipelineAgBgCrTDMPolicy
-    : public GemmPipelineAgBgCrCompTDMDefaultPolicy<false>
+    : public GemmPipelineAgBgCrCompTDMDefaultPolicy<false, DataCachePrefetchA_, DataCachePrefetchB_>
 {
+    using Base =
+        GemmPipelineAgBgCrCompTDMDefaultPolicy<false, DataCachePrefetchA_, DataCachePrefetchB_>;
 
-    using Base = GemmPipelineAgBgCrCompTDMDefaultPolicy<false>;
+    using Base::I0;
+    using Base::I1;
+    using Base::I2;
+
+    static constexpr DataCachePrefetchKind DataCachePrefetchA = DataCachePrefetchA_;
+    static constexpr DataCachePrefetchKind DataCachePrefetchB = DataCachePrefetchB_;
 
     template <typename Problem>
     CK_TILE_HOST_DEVICE static constexpr index_t GetSmemSizeA()
     {
-        constexpr index_t smem_size_a = sizeof(typename Problem::ADataType) *
-                                        MakeALdsBlockDescriptor<Problem>().get_element_space_size();
+        constexpr index_t smem_size_a =
+            sizeof(typename Problem::ADataType) *
+            Base::template MakeALdsBlockDescriptor<Problem>().get_element_space_size();
         return smem_size_a;
     }
 

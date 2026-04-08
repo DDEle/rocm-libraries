@@ -71,8 +71,8 @@ struct UniversalInvoker
                                              GemmConfig::NumWaveGroups,
                                              GemmConfig::Preshuffle,
                                              16,
-                                             GemmConfig::UseDataCachePrefetch,
-                                             GemmConfig::DataCachePrefetchToL1>;
+                                             GemmConfig::DataCachePrefetchA,
+                                             GemmConfig::DataCachePrefetchB>;
 
         constexpr auto scheduler = GemmConfig::Scheduler;
 

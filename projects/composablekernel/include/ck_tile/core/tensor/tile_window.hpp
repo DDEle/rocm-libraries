@@ -19,6 +19,8 @@
 #include "ck_tile/core/utility/functional.hpp"
 #include "ck_tile/core/utility/type_traits.hpp"
 
+#include "ck_tile/core/utility/data_cache_prefetch.hpp"
+
 namespace ck_tile {
 
 /**
@@ -952,10 +954,13 @@ struct tile_window_with_static_distribution
     }
 
 #if defined(__gfx125__)
-    template <bool isL1Cache = true>
+    template <DataCachePrefetchKind PrefetchKind = DataCachePrefetchKind::None>
     static constexpr index_t getCachelineSize()
     {
-        if constexpr(isL1Cache)
+        static_assert(PrefetchKind != DataCachePrefetchKind::None,
+                      "getCachelineSize() called with DataCachePrefetchKind::None; "
+                      "prefetching must target L1 or L2");
+        if constexpr(PrefetchKind == DataCachePrefetchKind::L1)
             return 32; // L1 cacheline size in bytes for gfx125
         else
             return 256; // L2 cacheline size in bytes for gfx125
@@ -964,17 +969,20 @@ struct tile_window_with_static_distribution
 
     // NOTE:
     // We assume that the prefetch_for_tdm call starts with coordinates aligned to cacheline size
-    // i.e for 32 bit cacheline they're aligned to 32. We also assume the step coordinate that is
+    // i.e for 32 byte cacheline they're aligned to 32. We also assume the step coordinate that is
     // moving in contiguous dimension is at the last dimension of the tile distribution (i.e x
     // dimension in row-major layout), and we only consider the step in that dimension for prefetch
     // coverage calculation.
-    template <bool PrefetchL1 = false, typename DramTileWindowStep>
+    template <DataCachePrefetchKind PrefetchKind = DataCachePrefetchKind::None,
+              typename DramTileWindowStep>
     CK_TILE_DEVICE constexpr index_t
     prefetch_for_tdm_covers_more_calls([[maybe_unused]] const DramTileWindowStep& step)
     {
+        if constexpr(PrefetchKind == DataCachePrefetchKind::None)
+            return 0;
 #if defined(__gfx125__)
         // TODO: move it somewhere and call when we need these values
-        constexpr index_t cacheline_size = getCachelineSize<PrefetchL1>();
+        constexpr index_t cacheline_size = getCachelineSize<PrefetchKind>();
 
         using Traits             = typename Base::Traits;
         constexpr auto tile_dstr = typename Base::TileDstr{};
@@ -1009,14 +1017,17 @@ struct tile_window_with_static_distribution
     // For OOB we set is_valid to false
     // For now TDMConfig_ is unused, but we keep it for future use when maybe TDM will have prefetch
     // config
-    template <bool PrefetchL1 = false, typename TDMConfig_>
+    template <DataCachePrefetchKind PrefetchKind = DataCachePrefetchKind::None, typename TDMConfig_>
     CK_TILE_DEVICE void prefetch_for_tdm([[maybe_unused]] const TDMConfig_& tdm_config) const
     {
+        if constexpr(PrefetchKind == DataCachePrefetchKind::None)
+            return;
 #if defined(__gfx125__)
         // TODO: move it somewhere and call when we need these values
-        constexpr index_t cacheline_size = getCachelineSize<PrefetchL1>();
-        constexpr auto preferred_coherence =
-            PrefetchL1 ? amd_buffer_coherence_enum::CU_RT : amd_buffer_coherence_enum::SE_RT;
+        constexpr index_t cacheline_size   = getCachelineSize<PrefetchKind>();
+        constexpr auto preferred_coherence = PrefetchKind == DataCachePrefetchKind::L1
+                                                 ? amd_buffer_coherence_enum::CU_RT
+                                                 : amd_buffer_coherence_enum::SE_RT;
 
         using Traits             = typename Base::Traits;
         constexpr auto tile_dstr = typename Base::TileDstr{};
@@ -1110,6 +1121,141 @@ struct tile_window_with_static_distribution
                     .get_buffer_view()
                     .template prefetch<DataType, preferred_coherence>(0, prefetch_offset, is_valid);
             });
+        });
+#endif
+    }
+
+    // NOTE:
+    // We assume that the prefetch_for_flat call starts with coordinates aligned to cacheline size
+    // i.e for 32 byte cacheline they're aligned to 32. We also assume the step coordinate that is
+    // moving in contiguous dimension is at the last dimension of the tile distribution (i.e x
+    // dimension in row-major layout), and we only consider the step in that dimension for prefetch
+    // coverage calculation.
+    // NWaveN_/NWaveK_ are accepted for API symmetry but do not affect coverage.
+    template <DataCachePrefetchKind PrefetchKind = DataCachePrefetchKind::None,
+              index_t NWaveN_                    = 1,
+              index_t NWaveK_                    = 1,
+              typename DramTileWindowStep>
+    CK_TILE_DEVICE constexpr index_t
+    prefetch_for_flat_covers_more_calls([[maybe_unused]] const DramTileWindowStep& step) const
+    {
+        if constexpr(PrefetchKind == DataCachePrefetchKind::None)
+            return 0;
+#if defined(__gfx125__)
+        constexpr index_t cacheline_size = getCachelineSize<PrefetchKind>();
+        using Traits                     = typename Base::Traits;
+
+        const index_t x_step = step.at(number<DramTileWindowStep{}.size() - 1>{});
+        if(x_step == 0)
+            return 0;
+
+        const index_t bytes_per_x_step =
+            x_step * Traits::PackedSize * sizeof(typename Base::DataType);
+
+        // bytes covered by the full K extent of the window
+        constexpr auto win_lengths = typename Base::WindowLengths{};
+        constexpr index_t x_len_bytes =
+            win_lengths.at(number<1>{}) * sizeof(typename Base::DataType);
+        // how many bytes the last cacheline extends past the window's K end
+        constexpr index_t cacheline_overhang =
+            (cacheline_size - x_len_bytes % cacheline_size) % cacheline_size;
+
+        const index_t additional_prefetches_covered =
+            max(0, static_cast<index_t>(cacheline_overhang) / bytes_per_x_step);
+        return additional_prefetches_covered;
+#else
+        return 0;
+#endif
+    }
+
+    // NWaveN_: number of N-direction warps per block (e.g. BlockWarps::at(I1)).
+    // NWaveK_: number of K-direction warps per block (e.g. BlockWarps::at(I2)).
+    // NWaveN/MWaveK used to partition the tile among warps, but only in the N dimension, so they
+    // don't affect coverage calculation. They are used here to determine which rows each warp
+    // should prefetch to minimize cross-warp redundancy(i.e. to not prefetch the same data in each
+    // warp).
+    template <DataCachePrefetchKind PrefetchKind = DataCachePrefetchKind::None,
+              index_t NWaveN_                    = 1,
+              index_t NWaveK_                    = 1>
+    CK_TILE_DEVICE void prefetch_for_flat() const
+    {
+        if constexpr(PrefetchKind == DataCachePrefetchKind::None)
+            return;
+#if defined(__gfx125__)
+        constexpr index_t cacheline_size   = getCachelineSize<PrefetchKind>();
+        constexpr auto preferred_coherence = PrefetchKind == DataCachePrefetchKind::L1
+                                                 ? amd_buffer_coherence_enum::CU_RT
+                                                 : amd_buffer_coherence_enum::SE_RT;
+
+        using Traits = typename Base::Traits;
+
+        auto&& global_strides             = get_cached_global_strides();
+        const auto& glb_tensor_descriptor = this->get_bottom_tensor_view().get_tensor_descriptor();
+
+        // Use window lengths (X-space) instead of ys_to_d lengths (Y-space)
+        constexpr auto win_lengths = typename Base::WindowLengths{};
+        constexpr index_t x_len    = win_lengths.at(number<1>{}) / Traits::PackedSize;
+        constexpr index_t y_len    = win_lengths.at(number<0>{});
+
+        // Partition N-rows among N-warps using ceil-div so every warp gets at least one row even
+        // when y_len < NWaveN_.  The actual rows covered by a warp are clamped against y_len in
+        // the is_valid predicate, so warps whose base exceeds y_len simply issue no prefetches.
+        constexpr index_t y_per_wave = max(index_t{1}, integer_divide_ceil(y_len, NWaveN_));
+
+        // n_wave_id = which N-warp this thread belongs to.
+        const index_t n_wave_id   = (get_warp_id() / NWaveK_) % NWaveN_;
+        const index_t y_wave_base = n_wave_id * y_per_wave;
+
+        // Base from window origin (warp-level, same for all lanes), not per-thread coords.
+        const auto win_origin_coord =
+            make_tensor_coordinate(glb_tensor_descriptor, this->get_window_origin());
+        const auto base_offset = win_origin_coord.get_offset() / Traits::PackedSize;
+
+        // OOB: remaining tensor extents measured from window origin
+        auto&& tensor_dims = to_array<index_t, Base::NDimBottomTensor>(tuple_reverse(
+            transform_tuples([](auto x) { return max(index_t{0}, x); },
+                             glb_tensor_descriptor.get_lengths() - this->get_window_origin())));
+        tensor_dims[0] /= Traits::PackedSize;
+
+        // Distribute cache-line prefetches across warp lanes
+        constexpr index_t col_prefetch_stride =
+            max(1,
+                static_cast<index_t>(cacheline_size /
+                                     (Traits::PackedSize * sizeof(typename Base::DataType))));
+        constexpr index_t num_lanes         = get_warp_size();
+        constexpr index_t num_unique_x      = max(1, x_len / col_prefetch_stride);
+        constexpr index_t lanes_per_row     = num_unique_x < num_lanes ? num_unique_x : num_lanes;
+        constexpr index_t num_rows_parallel = num_lanes / lanes_per_row;
+
+        // Lane offset within this warp's N-stripe [0, y_per_wave).
+        // y_per_wave >= 1 by construction so the modulus is safe.
+        const index_t y_lane_offset = (get_lane_id() / lanes_per_row) % y_per_wave;
+        const index_t x_lane_offset = (get_lane_id() % lanes_per_row) * col_prefetch_stride;
+
+        constexpr index_t num_x_iterations =
+            integer_divide_ceil(x_len, lanes_per_row * col_prefetch_stride);
+        constexpr index_t num_y_iterations = integer_divide_ceil(y_per_wave, num_rows_parallel);
+
+        constexpr auto box_dim = sequence<num_x_iterations, num_y_iterations>{};
+        constexpr auto reverse_order =
+            typename arithmetic_sequence_gen<box_dim.size() - 1, -1, -1>::type{};
+
+        static_ford<decltype(box_dim), decltype(reverse_order)>{}([&](auto box_dim_idx) {
+            const index_t x = x_lane_offset + box_dim_idx[I0] * lanes_per_row * col_prefetch_stride;
+            const index_t y = y_wave_base + y_lane_offset + box_dim_idx[I1] * num_rows_parallel;
+
+            index_t prefetch_offset = base_offset + x + y * global_strides[0];
+            bool is_valid           = x < tensor_dims[0] && y < tensor_dims[1];
+
+            static_for<2, box_dim.size(), 1>{}([&](auto i) {
+                prefetch_offset += box_dim_idx[i] * global_strides[i - 1];
+                is_valid = is_valid && box_dim_idx[i] < tensor_dims[i];
+            });
+
+            using DataType = typename Base::DataType;
+            this->get_bottom_tensor_view()
+                .get_buffer_view()
+                .template prefetch<DataType, preferred_coherence>(0, prefetch_offset, is_valid);
         });
 #endif
     }

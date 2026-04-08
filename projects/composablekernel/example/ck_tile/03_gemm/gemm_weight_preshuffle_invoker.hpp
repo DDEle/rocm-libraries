@@ -45,7 +45,10 @@ struct WeightPreshuffleInvoker
                                              GemmConfig::UseStructuredSparsity,
                                              Persistent,
                                              GemmConfig::NumWaveGroups,
-                                             GemmConfig::Preshuffle>;
+                                             GemmConfig::Preshuffle,
+                                             16,
+                                             GemmConfig::DataCachePrefetchA,
+                                             GemmConfig::DataCachePrefetchB>;
         constexpr auto scheduler = GemmConfig::Scheduler;
 
         using AComputeDataType =

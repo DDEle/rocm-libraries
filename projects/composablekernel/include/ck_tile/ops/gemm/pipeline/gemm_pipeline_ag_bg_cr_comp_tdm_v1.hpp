@@ -79,7 +79,7 @@ struct BaseGemmPipelineAgBgCrCompTDM
         __builtin_unreachable();
 #else
         throw std::logic_error(
-            "Invalid TailNumber: Only TailNumber::Three and TailNumber::Two are supported");
+            "Invalid TailNumber: Only TailNumber::One and TailNumber::Two are supported");
 #endif
     }
 };
@@ -173,6 +173,10 @@ struct GemmPipelineAgBgCrCompTDMV1 : public BaseGemmPipelineAgBgCrCompTDM<Proble
     static constexpr index_t sub_tile_num      = pipeline_tune_params.value;
     static constexpr index_t num_lds_buffers   = 2;
 
+    static constexpr bool UseDataCachePrefetch =
+        (Policy::DataCachePrefetchA != DataCachePrefetchKind::None ||
+         Policy::DataCachePrefetchB != DataCachePrefetchKind::None);
+
     CK_TILE_HOST_DEVICE static constexpr index_t GetSmemSize()
     {
         constexpr index_t smem_size = Policy::template GetSmemSize<Problem>();
@@ -256,6 +260,36 @@ struct GemmPipelineAgBgCrCompTDMV1 : public BaseGemmPipelineAgBgCrCompTDM<Proble
             __builtin_amdgcn_sched_barrier(0);
         }
 
+        template <DataCachePrefetchKind PrefetchKind,
+                  typename Window,
+                  typename WindowStep,
+                  typename TDMConfig>
+        CK_TILE_DEVICE static void PrefetchForTDM(Window& dram_window,
+                                                  const WindowStep& step,
+                                                  const TDMConfig& tdm_config,
+                                                  bool move_window = false)
+        {
+            if constexpr(PrefetchKind != DataCachePrefetchKind::None)
+            {
+                __builtin_amdgcn_sched_barrier(0);
+                auto prefetch_window = dram_window;
+
+                if(move_window)
+                {
+                    move_tile_window(prefetch_window, step);
+                }
+                prefetch_window.template prefetch_for_tdm<PrefetchKind>(tdm_config);
+                __builtin_amdgcn_sched_barrier(0);
+            }
+        }
+
+        template <DataCachePrefetchKind PrefetchKind, typename Window, typename WindowStep>
+        CK_TILE_DEVICE static constexpr bool IsOverprefetchedTDM(const WindowStep& step)
+        {
+            return remove_cvref_t<Window>{}
+                .template prefetch_for_tdm_covers_more_calls<PrefetchKind>(step);
+        }
+
         // Pipeline loop function - handles prefetching and compute loop
         // NumLdsBuffers: 2 for double buffering
         // Double buffer specialization (NumLdsBuffers == 2)
@@ -336,24 +370,15 @@ struct GemmPipelineAgBgCrCompTDMV1 : public BaseGemmPipelineAgBgCrCompTDM<Proble
                                     b_copy_dram_window,
                                     b_dram_tile_window_step);
 
-            if constexpr(Policy::UseDataCachePrefetch && HasHotLoop)
+            if constexpr(UseDataCachePrefetch && HasHotLoop)
             {
-                __builtin_amdgcn_sched_barrier(0);
-                auto a_prefetch_window = a_copy_dram_window;
-                auto b_prefetch_window = b_copy_dram_window;
                 // prefetch for first TDM loads
                 if(data_cache_prefetch_a)
-                {
-                    a_prefetch_window.template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                        tdm_config_a);
-                }
+                    PrefetchForTDM<Policy::DataCachePrefetchA>(
+                        a_copy_dram_window, a_dram_tile_window_step, tdm_config_a);
                 if(data_cache_prefetch_b)
-                {
-                    b_prefetch_window.template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                        tdm_config_b);
-                }
-
-                __builtin_amdgcn_sched_barrier(0);
+                    PrefetchForTDM<Policy::DataCachePrefetchB>(
+                        b_copy_dram_window, b_dram_tile_window_step, tdm_config_b);
             }
 
             s_wait_tensorcnt_barrier<2>();
@@ -394,44 +419,31 @@ struct GemmPipelineAgBgCrCompTDMV1 : public BaseGemmPipelineAgBgCrCompTDM<Proble
                         });
 
                         // Data cache prefetch for iteration i+2
-                        if constexpr(Policy::UseDataCachePrefetch)
+                        if constexpr(UseDataCachePrefetch)
                         {
-                            __builtin_amdgcn_sched_barrier(0);
-                            auto a_prefetch_window = a_copy_dram_window;
-                            auto b_prefetch_window = b_copy_dram_window;
-                            if(i_global_read + 2 < num_loop)
-                            {
-                                move_tile_window(a_prefetch_window, a_dram_tile_window_step);
-                                move_tile_window(b_prefetch_window, b_dram_tile_window_step);
-                            }
                             // check if prefetch is needed or was covered by previous call
-                            if constexpr(!a_prefetch_window
-                                              .template prefetch_for_tdm_covers_more_calls<
-                                                  Policy::DataCachePrefetchToL1>(
-                                                  a_dram_tile_window_step))
+                            if constexpr(!IsOverprefetchedTDM<Policy::DataCachePrefetchA,
+                                                              decltype(a_copy_dram_window)>(
+                                             a_dram_tile_window_step))
                             {
                                 if(data_cache_prefetch_a)
-                                {
-                                    a_prefetch_window
-                                        .template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                                            tdm_config_a);
-                                }
+                                    PrefetchForTDM<Policy::DataCachePrefetchA>(
+                                        a_copy_dram_window,
+                                        a_dram_tile_window_step,
+                                        tdm_config_a,
+                                        i_global_read + 2 < num_loop);
                             }
-
-                            if constexpr(!b_prefetch_window
-                                              .template prefetch_for_tdm_covers_more_calls<
-                                                  Policy::DataCachePrefetchToL1>(
-                                                  b_dram_tile_window_step))
+                            if constexpr(!IsOverprefetchedTDM<Policy::DataCachePrefetchB,
+                                                              decltype(b_copy_dram_window)>(
+                                             b_dram_tile_window_step))
                             {
                                 if(data_cache_prefetch_b)
-                                {
-                                    b_prefetch_window
-                                        .template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                                            tdm_config_b);
-                                }
+                                    PrefetchForTDM<Policy::DataCachePrefetchB>(
+                                        b_copy_dram_window,
+                                        b_dram_tile_window_step,
+                                        tdm_config_b,
+                                        i_global_read + 2 < num_loop);
                             }
-
-                            __builtin_amdgcn_sched_barrier(0);
                         }
                         block_sync_lds();
 
@@ -485,29 +497,20 @@ struct GemmPipelineAgBgCrCompTDMV1 : public BaseGemmPipelineAgBgCrCompTDM<Proble
                         });
 
                         // Data cache prefetch for iteration i+2
-                        if constexpr(Policy::UseDataCachePrefetch)
+                        if constexpr(UseDataCachePrefetch)
                         {
-                            __builtin_amdgcn_sched_barrier(0);
-                            auto a_prefetch_window = a_copy_dram_window;
-                            auto b_prefetch_window = b_copy_dram_window;
-                            if(i_global_read + 2 < num_loop)
-                            {
-                                move_tile_window(a_prefetch_window, a_dram_tile_window_step);
-                                move_tile_window(b_prefetch_window, b_dram_tile_window_step);
-                            }
                             if(data_cache_prefetch_a)
-                            {
-                                a_prefetch_window
-                                    .template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                                        tdm_config_a);
-                            }
+                                PrefetchForTDM<Policy::DataCachePrefetchA>(a_copy_dram_window,
+                                                                           a_dram_tile_window_step,
+                                                                           tdm_config_a,
+                                                                           i_global_read + 2 <
+                                                                               num_loop);
                             if(data_cache_prefetch_b)
-                            {
-                                b_prefetch_window
-                                    .template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                                        tdm_config_b);
-                            }
-                            __builtin_amdgcn_sched_barrier(0);
+                                PrefetchForTDM<Policy::DataCachePrefetchB>(b_copy_dram_window,
+                                                                           b_dram_tile_window_step,
+                                                                           tdm_config_b,
+                                                                           i_global_read + 2 <
+                                                                               num_loop);
                         }
                         block_sync_lds();
 
@@ -741,24 +744,15 @@ struct GemmPipelineAgBgCrCompTDMV1 : public BaseGemmPipelineAgBgCrCompTDM<Proble
             Base::GlobalPrefetch(
                 b_scale_tile[1], b_scale_dram_window, b_scale_dram_tile_window_step);
 
-            if constexpr(Policy::UseDataCachePrefetch && HasHotLoop)
+            if constexpr(UseDataCachePrefetch && HasHotLoop)
             {
-                __builtin_amdgcn_sched_barrier(0);
-                auto a_prefetch_window = a_copy_dram_window;
-                auto b_prefetch_window = b_copy_dram_window;
                 // prefetch for first TDM loads
                 if(data_cache_prefetch_a)
-                {
-                    a_prefetch_window.template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                        tdm_config_a);
-                }
+                    PrefetchForTDM<Policy::DataCachePrefetchA>(
+                        a_copy_dram_window, a_dram_tile_window_step, tdm_config_a);
                 if(data_cache_prefetch_b)
-                {
-                    b_prefetch_window.template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                        tdm_config_b);
-                }
-
-                __builtin_amdgcn_sched_barrier(0);
+                    PrefetchForTDM<Policy::DataCachePrefetchB>(
+                        b_copy_dram_window, b_dram_tile_window_step, tdm_config_b);
             }
 
             s_wait_tensorcnt_barrier<2>();
@@ -802,44 +796,31 @@ struct GemmPipelineAgBgCrCompTDMV1 : public BaseGemmPipelineAgBgCrCompTDM<Proble
                         });
 
                         // Data cache prefetch for iteration i+2
-                        if constexpr(Policy::UseDataCachePrefetch)
+                        if constexpr(UseDataCachePrefetch)
                         {
-                            __builtin_amdgcn_sched_barrier(0);
-                            auto a_prefetch_window = a_copy_dram_window;
-                            auto b_prefetch_window = b_copy_dram_window;
-                            if(i_global_read + 2 < num_loop)
-                            {
-                                move_tile_window(a_prefetch_window, a_dram_tile_window_step);
-                                move_tile_window(b_prefetch_window, b_dram_tile_window_step);
-                            }
                             // check if prefetch is needed or was covered by previous call
-                            if constexpr(!a_prefetch_window
-                                              .template prefetch_for_tdm_covers_more_calls<
-                                                  Policy::DataCachePrefetchToL1>(
-                                                  a_dram_tile_window_step))
+                            if constexpr(!IsOverprefetchedTDM<Policy::DataCachePrefetchA,
+                                                              decltype(a_copy_dram_window)>(
+                                             a_dram_tile_window_step))
                             {
                                 if(data_cache_prefetch_a)
-                                {
-                                    a_prefetch_window
-                                        .template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                                            tdm_config_a);
-                                }
+                                    PrefetchForTDM<Policy::DataCachePrefetchA>(
+                                        a_copy_dram_window,
+                                        a_dram_tile_window_step,
+                                        tdm_config_a,
+                                        i_global_read + 2 < num_loop);
                             }
-
-                            if constexpr(!b_prefetch_window
-                                              .template prefetch_for_tdm_covers_more_calls<
-                                                  Policy::DataCachePrefetchToL1>(
-                                                  b_dram_tile_window_step))
+                            if constexpr(!IsOverprefetchedTDM<Policy::DataCachePrefetchB,
+                                                              decltype(b_copy_dram_window)>(
+                                             b_dram_tile_window_step))
                             {
                                 if(data_cache_prefetch_b)
-                                {
-                                    b_prefetch_window
-                                        .template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                                            tdm_config_b);
-                                }
+                                    PrefetchForTDM<Policy::DataCachePrefetchB>(
+                                        b_copy_dram_window,
+                                        b_dram_tile_window_step,
+                                        tdm_config_b,
+                                        i_global_read + 2 < num_loop);
                             }
-
-                            __builtin_amdgcn_sched_barrier(0);
                         }
                         block_sync_lds();
 
@@ -906,29 +887,20 @@ struct GemmPipelineAgBgCrCompTDMV1 : public BaseGemmPipelineAgBgCrCompTDM<Proble
                         });
 
                         // Data cache prefetch for iteration i+2
-                        if constexpr(Policy::UseDataCachePrefetch)
+                        if constexpr(UseDataCachePrefetch)
                         {
-                            __builtin_amdgcn_sched_barrier(0);
-                            auto a_prefetch_window = a_copy_dram_window;
-                            auto b_prefetch_window = b_copy_dram_window;
-                            if(i_global_read + 2 < num_loop)
-                            {
-                                move_tile_window(a_prefetch_window, a_dram_tile_window_step);
-                                move_tile_window(b_prefetch_window, b_dram_tile_window_step);
-                            }
                             if(data_cache_prefetch_a)
-                            {
-                                a_prefetch_window
-                                    .template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                                        tdm_config_a);
-                            }
+                                PrefetchForTDM<Policy::DataCachePrefetchA>(a_copy_dram_window,
+                                                                           a_dram_tile_window_step,
+                                                                           tdm_config_a,
+                                                                           i_global_read + 2 <
+                                                                               num_loop);
                             if(data_cache_prefetch_b)
-                            {
-                                b_prefetch_window
-                                    .template prefetch_for_tdm<Policy::DataCachePrefetchToL1>(
-                                        tdm_config_b);
-                            }
-                            __builtin_amdgcn_sched_barrier(0);
+                                PrefetchForTDM<Policy::DataCachePrefetchB>(b_copy_dram_window,
+                                                                           b_dram_tile_window_step,
+                                                                           tdm_config_b,
+                                                                           i_global_read + 2 <
+                                                                               num_loop);
                         }
                         block_sync_lds();
 
@@ -1138,7 +1110,7 @@ struct GemmPipelineAgBgCrCompTDMV1 : public BaseGemmPipelineAgBgCrCompTDM<Proble
                     Policy::template GetTDMWorkgroupMask<MultiCastDirection::kN, Problem>(
                         block_id_in_cluster);
 
-                if constexpr(Policy::UseDataCachePrefetch)
+                if constexpr(UseDataCachePrefetch)
                 {
                     data_cache_prefetch_a = (block_id_in_cluster.y == 0);
                     data_cache_prefetch_b = (block_id_in_cluster.x == 0);
@@ -1289,7 +1261,7 @@ struct GemmPipelineAgBgCrCompTDMV1 : public BaseGemmPipelineAgBgCrCompTDM<Proble
                     Policy::template GetTDMWorkgroupMask<MultiCastDirection::kN, Problem>(
                         block_id_in_cluster);
 
-                if constexpr(Policy::UseDataCachePrefetch)
+                if constexpr(UseDataCachePrefetch)
                 {
                     data_cache_prefetch_a = (block_id_in_cluster.y == 0);
                     data_cache_prefetch_b = (block_id_in_cluster.x == 0);

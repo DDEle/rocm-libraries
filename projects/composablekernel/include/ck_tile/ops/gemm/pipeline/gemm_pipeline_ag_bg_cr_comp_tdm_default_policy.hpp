@@ -4,6 +4,7 @@
 #pragma once
 
 #include "ck_tile/core.hpp"
+#include "ck_tile/core/utility/data_cache_prefetch.hpp"
 #include "ck_tile/ops/gemm/warp/warp_gemm_dispatcher.hpp"
 #include "ck_tile/ops/common/tensor_layout.hpp"
 #include "ck_tile/ops/gemm/pipeline/gemm_universal_pipeline_ag_bg_cr_policy.hpp"
@@ -18,21 +19,21 @@ enum class MultiCastDirection
 };
 
 // Default policy for GemmPipelineAgBgCrCompTDM
-template <bool WaveSpecialized        = false,
-          bool UseDataCachePrefetch_  = false,
-          bool DataCachePrefetchToL1_ = false>
+template <bool WaveSpecialized                               = false,
+          ck_tile::DataCachePrefetchKind DataCachePrefetchA_ = ck_tile::DataCachePrefetchKind::None,
+          ck_tile::DataCachePrefetchKind DataCachePrefetchB_ = ck_tile::DataCachePrefetchKind::None>
 struct GemmPipelineAgBgCrCompTDMDefaultPolicy
     : public UniversalGemmBasePolicy<GemmPipelineAgBgCrCompTDMDefaultPolicy<WaveSpecialized,
-                                                                            UseDataCachePrefetch_,
-                                                                            DataCachePrefetchToL1_>>
+                                                                            DataCachePrefetchA_,
+                                                                            DataCachePrefetchB_>>
 {
     using Base =
         UniversalGemmBasePolicy<GemmPipelineAgBgCrCompTDMDefaultPolicy<WaveSpecialized,
-                                                                       UseDataCachePrefetch_,
-                                                                       DataCachePrefetchToL1_>>;
+                                                                       DataCachePrefetchA_,
+                                                                       DataCachePrefetchB_>>;
 
-    static constexpr bool UseDataCachePrefetch  = UseDataCachePrefetch_;
-    static constexpr bool DataCachePrefetchToL1 = DataCachePrefetchToL1_;
+    static constexpr ck_tile::DataCachePrefetchKind DataCachePrefetchA = DataCachePrefetchA_;
+    static constexpr ck_tile::DataCachePrefetchKind DataCachePrefetchB = DataCachePrefetchB_;
 
     template <typename Problem>
     using LdsADataType = typename Problem::ADataType;

@@ -8,8 +8,14 @@
 #include "ck_tile/core/utility/gemm_validation.hpp"
 
 // Template function to run GEMM with optional prefetch comparison.
-// GemmConfig takes (PrecType, UseDataCachePrefetch, DataCachePrefetchToL1, ClusterM, ClusterN).
-template <template <typename, bool, bool, ck_tile::index_t, ck_tile::index_t> class GemmConfig,
+// GemmConfig takes (PrecType, DataCachePrefetchKind A, DataCachePrefetchKind B,
+// ClusterM, ClusterN).
+template <template <typename,
+                    ck_tile::DataCachePrefetchKind,
+                    ck_tile::DataCachePrefetchKind,
+                    ck_tile::index_t,
+                    ck_tile::index_t>
+          class GemmConfig,
           ck_tile::index_t ClusterM,
           ck_tile::index_t ClusterN,
           typename ADataType,
@@ -18,39 +24,59 @@ bool run_gemm_with_prefetch_comparison(const std::string& a_layout,
                                        const std::string& b_layout,
                                        ck_tile::ArgParser& arg_parser,
                                        bool compare_with_non_prefetch,
-                                       bool prefetch_to_l1)
+                                       ck_tile::DataCachePrefetchKind prefetch_kind_a,
+                                       ck_tile::DataCachePrefetchKind prefetch_kind_b)
 {
     using Invoker = UniversalInvoker;
+    using Kind    = ck_tile::DataCachePrefetchKind;
+    auto kind_str = [](Kind k) { return k == Kind::L1 ? "L1" : "L2"; };
 
-    std::cout << "\n=== Running with DataCache Prefetch ENABLED (";
-    std::cout << (prefetch_to_l1 ? "L1" : "L2") << ") ===\n" << std::endl;
+    std::cout << "\n=== Running with DataCache Prefetch ENABLED (A " << kind_str(prefetch_kind_a)
+              << " / B " << kind_str(prefetch_kind_b) << ") ===\n"
+              << std::endl;
 
     bool pass_prefetch;
-    if(prefetch_to_l1)
+    if(prefetch_kind_a == Kind::L1 && prefetch_kind_b == Kind::L1)
     {
-        pass_prefetch =
-            run_gemm_example_prec_type<GemmConfig<ADataType, true, true, ClusterM, ClusterN>,
-                                       Invoker,
-                                       ADataType,
-                                       BCAccDataTypes...>(a_layout, b_layout, arg_parser);
+        pass_prefetch = run_gemm_example_prec_type<
+            GemmConfig<ADataType, Kind::L1, Kind::L1, ClusterM, ClusterN>,
+            Invoker,
+            ADataType,
+            BCAccDataTypes...>(a_layout, b_layout, arg_parser);
+    }
+    else if(prefetch_kind_a == Kind::L1 && prefetch_kind_b == Kind::L2)
+    {
+        pass_prefetch = run_gemm_example_prec_type<
+            GemmConfig<ADataType, Kind::L1, Kind::L2, ClusterM, ClusterN>,
+            Invoker,
+            ADataType,
+            BCAccDataTypes...>(a_layout, b_layout, arg_parser);
+    }
+    else if(prefetch_kind_a == Kind::L2 && prefetch_kind_b == Kind::L1)
+    {
+        pass_prefetch = run_gemm_example_prec_type<
+            GemmConfig<ADataType, Kind::L2, Kind::L1, ClusterM, ClusterN>,
+            Invoker,
+            ADataType,
+            BCAccDataTypes...>(a_layout, b_layout, arg_parser);
     }
     else
     {
-        pass_prefetch =
-            run_gemm_example_prec_type<GemmConfig<ADataType, true, false, ClusterM, ClusterN>,
-                                       Invoker,
-                                       ADataType,
-                                       BCAccDataTypes...>(a_layout, b_layout, arg_parser);
+        pass_prefetch = run_gemm_example_prec_type<
+            GemmConfig<ADataType, Kind::L2, Kind::L2, ClusterM, ClusterN>,
+            Invoker,
+            ADataType,
+            BCAccDataTypes...>(a_layout, b_layout, arg_parser);
     }
 
     if(compare_with_non_prefetch)
     {
         std::cout << "\n=== Running with DataCache Prefetch DISABLED ===\n" << std::endl;
-        bool pass_no_prefetch =
-            run_gemm_example_prec_type<GemmConfig<ADataType, false, false, ClusterM, ClusterN>,
-                                       Invoker,
-                                       ADataType,
-                                       BCAccDataTypes...>(a_layout, b_layout, arg_parser);
+        bool pass_no_prefetch = run_gemm_example_prec_type<
+            GemmConfig<ADataType, Kind::None, Kind::None, ClusterM, ClusterN>,
+            Invoker,
+            ADataType,
+            BCAccDataTypes...>(a_layout, b_layout, arg_parser);
 
         std::cout << "\n=== Comparison Summary ===" << std::endl;
         std::cout << "Note: Check the timing results above to compare performance." << std::endl;
@@ -65,7 +91,12 @@ bool run_gemm_with_prefetch_comparison(const std::string& a_layout,
 }
 
 // Common GEMM example runner
-template <template <typename, bool, bool, ck_tile::index_t, ck_tile::index_t> class GemmConfig,
+template <template <typename,
+                    ck_tile::DataCachePrefetchKind,
+                    ck_tile::DataCachePrefetchKind,
+                    ck_tile::index_t,
+                    ck_tile::index_t>
+          class GemmConfig,
           ck_tile::index_t ClusterM,
           ck_tile::index_t ClusterN>
 int run_gemm_example_with_prefetch(ck_tile::ArgParser& arg_parser)
@@ -87,7 +118,12 @@ int run_gemm_example_with_prefetch(ck_tile::ArgParser& arg_parser)
     int stride_c = arg_parser.get_int("stride_c");
 
     bool compare_with_non_prefetch = arg_parser.get_int("compare") == 1;
-    bool prefetch_to_l1            = arg_parser.get_int("prefetch_l1") == 1;
+    auto prefetch_kind_a           = arg_parser.get_int("prefetch_a_l1") == 1
+                                         ? ck_tile::DataCachePrefetchKind::L1
+                                         : ck_tile::DataCachePrefetchKind::L2;
+    auto prefetch_kind_b           = arg_parser.get_int("prefetch_b_l1") == 1
+                                         ? ck_tile::DataCachePrefetchKind::L1
+                                         : ck_tile::DataCachePrefetchKind::L2;
 
     ck_tile::validate_gemm_stride(
         a_layout, b_layout, c_layout, m, n, k, stride_a, stride_b, stride_c);
@@ -98,8 +134,12 @@ int run_gemm_example_with_prefetch(ck_tile::ArgParser& arg_parser)
                                                  ClusterM,
                                                  ClusterN,
                                                  ck_tile::half_t,
-                                                 ck_tile::half_t>(
-            a_layout, b_layout, arg_parser, compare_with_non_prefetch, prefetch_to_l1);
+                                                 ck_tile::half_t>(a_layout,
+                                                                  b_layout,
+                                                                  arg_parser,
+                                                                  compare_with_non_prefetch,
+                                                                  prefetch_kind_a,
+                                                                  prefetch_kind_b);
     }
     else if(data_type == "bf16")
     {
@@ -107,8 +147,12 @@ int run_gemm_example_with_prefetch(ck_tile::ArgParser& arg_parser)
                                                  ClusterM,
                                                  ClusterN,
                                                  ck_tile::bf16_t,
-                                                 ck_tile::bf16_t>(
-            a_layout, b_layout, arg_parser, compare_with_non_prefetch, prefetch_to_l1);
+                                                 ck_tile::bf16_t>(a_layout,
+                                                                  b_layout,
+                                                                  arg_parser,
+                                                                  compare_with_non_prefetch,
+                                                                  prefetch_kind_a,
+                                                                  prefetch_kind_b);
     }
     else if(data_type == "fp8")
     {
@@ -117,8 +161,12 @@ int run_gemm_example_with_prefetch(ck_tile::ArgParser& arg_parser)
                                                  ClusterN,
                                                  ck_tile::fp8_t,
                                                  ck_tile::fp8_t,
-                                                 ck_tile::half_t>(
-            a_layout, b_layout, arg_parser, compare_with_non_prefetch, prefetch_to_l1);
+                                                 ck_tile::half_t>(a_layout,
+                                                                  b_layout,
+                                                                  arg_parser,
+                                                                  compare_with_non_prefetch,
+                                                                  prefetch_kind_a,
+                                                                  prefetch_kind_b);
     }
     else if(data_type == "bf8")
     {
@@ -127,8 +175,12 @@ int run_gemm_example_with_prefetch(ck_tile::ArgParser& arg_parser)
                                                  ClusterN,
                                                  ck_tile::bf8_t,
                                                  ck_tile::bf8_t,
-                                                 ck_tile::half_t>(
-            a_layout, b_layout, arg_parser, compare_with_non_prefetch, prefetch_to_l1);
+                                                 ck_tile::half_t>(a_layout,
+                                                                  b_layout,
+                                                                  arg_parser,
+                                                                  compare_with_non_prefetch,
+                                                                  prefetch_kind_a,
+                                                                  prefetch_kind_b);
     }
     else if(data_type == "i8")
     {
@@ -137,8 +189,12 @@ int run_gemm_example_with_prefetch(ck_tile::ArgParser& arg_parser)
                                                  ClusterN,
                                                  ck_tile::int8_t,
                                                  ck_tile::int8_t,
-                                                 int32_t>(
-            a_layout, b_layout, arg_parser, compare_with_non_prefetch, prefetch_to_l1);
+                                                 int32_t>(a_layout,
+                                                          b_layout,
+                                                          arg_parser,
+                                                          compare_with_non_prefetch,
+                                                          prefetch_kind_a,
+                                                          prefetch_kind_b);
     }
     else
     {
@@ -148,10 +204,10 @@ int run_gemm_example_with_prefetch(ck_tile::ArgParser& arg_parser)
 
 // TDM V1 GEMM Configuration with Data Cache Prefetch control
 template <typename PrecType,
-          bool UseDataCachePrefetch_,
-          bool DataCachePrefetchToL1_     = false,
-          ck_tile::index_t kClusterSizeM_ = 1,
-          ck_tile::index_t kClusterSizeN_ = 1>
+          ck_tile::DataCachePrefetchKind DataCachePrefetchA_ = ck_tile::DataCachePrefetchKind::L2,
+          ck_tile::DataCachePrefetchKind DataCachePrefetchB_ = DataCachePrefetchA_,
+          ck_tile::index_t kClusterSizeM_                    = 1,
+          ck_tile::index_t kClusterSizeN_                    = 1>
 struct GemmConfigTDMV1Prefetch : public GemmConfigBase
 {
     static constexpr ck_tile::index_t M_Tile = 128;
@@ -173,8 +229,8 @@ struct GemmConfigTDMV1Prefetch : public GemmConfigBase
 
     static constexpr bool DoubleSmemBuffer          = true;
     static constexpr ck_tile::GemmPipeline Pipeline = ck_tile::GemmPipeline::COMPUTE_TDM_V1;
-    static constexpr bool UseDataCachePrefetch      = UseDataCachePrefetch_;
-    static constexpr bool DataCachePrefetchToL1     = DataCachePrefetchToL1_;
+    static constexpr ck_tile::DataCachePrefetchKind DataCachePrefetchA = DataCachePrefetchA_;
+    static constexpr ck_tile::DataCachePrefetchKind DataCachePrefetchB = DataCachePrefetchB_;
 
     static constexpr ck_tile::index_t kClusterSizeM = kClusterSizeM_;
     static constexpr ck_tile::index_t kClusterSizeN = kClusterSizeN_;
@@ -182,10 +238,10 @@ struct GemmConfigTDMV1Prefetch : public GemmConfigBase
 
 // TDM V2 GEMM Configuration with Data Cache Prefetch control
 template <typename PrecType,
-          bool UseDataCachePrefetch_,
-          bool DataCachePrefetchToL1_     = false,
-          ck_tile::index_t kClusterSizeM_ = 1,
-          ck_tile::index_t kClusterSizeN_ = 1>
+          ck_tile::DataCachePrefetchKind DataCachePrefetchA_ = ck_tile::DataCachePrefetchKind::L2,
+          ck_tile::DataCachePrefetchKind DataCachePrefetchB_ = DataCachePrefetchA_,
+          ck_tile::index_t kClusterSizeM_                    = 1,
+          ck_tile::index_t kClusterSizeN_                    = 1>
 struct GemmConfigTDMV2Prefetch : public GemmConfigBase
 {
     static constexpr ck_tile::index_t M_Tile = 128;
@@ -208,8 +264,8 @@ struct GemmConfigTDMV2Prefetch : public GemmConfigBase
 
     static constexpr bool DoubleSmemBuffer          = true;
     static constexpr ck_tile::GemmPipeline Pipeline = ck_tile::GemmPipeline::COMPUTE_TDM_V2;
-    static constexpr bool UseDataCachePrefetch      = UseDataCachePrefetch_;
-    static constexpr bool DataCachePrefetchToL1     = DataCachePrefetchToL1_;
+    static constexpr ck_tile::DataCachePrefetchKind DataCachePrefetchA = DataCachePrefetchA_;
+    static constexpr ck_tile::DataCachePrefetchKind DataCachePrefetchB = DataCachePrefetchB_;
 
     static constexpr ck_tile::index_t kClusterSizeM = kClusterSizeM_;
     static constexpr ck_tile::index_t kClusterSizeN = kClusterSizeN_;
@@ -254,7 +310,8 @@ int main(int argc, char* argv[])
         "compare",
         "0",
         "0: Run with data cache prefetch only, 1: Compare with/without data cache prefetch");
-    arg_parser.insert("prefetch_l1", "0", "0: Prefetch to L2 cache, 1: Prefetch to L1 cache");
+    arg_parser.insert("prefetch_a_l1", "0", "0: Prefetch A to L2 cache, 1: Prefetch A to L1 cache");
+    arg_parser.insert("prefetch_b_l1", "1", "0: Prefetch B to L2 cache, 1: Prefetch B to L1 cache");
     auto result = arg_parser.parse(argc, argv);
 
     if(!result)

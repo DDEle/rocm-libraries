@@ -339,7 +339,9 @@ template <>
 struct PipelineTypeTraits<ck_tile::GemmPipeline::BASIC_V1>
 {
     template <typename PipelineProblem>
-    using GemmPipeline = ck_tile::GemmPipelineAGmemBGmemCRegV1<PipelineProblem>;
+    using GemmPipeline =
+        ck_tile::GemmPipelineAGmemBGmemCRegV1<PipelineProblem,
+                                              ck_tile::GroupedConvUniversalPipelineAgBgCrPolicy>;
     template <typename PipelineProblem>
     using UniversalGemmPipeline = ck_tile::BaseGemmPipelineAGmemBGmemCRegV1<PipelineProblem>;
 };
@@ -348,7 +350,9 @@ template <>
 struct PipelineTypeTraits<ck_tile::GemmPipeline::BASIC_V2>
 {
     template <typename PipelineProblem>
-    using GemmPipeline = ck_tile::GemmPipelineAGmemBGmemCRegV2<PipelineProblem>;
+    using GemmPipeline =
+        ck_tile::GemmPipelineAGmemBGmemCRegV2<PipelineProblem,
+                                              ck_tile::GroupedConvUniversalPipelineAgBgCrPolicy>;
     template <typename PipelineProblem>
     using UniversalGemmPipeline = ck_tile::BaseGemmPipelineAGmemBGmemCRegV2<PipelineProblem>;
 };
@@ -357,14 +361,22 @@ template <>
 struct PipelineTypeTraits<ck_tile::GemmPipeline::MEMORY>
 {
     template <typename PipelineProblem>
-    using GemmPipeline = ck_tile::GemmPipelineAgBgCrMem<PipelineProblem>;
+    using GemmPipeline =
+        ck_tile::GemmPipelineAgBgCrMem<PipelineProblem,
+                                       ck_tile::GroupedConvUniversalPipelineAgBgCrPolicy>;
+    template <typename PipelineProblem>
+    using UniversalGemmPipeline = ck_tile::BaseGemmPipelineAgBgCrMem<PipelineProblem>;
 };
 
 template <>
 struct PipelineTypeTraits<ck_tile::GemmPipeline::COMPUTE_V3>
 {
     template <typename PipelineProblem>
-    using GemmPipeline = ck_tile::GemmPipelineAgBgCrCompV3<PipelineProblem>;
+    using GemmPipeline =
+        ck_tile::GemmPipelineAgBgCrCompV3<PipelineProblem,
+                                          ck_tile::GroupedConvUniversalPipelineAgBgCrPolicy>;
+    template <typename PipelineProblem>
+    using UniversalGemmPipeline = ck_tile::BaseGemmPipelineAgBgCrCompV3<PipelineProblem>;
 };
 
 template <>

@@ -287,6 +287,22 @@ using CompAsyncConfig = std::tuple<ALayout,
                                    Intrawave,
                                    CompAsync>;
 
+template <typename ALayout, typename BLayout, typename CLayout, typename InputType>
+using CompAsyncConfig16x16x128 = std::tuple<ALayout,
+                                            BLayout,
+                                            CLayout,
+                                            InputType, // AType
+                                            InputType, // BType
+                                            F32,       // AccType
+                                            F16,       // OutputType
+                                            I64,       // MBlockTileSize
+                                            I64,       // NBlockTileSize
+                                            I128,      // KBlockTileSize
+                                            I16,       // MWarpTileSize
+                                            I16,       // NWarpTileSize
+                                            Intrawave,
+                                            CompAsync>;
+
 using KernelTypesCompAsync = ::testing::Types<CompAsyncConfig<Row, Row, Row, F16>,
                                               CompAsyncConfig<Row, Col, Row, F16>,
                                               CompAsyncConfig<Col, Row, Row, F16>,
@@ -295,6 +311,10 @@ using KernelTypesCompAsync = ::testing::Types<CompAsyncConfig<Row, Row, Row, F16
                                               CompAsyncConfig<Row, Col, Row, F8>,
                                               CompAsyncConfig<Col, Row, Row, F8>,
                                               CompAsyncConfig<Col, Col, Row, F8>>;
+
+using KernelTypesCompAsync16x16x128 = ::testing::Types<CompAsyncConfig16x16x128<Row, Col, Row, F4>,
+                                                       CompAsyncConfig16x16x128<Row, Col, Row, F8>>;
+
 // clang-format off
 
 using KernelTypesCompV6 = ::testing::Types<

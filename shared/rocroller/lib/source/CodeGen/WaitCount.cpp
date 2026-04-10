@@ -7,6 +7,7 @@
 #include "rocRoller/GPUArchitecture/GPUArchitectureTarget.hpp"
 #include <rocRoller/CodeGen/Instruction.hpp>
 #include <rocRoller/Utilities/Settings.hpp>
+#include <rocRoller/Utilities/String.hpp>
 
 namespace rocRoller
 {
@@ -80,7 +81,19 @@ namespace rocRoller
         case GPUWaitQueue::TensorQueue:
             m_tensorcnt = count;
             break;
+        case GPUWaitQueue::None:
+        case GPUWaitQueue::Count:
+            Throw<FatalError>("Invalid GPUWaitQueue!");
+            break;
         }
+    }
+
+    WaitCount::WaitCount(GPUArchitecture const&       arch,
+                         EnumBitset<GPUWaitQueueType> queuesToSync,
+                         std::string const&           message)
+        : m_queuesToSync(queuesToSync)
+        , m_comments({message})
+    {
     }
 
     WaitCount WaitCount::LoadCnt(GPUArchitecture const& arch, int value, std::string const& message)
@@ -196,6 +209,25 @@ namespace rocRoller
         return rv;
     }
 
+    WaitCount WaitCount::SyncQueue(GPUArchitecture const& arch,
+                                   GPUWaitQueueType       queue,
+                                   std::string const&     message)
+    {
+        return SyncQueues(arch, EnumBitset<GPUWaitQueueType>{queue}, message);
+    }
+
+    WaitCount WaitCount::SyncQueues(GPUArchitecture const&       arch,
+                                    EnumBitset<GPUWaitQueueType> queues,
+                                    std::string const&           message)
+    {
+        return WaitCount(arch, queues, message);
+    }
+
+    EnumBitset<GPUWaitQueueType> const& WaitCount::queuesToSync() const
+    {
+        return m_queuesToSync;
+    }
+
     int WaitCount::CombineValues(int lhs, int rhs)
     {
         if(lhs < 0)
@@ -227,6 +259,8 @@ namespace rocRoller
         m_hasTensorCnt   = other.m_hasTensorCnt;
 
         m_comments.insert(m_comments.end(), other.m_comments.begin(), other.m_comments.end());
+
+        m_queuesToSync |= other.m_queuesToSync;
 
         return *this;
     }
@@ -476,7 +510,7 @@ namespace rocRoller
 
             if(commentIter != m_comments.end())
             {
-                for(auto const& line : Instruction::EscapeComment(*commentIter))
+                for(auto const& line : EscapeComment(*commentIter))
                     os << line;
                 commentIter++;
             }
@@ -492,7 +526,7 @@ namespace rocRoller
 
             if(commentIter != m_comments.end())
             {
-                for(auto const& line : Instruction::EscapeComment(*commentIter))
+                for(auto const& line : EscapeComment(*commentIter))
                     os << line;
                 commentIter++;
             }
@@ -511,7 +545,13 @@ namespace rocRoller
                 m_kmcnt,
                 m_expcnt);
 
-            for(auto const& line : Instruction::EscapeComment(fieldComment))
+            if(m_queuesToSync.any())
+            {
+                fieldComment
+                    += fmt::format(" m_queuesToSync({})", rocRoller::toString(m_queuesToSync));
+            }
+
+            for(auto const& line : EscapeComment(fieldComment))
                 os << line;
             os << "\n";
         }
@@ -520,7 +560,7 @@ namespace rocRoller
         {
             for(; commentIter != m_comments.end(); commentIter++)
             {
-                for(auto const& line : Instruction::EscapeComment(*commentIter))
+                for(auto const& line : EscapeComment(*commentIter))
                     os << line;
             }
             os << "\n";

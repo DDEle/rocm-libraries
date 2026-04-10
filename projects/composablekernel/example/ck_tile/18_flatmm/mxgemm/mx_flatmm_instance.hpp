@@ -16,7 +16,7 @@ template <typename Layout>
 using is_row_major_t = ck_tile::bool_constant<
     std::is_same_v<ck_tile::remove_cvref_t<Layout>, ck_tile::tensor_layout::gemm::RowMajor>>;
 
-template <typename FlatmmConfig,
+template <typename MXFlatmmArchTraits,
           typename ADataType,
           typename BDataType,
           typename DsDatatype,
@@ -36,6 +36,8 @@ template <typename FlatmmConfig,
 float mx_flatmm_calc(const ck_tile::ScaleFlatmmHostArgs<ScaleM, ScaleN>& args,
                      const ck_tile::stream_config& s)
 {
+    using FlatmmConfig = typename MXFlatmmArchTraits::Config;
+
     using FlatmmShape = ck_tile::TileGemmShape<
         ck_tile::sequence<FlatmmConfig::M_Tile, FlatmmConfig::N_Tile, FlatmmConfig::K_Tile>,
         ck_tile::sequence<FlatmmConfig::M_Warp, FlatmmConfig::N_Warp, FlatmmConfig::K_Warp>,
@@ -63,7 +65,8 @@ float mx_flatmm_calc(const ck_tile::ScaleFlatmmHostArgs<ScaleM, ScaleN>& args,
     constexpr auto scheduler = FlatmmConfig::Scheduler;
     ck_tile::ignore          = Splitk;
 
-    constexpr int BlockedXDLN_PerWarp = CurrentArchTraits::BlockedXDLN_PerWarp;
+    // determined by scale shuffle pattern
+    constexpr int BlockedXDLN_PerWarp = MXFlatmmArchTraits::BlockedXDLN_PerWarp;
 
     using MXPipelineProblem = ck_tile::MXFlatmmPipelineProblem<ADataType,
                                                                BDataType,
@@ -75,7 +78,7 @@ float mx_flatmm_calc(const ck_tile::ScaleFlatmmHostArgs<ScaleM, ScaleN>& args,
                                                                TailNum>;
 
     using MXFlatmmPipeline =
-        typename CurrentArchTraits::template MXFlatmmPipeline<MXPipelineProblem>;
+        typename MXFlatmmArchTraits::template MXFlatmmPipeline<MXPipelineProblem>;
 
     using TilePartitioner =
         ck_tile::GemmSpatiallyLocalTilePartitioner<FlatmmShape,

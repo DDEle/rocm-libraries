@@ -862,6 +862,13 @@ namespace rocRoller
         bool isSwappedLayout(KernelGraph const&                    graph,
                              int                                   elementNumberTag,
                              CoordinateGraph::ElementNumber const& elementNumber);
+
+        /**
+         * @brief Get the size of the VGPRBlockSet dimension for a given tag.
+         *
+         * @return The VGPRBlockSet size, or std::nullopt if no VGPRBlockSet dimension exists.
+         */
+        std::optional<uint> GetVGPRBlockSetDimSize(KernelGraph const& graph, int tag);
     }
 }
 

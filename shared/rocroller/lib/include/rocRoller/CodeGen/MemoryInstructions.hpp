@@ -42,19 +42,19 @@ namespace rocRoller
         };
 
         /**
-          * @brief Generate the instructions required to perform a load.
-          *
-          *
-          * @param kind The kind of memory operation to perform.
-          * @param dest The register to store the loaded data in.
-          * @param addr  The register containing the address to load the data from.
-          * @param offset Register containing an offset to be added to addr.
-          * @param numBytes The number of bytes to load.
-          * @param comment Comment that will be generated along with the instructions. (Default = "")
-          * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
-          * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
-          * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
-          */
+         * @brief Generate the instructions required to perform a load.
+         *
+         *
+         * @param kind The kind of memory operation to perform.
+         * @param dest The register to store the loaded data in.
+         * @param addr  The register containing the address to load the data from.
+         * @param offset Register containing an offset to be added to addr.
+         * @param numBytes The number of bytes to load.
+         * @param comment Comment that will be generated along with the instructions. (Default = "")
+         * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
+         * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
+         * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
+         */
         Generator<Instruction> load(MemoryKind               kind,
                                     Register::ValuePtr       dest,
                                     Register::ValuePtr       addr,
@@ -66,19 +66,19 @@ namespace rocRoller
                                     BufferInstructionOptions buffOpts = BufferInstructionOptions());
 
         /**
-          * @brief Generate the instructions required to perform a store.
-          *
-          *
-          * @param kind The kind of memory operation to perform.
-          * @param addr The register containing the address to store the data.
-          * @param data  The register containing the data to store.
-          * @param offset Register containing an offset to be added to addr.
-          * @param numBytes The number of bytes to store.
-          * @param comment Comment that will be generated along with the instructions. (Default = "")
-          * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
-          * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
-          * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
-          */
+         * @brief Generate the instructions required to perform a store.
+         *
+         *
+         * @param kind The kind of memory operation to perform.
+         * @param addr The register containing the address to store the data.
+         * @param data  The register containing the data to store.
+         * @param offset Register containing an offset to be added to addr.
+         * @param numBytes The number of bytes to store.
+         * @param comment Comment that will be generated along with the instructions. (Default = "")
+         * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
+         * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
+         * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
+         */
         Generator<Instruction> store(MemoryKind               kind,
                                      Register::ValuePtr       addr,
                                      Register::ValuePtr       data,
@@ -91,19 +91,19 @@ namespace rocRoller
                                      = BufferInstructionOptions());
 
         /**
-          * @brief Generate the instructions required to perform a load or store.
-          *
-          * @tparam Dir Whether to load or store data
-          * @param kind The kind of memory operation to perform.
-          * @param addr The register containing the address.
-          * @param data  The register containing the data.
-          * @param offset Register containing an offset to be added to addr.
-          * @param numBytes The number of bytes.
-          * @param comment Comment that will be generated along with the instructions. (Default = "")
-          * @param high Whether the value will be loaded or stored into the high bits of the register. (Default=false)
-          * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
-          * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
-          */
+         * @brief Generate the instructions required to perform a load or store.
+         *
+         * @tparam Dir Whether to load or store data
+         * @param kind The kind of memory operation to perform.
+         * @param addr The register containing the address.
+         * @param data  The register containing the data.
+         * @param offset Register containing an offset to be added to addr.
+         * @param numBytes The number of bytes.
+         * @param comment Comment that will be generated along with the instructions. (Default = "")
+         * @param high Whether the value will be loaded or stored into the high bits of the register. (Default=false)
+         * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
+         * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
+         */
         template <MemoryDirection Dir>
         Generator<Instruction> moveData(MemoryKind               kind,
                                         Register::ValuePtr       addr,
@@ -117,19 +117,19 @@ namespace rocRoller
                                         = BufferInstructionOptions());
 
         /**
-          * @brief Generate instructions that will load two 16bit values and pack them into
-          *        a single register.
-          *
-          * @param kind The kind of memory operation to perform.
-          * @param dest The register to store the loaded data in.
-          * @param addr1 The register containing the address of the first 16bit value to load the data from.
-          * @param offset1 Register containing an offset to be added to addr1.
-          * @param addr2 The register containing the address of the second 16bit value to load the data from.
-          * @param offset2 Register containing an offset to be added to addr2.
-          * @param comment Comment that will be generated along with the instructions. (Default = "")
-          * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
-          * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
-          */
+         * @brief Generate instructions that will load two 16bit values and pack them into
+         *        a single register.
+         *
+         * @param kind The kind of memory operation to perform.
+         * @param dest The register to store the loaded data in.
+         * @param addr1 The register containing the address of the first 16bit value to load the data from.
+         * @param offset1 Register containing an offset to be added to addr1.
+         * @param addr2 The register containing the address of the second 16bit value to load the data from.
+         * @param offset2 Register containing an offset to be added to addr2.
+         * @param comment Comment that will be generated along with the instructions. (Default = "")
+         * @param buffDesc Buffer descriptor to use when `kind` is `Buffer`. (Default = nullptr)
+         * @param buffOpts Buffer options. (Default = BufferInstructionOptions())
+         */
         Generator<Instruction> loadAndPack(MemoryKind               kind,
                                            Register::ValuePtr       dest,
                                            Register::ValuePtr       addr1,
@@ -142,16 +142,16 @@ namespace rocRoller
                                            = BufferInstructionOptions());
 
         /**
-          * @brief Generate instructions that will pack 2 16bit values into a single 32bit register and store the value
-          *        to memmory.
-          *
-          * @param kind The kind of memory operation to perform.
-          * @param addr The register containing the address to store the data.
-          * @param data1 The register containing the first 16bit value to store.
-          * @param data2 The register containing the second 16bit value to store.
-          * @param offset Register containing an offset to be added to addr.
-          * @param comment Comment that will be generated along with the instructions. (Default = "")
-          */
+         * @brief Generate instructions that will pack 2 16bit values into a single 32bit register and store the value
+         *        to memmory.
+         *
+         * @param kind The kind of memory operation to perform.
+         * @param addr The register containing the address to store the data.
+         * @param data1 The register containing the first 16bit value to store.
+         * @param data2 The register containing the second 16bit value to store.
+         * @param offset Register containing an offset to be added to addr.
+         * @param comment Comment that will be generated along with the instructions. (Default = "")
+         */
         Generator<Instruction> packAndStore(MemoryKind         kind,
                                             Register::ValuePtr addr,
                                             Register::ValuePtr data1,
@@ -160,15 +160,15 @@ namespace rocRoller
                                             std::string const  comment = "");
 
         /**
-          * @brief Generate the instructions required to perform a global load.
-          *
-          *
-          * @param dest The register to store the loaded data in.
-          * @param addr  The register containing the address to load the data from.
-          * @param offset Offset to be added to addr.
-          * @param numBytes The number of bytes to load.
-          * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
-          */
+         * @brief Generate the instructions required to perform a global load.
+         *
+         *
+         * @param dest The register to store the loaded data in.
+         * @param addr  The register containing the address to load the data from.
+         * @param offset Offset to be added to addr.
+         * @param numBytes The number of bytes to load.
+         * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
+         */
         Generator<Instruction> loadGlobal(Register::ValuePtr dest,
                                           Register::ValuePtr addr,
                                           int                offset,
@@ -176,15 +176,15 @@ namespace rocRoller
                                           bool               high = false);
 
         /**
-          * @brief Generate the instructions required to perform a global store.
-          *
-          *
-          * @param addr The register containing the address to store the data.
-          * @param data  The register containing the data to store.
-          * @param offset Offset to be added to addr.
-          * @param numBytes The number of bytes to load.
-          * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
-          */
+         * @brief Generate the instructions required to perform a global store.
+         *
+         *
+         * @param addr The register containing the address to store the data.
+         * @param data  The register containing the data to store.
+         * @param offset Offset to be added to addr.
+         * @param numBytes The number of bytes to load.
+         * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
+         */
         Generator<Instruction> storeGlobal(Register::ValuePtr addr,
                                            Register::ValuePtr data,
                                            int                offset,
@@ -192,15 +192,15 @@ namespace rocRoller
                                            bool               high = false);
 
         /**
-          * @brief Generate the instructions required to load scalar data into a register from memory.
-          *
-          *
-          * @param dest The register to store the loaded data in.
-          * @param base  The register containing the address to load the data from.
-          * @param offset The value containing an offset to be added to the address in base.
-          * @param numBytes The total number of bytes to load.
-          * @param glc Globally Coherent modifier, controls L1 cache policy: false=hit_lru, true=miss_evict. (Default=false)
-          */
+         * @brief Generate the instructions required to load scalar data into a register from memory.
+         *
+         *
+         * @param dest The register to store the loaded data in.
+         * @param base  The register containing the address to load the data from.
+         * @param offset The value containing an offset to be added to the address in base.
+         * @param numBytes The total number of bytes to load.
+         * @param glc Globally Coherent modifier, controls L1 cache policy: false=hit_lru, true=miss_evict. (Default=false)
+         */
         Generator<Instruction> loadScalar(Register::ValuePtr dest,
                                           Register::ValuePtr base,
                                           int                offset,
@@ -208,15 +208,15 @@ namespace rocRoller
                                           bool               glc = false);
 
         /**
-          * @brief Generate the instructions required to perform a scalar store.
-          *
-          *
-          * @param addr The register containing the address to store the data.
-          * @param data  The register containing the data to store.
-          * @param offset Offset to be added to addr.
-          * @param numBytes The number of bytes to load.
-          * @param glc Globally Coherent modifier, controls L1 cache bypass: false=write-combine, true=write-thru. (Default=true)
-          */
+         * @brief Generate the instructions required to perform a scalar store.
+         *
+         *
+         * @param addr The register containing the address to store the data.
+         * @param data  The register containing the data to store.
+         * @param offset Offset to be added to addr.
+         * @param numBytes The number of bytes to load.
+         * @param glc Globally Coherent modifier, controls L1 cache bypass: false=write-combine, true=write-thru. (Default=true)
+         */
         Generator<Instruction> storeScalar(Register::ValuePtr addr,
                                            Register::ValuePtr data,
                                            int                offset,
@@ -224,16 +224,16 @@ namespace rocRoller
                                            bool               glc = true);
 
         /**
-          * @brief Generate the instructions required to perform an LDS load.
-          *
-          *
-          * @param dest The register to store the loaded data in.
-          * @param addr  The register containing the address to load the data from.
-          * @param offset Offset to be added to addr.
-          * @param numBytes The number of bytes to load.
-          * @param comment Comment that will be generated along with the instructions. (Default = "")
-          * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
-          */
+         * @brief Generate the instructions required to perform an LDS load.
+         *
+         *
+         * @param dest The register to store the loaded data in.
+         * @param addr  The register containing the address to load the data from.
+         * @param offset Offset to be added to addr.
+         * @param numBytes The number of bytes to load.
+         * @param comment Comment that will be generated along with the instructions. (Default = "")
+         * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
+         */
         Generator<Instruction> loadLocal(Register::ValuePtr dest,
                                          Register::ValuePtr addr,
                                          int                offset,
@@ -242,16 +242,16 @@ namespace rocRoller
                                          bool               high    = false);
 
         /**
-          * @brief Generate the instructions required to perform a transpose load from LDS.
-          *
-          *
-          * @param dest The register to store the transpose-loaded data in.
-          * @param addr  The register containing the address to transpose load the data from.
-          * @param offset Offset to be added to addr.
-          * @param numBytes The number of bytes to load.
-          * @param elementBits number of bits of variable type to load.
-          * @param comment Comment that will be generated along with the instructions. (Default = "")
-          */
+         * @brief Generate the instructions required to perform a transpose load from LDS.
+         *
+         *
+         * @param dest The register to store the transpose-loaded data in.
+         * @param addr  The register containing the address to transpose load the data from.
+         * @param offset Offset to be added to addr.
+         * @param numBytes The number of bytes to load.
+         * @param elementBits number of bits of variable type to load.
+         * @param comment Comment that will be generated along with the instructions. (Default = "")
+         */
         Generator<Instruction> transposeLoadLocal(Register::ValuePtr dest,
                                                   Register::ValuePtr addr,
                                                   int                offset,
@@ -260,16 +260,16 @@ namespace rocRoller
                                                   std::string const  comment = "");
 
         /**
-          * @brief Generate the instructions required to perform an LDS store.
-          *
-          *
-          * @param addr The register containing the address to store the data.
-          * @param data  The register containing the data to store.
-          * @param offset Offset to be added to addr.
-          * @param numBytes The number of bytes to load.
-          * @param comment Comment that will be generated along with the instructions. (Default = "")
-          * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
-          */
+         * @brief Generate the instructions required to perform an LDS store.
+         *
+         *
+         * @param addr The register containing the address to store the data.
+         * @param data  The register containing the data to store.
+         * @param offset Offset to be added to addr.
+         * @param numBytes The number of bytes to load.
+         * @param comment Comment that will be generated along with the instructions. (Default = "")
+         * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
+         */
         Generator<Instruction> storeLocal(Register::ValuePtr addr,
                                           Register::ValuePtr data,
                                           int                offset,
@@ -278,17 +278,17 @@ namespace rocRoller
                                           bool               high    = false);
 
         /**
-          * @brief Generate the instructions required to perform a buffer load.
-          *
-          *
-          * @param dest The register to store the loaded data in.
-          * @param addr  The register containing the address to load the data from.
-          * @param offset Offset to be added to addr.
-          * @param buffDesc Buffer descriptor to use.
-          * @param buffOpts Buffer options
-          * @param numBytes The number of bytes to load.
-          * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
-          */
+         * @brief Generate the instructions required to perform a buffer load.
+         *
+         *
+         * @param dest The register to store the loaded data in.
+         * @param addr  The register containing the address to load the data from.
+         * @param offset Offset to be added to addr.
+         * @param buffDesc Buffer descriptor to use.
+         * @param buffOpts Buffer options
+         * @param numBytes The number of bytes to load.
+         * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
+         */
         Generator<Instruction> loadBuffer(Register::ValuePtr       dest,
                                           Register::ValuePtr       addr,
                                           int                      offset,
@@ -298,17 +298,17 @@ namespace rocRoller
                                           bool                     high = false);
 
         /**
-          * @brief Generate the instructions required to perform a buffer store.
-          *
-          *
-          * @param data  The register containing the data to store.
-          * @param addr The register containing the address to store the data.
-          * @param offset Offset to be added to addr.
-          * @param buffDesc Buffer descriptor to use
-          * @param buffOpts Buffer options
-          * @param numBytes The number of bytes to load.
-          * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
-          */
+         * @brief Generate the instructions required to perform a buffer store.
+         *
+         *
+         * @param data  The register containing the data to store.
+         * @param addr The register containing the address to store the data.
+         * @param offset Offset to be added to addr.
+         * @param buffDesc Buffer descriptor to use
+         * @param buffOpts Buffer options
+         * @param numBytes The number of bytes to load.
+         * @param high Whether the value will be loaded into the high bits of the register. (Default=false)
+         */
         Generator<Instruction> storeBuffer(Register::ValuePtr       data,
                                            Register::ValuePtr       addr,
                                            int                      offset,
@@ -318,60 +318,60 @@ namespace rocRoller
                                            bool                     high = false);
 
         /**
-          * @brief Generate the instructions required to perform a direct global to lds buffer load.
-          *
-          *
-          * @param addr  The register containing the LDS address to write data.
-          * @param data The register containing the data to store.
-          * @param buffDesc Buffer descriptor to use.
-          * @param buffOpts Buffer options
-          * @param numBytes The number of bytes to load.
-          */
+         * @brief Generate the instructions required to perform a direct global to lds buffer load.
+         *
+         *
+         * @param addr  The register containing the LDS address to write data.
+         * @param data The register containing the data to store.
+         * @param buffDesc Buffer descriptor to use.
+         * @param buffOpts Buffer options
+         * @param numBytes The number of bytes to load.
+         */
         Generator<Instruction> bufferLoad2LDS(Register::ValuePtr       data,
                                               Register::ValuePtr       buffDesc,
                                               BufferInstructionOptions buffOpts,
                                               int                      numBytes,
                                               Register::ValuePtr       soffset);
         /**
-          * @brief Generate the instructions required to perform Global into LDS loads using TDM.
-          */
+         * @brief Generate the instructions required to perform Global into LDS loads using TDM.
+         */
         Generator<Instruction> loadTensorToLDS(Register::ValuePtr tdmDesc);
 
         /**
-          * @brief Generate the instructions required to perform LDS into Global stores using TDM.
-          */
+         * @brief Generate the instructions required to perform LDS into Global stores using TDM.
+         */
         Generator<Instruction> storeTensorFromLDS(Register::ValuePtr tdmDesc);
 
         /**
-          * @brief Generate the instructions required to add a wave synchronization barrier.
-          *
-          * @return Generator<Instruction>
-          */
+         * @brief Generate the instructions required to add a wave synchronization barrier.
+         *
+         * @return Generator<Instruction>
+         */
         Generator<Instruction> barrier(CForwardRangeOf<Register::ValuePtr> auto srcs,
                                        std::string                              comment = "");
         Generator<Instruction> barrier(std::initializer_list<Register::ValuePtr> srcs,
                                        std::string                               comment = "");
 
         /**
-          * @brief Add the offset to a new register if the offset is greater than maxOffset allowed by the
-          *        instruction.
-          *
-          *
-          * @param offset Offset to be added to addr.
-          * @param addr The register containing the address to store the data.
-          * @param inst The instruction to be queried for maxOffset
-          */
+         * @brief Add the offset to a new register if the offset is greater than maxOffset allowed by the
+         *        instruction.
+         *
+         *
+         * @param offset Offset to be added to addr.
+         * @param addr The register containing the address to store the data.
+         * @param inst The instruction to be queried for maxOffset
+         */
         Generator<Instruction>
             addLargerOffset2Addr(int& offset, Register::ValuePtr& addr, std::string inst);
 
         /**
-      * Returns a function which can be used with Generator<Instruction>::map() to add `dst` as an extra destination operand to all memory instructions that are yielded by that generator.
-      */
+         * Returns a function which can be used with Generator<Instruction>::map() to add `dst` as an extra destination operand to all memory instructions that are yielded by that generator.
+         */
         static auto addExtraDst(Register::ValuePtr dst);
 
         /**
-      * Returns a function which can be used with Generator<Instruction>::map() to add `src` as an extra source operand to all memory instructions that are yielded by that generator.
-      */
+         * Returns a function which can be used with Generator<Instruction>::map() to add `src` as an extra source operand to all memory instructions that are yielded by that generator.
+         */
         static auto addExtraSrc(Register::ValuePtr src);
 
     private:

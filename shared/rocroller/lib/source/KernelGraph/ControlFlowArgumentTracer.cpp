@@ -283,33 +283,6 @@ namespace rocRoller::KernelGraph
                     m_directlyReferencedArgs.insert(arg);
                 }
             }
-
-            // Now propagate indirect references (args referenced by other args' expressions)
-            do
-            {
-                any = false;
-
-                for(auto& [node, referencedArgs] : m_referencedArgs)
-                {
-                    std::unordered_set<std::string> additions;
-
-                    for(auto const& arg : referencedArgs)
-                    {
-                        auto iter = m_subReferencedArgs.find(arg);
-                        if(iter != m_subReferencedArgs.end())
-                        {
-                            additions.insert(iter->second.begin(), iter->second.end());
-                        }
-                    }
-
-                    auto beforeSize = referencedArgs.size();
-                    referencedArgs.insert(additions.begin(), additions.end());
-                    auto afterSize = referencedArgs.size();
-
-                    if(afterSize > beforeSize)
-                        any = true;
-                }
-            } while(any);
         }
 
         // Arguments directly used in control flow (before propagation)
@@ -358,15 +331,6 @@ namespace rocRoller::KernelGraph
             }
         }
 
-        // Launch-time-only args: referenced but not directly referenced
-        // These were added via propagation from other argument expressions
-        // which are evaluated at kernel launch time, not execute time
-        for(auto const& arg : allReferenced)
-        {
-            if(!visitor.m_directlyReferencedArgs.contains(arg))
-                m_launchTimeOnlyArguments.insert(arg);
-        }
-
         if(m_neverReferencedArguments.size() > 0)
         {
             std::ostringstream msg;
@@ -381,14 +345,6 @@ namespace rocRoller::KernelGraph
             std::ostringstream msg;
             msg << "Directly referenced args (" << visitor.m_directlyReferencedArgs.size() << "): ";
             streamJoin(msg, visitor.m_directlyReferencedArgs, ", ");
-            Log::debug(msg.str());
-        }
-
-        if(m_launchTimeOnlyArguments.size() > 0)
-        {
-            std::ostringstream msg;
-            msg << "Launch-time-only argument(s) (skip loading): ";
-            streamJoin(msg, m_launchTimeOnlyArguments, ", ");
             Log::debug(msg.str());
         }
     }
@@ -411,10 +367,5 @@ namespace rocRoller::KernelGraph
     std::set<std::string> const& ControlFlowArgumentTracer::neverReferencedArguments() const
     {
         return m_neverReferencedArguments;
-    }
-
-    std::set<std::string> const& ControlFlowArgumentTracer::launchTimeOnlyArguments() const
-    {
-        return m_launchTimeOnlyArguments;
     }
 }

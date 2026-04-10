@@ -1726,5 +1726,19 @@ namespace rocRoller
 
             return threadTileIndex.dim != elementNumber.dim;
         }
+
+        std::optional<uint> GetVGPRBlockSetDimSize(KernelGraph const& graph, int tag)
+        {
+            auto coord = graph.mapper.get(tag, Connections::TypeAndSubDimension{"VGPRBlockSet", 0});
+            if(coord == -1)
+                return {};
+
+            auto [vgprBlockSetTag, vgprBlockSet] = graph.getDimension<CT::VGPRBlockSet>(tag);
+            AssertFatal(Expression::evaluationTimes(
+                            vgprBlockSet.size)[Expression::EvaluationTime::Translate],
+                        "Could not determine VGPRBlockSet size at translate-time.",
+                        ShowValue(vgprBlockSet));
+            return getUnsignedInt(evaluate(vgprBlockSet.size));
+        }
     }
 }

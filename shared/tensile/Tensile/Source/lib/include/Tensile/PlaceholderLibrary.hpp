@@ -152,7 +152,7 @@ namespace Tensile
 
         PlaceholderLibrary() = default;
 
-        bool loadPlaceholderLibrary() const
+        bool loadPlaceholderLibrary(Hardware const* hardware = nullptr) const
         {
             std::lock_guard<std::mutex> lock(lazyLoadingGuard);
             // If condition in case two threads got into this function
@@ -164,7 +164,21 @@ namespace Tensile
                     = static_cast<MasterSolutionLibrary<MyProblem, MySolution>*>(newLibrary.get());
                 library = mLibrary->library;
                 std::lock_guard<std::mutex> lock(*solutionsGuard);
-                masterSolutions->insert(mLibrary->solutions.begin(), mLibrary->solutions.end());
+                if(hardware == nullptr)
+                {
+                    masterSolutions->insert(mLibrary->solutions.begin(), mLibrary->solutions.end());
+                }
+                else
+                {
+                    std::transform(std::begin(mLibrary->solutions),
+                                   std::end(mLibrary->solutions),
+                                   std::inserter(*masterSolutions, std::end(*masterSolutions)),
+                                   [this, hardware](auto& i) {
+                                       i.second->codeObjectFilename
+                                           = getCodeObjectFileName(*hardware, *i.second);
+                                       return i;
+                                   });
+                }
 
                 return mLibrary;
             }
@@ -202,7 +216,7 @@ namespace Tensile
                                                              = nullptr) const override
         {
             if(!library)
-                loadPlaceholderLibrary();
+                loadPlaceholderLibrary(&hardware);
 
             auto solution = library->findBestSolution(problem, hardware, fitness);
 
@@ -223,7 +237,7 @@ namespace Tensile
         {
             if(!library)
             {
-                loadPlaceholderLibrary();
+                loadPlaceholderLibrary(&hardware);
             }
 
             auto solutions = library->findAllSolutions(problem, hardware);
@@ -242,7 +256,7 @@ namespace Tensile
         {
             if(!library)
             {
-                loadPlaceholderLibrary();
+                loadPlaceholderLibrary(&hardware);
             }
 
             auto solutions = library->findAllSolutionsMatchingType(problem, hardware);

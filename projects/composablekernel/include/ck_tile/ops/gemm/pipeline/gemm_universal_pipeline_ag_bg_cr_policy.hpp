@@ -193,7 +193,6 @@ struct UniversalGemmBasePolicy
         using ADataType             = ALdsDataType_<Problem>;
         constexpr index_t MPerBlock = Problem::BlockGemmShape::kM;
         constexpr index_t KPerBlock = Problem::BlockGemmShape::kK;
-        constexpr index_t KPack     = Derived::template GetSmemPackA<Problem>();
 
         if constexpr(is_a_load_tr<Problem>)
         {
@@ -327,6 +326,7 @@ struct UniversalGemmBasePolicy
             }
             else // A is in RowMajor
             {
+                constexpr index_t KPack     = Derived::template GetSmemPackA<Problem>();
                 constexpr auto DataTypeSize = sizeof(ADataType);
                 constexpr index_t MLdsLayerRequired =
                     get_n_lds_banks() * get_n_dwords_per_128b() / KPerBlock / DataTypeSize;
@@ -1082,7 +1082,7 @@ struct UniversalGemmBasePolicy
     }
 
     template <typename Problem>
-    CK_TILE_DEVICE static constexpr index_t GetSmemSizeA()
+    CK_TILE_HOST_DEVICE static constexpr index_t GetSmemSizeA()
     {
         using ADataType                 = ALdsDataType_<Problem>;
         constexpr index_t PackedSize    = numeric_traits<ADataType>::PackedSize;
@@ -1093,7 +1093,7 @@ struct UniversalGemmBasePolicy
     }
 
     template <typename Problem>
-    CK_TILE_DEVICE static constexpr index_t GetSmemSizeB()
+    CK_TILE_HOST_DEVICE static constexpr index_t GetSmemSizeB()
     {
         constexpr bool IsBCastPolicyBeforeLDSWrite = IsBCastPolicyBeforeLDSWrite_v<Problem>;
         using BDataType                            = std::conditional_t<IsBCastPolicyBeforeLDSWrite,
@@ -1107,7 +1107,7 @@ struct UniversalGemmBasePolicy
     }
 
     template <typename Problem>
-    CK_TILE_DEVICE static constexpr index_t GetSmemSize()
+    CK_TILE_HOST_DEVICE static constexpr index_t GetSmemSize()
     {
         constexpr index_t smem_size_a = GetSmemSizeA<Problem>();
         constexpr index_t smem_size_b = GetSmemSizeB<Problem>();

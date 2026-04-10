@@ -28,15 +28,15 @@ namespace MatrixMultiplyTest
     concept isF32 = std::is_same_v<T, float>;
 
     /**
-      * @brief Return a reasonable random value range for datatype T.
-      *
-      * The return value is usually passed to the random generator to
-      * obtain values in (-range, range), and these will be used to
-      * populate matrices for (small) GEMM problems.
-      *
-      * The value returned *may or may not* correspond to the maximum
-      * representable value of T.
-      */
+     * @brief Return a reasonable random value range for datatype T.
+     *
+     * The return value is usually passed to the random generator to
+     * obtain values in (-range, range), and these will be used to
+     * populate matrices for (small) GEMM problems.
+     *
+     * The value returned *may or may not* correspond to the maximum
+     * representable value of T.
+     */
     template <typename T>
     float range()
     {

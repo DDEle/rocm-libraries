@@ -442,6 +442,17 @@ struct WarpGemmAttributeMfmaTransposedCDistribution
         Impl{}.template operator()<Params..., SwapReuse_<true>>(c_vec, b_vec, a_vec);
     }
 
+    template <typename... Params>
+    CK_TILE_DEVICE void operator()(CVecType& c_vec,
+                                   const AVecType& a_vec,
+                                   const int32_t& a_scale,
+                                   const BVecType& b_vec,
+                                   const int32_t& b_scale) const
+    {
+        // swap A and B
+        Impl{}.template operator()<Params...>(c_vec, b_vec, b_scale, a_vec, a_scale);
+    }
+
     // c_vec = a_vec * b_vec
     template <typename... Params>
     CK_TILE_DEVICE CVecType operator()(const AVecType& a_vec, const BVecType& b_vec) const
@@ -534,6 +545,17 @@ struct WarpGemmAttributeMfmaTransposedCDistribution_SwizzleB
     {
         // swap A and B
         Impl{}.template operator()<Params..., SwapReuse_<true>>(c_vec, b_vec, a_vec);
+    }
+
+    template <typename... Params>
+    CK_TILE_DEVICE void operator()(CVecType& c_vec,
+                                   const AVecType& a_vec,
+                                   const int32_t& a_scale,
+                                   const BVecType& b_vec,
+                                   const int32_t& b_scale) const
+    {
+        // swap A and B
+        Impl{}.template operator()<Params...>(c_vec, b_vec, b_scale, a_vec, a_scale);
     }
 
     // c_vec = a_vec * b_vec

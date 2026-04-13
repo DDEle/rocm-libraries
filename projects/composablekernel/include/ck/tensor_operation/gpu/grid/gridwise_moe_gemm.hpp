@@ -274,8 +274,13 @@ struct GridwiseMoeGemm : public GridwiseGemm_xdl_cshuffle_base<
     using ThisThreadBlock = typename Base::ThisThreadBlock;
     using Base::NumDTensor;
     static constexpr auto BlockSizeNumber = Number<BlockSize>{};
-
-    using mfma_selector = MfmaSelector<ComputeTypeA, MPerXdl, NPerXdl, ComputeTypeB>;
+#if defined(__gfx125__)
+    static constexpr bool is_single_rate_mfma = true;
+#else
+    static constexpr bool is_single_rate_mfma = false;
+#endif
+    using mfma_selector =
+        MfmaSelector<ComputeTypeA, MPerXdl, NPerXdl, ComputeTypeB, is_single_rate_mfma>;
     static constexpr index_t KPack =
         math::max(math::lcm(AK1Number, BK1Number), mfma_selector::selected_mfma.k_per_blk);
     static constexpr index_t KLane =

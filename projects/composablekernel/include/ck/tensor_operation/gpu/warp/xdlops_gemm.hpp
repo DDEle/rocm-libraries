@@ -111,6 +111,7 @@ enum struct MfmaInstr
     wmma_i32_16x16x64_iu8_gfx125,
 
     wmma_f32_16x16x128_f8f6f4_gfx125, // not implemented
+    wmma_f32_32x16x128_f4_gfx125,     // not implemented
     wmma_scale16_f32_16x16x128_f8f6f4_gfx125,
     wmma_scale_f32_16x16x128_f8f6f4_gfx125,
     wmma_scale16_f32_32x16x128_f4_gfx125,
@@ -118,7 +119,19 @@ enum struct MfmaInstr
 
     wmma_f32_16x16x4_f32_gfx125,
 
-    wmma_f64_16x16x4_f64_gfx1251
+    wmma_f64_16x16x4_f64_gfx1251,
+    wmma_f16_16x16x128_bf8bf8_gfx125,
+    wmma_f16_16x16x128_bf8f8_gfx125,
+    wmma_f16_16x16x128_f8bf8_gfx125,
+    wmma_f16_16x16x128_f8f8_gfx125,
+    wmma_f16_16x16x64_f8f8_gfx125,
+    wmma_f16_16x16x64_f8bf8_gfx125,
+    wmma_f16_16x16x64_bf8f8_gfx125,
+    wmma_f16_16x16x64_bf8bf8_gfx125,
+    wmma_f32_16x16x128_bf8bf8_gfx125,
+    wmma_f32_16x16x128_bf8f8_gfx125,
+    wmma_f32_16x16x128_f8bf8_gfx125,
+    wmma_f32_16x16x128_f8f8_gfx125
 };
 
 template <MfmaInstr instr>
@@ -715,7 +728,13 @@ struct mfma_type<MfmaInstr::mfma_f32_16x16x32f8f8>
     template <index_t MPerXdlops, index_t NPerXdlops, class FloatA, class FloatB, class FloatC>
     __device__ void run(const FloatA& a, const FloatB& b, FloatC& reg_c) const
     {
+#if defined(__HIP_DEVICE_COMPILE__)
         intrin_mfma_f32_16x16x32f8f8<MPerXdlops, NPerXdlops>::Run(a, b, reg_c);
+#else
+        ignore = a;
+        ignore = b;
+        ignore = reg_c;
+#endif
     }
 };
 
@@ -759,7 +778,13 @@ struct mfma_type<MfmaInstr::mfma_f32_16x16x32bf8bf8>
     template <index_t MPerXdlops, index_t NPerXdlops, class FloatA, class FloatB, class FloatC>
     __device__ void run(const FloatA& a, const FloatB& b, FloatC& reg_c) const
     {
+#if defined(__HIP_DEVICE_COMPILE__)
         intrin_mfma_f32_16x16x32bf8bf8<MPerXdlops, NPerXdlops>::Run(a, b, reg_c);
+#else
+        ignore = a;
+        ignore = b;
+        ignore = reg_c;
+#endif
     }
 };
 
@@ -803,7 +828,13 @@ struct mfma_type<MfmaInstr::mfma_f32_16x16x32f8bf8>
     template <index_t MPerXdlops, index_t NPerXdlops, class FloatA, class FloatB, class FloatC>
     __device__ void run(const FloatA& a, const FloatB& b, FloatC& reg_c) const
     {
+#if defined(__HIP_DEVICE_COMPILE__)
         intrin_mfma_f32_16x16x32f8bf8<MPerXdlops, NPerXdlops>::Run(a, b, reg_c);
+#else
+        ignore = a;
+        ignore = b;
+        ignore = reg_c;
+#endif
     }
 };
 
@@ -847,7 +878,13 @@ struct mfma_type<MfmaInstr::mfma_f32_16x16x32bf8f8>
     template <index_t MPerXdlops, index_t NPerXdlops, class FloatA, class FloatB, class FloatC>
     __device__ void run(const FloatA& a, const FloatB& b, FloatC& reg_c) const
     {
+#if defined(__HIP_DEVICE_COMPILE__)
         intrin_mfma_f32_16x16x32bf8f8<MPerXdlops, NPerXdlops>::Run(a, b, reg_c);
+#else
+        ignore = a;
+        ignore = b;
+        ignore = reg_c;
+#endif
     }
 };
 
@@ -968,9 +1005,16 @@ struct mfma_type<MfmaInstr::mfma_scale_f32_16x16x128f8f6f4>
                         const ScaleB& scale_b,
                         FloatC& reg_c) const
     {
-
+#if defined(__HIP_DEVICE_COMPILE__)
         intrin_mfma_scale_f32_16x16x128f8f6f4<MPerXdlops, NPerXdlops, OpselA, OpselB>::Run(
             a, bit_cast<int32_t>(scale_a), b, bit_cast<int32_t>(scale_b), reg_c);
+#else
+        ignore = a;
+        ignore = scale_a;
+        ignore = b;
+        ignore = scale_b;
+        ignore = reg_c;
+#endif
     }
 };
 
@@ -1548,6 +1592,141 @@ struct mfma_type<MfmaInstr::wmma_scale16_f32_32x16x128_f4_gfx125> : public mfma_
     }
 };
 
+// wmma_f16_16x16x128_bf8bf8_gfx125: result type f16, 16x16 tile, k=128, a/b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x128_bf8bf8_gfx125> : public mfma_type_gfx125_base
+{
+    static constexpr index_t k_per_blk = 128;
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x128_bf8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f32_16x16x128_bf8bf8_gfx125: result type f16, 16x16 tile, k=128, a/b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f32_16x16x128_bf8bf8_gfx125> : public mfma_type_gfx125_base_128
+{
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f32_16x16x128_bf8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x128_bf8f8_gfx125: result type f16, 16x16 tile, k=128, a type bf8, b type fp8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x128_bf8f8_gfx125> : public mfma_type_gfx125_base_128
+{
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x128_bf8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f32_16x16x128_bf8f8_gfx125: result type f16, 16x16 tile, k=128, a type bf8, b type fp8
+template <>
+struct mfma_type<MfmaInstr::wmma_f32_16x16x128_bf8f8_gfx125> : public mfma_type_gfx125_base_128
+{
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f32_16x16x128_bf8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x128_f8bf8_gfx125: result type f16, 16x16 tile, k=128, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x128_f8bf8_gfx125> : public mfma_type_gfx125_base_128
+{
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x128_f8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f32_16x16x128_f8bf8_gfx125: result type f16, 16x16 tile, k=128, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f32_16x16x128_f8bf8_gfx125> : public mfma_type_gfx125_base_128
+{
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f32_16x16x128_f8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x128_f8f8_gfx125: result type f16, 16x16 tile, k=128, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x128_f8f8_gfx125> : public mfma_type_gfx125_base_128
+{
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x128_f8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f32_16x16x128_f8f8_gfx125: result type f16, 16x16 tile, k=128, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f32_16x16x128_f8f8_gfx125> : public mfma_type_gfx125_base_128
+{
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f32_16x16x128_f8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x64_f8f8_gfx125: result type f16, 16x16 tile, k=64, a type fp8, b type fp8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x64_f8f8_gfx125> : public mfma_type_gfx125_base_64
+{
+
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x64_f8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x64_f8bf8_gfx125: result type f16, 16x16 tile, k=64, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x64_f8bf8_gfx125> : public mfma_type_gfx125_base_64
+{
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x64_f8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x64_bf8f8_gfx125: result type f16, 16x16 tile, k=64, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x64_bf8f8_gfx125> : public mfma_type_gfx125_base_64
+{
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x64_bf8f8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
+// wmma_f16_16x16x64_bf8bf8_gfx125: result type f16, 16x16 tile, k=64, a type fp8, b type bf8
+template <>
+struct mfma_type<MfmaInstr::wmma_f16_16x16x64_bf8bf8_gfx125> : public mfma_type_gfx125_base_64
+{
+    template <index_t MPerWmma, index_t NPerWmma, class FloatA, class FloatB, class FloatC>
+    __device__ void run(const FloatA& a, const FloatB& b, FloatC& c) const
+    {
+        ck::intrin_wmma_f16_16x16x64_bf8bf8<MPerWmma, NPerWmma>::Run(a, b, c);
+    }
+};
+
 /**
  * @class MfmaSelector
  * @brief Selects the appropriate MFMA instruction type and configuration for given data types
@@ -1567,7 +1746,11 @@ template <typename base_type,
           index_t NPerXdlops,
           typename additional_type = base_type,
           bool is_single_rate_mfma = false,
-          bool is_scale_mfma       = false>
+          bool is_scale_mfma       = false,
+          typename AccType         = float,
+          index_t ScaleBlkSize     = (is_scale_mfma ? 32 : 0),
+          typename AScaleDataType  = void,
+          typename BScaleDataType  = void>
 struct MfmaSelector
 {
     template <typename base_type_,
@@ -1575,7 +1758,11 @@ struct MfmaSelector
               index_t NPerXdlops_,
               typename additional_type_ = base_type_,
               bool is_single_rate_mfma_ = false,
-              bool is_scale_mfma_       = false>
+              bool is_scale_mfma_       = false,
+              typename AccType_         = float,
+              index_t ScaleBlkSize_     = (is_scale_mfma_ ? 32 : 0),
+              typename AScaleDataType_  = void,
+              typename BScaleDataType_  = void>
     static constexpr auto GetMfma();
 
     template <>
@@ -1899,7 +2086,11 @@ struct MfmaSelector
                            16,
                            element_type_t<additional_type>,
                            is_single_rate_mfma,
-                           true>()
+                           true,
+                           float,
+                           32,
+                           AScaleDataType,
+                           BScaleDataType>()
     {
 #if defined(__gfx125__)
         return MfmaInstr::wmma_scale_f32_16x16x128_f8f6f4_gfx125;
@@ -1910,6 +2101,21 @@ struct MfmaSelector
 #else
         return MfmaInstr::mfma_scale_f32_16x16x128f8f6f4;
 #endif
+    }
+
+    template <>
+    constexpr auto GetMfma<element_type_t<base_type>,
+                           16,
+                           16,
+                           element_type_t<additional_type>,
+                           is_single_rate_mfma,
+                           true,
+                           float,
+                           16,
+                           AScaleDataType,
+                           BScaleDataType>()
+    {
+        return MfmaInstr::wmma_scale16_f32_16x16x128_f8f6f4_gfx125;
     }
 
     template <>
@@ -1930,7 +2136,7 @@ struct MfmaSelector
     constexpr auto GetMfma<f8_t, 16, 16, f8_t, false, false>()
     {
 #if defined(__gfx125__)
-        return MfmaInstr::wmma_f32_16x16x64_f8f8_gfx125;
+        return MfmaInstr::wmma_f32_16x16x128_f8f8_gfx125;
 #elif defined(__gfx12__)
         return MfmaInstr::wmma_f32_16x16x16_f8f8_gfx12;
 #elif defined(__gfx11__)
@@ -1988,7 +2194,7 @@ struct MfmaSelector
     constexpr auto GetMfma<bf8_t, 16, 16, bf8_t, false, false>()
     {
 #if defined(__gfx125__)
-        return MfmaInstr::wmma_f32_16x16x64_bf8bf8_gfx125;
+        return MfmaInstr::wmma_f32_16x16x128_bf8bf8_gfx125;
 #elif defined(__gfx12__)
         return MfmaInstr::wmma_f32_16x16x16_bf8bf8_gfx12;
 #elif defined(__gfx11__)
@@ -2034,7 +2240,7 @@ struct MfmaSelector
     constexpr auto GetMfma<f8_t, 16, 16, bf8_t, false, false>()
     {
 #if defined(__gfx125__)
-        return MfmaInstr::wmma_f32_16x16x64_f8bf8_gfx125;
+        return MfmaInstr::wmma_f32_16x16x128_f8bf8_gfx125;
 #elif defined(__gfx12__)
         return MfmaInstr::wmma_f32_16x16x16_f8bf8_gfx12;
 #elif defined(__gfx11__)
@@ -2080,7 +2286,7 @@ struct MfmaSelector
     constexpr auto GetMfma<bf8_t, 16, 16, f8_t, false, false>()
     {
 #if defined(__gfx125__)
-        return MfmaInstr::wmma_f32_16x16x64_bf8f8_gfx125;
+        return MfmaInstr::wmma_f32_16x16x128_bf8f8_gfx125;
 #elif defined(__gfx12__)
         return MfmaInstr::wmma_f32_16x16x16_bf8f8_gfx12;
 #elif defined(__gfx11__)
@@ -2092,12 +2298,104 @@ struct MfmaSelector
 #endif
     }
 
+    // Specialization for wmma_f16_16x16x128_bf8bf8_gfx125
+    template <>
+    constexpr auto GetMfma<bf8_t, 16, 16, bf8_t, false, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x128_bf8bf8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx12;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x128_bf8f8_gfx125
+    template <>
+    constexpr auto GetMfma<bf8_t, 16, 16, f8_t, false, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x128_bf8f8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx12;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x128_f8bf8_gfx125
+    template <>
+    constexpr auto GetMfma<f8_t, 16, 16, bf8_t, false, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x128_f8bf8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx12;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x128_f8f8_gfx125
+    template <>
+    constexpr auto GetMfma<f8_t, 16, 16, f8_t, false, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x128_f8f8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx12;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x64_f8f8_gfx125
+    template <>
+    constexpr auto GetMfma<f8_t, 16, 16, f8_t, true, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x64_f8f8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx12;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x64_f8bf8_gfx125
+    template <>
+    constexpr auto GetMfma<f8_t, 16, 16, bf8_t, true, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x64_f8bf8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx12;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x64_bf8f8_gfx125
+    template <>
+    constexpr auto GetMfma<bf8_t, 16, 16, f8_t, true, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x64_bf8f8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx12;
+#endif
+    }
+
+    // Specialization for wmma_f16_16x16x64_bf8bf8_gfx125
+    template <>
+    constexpr auto GetMfma<bf8_t, 16, 16, bf8_t, true, false, ck::half_t>()
+    {
+#if defined(__gfx125__)
+        return MfmaInstr::wmma_f16_16x16x64_bf8bf8_gfx125;
+#else
+        return MfmaInstr::wmma_unsupport_16x16_gfx12;
+#endif
+    }
+
     static constexpr auto selected_mfma = mfma_type<GetMfma<element_type_t<base_type>,
                                                             MPerXdlops,
                                                             NPerXdlops,
                                                             element_type_t<additional_type>,
                                                             is_single_rate_mfma,
-                                                            is_scale_mfma>()>{};
+                                                            is_scale_mfma,
+                                                            element_type_t<AccType>,
+                                                            ScaleBlkSize,
+                                                            AScaleDataType,
+                                                            BScaleDataType>()>{}; // default init
 
     __host__ __device__ constexpr MfmaSelector()
     {
@@ -2569,7 +2867,12 @@ struct XdlopsGemm
         (((is_same<base_type, half_t>::value || is_same<base_type, bhalf_t>::value) &&
           KPack <= 4) ||
          (is_same<base_type, int8_t>::value && KPack <= 8) ||
-         ((is_same<base_type, f8_t>::value || is_same<base_type, bf8_t>::value) && KPack < 32) ||
+         ((is_same<base_type, f8_t>::value || is_same<base_type, bf8_t>::value) &&
+#if defined(__gfx125__)
+          KPack < 128) ||
+#else
+          KPack < 32) ||
+#endif
          is_same<additional_type, pk_i4_t>::value)
 #if defined(__gfx950__)
                 // tf32 on gfx950 is implemented as bf16x3, so it should be treated as bf16.

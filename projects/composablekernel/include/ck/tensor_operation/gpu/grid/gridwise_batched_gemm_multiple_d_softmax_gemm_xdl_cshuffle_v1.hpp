@@ -502,7 +502,11 @@ struct GridwiseBatchedGemmMultipleDSoftmaxGemm_Xdl_CShuffle
               lcm_AK1_BK1 <= 4) ||
              (is_same<FloatAB, int8_t>::value && lcm_AK1_BK1 <= 8) ||
              ((is_same<FloatAB, f8_t>::value || is_same<FloatAB, bf8_t>::value) &&
+#if defined(__gfx125__)
+              lcm_AK1_BK1 < 128))
+#else
               lcm_AK1_BK1 < 32))
+#endif
                 ? true
                 : false;
         constexpr auto is_scale_mfma = false;
@@ -724,7 +728,11 @@ struct GridwiseBatchedGemmMultipleDSoftmaxGemm_Xdl_CShuffle
               lcm_AK1_BK1 <= 4) ||
              (is_same<FloatAB, int8_t>::value && lcm_AK1_BK1 <= 8) ||
              ((is_same<FloatAB, f8_t>::value || is_same<FloatAB, bf8_t>::value) &&
+#if defined(__gfx125__)
+              lcm_AK1_BK1 < 128))
+#else
               lcm_AK1_BK1 < 32))
+#endif
                 ? true
                 : false;
         constexpr auto is_scale_mfma = false;

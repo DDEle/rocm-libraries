@@ -343,6 +343,8 @@ ConvSolution BnBwdTrainingSpatial::GetSolution(const ExecutionContext& context,
                 {"MIO_BN_GFX125X", (StartsWith(handle.GetDeviceName(), "gfx125") ? "1" : "0")},
             };
 
+            build_params.Define("HIP_ENABLE_EXTRA_WARP_SYNC_TYPES");
+
             kernel.comp_options = build_params.GenerateFor(kbp::HIP());
 
             kernel.l_wk.push_back(xlocalsize);

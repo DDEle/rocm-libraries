@@ -76,6 +76,7 @@ namespace rocRoller
         Register::ValuePtr getVCC_HI();
         Register::ValuePtr getSCC();
         Register::ValuePtr getExec();
+        Register::ValuePtr getTTMP6();
         Register::ValuePtr getTTMP7();
         Register::ValuePtr getTTMP9();
         Register::ValuePtr getSpecial(Register::Type t);

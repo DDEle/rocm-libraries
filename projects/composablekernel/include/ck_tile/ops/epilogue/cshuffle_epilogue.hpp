@@ -35,7 +35,9 @@ template <typename AsDataType_,
           index_t VectorSizeC_         = 1,
           bool TiledMMAPermuteN_       = false,
           index_t BlockedXDLN_PerWarp_ = 1, // The number of continuous xdl_output per warp
-          bool DoubleSmemBuffer_       = false>
+          bool DoubleSmemBuffer_       = false,
+          typename AComputeDataType_   = void,
+          typename BComputeDataType_   = void>
 struct CShuffleEpilogueProblem
 {
     using AsDataType                             = remove_cvref_t<AsDataType_>;
@@ -46,6 +48,8 @@ struct CShuffleEpilogueProblem
     using DsLayout                               = remove_cvref_t<DsLayout_>;
     using ELayout                                = remove_cvref_t<ELayout_>;
     using CDElementwise                          = remove_cvref_t<CDElementwise_>;
+    using AComputeDataType                       = remove_cvref_t<AComputeDataType_>;
+    using BComputeDataType                       = remove_cvref_t<BComputeDataType_>;
     static constexpr index_t kBlockSize          = MWave_ * NWave_ * get_warp_size();
     static constexpr index_t kMPerBlock          = kM_;
     static constexpr index_t kNPerBlock          = kN_;
@@ -70,13 +74,15 @@ struct CShuffleEpilogueProblem
 template <typename Problem_, typename Policy_ = void>
 struct CShuffleEpilogue
 {
-    using Problem     = remove_cvref_t<Problem_>;
-    using AsDataType  = remove_cvref_t<typename Problem::AsDataType>;
-    using BsDataType  = remove_cvref_t<typename Problem::BsDataType>;
-    using AccDataType = remove_cvref_t<typename Problem::AccDataType>;
-    using ODataType   = remove_cvref_t<typename Problem::ODataType>;
-    using DsDataType  = remove_cvref_t<typename Problem::DsDataType>;
-    using DsLayout    = remove_cvref_t<typename Problem::DsLayout>;
+    using Problem          = remove_cvref_t<Problem_>;
+    using AsDataType       = remove_cvref_t<typename Problem::AsDataType>;
+    using BsDataType       = remove_cvref_t<typename Problem::BsDataType>;
+    using AccDataType      = remove_cvref_t<typename Problem::AccDataType>;
+    using ODataType        = remove_cvref_t<typename Problem::ODataType>;
+    using DsDataType       = remove_cvref_t<typename Problem::DsDataType>;
+    using DsLayout         = remove_cvref_t<typename Problem::DsLayout>;
+    using AComputeDataType = remove_cvref_t<typename Problem::AComputeDataType>;
+    using BComputeDataType = remove_cvref_t<typename Problem::BComputeDataType>;
 
     static constexpr bool ADataTypeIsTuple = is_detected<is_tuple, AsDataType>::value;
     static constexpr bool BDataTypeIsTuple = is_detected<is_tuple, BsDataType>::value;
@@ -336,6 +342,8 @@ struct CShuffleEpilogue
             constexpr index_t BaseWords  = ToWords(BaseStrideElems);
             constexpr index_t PadWords   = ((BaseWords % 2) == 0) ? 1 : 0;
             constexpr auto PaddingAmount = PadWords * ElemsPer4B;
+#elif defined(__gfx125__)
+            constexpr auto PaddingAmount = VectorLen;
 #else
             constexpr auto PaddingAmount = 0;
 #endif
@@ -390,6 +398,8 @@ struct CShuffleEpilogue
             constexpr index_t BaseWords  = ToWords(BaseStrideElems);
             constexpr index_t PadWords   = ((BaseWords % 2) == 0) ? 1 : 0;
             constexpr auto PaddingAmount = PadWords * ElemsPer4B;
+#elif defined(__gfx125__)
+            constexpr auto PaddingAmount = VectorLen;
 #else
             constexpr auto PaddingAmount = 0;
 #endif
@@ -825,7 +835,7 @@ struct CShuffleEpilogue
                                                   MPerIterationShuffle,
                                                   NPerIterationShuffle,
                                                   GetVectorSizeC(),
-                                                  tile_distribution_pattern::thread_raked,
+                                                  tile_distribution_pattern::warp_raked,
                                                   Problem::kNumWaveGroups>;
         constexpr auto dram_tile_distribution =
             TileEncodingPattern::make_2d_static_tile_distribution();
@@ -868,6 +878,8 @@ struct CShuffleEpilogue
                 return EmptyScale{};
             }
         }();
+
+        s_wait_tensorcnt_barrier();
 
         static_for<0, num_access, 1>{}([&](auto iAccess) {
             block_sync_lds();

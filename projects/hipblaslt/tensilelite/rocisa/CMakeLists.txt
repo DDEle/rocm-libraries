@@ -17,8 +17,6 @@ target_include_directories(rocisa-cpp
 )
 
 if(HIPBLASLT_BUNDLE_PYTHON_DEPS)
-    find_package(hip REQUIRED)
-
     include(FetchContent)
     FetchContent_Declare(
       nanobind
@@ -47,7 +45,7 @@ if(HIPBLASLT_BUNDLE_PYTHON_DEPS)
                           "${CMAKE_CURRENT_SOURCE_DIR}/rocisa/src/pass/remove.cpp"
                           "${CMAKE_CURRENT_SOURCE_DIR}/rocisa/src/pass/insert_delay_alu.cpp")
 
-    nanobind_add_module(rocisa NOMINSIZE NB_SUPPRESS_WARNINGS
+    nanobind_add_module(rocisa NOMINSIZE NB_SUPPRESS_WARNINGS NB_SHARED
                             "${CMAKE_CURRENT_SOURCE_DIR}/rocisa/src/main.cpp"
                             "${CMAKE_CURRENT_SOURCE_DIR}/rocisa/src/base.cpp"
                             "${CMAKE_CURRENT_SOURCE_DIR}/rocisa/src/code.cpp"
@@ -61,7 +59,7 @@ if(HIPBLASLT_BUNDLE_PYTHON_DEPS)
                             ${ROCISAINST_SOURCE}
                             ${ROCISAPASS_SOURCE}
                             ${ROCISAFUNC_SOURCE})
-    target_include_directories(rocisa PRIVATE 
+    target_include_directories(rocisa PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/rocisa/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../../../shared/origami/include"
     )

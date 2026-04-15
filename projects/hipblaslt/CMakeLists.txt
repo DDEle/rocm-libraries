@@ -79,6 +79,8 @@ if(HIPBLASLT_ENABLE_HOST OR TENSILELITE_ENABLE_HOST)
     option(HIPBLASLT_ENABLE_OPENMP "Use OpenMP to improve performance." ON)
 endif()
 
+set(HIPBLASLT_ENABLE_ROCROLLER OFF)
+
 if(HIPBLASLT_ENABLE_HOST)
     option(HIPBLASLT_BUILD_SHARED_LIBS "Build the hipblaslt library as shared vs static" ON)
     option(HIPBLASLT_ENABLE_ROCROLLER "Use RocRoller library." ON)

@@ -1430,16 +1430,17 @@ struct UniversalGemmPipelineAgBgCrPolicy
         using ATypeToUse = remove_cvref_t<typename Problem::AComputeDataType>;
         using BTypeToUse = remove_cvref_t<typename Problem::BComputeDataType>;
 
-        using WarpGemm = WarpGemmDispatcher<ATypeToUse,
-                                            BTypeToUse,
-                                            typename Problem::CDataType,
-                                            WarpTile::at(I0),
-                                            WarpTile::at(I1),
-                                            WarpTile::at(I2),
-                                            Problem::TransposeC,
-                                            false,
-                                            Problem::UseStructuredSparsity,
-                                            wg_attr_num_access>;
+        using WarpGemm =
+            WarpGemmDispatcher<if_select_t<AComputeDataType, tf32_t, tf32_t, ATypeToUse>,
+                               if_select_t<BComputeDataType, tf32_t, tf32_t, BTypeToUse>,
+                               typename Problem::CDataType,
+                               WarpTile::at(I0),
+                               WarpTile::at(I1),
+                               WarpTile::at(I2),
+                               Problem::TransposeC,
+                               false,
+                               Problem::UseStructuredSparsity,
+                               wg_attr_num_access>;
 
         using BlockGemmPolicy = BlockGemmASmemBSmemCRegV1CustomPolicy<ATypeToUse,
                                                                       BTypeToUse,

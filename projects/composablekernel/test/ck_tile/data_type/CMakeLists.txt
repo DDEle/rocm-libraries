@@ -13,6 +13,8 @@ if(GPU_TARGETS MATCHES "gfx95|gfx125")
     if(result EQUAL 0)
       target_compile_options(test_ck_tile_mx_scale PRIVATE -mavx)
     endif()
+    add_gtest_executable(test_ck_tile_tf32 test_tf32.cpp)
+    add_gtest_executable(test_ck_tile_bf16_f32_convert test_bf16_f32_convert.cpp)
 endif()
 if(GPU_TARGETS MATCHES "gfx125")
     # Check if host CPU supports AVX-512

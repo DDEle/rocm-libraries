@@ -177,7 +177,6 @@ auto preShuffleWeight(ck_tile::HostTensor<dtype>& src)
 
     // fp4/fp6:32 or fp8:16
     int KPack = std::is_same_v<dtype, ck_tile::pk_fp6x16_t> ? 32 : 16 * packed_size; 
-
     int KLane = ck_tile::get_warp_size() / NLane;
     int K0    = K / (KLane * KPack);
 
@@ -229,7 +228,7 @@ int run_mx_flatmm_example(const ck_tile::ArgParser& arg_parser)
                 return run_mx_flatmm_with_layouts<ck_tile::pk_fp4_t,
                                                   ck_tile::pk_fp4_t,
                                                   ck_tile::fp16_t,
-                                                  MXFlatmm_GFX950_FP4FP4_Traits,
+                                                  MXFlatmm_FP4FP4_Traits,
                                                   false>(arg_parser, Row{}, Col{}, Row{});
             else
                 throw std::runtime_error("Only non-persistent kernels are supported currently!");
@@ -240,7 +239,7 @@ int run_mx_flatmm_example(const ck_tile::ArgParser& arg_parser)
                 return run_mx_flatmm_with_layouts<ck_tile::pk_fp6x16_t,
                                                   ck_tile::pk_fp6x16_t,
                                                   ck_tile::fp16_t,
-                                                  MXFlatmm_GFX950_FP6FP6_Traits,
+                                                  MXFlatmm_FP6FP6_Traits,
                                                   false>(arg_parser, Row{}, Col{}, Row{});
             else
                 throw std::runtime_error("Only support non-persistent kernel now!");
@@ -251,7 +250,7 @@ int run_mx_flatmm_example(const ck_tile::ArgParser& arg_parser)
                 return run_mx_flatmm_with_layouts<ck_tile::fp8_t,
                                                   ck_tile::fp8_t,
                                                   ck_tile::fp16_t,
-                                                  MXFlatmm_GFX950_FP8FP8_Traits,
+                                                  MXFlatmm_FP8FP8_Traits,
                                                   false>(arg_parser, Row{}, Col{}, Row{});
             else
                 throw std::runtime_error("Only support non-persistent kernel now!");
@@ -262,7 +261,7 @@ int run_mx_flatmm_example(const ck_tile::ArgParser& arg_parser)
                 return run_mx_flatmm_with_layouts<ck_tile::fp8_t,
                                                   ck_tile::pk_fp4_t,
                                                   ck_tile::fp16_t,
-                                                  MXFlatmm_GFX950_FP8FP4_Traits,
+                                                  MXFlatmm_FP8FP4_Traits,
                                                   false>(arg_parser, Row{}, Col{}, Row{});
             else
                 throw std::runtime_error("Only support non-persistent kernel now!");
@@ -273,7 +272,7 @@ int run_mx_flatmm_example(const ck_tile::ArgParser& arg_parser)
                 return run_mx_flatmm_with_layouts<ck_tile::pk_fp4_t,
                                                   ck_tile::fp8_t,
                                                   ck_tile::fp16_t,
-                                                  MXFlatmm_GFX950_FP4FP8_Traits,
+                                                  MXFlatmm_FP4FP8_Traits,
                                                   false>(arg_parser, Row{}, Col{}, Row{});
             else
                 throw std::runtime_error("Only support non-persistent kernel now!");

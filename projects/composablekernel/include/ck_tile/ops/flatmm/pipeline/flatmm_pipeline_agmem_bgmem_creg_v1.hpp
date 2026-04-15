@@ -188,7 +188,9 @@ defined(USING_MFMA_32x32x64) && defined(ENABLE_FP4) // mi350 fp4 32c 1*K1
 #endif
     static constexpr index_t dsread_per_wg =
         WG::kM * WG::kK * sizeof(ADataType) / WaveSize / Problem::VectorLoadSize;
+#if defined(__HIP_DEVICE_COMPILE__)
     static_assert((WG::kM * WG::kK * sizeof(ADataType) / WaveSize) % Problem::VectorLoadSize == 0);
+#endif
 
     static constexpr index_t dsread_num_perK  = dsread_per_wg * MIterPerWarp;
     static constexpr index_t dswrite_num_perK = dsread_num_perK / (MWarp * NWarp);

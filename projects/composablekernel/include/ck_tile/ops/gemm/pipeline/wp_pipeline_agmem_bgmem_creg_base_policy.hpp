@@ -258,21 +258,19 @@ struct UniversalWeightPreshufflePipelineAgBgCrPolicy
         using WarpTile   = typename Problem::BlockGemmShape::WarpTile;
 
         // Use ComputeDataType to detect tf32 mode for warp gemm selection
-        using ComputeDataType = remove_cvref_t<typename Problem::ComputeDataType>;
-        using ADataType       = remove_cvref_t<typename Problem::ADataType>;
-        using BDataType       = remove_cvref_t<typename Problem::BDataType>;
-
+        using AComputeDataType = remove_cvref_t<typename Problem::AComputeDataType>;
+        using BComputeDataType = remove_cvref_t<typename Problem::BComputeDataType>;
+        using ADataType        = remove_cvref_t<typename Problem::ADataType>;
+        using BDataType        = remove_cvref_t<typename Problem::BDataType>;
         // Determine compute types to use
         // This logic defaults to A/B DataType, but if one of them is packed falls back to the other
         // If both are packed, it falls back to the explicitly defined ComputeDataType in the
         // problem It might be a good idea to use ComputeDataType anyway, but that would break how
         // this behaviour used to work
-        using ATypeToUse = mixed_prec_compute_type_from_input_t<typename Problem::ADataType,
-                                                                typename Problem::BDataType,
-                                                                typename Problem::AComputeDataType>;
-        using BTypeToUse = mixed_prec_compute_type_from_input_t<typename Problem::BDataType,
-                                                                typename Problem::ADataType,
-                                                                typename Problem::BComputeDataType>;
+        using ATypeToUse =
+            mixed_prec_compute_type_from_input_t<ADataType, BDataType, AComputeDataType>;
+        using BTypeToUse =
+            mixed_prec_compute_type_from_input_t<BDataType, ADataType, BComputeDataType>;
 #if defined(__gfx125__)
         constexpr auto NumAccess = WGAttrNumAccessEnum::Single;
 #else

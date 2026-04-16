@@ -538,8 +538,7 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx_bprehuffle<BlockGemmPipelineScheduler:
         static_ford<Sequence<LocalPrefetchStages, KRepeat>>{}([&](auto mk) {
             constexpr auto m0     = Number<mk[Number<0>{}]>{};
             constexpr auto k      = Number<mk[Number<1>{}]>{};
-            constexpr auto k_step =
-                k * xdlops_gemm.KPerXdlops * KPack / xdlops_gemm.K1PerXdlops;
+            constexpr auto k_step = k * xdlops_gemm.KPerXdlops * KPack / xdlops_gemm.K1PerXdlops;
             static_for<0, xdlops_gemm.K1PerXdlops / (APackedSize * KThreadChunk), 1>{}(
                 [&](auto chunk) {
                     constexpr auto a_k_step_chunk =

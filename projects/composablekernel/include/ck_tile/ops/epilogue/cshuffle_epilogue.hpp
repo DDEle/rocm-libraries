@@ -463,8 +463,9 @@ struct CShuffleEpilogue
                 constexpr int RakedXDLN_PerWarp = NumNXdlPerWavePerShuffle / BlockedXDLN_PerWarp;
                 // BlockedLayout
                 // this branch is for original a16w4
-                if constexpr(UseBlockedLayout || is_any_of<ADataType, pk_int4_t, pk_fp4_t>::value ||
-                             is_any_of<BDataType, pk_int4_t, pk_fp4_t>::value)
+                if constexpr(UseBlockedLayout ||
+                             is_any_of<ADataTypeBuf, pk_int4_t, pk_fp4_t>::value ||
+                             is_any_of<BDataTypeBuf, pk_int4_t, pk_fp4_t>::value)
                 {
                     if constexpr(EightWave)
                     {

@@ -359,9 +359,9 @@ struct BlockwiseGemmXdlops_pipeline_bpreshuffle_mx_moe_v1<BlockGemmPipelineSched
         static_ford<
             Sequence<MRepeat, KRepeat, xdlops_gemm.K1PerXdlops / (APackedSize * KThreadChunk)>>{}(
             [&](auto mkc) {
-                constexpr auto m0     = Number<mkc[Number<0>{}]>{};
-                constexpr auto k      = Number<mkc[Number<1>{}]>{};
-                constexpr auto chunk  = Number<mkc[Number<2>{}]>{};
+                constexpr auto m0    = Number<mkc[Number<0>{}]>{};
+                constexpr auto k     = Number<mkc[Number<1>{}]>{};
+                constexpr auto chunk = Number<mkc[Number<2>{}]>{};
                 constexpr auto k_step =
                     k * xdlops_gemm.KPerXdlops * KPack / xdlops_gemm.K1PerXdlops;
                 constexpr auto a_k_step_chunk =
@@ -484,7 +484,7 @@ struct BlockwiseGemmXdlops_pipeline_bpreshuffle_mx_moe_v1<BlockGemmPipelineSched
                             a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                                 a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                                     make_tuple(im_major, I0, im_minor, k0, ik))>{}];
-                                });
+                        });
                         static_for<0, BKPack, 1>{}([&](auto ik) {
                             b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                                 b_thread_bufs[scale_comp_buf][Number<b_thread_desc_.CalculateOffset(
@@ -523,9 +523,9 @@ struct BlockwiseGemmXdlops_pipeline_bpreshuffle_mx_moe_v1<BlockGemmPipelineSched
                                          KRepeat,
                                          xdlops_gemm.K1PerXdlops / (APackedSize * KThreadChunk)>>{}(
                         [&](auto mkc) {
-                            constexpr auto m0     = Number<mkc[Number<0>{}]>{};
-                            constexpr auto k      = Number<mkc[Number<1>{}]>{};
-                            constexpr auto chunk  = Number<mkc[Number<2>{}]>{};
+                            constexpr auto m0    = Number<mkc[Number<0>{}]>{};
+                            constexpr auto k     = Number<mkc[Number<1>{}]>{};
+                            constexpr auto chunk = Number<mkc[Number<2>{}]>{};
                             constexpr auto k_step =
                                 k * xdlops_gemm.KPerXdlops * KPack / xdlops_gemm.K1PerXdlops;
                             constexpr auto a_k_step_chunk =
@@ -634,7 +634,7 @@ struct BlockwiseGemmXdlops_pipeline_bpreshuffle_mx_moe_v1<BlockGemmPipelineSched
                     a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                         a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                             make_tuple(im_major, I0, im_minor, k0, ik))>{}];
-                        });
+                });
                 static_for<0, BKPack, 1>{}([&](auto ik) {
                     b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                         b_thread_bufs[I0][Number<b_thread_desc_.CalculateOffset(
@@ -674,9 +674,9 @@ struct BlockwiseGemmXdlops_pipeline_bpreshuffle_mx_moe_v1<BlockGemmPipelineSched
                                  KRepeat,
                                  xdlops_gemm.K1PerXdlops / (APackedSize * KThreadChunk)>>{}(
                 [&](auto mkc) {
-                    constexpr auto m0     = Number<mkc[Number<0>{}]>{};
-                    constexpr auto k      = Number<mkc[Number<1>{}]>{};
-                    constexpr auto chunk  = Number<mkc[Number<2>{}]>{};
+                    constexpr auto m0    = Number<mkc[Number<0>{}]>{};
+                    constexpr auto k     = Number<mkc[Number<1>{}]>{};
+                    constexpr auto chunk = Number<mkc[Number<2>{}]>{};
                     constexpr auto k_step =
                         k * xdlops_gemm.KPerXdlops * KPack / xdlops_gemm.K1PerXdlops;
                     constexpr auto a_k_step_chunk =
@@ -735,7 +735,7 @@ struct BlockwiseGemmXdlops_pipeline_bpreshuffle_mx_moe_v1<BlockGemmPipelineSched
                     a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                         a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                             make_tuple(im_major, I0, im_minor, k0, ik))>{}];
-                        });
+                });
                 static_for<0, BKPack, 1>{}([&](auto ik) {
                     b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                         b_thread_bufs[I1][Number<b_thread_desc_.CalculateOffset(
@@ -805,7 +805,7 @@ struct BlockwiseGemmXdlops_pipeline_bpreshuffle_mx_moe_v1<BlockGemmPipelineSched
                     a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                         a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                             make_tuple(im_major, I0, im_minor, k0, ik))>{}];
-                        });
+                });
                 static_for<0, BKPack, 1>{}([&](auto ik) {
                     b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                         b_thread_bufs[I0][Number<b_thread_desc_.CalculateOffset(

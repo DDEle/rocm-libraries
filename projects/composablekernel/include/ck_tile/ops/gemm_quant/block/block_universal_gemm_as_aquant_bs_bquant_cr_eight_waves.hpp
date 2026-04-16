@@ -210,9 +210,9 @@ struct ABQuantBlockUniversalGemmAsBsCrAsync : public BlockGemmQuantBase
             make_static_tile_distribution(MakeCBlockDistributionEncode()));
     }
 
-    using ALdsTile = decltype(make_static_distributed_tensor<AComputeDataType>(
+    using ALdsTile  = decltype(make_static_distributed_tensor<AComputeDataType>(
         make_static_tile_distribution(MakeABlockDistributionEncode())));
-    using BLdsTile = statically_indexed_array<
+    using BLdsTiles = statically_indexed_array<
         statically_indexed_array<decltype(make_static_distributed_tensor<BComputeDataType>(
                                      make_static_tile_distribution(
                                          MakeBBlockDistributionEncode()))),

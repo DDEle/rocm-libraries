@@ -1055,19 +1055,19 @@ struct GridwiseGemm_wmma_cshuffle_v3
 
         // ======== Grid pointers ======== //
 
-            AsGridPointer p_as_grid_;
-            static_for<0, NumATensor, 1>{}([&](auto i) {
-                using ADataType_ = remove_cvref_t<tuple_element_t<i.value, AsDataType>>;
-                p_as_grid_(i) =
-                    static_cast<const ADataType_*>(karg.p_as_grid[i]) + a_batch_offset + a_n_offset;
-            });
+        AsGridPointer p_as_grid_;
+        static_for<0, NumATensor, 1>{}([&](auto i) {
+            using ADataType_ = remove_cvref_t<tuple_element_t<i.value, AsDataType>>;
+            p_as_grid_(i) =
+                static_cast<const ADataType_*>(karg.p_as_grid[i]) + a_batch_offset + a_n_offset;
+        });
 
-            BsGridPointer p_bs_grid_;
-            static_for<0, NumBTensor, 1>{}([&](auto i) {
-                using BDataType_ = remove_cvref_t<tuple_element_t<i.value, BsDataType>>;
-                p_bs_grid_(i) =
-                    static_cast<const BDataType_*>(karg.p_bs_grid[i]) + b_batch_offset + b_n_offset;
-            });
+        BsGridPointer p_bs_grid_;
+        static_for<0, NumBTensor, 1>{}([&](auto i) {
+            using BDataType_ = remove_cvref_t<tuple_element_t<i.value, BsDataType>>;
+            p_bs_grid_(i) =
+                static_cast<const BDataType_*>(karg.p_bs_grid[i]) + b_batch_offset + b_n_offset;
+        });
 
         DsGridPointer p_ds_grid_grp;
         static_for<0, NumDTensor, 1>{}([&](auto i) {
@@ -1106,17 +1106,17 @@ struct GridwiseGemm_wmma_cshuffle_v3
             },
             Number<NumATensor>{});
 
-            const auto bs_grid_desc_bk0_n_bk1 = generate_tuple(
-                [&](auto i) {
-                    ignore = i;
-                    return b_grid_desc_bk0_n_bk1;
-                },
-                Number<NumBTensor>{});
+        const auto bs_grid_desc_bk0_n_bk1 = generate_tuple(
+            [&](auto i) {
+                ignore = i;
+                return b_grid_desc_bk0_n_bk1;
+            },
+            Number<NumBTensor>{});
 
         // ======== Tiling ======== //
 
-            const auto block_work_idx =
-                block_2_ctile_map.CalculateBottomIndex(make_multi_index(get_block_1d_id()));
+        const auto block_work_idx =
+            block_2_ctile_map.CalculateBottomIndex(make_multi_index(get_block_1d_id()));
 
         if(!block_2_ctile_map.ValidCTileIndex(
                block_work_idx,
@@ -1128,8 +1128,8 @@ struct GridwiseGemm_wmma_cshuffle_v3
 
         // ======== Remaining Run() arguments ======== //
 
-            const index_t block_m_id = __builtin_amdgcn_readfirstlane(block_work_idx[I0]);
-            const index_t block_n_id = __builtin_amdgcn_readfirstlane(block_work_idx[I1]);
+        const index_t block_m_id = __builtin_amdgcn_readfirstlane(block_work_idx[I0]);
+        const index_t block_n_id = __builtin_amdgcn_readfirstlane(block_work_idx[I1]);
 
         // Scale structs (Empty)
         using Scale         = typename BlockwiseGemmPipe::Empty;

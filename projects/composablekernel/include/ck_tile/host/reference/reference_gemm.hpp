@@ -499,7 +499,7 @@ reference_gemm(const HostTensor<if_select_t<ADataType_, tf32_t, float, ADataType
                 const float unpacked    = (k % 2 == 1) ? fp32_val.hi : fp32_val.lo;
                 v_a = ck_tile::type_convert<AccDataType>(a_element_op(unpacked));
             }
-            else if constexpr(std::is_same_v<ADataType, pk_fp4_t>)
+            else if constexpr(std::is_same_v<ADataTypeBuf, pk_fp4_t>)
             {
                 const pk_fp4_t pk_val   = a_element_op(a_m_k(m, k));
                 const fp32x2_t fp32_val = pk_fp4_to_fp32x2(pk_val, 1.f);
@@ -528,7 +528,7 @@ reference_gemm(const HostTensor<if_select_t<ADataType_, tf32_t, float, ADataType
                 const float unpacked    = (k % 2 == 1) ? fp32_val.hi : fp32_val.lo;
                 v_b = ck_tile::type_convert<AccDataType>(b_element_op(unpacked));
             }
-            else if constexpr(std::is_same_v<BDataType, pk_fp4_t>)
+            else if constexpr(std::is_same_v<BDataTypeBuf, pk_fp4_t>)
             {
                 const pk_fp4_t pk_val   = b_element_op(b_k_n(k, n));
                 const fp32x2_t fp32_val = pk_fp4_to_fp32x2(pk_val, 1.f);

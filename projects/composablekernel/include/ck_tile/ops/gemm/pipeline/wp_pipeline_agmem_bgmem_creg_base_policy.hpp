@@ -271,8 +271,8 @@ struct UniversalWeightPreshufflePipelineAgBgCrPolicy
             mixed_prec_compute_type_from_input_t<ADataType, BDataType, AComputeDataType>;
         using BTypeToUse =
             mixed_prec_compute_type_from_input_t<BDataType, ADataType, BComputeDataType>;
-#if defined(__gfx125__)
-        constexpr auto NumAccess = WGAttrNumAccessEnum::Single;
+#if defined(__gfx11__) || defined(__gfx12__)
+        constexpr auto NumAccess = WGAttrNumAccessEnum::Default;
 #else
         constexpr index_t WaveSize = get_warp_size();
         constexpr index_t KLane    = WarpTile::at(I2) * WarpTile::at(I0) / WaveSize;

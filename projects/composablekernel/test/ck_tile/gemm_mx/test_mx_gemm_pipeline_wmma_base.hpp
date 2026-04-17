@@ -15,13 +15,6 @@ class TestCkTileMxGemmPipelineWmmaBase : public TestCkTileMxGemmPipeline<Tuple, 
     {
         using Base = TestCkTileMxGemmPipeline<Tuple, Derived>;
 
-        // currently MX Gemm does not support transpose load
-        if constexpr(std::is_same_v<typename Base::ALayout, Col> ||
-                     std::is_same_v<typename Base::BLayout, Row>)
-        {
-            return false;
-        }
-
         if constexpr(!is_valid_mx_scale_combination<typename Base::ADataType,
                                                     typename Base::AScaleDataType,
                                                     typename Base::BDataType,

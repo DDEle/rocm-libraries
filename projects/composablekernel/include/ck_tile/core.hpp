@@ -68,6 +68,7 @@
 #include "ck_tile/core/numeric/integer.hpp"
 #include "ck_tile/core/numeric/integral_constant.hpp"
 #include "ck_tile/core/numeric/math.hpp"
+#include "ck_tile/core/numeric/math_v2.hpp"
 #include "ck_tile/core/numeric/mxfp_convert.hpp"
 #include "ck_tile/core/numeric/mxfp_scale.hpp"
 #include "ck_tile/core/numeric/null_type.hpp"

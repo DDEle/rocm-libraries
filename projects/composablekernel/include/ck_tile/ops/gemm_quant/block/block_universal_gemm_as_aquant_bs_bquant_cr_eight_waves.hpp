@@ -123,7 +123,8 @@ struct ABQuantBlockUniversalGemmAsBsCrAsync : public BlockGemmQuantBase
 
         static constexpr index_t InterWaveSchedulingMacClusters = 1;
 
-        static constexpr index_t KPack      = WarpGemm::kKPerThread;
+        static constexpr index_t KPackA     = WarpGemm::kKPerThread;
+        static constexpr index_t KPackB     = WarpGemm::kKPerThread;
         static constexpr index_t KPerThread = KIterPerWarp * WarpGemm::kKPerThread;
         static constexpr bool TransposeC    = Problem::TransposeC;
     };
@@ -210,9 +211,9 @@ struct ABQuantBlockUniversalGemmAsBsCrAsync : public BlockGemmQuantBase
             make_static_tile_distribution(MakeCBlockDistributionEncode()));
     }
 
-    using ALdsTile = decltype(make_static_distributed_tensor<AComputeDataType>(
+    using ALdsTile  = decltype(make_static_distributed_tensor<AComputeDataType>(
         make_static_tile_distribution(MakeABlockDistributionEncode())));
-    using BLdsTile = statically_indexed_array<
+    using BLdsTiles = statically_indexed_array<
         statically_indexed_array<decltype(make_static_distributed_tensor<BComputeDataType>(
                                      make_static_tile_distribution(
                                          MakeBBlockDistributionEncode()))),

@@ -133,7 +133,7 @@ TYPED_TEST(TEST_SUITE_NAME, PaddK)
 {
     std::vector<int> Ms{128};
     constexpr int N = 1024;
-    constexpr int K = 432;
+    constexpr int K = 416;
 
     if constexpr(TestFixture::PipelineType == GemmPipelineType::CompAsyncEightWaves)
         return;

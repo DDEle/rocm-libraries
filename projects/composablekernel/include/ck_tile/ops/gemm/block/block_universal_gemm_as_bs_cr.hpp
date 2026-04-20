@@ -83,7 +83,8 @@ struct BlockUniversalGemmAsBsCr
         static constexpr index_t InterWaveSchedulingMacClusters = 1;
 
         // should be at least equal to: WarpGemm::Impl::kABKPerLane
-        static constexpr index_t KPack      = WarpGemm::kKPack;
+        static constexpr index_t KPackA     = WarpGemm::kAKPack;
+        static constexpr index_t KPackB     = WarpGemm::kBKPack;
         static constexpr index_t KPerThread = KIterPerWarp * WarpGemm::kKPerThread;
     };
 
@@ -96,8 +97,8 @@ struct BlockUniversalGemmAsBsCr
     using BComputeDataType = remove_cvref_t<typename Traits::BComputeDataType>;
     using CDataType        = remove_cvref_t<typename Traits::CDataType>;
 
-    using ATypeToUse = AComputeDataType;
-    using BTypeToUse = BComputeDataType;
+    using ATypeToUse = if_select_t<AComputeDataType, tf32_t, float_t, AComputeDataType>;
+    using BTypeToUse = if_select_t<BComputeDataType, tf32_t, float_t, BComputeDataType>;
 
     using WarpGemm = remove_cvref_t<typename Traits::WarpGemm>;
 

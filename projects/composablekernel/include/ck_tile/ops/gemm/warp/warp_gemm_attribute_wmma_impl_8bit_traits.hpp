@@ -555,6 +555,90 @@ struct WmmaTraits<gfx125_t, pk_fp4_t, pk_fp4_t, float, 32, 16, 128>
     }
 };
 
+template <>
+struct WmmaTraits<gfx125_t, pk_fp4_t, pk_fp4_t, float, 32, 32, 128>
+    : WmmaTraitsBase<gfx12_t, pk_fp4_t, pk_fp4_t, float, 128, false, 32, 32>
+{
+    using ArchType = gfx125_t;
+
+    template <typename... Params>
+    CK_TILE_DEVICE static CVecType wmma_intrinsic(const AVecType& a_vec,
+                                                  const int32_t& a_scale,
+                                                  const BVecType& b_vec,
+                                                  const int32_t& b_scale,
+                                                  const CVecType& c_vec)
+    {
+#ifdef __gfx125__
+        using ASliceType = ext_vector_t<pk_fp4_t, sizeof(AVecType) / sizeof(pk_fp4_t)>;
+        using BSliceType = ext_vector_t<pk_fp4_t, sizeof(BVecType) / sizeof(pk_fp4_t) / kCNBlock>;
+        using CSliceType = fp32x16_t;
+
+        using a_buf = thread_buffer<ASliceType, 1>;
+        using b_buf = thread_buffer<BSliceType, kCNBlock>;
+        using c_buf = thread_buffer<CSliceType, kCNBlock>;
+
+        static_assert(sizeof(CVecType) == sizeof(c_buf),
+                      "CVecType and c_buf must have the same size");
+        static_assert(sizeof(AVecType) == sizeof(a_buf),
+                      "AVecType and a_buf must have the same size");
+        static_assert(sizeof(BVecType) == sizeof(b_buf),
+                      "BVecType and b_buf must have the same size");
+
+        auto&& a_buffer = bit_cast<a_buf>(a_vec);
+        auto&& b_buffer = bit_cast<b_buf>(b_vec);
+        auto&& c_result = bit_cast<c_buf>(c_vec);
+
+        const auto& a_slice = a_buffer.template get_as<ASliceType>()[0];
+
+        using P = WarpGemmParamsParser<Params...>;
+
+        static_for<0, kCNBlock, 1>{}([&](auto n) {
+            const auto& b_slice = b_buffer.template get_as<BSliceType>()[n];
+            auto& c_slice       = c_result.template get_as<CSliceType>()[n];
+
+            c_slice = __builtin_amdgcn_wmma_scale_f32_32x16x128_f4(
+                bit_cast<int32x16_t>(a_slice),
+                bit_cast<int32x8_t>(b_slice),
+                0,
+                c_slice,
+                1,          // OPSEL[0] - fixed to 1 for F4
+                P::scale_a, // OPSEL_HI[0] - scale data type for A
+                a_scale,
+                n.value,    // OPSEL[1] - select B scale (iterates over N blocks)
+                P::scale_b, // OPSEL_HI[1] - scale data type for B
+                b_scale,
+                0,  // NEG
+                0); // NEG_HI
+        });
+
+        return bit_cast<CVecType>(c_result);
+#else
+        ck_tile::ignore = a_vec;
+        ck_tile::ignore = a_scale;
+        ck_tile::ignore = b_vec;
+        ck_tile::ignore = b_scale;
+        ck_tile::ignore = c_vec;
+        return CVecType{0};
+#endif
+    }
+
+    template <typename... Params>
+    CK_TILE_DEVICE static CVecType
+    wmma_intrinsic(const AVecType& a_vec, const BVecType& b_vec, const CVecType& c_vec)
+    {
+#ifdef __gfx125__
+        // Pass default scale values 1.0f
+        Packed4Scale_E8M0 pkscale(1.0f, 1.0f, 1.0f, 1.0f);
+        return wmma_intrinsic(a_vec, pkscale, b_vec, pkscale, c_vec);
+#else
+        ck_tile::ignore = a_vec;
+        ck_tile::ignore = b_vec;
+        ck_tile::ignore = c_vec;
+        return CVecType{0};
+#endif
+    }
+};
+
 // f8f6f4 specialization - GFX125
 enum F8F6F4OpDataTypeEnum
 {
@@ -690,7 +774,7 @@ struct WmmaTraits<gfx125_t, AType, BType, float, 32, 32, 128>
 
         static_for<0, kCNBlock, 1>{}([&](auto n) {
             static_for<0, kCMBlock, 1>{}([&](auto m) {
-                constexpr index_t c_idx = m * kCNBlock + n;
+                constexpr index_t c_idx = n * kCMBlock + m;
 
                 const auto& a_slice = a_buffer.template get_as<ASliceType>()[m];
                 const auto& b_slice = b_buffer.template get_as<BSliceType>()[n];
@@ -750,7 +834,7 @@ struct WmmaTraits<gfx125_t, AType, BType, float, 32, 32, 128>
 
         static_for<0, kCNBlock, 1>{}([&](auto n) {
             static_for<0, kCMBlock, 1>{}([&](auto m) {
-                constexpr index_t c_idx = m * kCNBlock + n;
+                constexpr index_t c_idx = n * kCMBlock + m;
 
                 const auto& a_slice = a_buffer.template get_as<ASliceType>()[m];
                 const auto& b_slice = b_buffer.template get_as<BSliceType>()[n];

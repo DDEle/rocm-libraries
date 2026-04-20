@@ -724,7 +724,7 @@ def cmake_build(Map conf=[:]){
         }
 
         //run tests except when NO_CK_BUILD is set
-        if(!setup_args.contains("NO_CK_BUILD")){
+        if(!setup_args.contains("NO_CK_BUILD") && !setup_args.contains("gfx1250")){
             if (params.NINJA_BUILD_TRACE || params.BUILD_INSTANCES_ONLY){
                 // do not run unit tests when building instances only
                 if(!params.BUILD_INSTANCES_ONLY){

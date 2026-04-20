@@ -249,8 +249,8 @@ struct GemmMicroscalePipelineAgBgCrPolicy : public UniversalGemmPipelineAgBgCrPo
         using AComputeDataType = typename Problem::AComputeDataType;
         using BComputeDataType = typename Problem::BComputeDataType;
 #if defined(__gfx125__)
-        constexpr auto wg_attr_num_accessA = WGAttrNumAccessEnum::Single;
-        constexpr auto wg_attr_num_accessB = WGAttrNumAccessEnum::Single;
+        constexpr auto wg_attr_num_accessA = WGAttrNumAccessEnum::Default;
+        constexpr auto wg_attr_num_accessB = WGAttrNumAccessEnum::Default;
 #else
 
         using LDSADataType = ALdsDataType_<Problem>;

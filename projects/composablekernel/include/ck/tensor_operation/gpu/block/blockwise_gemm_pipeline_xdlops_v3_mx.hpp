@@ -626,8 +626,8 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                                     a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                                         a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                                             make_tuple(m0, I0, imxdl, kxdl, ik))>{}];
-                                            });
-                                            static_for<0, BKPack, 1>{}([&](auto ik) {
+                                });
+                                static_for<0, BKPack, 1>{}([&](auto ik) {
                                     b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                                         b_thread_buf[Number<b_thread_desc_.CalculateOffset(
                                             make_tuple(n0, I0, inxdl, kxdl, ik))>{}];
@@ -786,7 +786,6 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                     constexpr index_t b_scale_offset =
                         b_scale_thread_desc.CalculateOffset(make_tuple(n0, k0, I0));
 
-
                     vector_type<AScaleDataType, a_scale_thread_vec_size> a_scale_thread_vec;
                     vector_type<BScaleDataType, b_scale_thread_vec_size> b_scale_thread_vec;
 
@@ -814,8 +813,8 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                             a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                                 a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                                     make_tuple(m0, I0, imxdl, kxdl, ik))>{}];
-                                    });
-                                    static_for<0, BKPack, 1>{}([&](auto ik) {
+                        });
+                        static_for<0, BKPack, 1>{}([&](auto ik) {
                             b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                                 b_thread_buf[Number<b_thread_desc_.CalculateOffset(
                                     make_tuple(n0, I0, inxdl, kxdl, ik))>{}];
@@ -920,7 +919,6 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                     constexpr index_t b_scale_offset =
                         b_scale_thread_desc.CalculateOffset(make_tuple(n0, k0, I0));
 
-
                     vector_type<AScaleDataType, a_scale_thread_vec_size> a_scale_thread_vec;
                     vector_type<BScaleDataType, b_scale_thread_vec_size> b_scale_thread_vec;
 
@@ -948,8 +946,8 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                             a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                                 a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                                     make_tuple(m0, I0, imxdl, kxdl, ik))>{}];
-                                    });
-                                    static_for<0, BKPack, 1>{}([&](auto ik) {
+                        });
+                        static_for<0, BKPack, 1>{}([&](auto ik) {
                             b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                                 b_thread_buf[Number<b_thread_desc_.CalculateOffset(
                                     make_tuple(n0, I0, inxdl, kxdl, ik))>{}];
@@ -997,7 +995,6 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                     constexpr index_t b_scale_offset =
                         b_scale_thread_desc.CalculateOffset(make_tuple(n0, k0, I0));
 
-
                     vector_type<AScaleDataType, a_scale_thread_vec_size> a_scale_thread_vec;
                     vector_type<BScaleDataType, b_scale_thread_vec_size> b_scale_thread_vec;
 
@@ -1025,8 +1022,8 @@ struct BlockwiseGemmXdlops_pipeline_v3_mx<BlockGemmPipelineScheduler::Intrawave,
                             a_thread_vec.template AsType<ComputeTypeA>()(ik) =
                                 a_thread_buf[Number<a_thread_desc_.CalculateOffset(
                                     make_tuple(m0, I0, imxdl, kxdl, ik))>{}];
-                                    });
-                                    static_for<0, BKPack, 1>{}([&](auto ik) {
+                        });
+                        static_for<0, BKPack, 1>{}([&](auto ik) {
                             b_thread_vec.template AsType<ComputeTypeB>()(ik) =
                                 b_thread_buf[Number<b_thread_desc_.CalculateOffset(
                                     make_tuple(n0, I0, inxdl, kxdl, ik))>{}];

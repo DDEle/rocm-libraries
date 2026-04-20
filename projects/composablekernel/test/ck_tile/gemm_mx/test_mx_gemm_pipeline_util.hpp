@@ -383,8 +383,40 @@ class TestCkTileMxGemmPipeline : public ::testing::Test
             {static_cast<std::size_t>(num_scale_k), static_cast<std::size_t>(1)});
 
         // Fill data
-        FillUniformDistributionIntegerValue<ADataType>{-5, 5, 11939}(a_m_k);
-        FillUniformDistributionIntegerValue<BDataType>{-5, 5, 11940}(b_k_n);
+        // For pk_fp4_t each byte packs two 4-bit elements; the generic filler
+        // converts a single float and duplicates it into both nibbles.
+        // Generate two independent random values per byte instead.
+        if constexpr(std::is_same_v<ADataType, pk_fp4_t>)
+        {
+            std::mt19937 gen(11939);
+            std::uniform_real_distribution<float> dis(-5.f, 5.f);
+            for(auto& elem : a_m_k.mData)
+            {
+                auto lo = float_to_mxfp4(std::round(dis(gen)), 1.f);
+                auto hi = float_to_mxfp4(std::round(dis(gen)), 1.f);
+                elem    = pk_fp4_t::_pack(lo, hi);
+            }
+        }
+        else
+        {
+            FillUniformDistributionIntegerValue<ADataType>{-5, 5, 11939}(a_m_k);
+        }
+        if constexpr(std::is_same_v<BDataType, pk_fp4_t>)
+        {
+            std::mt19937 gen(11940);
+            std::uniform_real_distribution<float> dis(-5.f, 5.f);
+            for(auto& elem : b_k_n.mData)
+            {
+                auto lo = float_to_mxfp4(std::round(dis(gen)), 1.f);
+                auto hi = float_to_mxfp4(std::round(dis(gen)), 1.f);
+                elem    = pk_fp4_t::_pack(lo, hi);
+            }
+        }
+        else
+        {
+            FillUniformDistributionIntegerValue<BDataType>{-5, 5, 11940}(b_k_n);
+        }
+
         {
             std::mt19937 gen(std::chrono::steady_clock::now().time_since_epoch().count());
             std::uniform_int_distribution<int> dist(40, 60);

@@ -159,6 +159,7 @@ using KernelTypesCompV3 = ::testing::Types<
 using KernelTypesCompV3Wmma = ::testing::Types<
 #ifdef CK_USE_GFX1250
     std::tuple<    Row,     Col,     Row,       F4,        F4,          F32,       F16,        I128,        I128,         I128,       I32,        I16, Intrawave,        CompV3>,
+    std::tuple<    Row,     Col,     Row,       F4,        F4,          F32,       F16,        I128,        I128,         I128,       I32,        I32, Intrawave,        CompV3>,
     std::tuple<    Row,     Row,     Row,       F32,       F32,         F32,       F32,        I64,         I64,          I8,         I16,        I16, Intrawave,        CompV3>,
     std::tuple<    Row,     Col,     Row,       F32,       F32,         F32,       F32,        I64,         I64,          I8,         I16,        I16, Intrawave,        CompV3>,
     std::tuple<    Col,     Row,     Row,       F32,       F32,         F32,       F32,        I64,         I64,          I8,         I16,        I16, Intrawave,        CompV3>,
@@ -266,7 +267,9 @@ using KernelTypesCompTDMWmma = ::testing::Types<
     std::tuple<    Row,     Col,     Row,       F4,        F4,          F32,       F16,        I64,         I64,          I128,       I16,        I16, Intrawave,        CompTDMV1>,
     std::tuple<    Row,     Col,     Row,       F8,        F4,          F32,       F16,        I64,         I64,          I128,       I16,        I16, Intrawave,        CompTDMV1>,
     std::tuple<    Row,     Col,     Row,       F4,        F4,          F32,       F16,        I64,         I64,          I128,       I32,        I32, Intrawave,        CompTDMV1>,
-    std::tuple<    Row,     Col,     Row,       F8,        F4,          F32,       F16,        I64,         I64,          I128,       I32,        I32, Intrawave,        CompTDMV1>
+    std::tuple<    Row,     Col,     Row,       F8,        F4,          F32,       F16,        I64,         I64,          I128,       I32,        I32, Intrawave,        CompTDMV1>,
+    std::tuple<    Row,     Row,     Row,       F8,        F8,          F32,       F16,        I64,         I64,          I128,       I16,        I16, Intrawave,        CompTDMV1>,
+    std::tuple<    Col,     Row,     Row,       F8,        F8,          F32,       F16,        I64,         I64,          I128,       I16,        I16, Intrawave,        CompTDMV1>
 >;
 
 using KernelTypesCompAsyncWmma = ::testing::Types<
@@ -319,7 +322,6 @@ using CompAsyncEightWavesConfig = std::tuple<ALayout,
                                              I128,      // KBlockTileSize
                                              I16,       // MWarpTileSize
                                              I16,       // NWarpTileSize
-                                             I128,      // KWarpTileSize
                                              Intrawave,
                                              CompAsyncEightWaves>;
 
@@ -385,10 +387,10 @@ using KernelTypesPersistentWmma = ::testing::Types<
 // Tile: 128x128x64, Warp tile: 32x32x16
 using KernelTypesTf32Mem = ::testing::Types<
     //         ALayout, BLayout, CLayout, ADataType, BDataType, AccDataType, CDataType, M_BlockSize, N_BlockSize, K_BlockSize, M_TileSize, N_TileSize, K_TileSize, Scheduler, PipelineType
-    std::tuple<    Row,     Row,     Row,      TF32,      TF32,         F32,       F32,        I128,        I128,         I64,        I32,        I32,        I16, Intrawave,         Mem>,
-    std::tuple<    Row,     Row,     Row,      TF32,      TF32,         F32,       F32,        I128,        I128,         I64,        I32,        I32,        I16, Interwave,         Mem>,
-    std::tuple<    Row,     Col,     Row,      TF32,      TF32,         F32,       F32,        I128,        I128,         I64,        I32,        I32,        I16, Intrawave,         Mem>,
-    std::tuple<    Row,     Col,     Row,      TF32,      TF32,         F32,       F32,        I128,        I128,         I64,        I32,        I32,        I16, Interwave,         Mem>
+    std::tuple<    Row,     Row,     Row,      TF32,      TF32,         F32,       F32,        I128,        I128,         I64,        I32,        I32, Intrawave,         Mem>,
+    std::tuple<    Row,     Row,     Row,      TF32,      TF32,         F32,       F32,        I128,        I128,         I64,        I32,        I32, Interwave,         Mem>,
+    std::tuple<    Row,     Col,     Row,      TF32,      TF32,         F32,       F32,        I128,        I128,         I64,        I32,        I32, Intrawave,         Mem>,
+    std::tuple<    Row,     Col,     Row,      TF32,      TF32,         F32,       F32,        I128,        I128,         I64,        I32,        I32, Interwave,         Mem>
 >;
 
 // clang-format on

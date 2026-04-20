@@ -65,7 +65,8 @@ namespace hiptensor
     struct ActorCriticSelection
     {
         static hiptensorStatus_t
-            selectWinner(ContractionSolution**                                   winner,
+            selectWinner(const hiptensorHandle_t                                 handle,
+                         ContractionSolution**                                   winner,
                          std::unordered_map<size_t, ContractionSolution*> const& candidates,
                          hiptensorDataType_t                                     typeA,
                          std::vector<std::size_t> const&                         a_ms_ks_lengths,
@@ -87,7 +88,8 @@ namespace hiptensor
     };
 
     hiptensorStatus_t
-        actorCriticModel(ContractionSolution**                                   winner,
+        actorCriticModel(const hiptensorHandle_t                                 handle,
+                         ContractionSolution**                                   winner,
                          std::unordered_map<size_t, ContractionSolution*> const& candidates,
                          hiptensorDataType_t                                     typeA,
                          std::vector<std::size_t> const&                         a_ms_ks_lengths,

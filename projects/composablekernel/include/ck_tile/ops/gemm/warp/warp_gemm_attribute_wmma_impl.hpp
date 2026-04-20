@@ -174,6 +174,9 @@ using WarpGemmAttributeWmmaImpl_f32_16x16x128_bf8_f8 =
 using WarpGemmAttributeWmmaImpl_f32_32x16x128_f4 =
     WarpGemmAttributeWmmaImpl<WmmaTraits<gfx125_t, pk_fp4_t, pk_fp4_t, float, 32, 16, 128>>;
 
+using WarpGemmAttributeWmmaImpl_f32_32x32x128_f4 =
+    WarpGemmAttributeWmmaImpl<WmmaTraits<gfx125_t, pk_fp4_t, pk_fp4_t, float, 32, 32, 128>>;
+
 using WarpGemmAttributeWmmaImpl_f16_16x16x64_f8_f8 =
     WarpGemmAttributeWmmaImpl<WmmaTraits<gfx125_t, fp8_t, fp8_t, fp16_t, 16, 16, 64>>;
 

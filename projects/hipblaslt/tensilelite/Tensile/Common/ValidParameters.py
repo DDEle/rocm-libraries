@@ -837,9 +837,9 @@ validParameters = { # we need to make sure this matches develop
     # Only support LdsBlockSizePerPad >= unrollDepth * BPE
     # 0 means disable LdsBlockSizePerPad
     "LdsBlockSizePerPadA": [-1, 0, 64, 128, 256, 512, 1024, 2048],
-    "LdsBlockSizePerPadMXSA": [-1, 0, 64, 128, 256, 512, 1024, 2048],
+    "LdsBlockSizePerPadMXSA": [0],
     "LdsBlockSizePerPadB": [-1, 0, 64, 128, 256, 512, 1024, 2048],
-    "LdsBlockSizePerPadMXSB": [-1, 0, 64, 128, 256, 512, 1024, 2048],
+    "LdsBlockSizePerPadMXSB": [0],
     "LdsBlockSizePerPadMetadata": [-1, 0, 64, 128, 256, 512, 1024, 2048],
     # Transpose LDS format. Local store in coalesced dimension , same as optimized global fetch dimension . applicable only in TLU=0 case for miSIMD(s)
     # -1 : keep LDS layout same as global fetch dimension for both A and B
@@ -959,7 +959,8 @@ validParameters = { # we need to make sure this matches develop
     # 1: Use TDM for A
     # 2: Use TDM for B
     # 3: Use TDM for both A and B
-    "TDMInst": [0, 1, 2, 3]
+    "TDMInst": [0, 1, 2, 3],
+    "TDMSplit": [False, True],
 }
 
 newMIValidParameters = {

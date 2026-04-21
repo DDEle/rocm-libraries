@@ -467,7 +467,8 @@ struct UniversalGemmKernel
             }
         }
 
-        if(kargs.K < GemmPipeline::BlockGemmShape::WarpTile::at(number<2>{}) * kargs.k_batch)
+        if(integer_divide_ceil(kargs.K, GemmPipeline::BlockGemmShape::WarpTile::at(number<2>{})) <
+           kargs.k_batch)
         {
             if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
             {
@@ -509,8 +510,8 @@ struct UniversalGemmKernel
                         {
                             CK_TILE_ERROR("K is not a multiple of vector load size for A tensor!");
                         }
-                        AsTensorIsValid = false;
-                    }
+			AsTensorIsValid = false;
+		    }
                 }
             }
             else
@@ -576,8 +577,8 @@ struct UniversalGemmKernel
                         {
                             CK_TILE_ERROR("N is not a multiple of vector load size for B tensor!");
                         }
-                        BsTensorIsValid = false;
-                    }
+			BsTensorIsValid = false;
+		    }
                 }
             }
             else

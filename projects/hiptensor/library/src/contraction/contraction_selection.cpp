@@ -109,11 +109,11 @@ namespace hiptensor
         std::string          best_op_name;
         ContractionSolution* bestSolution = nullptr;
         PerfMetrics          bestMetrics  = {
-                      0,
-                      "",
-                      0,
-                      0,
-                      0,
+            0,
+            "",
+            0,
+            0,
+            0,
         };
 
         std::vector<float> sol_times(candidates.size(), std::numeric_limits<float>::max());
@@ -179,7 +179,7 @@ namespace hiptensor
                     char msg[256];
                     snprintf(msg,
                              sizeof(msg),
-                             "KernelId: %lu, KernelName: %s, AvgTime: %0.3f ms",
+                             "KernelId: %zu, KernelName: %s, AvgTime: %0.3f ms",
                              solution->uid(),
                              solution->kernelName().c_str(),
                              time);
@@ -4694,11 +4694,11 @@ namespace hiptensor
 
     template <>
     struct ActorCriticSelectionUnaryOps<_Float16,
-                                _Float16,
-                                _Float16,
-                                _Float16,
-                                ContractionOpId_t::SCALE,
-                                _Float16>
+                                        _Float16,
+                                        _Float16,
+                                        _Float16,
+                                        ContractionOpId_t::SCALE,
+                                        _Float16>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -4806,11 +4806,11 @@ namespace hiptensor
 
     template <>
     struct ActorCriticSelectionUnaryOps<_Float16,
-                                _Float16,
-                                _Float16,
-                                _Float16,
-                                ContractionOpId_t::BILINEAR,
-                                _Float16>
+                                        _Float16,
+                                        _Float16,
+                                        _Float16,
+                                        ContractionOpId_t::BILINEAR,
+                                        _Float16>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -4919,11 +4919,11 @@ namespace hiptensor
     // Acotor-Critic model for unary ops
     template <>
     struct ActorCriticSelectionUnaryOps<_Float16,
-                                _Float16,
-                                _Float16,
-                                _Float16,
-                                ContractionOpId_t::SCALE,
-                                float>
+                                        _Float16,
+                                        _Float16,
+                                        _Float16,
+                                        ContractionOpId_t::SCALE,
+                                        float>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -5031,11 +5031,11 @@ namespace hiptensor
 
     template <>
     struct ActorCriticSelectionUnaryOps<_Float16,
-                                _Float16,
-                                _Float16,
-                                _Float16,
-                                ContractionOpId_t::BILINEAR,
-                                float>
+                                        _Float16,
+                                        _Float16,
+                                        _Float16,
+                                        ContractionOpId_t::BILINEAR,
+                                        float>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -5143,11 +5143,11 @@ namespace hiptensor
 
     template <>
     struct ActorCriticSelectionUnaryOps<hip_bfloat16,
-                                hip_bfloat16,
-                                hip_bfloat16,
-                                hip_bfloat16,
-                                ContractionOpId_t::SCALE,
-                                hip_bfloat16>
+                                        hip_bfloat16,
+                                        hip_bfloat16,
+                                        hip_bfloat16,
+                                        ContractionOpId_t::SCALE,
+                                        hip_bfloat16>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -5255,11 +5255,11 @@ namespace hiptensor
 
     template <>
     struct ActorCriticSelectionUnaryOps<hip_bfloat16,
-                                hip_bfloat16,
-                                hip_bfloat16,
-                                hip_bfloat16,
-                                ContractionOpId_t::BILINEAR,
-                                hip_bfloat16>
+                                        hip_bfloat16,
+                                        hip_bfloat16,
+                                        hip_bfloat16,
+                                        ContractionOpId_t::BILINEAR,
+                                        hip_bfloat16>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -5367,11 +5367,11 @@ namespace hiptensor
 
     template <>
     struct ActorCriticSelectionUnaryOps<hip_bfloat16,
-                                hip_bfloat16,
-                                hip_bfloat16,
-                                hip_bfloat16,
-                                ContractionOpId_t::SCALE,
-                                float>
+                                        hip_bfloat16,
+                                        hip_bfloat16,
+                                        hip_bfloat16,
+                                        ContractionOpId_t::SCALE,
+                                        float>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -5479,11 +5479,11 @@ namespace hiptensor
 
     template <>
     struct ActorCriticSelectionUnaryOps<hip_bfloat16,
-                                hip_bfloat16,
-                                hip_bfloat16,
-                                hip_bfloat16,
-                                ContractionOpId_t::BILINEAR,
-                                float>
+                                        hip_bfloat16,
+                                        hip_bfloat16,
+                                        hip_bfloat16,
+                                        ContractionOpId_t::BILINEAR,
+                                        float>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -5590,7 +5590,12 @@ namespace hiptensor
     };
 
     template <>
-    struct ActorCriticSelectionUnaryOps<float, float, float, float, ContractionOpId_t::SCALE, _Float16>
+    struct ActorCriticSelectionUnaryOps<float,
+                                        float,
+                                        float,
+                                        float,
+                                        ContractionOpId_t::SCALE,
+                                        _Float16>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -5697,7 +5702,12 @@ namespace hiptensor
     };
 
     template <>
-    struct ActorCriticSelectionUnaryOps<float, float, float, float, ContractionOpId_t::BILINEAR, _Float16>
+    struct ActorCriticSelectionUnaryOps<float,
+                                        float,
+                                        float,
+                                        float,
+                                        ContractionOpId_t::BILINEAR,
+                                        _Float16>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -5804,7 +5814,12 @@ namespace hiptensor
     };
 
     template <>
-    struct ActorCriticSelectionUnaryOps<float, float, float, float, ContractionOpId_t::SCALE, hip_bfloat16>
+    struct ActorCriticSelectionUnaryOps<float,
+                                        float,
+                                        float,
+                                        float,
+                                        ContractionOpId_t::SCALE,
+                                        hip_bfloat16>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -5912,11 +5927,11 @@ namespace hiptensor
 
     template <>
     struct ActorCriticSelectionUnaryOps<float,
-                                float,
-                                float,
-                                float,
-                                ContractionOpId_t::BILINEAR,
-                                hip_bfloat16>
+                                        float,
+                                        float,
+                                        float,
+                                        ContractionOpId_t::BILINEAR,
+                                        hip_bfloat16>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -6130,7 +6145,12 @@ namespace hiptensor
     };
 
     template <>
-    struct ActorCriticSelectionUnaryOps<float, float, float, float, ContractionOpId_t::BILINEAR, float>
+    struct ActorCriticSelectionUnaryOps<float,
+                                        float,
+                                        float,
+                                        float,
+                                        ContractionOpId_t::BILINEAR,
+                                        float>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -6237,7 +6257,12 @@ namespace hiptensor
     };
 
     template <>
-    struct ActorCriticSelectionUnaryOps<double, double, double, double, ContractionOpId_t::SCALE, float>
+    struct ActorCriticSelectionUnaryOps<double,
+                                        double,
+                                        double,
+                                        double,
+                                        ContractionOpId_t::SCALE,
+                                        float>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -6344,7 +6369,12 @@ namespace hiptensor
     };
 
     template <>
-    struct ActorCriticSelectionUnaryOps<double, double, double, double, ContractionOpId_t::BILINEAR, float>
+    struct ActorCriticSelectionUnaryOps<double,
+                                        double,
+                                        double,
+                                        double,
+                                        ContractionOpId_t::BILINEAR,
+                                        float>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -6451,7 +6481,12 @@ namespace hiptensor
     };
 
     template <>
-    struct ActorCriticSelectionUnaryOps<double, double, double, double, ContractionOpId_t::SCALE, double>
+    struct ActorCriticSelectionUnaryOps<double,
+                                        double,
+                                        double,
+                                        double,
+                                        ContractionOpId_t::SCALE,
+                                        double>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -6558,7 +6593,12 @@ namespace hiptensor
     };
 
     template <>
-    struct ActorCriticSelectionUnaryOps<double, double, double, double, ContractionOpId_t::BILINEAR, double>
+    struct ActorCriticSelectionUnaryOps<double,
+                                        double,
+                                        double,
+                                        double,
+                                        ContractionOpId_t::BILINEAR,
+                                        double>
     {
         static hiptensorStatus_t
             selectWinner(ContractionSolution**                                   winner,
@@ -6664,420 +6704,419 @@ namespace hiptensor
         }
     };
 
-
     hiptensorStatus_t
-        actorCriticModelUnaryOps(ContractionSolution**                           winner,
-                         std::unordered_map<size_t, ContractionSolution*> const& candidates,
-                         hiptensorDataType_t                                     typeA,
-                         std::vector<std::size_t> const&                         a_ms_ks_lengths,
-                         std::vector<std::size_t> const&                         a_ms_ks_strides,
-                         std::vector<int32_t> const&                             a_ms_ks_modes,
-                         hiptensorDataType_t                                     typeB,
-                         std::vector<std::size_t> const&                         b_ns_ks_lengths,
-                         std::vector<std::size_t> const&                         b_ns_ks_strides,
-                         std::vector<int32_t> const&                             b_ns_ks_modes,
-                         hiptensorDataType_t                                     typeD,
-                         std::vector<std::size_t> const&                         d_ms_ns_lengths,
-                         std::vector<std::size_t> const&                         d_ms_ns_strides,
-                         std::vector<int32_t> const&                             d_ms_ns_modes,
-                         hiptensorDataType_t                                     typeE,
-                         std::vector<std::size_t> const&                         e_ms_ns_lengths,
-                         std::vector<std::size_t> const&                         e_ms_ns_strides,
-                         std::vector<int32_t> const&                             e_ms_ns_modes,
-                         hiptensorComputeDescriptor_t                            computeType,
-                         const uint64_t                                          workspaceSize)
+        actorCriticModelUnaryOps(ContractionSolution**                                   winner,
+                                 std::unordered_map<size_t, ContractionSolution*> const& candidates,
+                                 hiptensorDataType_t                                     typeA,
+                                 std::vector<std::size_t> const& a_ms_ks_lengths,
+                                 std::vector<std::size_t> const& a_ms_ks_strides,
+                                 std::vector<int32_t> const&     a_ms_ks_modes,
+                                 hiptensorDataType_t             typeB,
+                                 std::vector<std::size_t> const& b_ns_ks_lengths,
+                                 std::vector<std::size_t> const& b_ns_ks_strides,
+                                 std::vector<int32_t> const&     b_ns_ks_modes,
+                                 hiptensorDataType_t             typeD,
+                                 std::vector<std::size_t> const& d_ms_ns_lengths,
+                                 std::vector<std::size_t> const& d_ms_ns_strides,
+                                 std::vector<int32_t> const&     d_ms_ns_modes,
+                                 hiptensorDataType_t             typeE,
+                                 std::vector<std::size_t> const& e_ms_ns_lengths,
+                                 std::vector<std::size_t> const& e_ms_ns_strides,
+                                 std::vector<int32_t> const&     e_ms_ns_modes,
+                                 hiptensorComputeDescriptor_t    computeType,
+                                 const uint64_t                  workspaceSize)
     {
         if(typeA == HIPTENSOR_R_16F && typeB == HIPTENSOR_R_16F && typeD == NONE_TYPE
            && typeE == HIPTENSOR_R_16F && computeType == HIPTENSOR_COMPUTE_DESC_32F)
         {
             return ActorCriticSelectionUnaryOps<_Float16,
-                                        _Float16,
-                                        _Float16,
-                                        _Float16,
-                                        ContractionOpId_t::SCALE,
-                                        float>::selectWinner(winner,
-                                                             candidates,
-                                                             typeA,
-                                                             a_ms_ks_lengths,
-                                                             a_ms_ks_strides,
-                                                             a_ms_ks_modes,
-                                                             typeB,
-                                                             b_ns_ks_lengths,
-                                                             b_ns_ks_strides,
-                                                             b_ns_ks_modes,
-                                                             typeD,
-                                                             d_ms_ns_lengths,
-                                                             d_ms_ns_strides,
-                                                             d_ms_ns_modes,
-                                                             typeE,
-                                                             e_ms_ns_lengths,
-                                                             e_ms_ns_strides,
-                                                             e_ms_ns_modes,
-                                                             workspaceSize);
+                                                _Float16,
+                                                _Float16,
+                                                _Float16,
+                                                ContractionOpId_t::SCALE,
+                                                float>::selectWinner(winner,
+                                                                     candidates,
+                                                                     typeA,
+                                                                     a_ms_ks_lengths,
+                                                                     a_ms_ks_strides,
+                                                                     a_ms_ks_modes,
+                                                                     typeB,
+                                                                     b_ns_ks_lengths,
+                                                                     b_ns_ks_strides,
+                                                                     b_ns_ks_modes,
+                                                                     typeD,
+                                                                     d_ms_ns_lengths,
+                                                                     d_ms_ns_strides,
+                                                                     d_ms_ns_modes,
+                                                                     typeE,
+                                                                     e_ms_ns_lengths,
+                                                                     e_ms_ns_strides,
+                                                                     e_ms_ns_modes,
+                                                                     workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_16F && typeB == HIPTENSOR_R_16F && typeD == HIPTENSOR_R_16F
                 && typeE == HIPTENSOR_R_16F && computeType == HIPTENSOR_COMPUTE_DESC_32F)
         {
             return ActorCriticSelectionUnaryOps<_Float16,
-                                        _Float16,
-                                        _Float16,
-                                        _Float16,
-                                        ContractionOpId_t::BILINEAR,
-                                        float>::selectWinner(winner,
-                                                             candidates,
-                                                             typeA,
-                                                             a_ms_ks_lengths,
-                                                             a_ms_ks_strides,
-                                                             a_ms_ks_modes,
-                                                             typeB,
-                                                             b_ns_ks_lengths,
-                                                             b_ns_ks_strides,
-                                                             b_ns_ks_modes,
-                                                             typeD,
-                                                             d_ms_ns_lengths,
-                                                             d_ms_ns_strides,
-                                                             d_ms_ns_modes,
-                                                             typeE,
-                                                             e_ms_ns_lengths,
-                                                             e_ms_ns_strides,
-                                                             e_ms_ns_modes,
-                                                             workspaceSize);
+                                                _Float16,
+                                                _Float16,
+                                                _Float16,
+                                                ContractionOpId_t::BILINEAR,
+                                                float>::selectWinner(winner,
+                                                                     candidates,
+                                                                     typeA,
+                                                                     a_ms_ks_lengths,
+                                                                     a_ms_ks_strides,
+                                                                     a_ms_ks_modes,
+                                                                     typeB,
+                                                                     b_ns_ks_lengths,
+                                                                     b_ns_ks_strides,
+                                                                     b_ns_ks_modes,
+                                                                     typeD,
+                                                                     d_ms_ns_lengths,
+                                                                     d_ms_ns_strides,
+                                                                     d_ms_ns_modes,
+                                                                     typeE,
+                                                                     e_ms_ns_lengths,
+                                                                     e_ms_ns_strides,
+                                                                     e_ms_ns_modes,
+                                                                     workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_16BF && typeB == HIPTENSOR_R_16BF && typeD == NONE_TYPE
                 && typeE == HIPTENSOR_R_16BF && computeType == HIPTENSOR_COMPUTE_DESC_32F)
         {
             return ActorCriticSelectionUnaryOps<hip_bfloat16,
-                                        hip_bfloat16,
-                                        hip_bfloat16,
-                                        hip_bfloat16,
-                                        ContractionOpId_t::SCALE,
-                                        float>::selectWinner(winner,
-                                                             candidates,
-                                                             typeA,
-                                                             a_ms_ks_lengths,
-                                                             a_ms_ks_strides,
-                                                             a_ms_ks_modes,
-                                                             typeB,
-                                                             b_ns_ks_lengths,
-                                                             b_ns_ks_strides,
-                                                             b_ns_ks_modes,
-                                                             typeD,
-                                                             d_ms_ns_lengths,
-                                                             d_ms_ns_strides,
-                                                             d_ms_ns_modes,
-                                                             typeE,
-                                                             e_ms_ns_lengths,
-                                                             e_ms_ns_strides,
-                                                             e_ms_ns_modes,
-                                                             workspaceSize);
+                                                hip_bfloat16,
+                                                hip_bfloat16,
+                                                hip_bfloat16,
+                                                ContractionOpId_t::SCALE,
+                                                float>::selectWinner(winner,
+                                                                     candidates,
+                                                                     typeA,
+                                                                     a_ms_ks_lengths,
+                                                                     a_ms_ks_strides,
+                                                                     a_ms_ks_modes,
+                                                                     typeB,
+                                                                     b_ns_ks_lengths,
+                                                                     b_ns_ks_strides,
+                                                                     b_ns_ks_modes,
+                                                                     typeD,
+                                                                     d_ms_ns_lengths,
+                                                                     d_ms_ns_strides,
+                                                                     d_ms_ns_modes,
+                                                                     typeE,
+                                                                     e_ms_ns_lengths,
+                                                                     e_ms_ns_strides,
+                                                                     e_ms_ns_modes,
+                                                                     workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_16BF && typeB == HIPTENSOR_R_16BF && typeD == HIPTENSOR_R_16BF
                 && typeE == HIPTENSOR_R_16BF && computeType == HIPTENSOR_COMPUTE_DESC_32F)
         {
             return ActorCriticSelectionUnaryOps<hip_bfloat16,
-                                        hip_bfloat16,
-                                        hip_bfloat16,
-                                        hip_bfloat16,
-                                        ContractionOpId_t::BILINEAR,
-                                        float>::selectWinner(winner,
-                                                             candidates,
-                                                             typeA,
-                                                             a_ms_ks_lengths,
-                                                             a_ms_ks_strides,
-                                                             a_ms_ks_modes,
-                                                             typeB,
-                                                             b_ns_ks_lengths,
-                                                             b_ns_ks_strides,
-                                                             b_ns_ks_modes,
-                                                             typeD,
-                                                             d_ms_ns_lengths,
-                                                             d_ms_ns_strides,
-                                                             d_ms_ns_modes,
-                                                             typeE,
-                                                             e_ms_ns_lengths,
-                                                             e_ms_ns_strides,
-                                                             e_ms_ns_modes,
-                                                             workspaceSize);
+                                                hip_bfloat16,
+                                                hip_bfloat16,
+                                                hip_bfloat16,
+                                                ContractionOpId_t::BILINEAR,
+                                                float>::selectWinner(winner,
+                                                                     candidates,
+                                                                     typeA,
+                                                                     a_ms_ks_lengths,
+                                                                     a_ms_ks_strides,
+                                                                     a_ms_ks_modes,
+                                                                     typeB,
+                                                                     b_ns_ks_lengths,
+                                                                     b_ns_ks_strides,
+                                                                     b_ns_ks_modes,
+                                                                     typeD,
+                                                                     d_ms_ns_lengths,
+                                                                     d_ms_ns_strides,
+                                                                     d_ms_ns_modes,
+                                                                     typeE,
+                                                                     e_ms_ns_lengths,
+                                                                     e_ms_ns_strides,
+                                                                     e_ms_ns_modes,
+                                                                     workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_32F && typeB == HIPTENSOR_R_32F && typeD == NONE_TYPE
                 && typeE == HIPTENSOR_R_32F && computeType == HIPTENSOR_COMPUTE_DESC_16F)
         {
             return ActorCriticSelectionUnaryOps<float,
-                                        float,
-                                        float,
-                                        float,
-                                        ContractionOpId_t::SCALE,
-                                        _Float16>::selectWinner(winner,
-                                                                candidates,
-                                                                typeA,
-                                                                a_ms_ks_lengths,
-                                                                a_ms_ks_strides,
-                                                                a_ms_ks_modes,
-                                                                typeB,
-                                                                b_ns_ks_lengths,
-                                                                b_ns_ks_strides,
-                                                                b_ns_ks_modes,
-                                                                typeD,
-                                                                d_ms_ns_lengths,
-                                                                d_ms_ns_strides,
-                                                                d_ms_ns_modes,
-                                                                typeE,
-                                                                e_ms_ns_lengths,
-                                                                e_ms_ns_strides,
-                                                                e_ms_ns_modes,
-                                                                workspaceSize);
+                                                float,
+                                                float,
+                                                float,
+                                                ContractionOpId_t::SCALE,
+                                                _Float16>::selectWinner(winner,
+                                                                        candidates,
+                                                                        typeA,
+                                                                        a_ms_ks_lengths,
+                                                                        a_ms_ks_strides,
+                                                                        a_ms_ks_modes,
+                                                                        typeB,
+                                                                        b_ns_ks_lengths,
+                                                                        b_ns_ks_strides,
+                                                                        b_ns_ks_modes,
+                                                                        typeD,
+                                                                        d_ms_ns_lengths,
+                                                                        d_ms_ns_strides,
+                                                                        d_ms_ns_modes,
+                                                                        typeE,
+                                                                        e_ms_ns_lengths,
+                                                                        e_ms_ns_strides,
+                                                                        e_ms_ns_modes,
+                                                                        workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_32F && typeB == HIPTENSOR_R_32F && typeD == HIPTENSOR_R_32F
                 && typeE == HIPTENSOR_R_32F && computeType == HIPTENSOR_COMPUTE_DESC_16F)
         {
             return ActorCriticSelectionUnaryOps<float,
-                                        float,
-                                        float,
-                                        float,
-                                        ContractionOpId_t::BILINEAR,
-                                        _Float16>::selectWinner(winner,
-                                                                candidates,
-                                                                typeA,
-                                                                a_ms_ks_lengths,
-                                                                a_ms_ks_strides,
-                                                                a_ms_ks_modes,
-                                                                typeB,
-                                                                b_ns_ks_lengths,
-                                                                b_ns_ks_strides,
-                                                                b_ns_ks_modes,
-                                                                typeD,
-                                                                d_ms_ns_lengths,
-                                                                d_ms_ns_strides,
-                                                                d_ms_ns_modes,
-                                                                typeE,
-                                                                e_ms_ns_lengths,
-                                                                e_ms_ns_strides,
-                                                                e_ms_ns_modes,
-                                                                workspaceSize);
+                                                float,
+                                                float,
+                                                float,
+                                                ContractionOpId_t::BILINEAR,
+                                                _Float16>::selectWinner(winner,
+                                                                        candidates,
+                                                                        typeA,
+                                                                        a_ms_ks_lengths,
+                                                                        a_ms_ks_strides,
+                                                                        a_ms_ks_modes,
+                                                                        typeB,
+                                                                        b_ns_ks_lengths,
+                                                                        b_ns_ks_strides,
+                                                                        b_ns_ks_modes,
+                                                                        typeD,
+                                                                        d_ms_ns_lengths,
+                                                                        d_ms_ns_strides,
+                                                                        d_ms_ns_modes,
+                                                                        typeE,
+                                                                        e_ms_ns_lengths,
+                                                                        e_ms_ns_strides,
+                                                                        e_ms_ns_modes,
+                                                                        workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_32F && typeB == HIPTENSOR_R_32F && typeD == NONE_TYPE
                 && typeE == HIPTENSOR_R_32F && computeType == HIPTENSOR_R_16BF)
         {
             return ActorCriticSelectionUnaryOps<float,
-                                        float,
-                                        float,
-                                        float,
-                                        ContractionOpId_t::SCALE,
-                                        hip_bfloat16>::selectWinner(winner,
-                                                                    candidates,
-                                                                    typeA,
-                                                                    a_ms_ks_lengths,
-                                                                    a_ms_ks_strides,
-                                                                    a_ms_ks_modes,
-                                                                    typeB,
-                                                                    b_ns_ks_lengths,
-                                                                    b_ns_ks_strides,
-                                                                    b_ns_ks_modes,
-                                                                    typeD,
-                                                                    d_ms_ns_lengths,
-                                                                    d_ms_ns_strides,
-                                                                    d_ms_ns_modes,
-                                                                    typeE,
-                                                                    e_ms_ns_lengths,
-                                                                    e_ms_ns_strides,
-                                                                    e_ms_ns_modes,
-                                                                    workspaceSize);
+                                                float,
+                                                float,
+                                                float,
+                                                ContractionOpId_t::SCALE,
+                                                hip_bfloat16>::selectWinner(winner,
+                                                                            candidates,
+                                                                            typeA,
+                                                                            a_ms_ks_lengths,
+                                                                            a_ms_ks_strides,
+                                                                            a_ms_ks_modes,
+                                                                            typeB,
+                                                                            b_ns_ks_lengths,
+                                                                            b_ns_ks_strides,
+                                                                            b_ns_ks_modes,
+                                                                            typeD,
+                                                                            d_ms_ns_lengths,
+                                                                            d_ms_ns_strides,
+                                                                            d_ms_ns_modes,
+                                                                            typeE,
+                                                                            e_ms_ns_lengths,
+                                                                            e_ms_ns_strides,
+                                                                            e_ms_ns_modes,
+                                                                            workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_32F && typeB == HIPTENSOR_R_32F && typeD == HIPTENSOR_R_32F
                 && typeE == HIPTENSOR_R_32F && computeType == HIPTENSOR_R_16BF)
         {
             return ActorCriticSelectionUnaryOps<float,
-                                        float,
-                                        float,
-                                        float,
-                                        ContractionOpId_t::BILINEAR,
-                                        hip_bfloat16>::selectWinner(winner,
-                                                                    candidates,
-                                                                    typeA,
-                                                                    a_ms_ks_lengths,
-                                                                    a_ms_ks_strides,
-                                                                    a_ms_ks_modes,
-                                                                    typeB,
-                                                                    b_ns_ks_lengths,
-                                                                    b_ns_ks_strides,
-                                                                    b_ns_ks_modes,
-                                                                    typeD,
-                                                                    d_ms_ns_lengths,
-                                                                    d_ms_ns_strides,
-                                                                    d_ms_ns_modes,
-                                                                    typeE,
-                                                                    e_ms_ns_lengths,
-                                                                    e_ms_ns_strides,
-                                                                    e_ms_ns_modes,
-                                                                    workspaceSize);
+                                                float,
+                                                float,
+                                                float,
+                                                ContractionOpId_t::BILINEAR,
+                                                hip_bfloat16>::selectWinner(winner,
+                                                                            candidates,
+                                                                            typeA,
+                                                                            a_ms_ks_lengths,
+                                                                            a_ms_ks_strides,
+                                                                            a_ms_ks_modes,
+                                                                            typeB,
+                                                                            b_ns_ks_lengths,
+                                                                            b_ns_ks_strides,
+                                                                            b_ns_ks_modes,
+                                                                            typeD,
+                                                                            d_ms_ns_lengths,
+                                                                            d_ms_ns_strides,
+                                                                            d_ms_ns_modes,
+                                                                            typeE,
+                                                                            e_ms_ns_lengths,
+                                                                            e_ms_ns_strides,
+                                                                            e_ms_ns_modes,
+                                                                            workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_32F && typeB == HIPTENSOR_R_32F && typeD == NONE_TYPE
                 && typeE == HIPTENSOR_R_32F && computeType == HIPTENSOR_COMPUTE_DESC_32F)
         {
             return ActorCriticSelectionUnaryOps<float,
-                                        float,
-                                        float,
-                                        float,
-                                        ContractionOpId_t::SCALE,
-                                        float>::selectWinner(winner,
-                                                             candidates,
-                                                             typeA,
-                                                             a_ms_ks_lengths,
-                                                             a_ms_ks_strides,
-                                                             a_ms_ks_modes,
-                                                             typeB,
-                                                             b_ns_ks_lengths,
-                                                             b_ns_ks_strides,
-                                                             b_ns_ks_modes,
-                                                             typeD,
-                                                             d_ms_ns_lengths,
-                                                             d_ms_ns_strides,
-                                                             d_ms_ns_modes,
-                                                             typeE,
-                                                             e_ms_ns_lengths,
-                                                             e_ms_ns_strides,
-                                                             e_ms_ns_modes,
-                                                             workspaceSize);
+                                                float,
+                                                float,
+                                                float,
+                                                ContractionOpId_t::SCALE,
+                                                float>::selectWinner(winner,
+                                                                     candidates,
+                                                                     typeA,
+                                                                     a_ms_ks_lengths,
+                                                                     a_ms_ks_strides,
+                                                                     a_ms_ks_modes,
+                                                                     typeB,
+                                                                     b_ns_ks_lengths,
+                                                                     b_ns_ks_strides,
+                                                                     b_ns_ks_modes,
+                                                                     typeD,
+                                                                     d_ms_ns_lengths,
+                                                                     d_ms_ns_strides,
+                                                                     d_ms_ns_modes,
+                                                                     typeE,
+                                                                     e_ms_ns_lengths,
+                                                                     e_ms_ns_strides,
+                                                                     e_ms_ns_modes,
+                                                                     workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_32F && typeB == HIPTENSOR_R_32F && typeD == HIPTENSOR_R_32F
                 && typeE == HIPTENSOR_R_32F && computeType == HIPTENSOR_COMPUTE_DESC_32F)
         {
             return ActorCriticSelectionUnaryOps<float,
-                                        float,
-                                        float,
-                                        float,
-                                        ContractionOpId_t::BILINEAR,
-                                        float>::selectWinner(winner,
-                                                             candidates,
-                                                             typeA,
-                                                             a_ms_ks_lengths,
-                                                             a_ms_ks_strides,
-                                                             a_ms_ks_modes,
-                                                             typeB,
-                                                             b_ns_ks_lengths,
-                                                             b_ns_ks_strides,
-                                                             b_ns_ks_modes,
-                                                             typeD,
-                                                             d_ms_ns_lengths,
-                                                             d_ms_ns_strides,
-                                                             d_ms_ns_modes,
-                                                             typeE,
-                                                             e_ms_ns_lengths,
-                                                             e_ms_ns_strides,
-                                                             e_ms_ns_modes,
-                                                             workspaceSize);
+                                                float,
+                                                float,
+                                                float,
+                                                ContractionOpId_t::BILINEAR,
+                                                float>::selectWinner(winner,
+                                                                     candidates,
+                                                                     typeA,
+                                                                     a_ms_ks_lengths,
+                                                                     a_ms_ks_strides,
+                                                                     a_ms_ks_modes,
+                                                                     typeB,
+                                                                     b_ns_ks_lengths,
+                                                                     b_ns_ks_strides,
+                                                                     b_ns_ks_modes,
+                                                                     typeD,
+                                                                     d_ms_ns_lengths,
+                                                                     d_ms_ns_strides,
+                                                                     d_ms_ns_modes,
+                                                                     typeE,
+                                                                     e_ms_ns_lengths,
+                                                                     e_ms_ns_strides,
+                                                                     e_ms_ns_modes,
+                                                                     workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_64F && typeB == HIPTENSOR_R_64F && typeD == NONE_TYPE
                 && typeE == HIPTENSOR_R_64F && computeType == HIPTENSOR_COMPUTE_DESC_32F)
         {
             return ActorCriticSelectionUnaryOps<double,
-                                        double,
-                                        double,
-                                        double,
-                                        ContractionOpId_t::SCALE,
-                                        float>::selectWinner(winner,
-                                                             candidates,
-                                                             typeA,
-                                                             a_ms_ks_lengths,
-                                                             a_ms_ks_strides,
-                                                             a_ms_ks_modes,
-                                                             typeB,
-                                                             b_ns_ks_lengths,
-                                                             b_ns_ks_strides,
-                                                             b_ns_ks_modes,
-                                                             typeD,
-                                                             d_ms_ns_lengths,
-                                                             d_ms_ns_strides,
-                                                             d_ms_ns_modes,
-                                                             typeE,
-                                                             e_ms_ns_lengths,
-                                                             e_ms_ns_strides,
-                                                             e_ms_ns_modes,
-                                                             workspaceSize);
+                                                double,
+                                                double,
+                                                double,
+                                                ContractionOpId_t::SCALE,
+                                                float>::selectWinner(winner,
+                                                                     candidates,
+                                                                     typeA,
+                                                                     a_ms_ks_lengths,
+                                                                     a_ms_ks_strides,
+                                                                     a_ms_ks_modes,
+                                                                     typeB,
+                                                                     b_ns_ks_lengths,
+                                                                     b_ns_ks_strides,
+                                                                     b_ns_ks_modes,
+                                                                     typeD,
+                                                                     d_ms_ns_lengths,
+                                                                     d_ms_ns_strides,
+                                                                     d_ms_ns_modes,
+                                                                     typeE,
+                                                                     e_ms_ns_lengths,
+                                                                     e_ms_ns_strides,
+                                                                     e_ms_ns_modes,
+                                                                     workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_64F && typeB == HIPTENSOR_R_64F && typeD == HIPTENSOR_R_64F
                 && typeE == HIPTENSOR_R_64F && computeType == HIPTENSOR_COMPUTE_DESC_32F)
         {
             return ActorCriticSelectionUnaryOps<double,
-                                        double,
-                                        double,
-                                        double,
-                                        ContractionOpId_t::BILINEAR,
-                                        float>::selectWinner(winner,
-                                                             candidates,
-                                                             typeA,
-                                                             a_ms_ks_lengths,
-                                                             a_ms_ks_strides,
-                                                             a_ms_ks_modes,
-                                                             typeB,
-                                                             b_ns_ks_lengths,
-                                                             b_ns_ks_strides,
-                                                             b_ns_ks_modes,
-                                                             typeD,
-                                                             d_ms_ns_lengths,
-                                                             d_ms_ns_strides,
-                                                             d_ms_ns_modes,
-                                                             typeE,
-                                                             e_ms_ns_lengths,
-                                                             e_ms_ns_strides,
-                                                             e_ms_ns_modes,
-                                                             workspaceSize);
+                                                double,
+                                                double,
+                                                double,
+                                                ContractionOpId_t::BILINEAR,
+                                                float>::selectWinner(winner,
+                                                                     candidates,
+                                                                     typeA,
+                                                                     a_ms_ks_lengths,
+                                                                     a_ms_ks_strides,
+                                                                     a_ms_ks_modes,
+                                                                     typeB,
+                                                                     b_ns_ks_lengths,
+                                                                     b_ns_ks_strides,
+                                                                     b_ns_ks_modes,
+                                                                     typeD,
+                                                                     d_ms_ns_lengths,
+                                                                     d_ms_ns_strides,
+                                                                     d_ms_ns_modes,
+                                                                     typeE,
+                                                                     e_ms_ns_lengths,
+                                                                     e_ms_ns_strides,
+                                                                     e_ms_ns_modes,
+                                                                     workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_64F && typeB == HIPTENSOR_R_64F && typeD == NONE_TYPE
                 && typeE == HIPTENSOR_R_64F && computeType == HIPTENSOR_COMPUTE_DESC_64F)
         {
             return ActorCriticSelectionUnaryOps<double,
-                                        double,
-                                        double,
-                                        double,
-                                        ContractionOpId_t::SCALE,
-                                        double>::selectWinner(winner,
-                                                              candidates,
-                                                              typeA,
-                                                              a_ms_ks_lengths,
-                                                              a_ms_ks_strides,
-                                                              a_ms_ks_modes,
-                                                              typeB,
-                                                              b_ns_ks_lengths,
-                                                              b_ns_ks_strides,
-                                                              b_ns_ks_modes,
-                                                              typeD,
-                                                              d_ms_ns_lengths,
-                                                              d_ms_ns_strides,
-                                                              d_ms_ns_modes,
-                                                              typeE,
-                                                              e_ms_ns_lengths,
-                                                              e_ms_ns_strides,
-                                                              e_ms_ns_modes,
-                                                              workspaceSize);
+                                                double,
+                                                double,
+                                                double,
+                                                ContractionOpId_t::SCALE,
+                                                double>::selectWinner(winner,
+                                                                      candidates,
+                                                                      typeA,
+                                                                      a_ms_ks_lengths,
+                                                                      a_ms_ks_strides,
+                                                                      a_ms_ks_modes,
+                                                                      typeB,
+                                                                      b_ns_ks_lengths,
+                                                                      b_ns_ks_strides,
+                                                                      b_ns_ks_modes,
+                                                                      typeD,
+                                                                      d_ms_ns_lengths,
+                                                                      d_ms_ns_strides,
+                                                                      d_ms_ns_modes,
+                                                                      typeE,
+                                                                      e_ms_ns_lengths,
+                                                                      e_ms_ns_strides,
+                                                                      e_ms_ns_modes,
+                                                                      workspaceSize);
         }
         else if(typeA == HIPTENSOR_R_64F && typeB == HIPTENSOR_R_64F && typeD == HIPTENSOR_R_64F
                 && typeE == HIPTENSOR_R_64F && computeType == HIPTENSOR_COMPUTE_DESC_64F)
         {
             return ActorCriticSelectionUnaryOps<double,
-                                        double,
-                                        double,
-                                        double,
-                                        ContractionOpId_t::BILINEAR,
-                                        double>::selectWinner(winner,
-                                                              candidates,
-                                                              typeA,
-                                                              a_ms_ks_lengths,
-                                                              a_ms_ks_strides,
-                                                              a_ms_ks_modes,
-                                                              typeB,
-                                                              b_ns_ks_lengths,
-                                                              b_ns_ks_strides,
-                                                              b_ns_ks_modes,
-                                                              typeD,
-                                                              d_ms_ns_lengths,
-                                                              d_ms_ns_strides,
-                                                              d_ms_ns_modes,
-                                                              typeE,
-                                                              e_ms_ns_lengths,
-                                                              e_ms_ns_strides,
-                                                              e_ms_ns_modes,
-                                                              workspaceSize);
+                                                double,
+                                                double,
+                                                double,
+                                                ContractionOpId_t::BILINEAR,
+                                                double>::selectWinner(winner,
+                                                                      candidates,
+                                                                      typeA,
+                                                                      a_ms_ks_lengths,
+                                                                      a_ms_ks_strides,
+                                                                      a_ms_ks_modes,
+                                                                      typeB,
+                                                                      b_ns_ks_lengths,
+                                                                      b_ns_ks_strides,
+                                                                      b_ns_ks_modes,
+                                                                      typeD,
+                                                                      d_ms_ns_lengths,
+                                                                      d_ms_ns_strides,
+                                                                      d_ms_ns_modes,
+                                                                      typeE,
+                                                                      e_ms_ns_lengths,
+                                                                      e_ms_ns_strides,
+                                                                      e_ms_ns_modes,
+                                                                      workspaceSize);
         }
         return HIPTENSOR_STATUS_EXECUTION_FAILED;
     }

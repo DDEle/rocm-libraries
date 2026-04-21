@@ -510,8 +510,8 @@ struct UniversalGemmKernel
                         {
                             CK_TILE_ERROR("K is not a multiple of vector load size for A tensor!");
                         }
-			AsTensorIsValid = false;
-		    }
+                        AsTensorIsValid = false;
+                    }
                 }
             }
             else
@@ -577,8 +577,8 @@ struct UniversalGemmKernel
                         {
                             CK_TILE_ERROR("N is not a multiple of vector load size for B tensor!");
                         }
-			BsTensorIsValid = false;
-		    }
+                        BsTensorIsValid = false;
+                    }
                 }
             }
             else

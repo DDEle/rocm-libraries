@@ -50,7 +50,4 @@ TYPED_TEST(TEST_SUITE_NAME, MidLargeM)
     }
 }
 
-TYPED_TEST(TEST_SUITE_NAME, LargeSize)
-{
-    this->Run(512, 512, 512);
-}
+TYPED_TEST(TEST_SUITE_NAME, LargeSize) { this->Run(512, 512, 512); }

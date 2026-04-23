@@ -45,6 +45,8 @@ BenchmarkProblems:
       ForkParameters:
         - MatrixInstruction:
           - [16, 16, 32, 1, 1, 1, 1, 1, 1]
+          - [16, 16, 32, 1, 1, 4, 4, 2, 2]
+          - [16, 16, 32, 1, 1, 8, 4, 1, 1]
         - DepthU: [32]
         - WavefrontSize: [32]
         - TransposeLDS: [-1]
@@ -99,7 +101,8 @@ BenchmarkProblems:
       ForkParameters:
         - MatrixInstruction:
           - [16, 16, 32, 1, 1, 1, 1, 1, 1]
-          - [16, 16, 32, 1, 1, 4, 4, 2, 2]
+          - [16, 16, 32, 1, 1, 2, 2, 2, 2]
+          - [16, 16, 32, 1, 1, 8, 4, 2, 2]
         - DepthU: [32]
         - WavefrontSize: [32]
         - TransposeLDS: [-1]
@@ -119,7 +122,7 @@ BenchmarkProblems:
       BenchmarkFinalParameters:
         - ProblemSizes:
           - Exact: [1, 1, 1, 1]
-          - Exact: [128, 128, 1, 128]
+          - Exact: [512, 512, 1, 512]
           - Exact: [127, 127, 1, 127]
         - BiasTypeArgs: ['s']
         - ActivationArgs:
@@ -154,7 +157,8 @@ BenchmarkProblems:
       ForkParameters:
         - MatrixInstruction:
           - [16, 16, 32, 1, 1, 1, 1, 1, 1]
-          - [16, 16, 32, 1, 1, 4, 4, 2, 2]
+          - [16, 16, 32, 1, 1, 2, 2, 2, 2]
+          - [16, 16, 32, 1, 1, 8, 4, 1, 1]
         - DepthU: [64]
         - WavefrontSize: [32]
         - TransposeLDS: [-1]
@@ -173,7 +177,7 @@ BenchmarkProblems:
       BenchmarkJoinParameters:
       BenchmarkFinalParameters:
         - ProblemSizes:
-          - Exact: [128, 128, 1, 128]
+          - Exact: [512, 512, 1, 512]
           - Exact: [127, 127, 1, 127]
           - Exact: [1, 1, 1, 1]
         - BiasTypeArgs: ['s']
@@ -208,7 +212,8 @@ BenchmarkProblems:
       ForkParameters:
         - MatrixInstruction:
           - [16, 16, 32, 1, 1, 1, 1, 1, 1]
-          - [16, 16, 32, 1, 1, 2, 2, 2, 2]
+          - [16, 16, 32, 1, 1, 4, 4, 2, 2]
+          - [16, 16, 32, 1, 1, 8, 4, 2, 2]
         - DepthU: [64]
         - WavefrontSize: [32]
         - TransposeLDS: [-1]
@@ -229,7 +234,7 @@ BenchmarkProblems:
         - ProblemSizes:
           - Exact: [1, 1, 1, 1]
           - Exact: [127, 127, 1, 127]
-          - Exact: [128, 128, 1, 128]
+          - Exact: [512, 512, 1, 512]
         - BiasTypeArgs: ['s']
         - ActivationArgs:
           - [Enum: none]

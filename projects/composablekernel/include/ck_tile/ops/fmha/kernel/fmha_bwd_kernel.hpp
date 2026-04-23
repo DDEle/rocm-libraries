@@ -88,95 +88,14 @@ struct FmhaBwdWorkspaceManager
         return GetWorkspaceHostSize<kUseQrQtrDorPipeline>(batch);
     }
 
-    // Fill CPU prepared workspace and return size of non CPU prepared workspace size
-    template <bool kUseQrQtrDorPipeline, index_t kN0>
-    CK_TILE_HOST static size_t
-    PrepareWorkspaceHost(void* cpu_ws,
-                         index_t batch_size,
-                         index_t hdim_q,
-                         index_t nhead_q,
-                         index_t seqlen_q           = 0, // only for batch mode
-                         index_t seqlen_k           = 0, // only for deterministic batch mode
-                         const index_t* seqstart_qs = nullptr,
-                         const index_t* seqstart_ks = nullptr)
-    {
-        if constexpr(kUseQrQtrDorPipeline)
-        {
-            // QrQtrDor writes dq directly; no workspace is allocated so cpu_ws is nullptr.
-            throw std::logic_error(
-                "PrepareWorkspaceHost: QrQtrDor pipeline does not use workspace");
-        }
-        const auto nsplits = reinterpret_cast<index_t*>(cpu_ws);
-        const auto offsets = reinterpret_cast<long_index_t*>(reinterpret_cast<char*>(cpu_ws) +
-                                                             GetDqAccSplitsSize<false>(batch_size));
-        if constexpr(kIsGroupMode)
-            if(!seqstart_qs || !seqstart_ks)
-                throw std::runtime_error("seqstart_qs and seqstart_ks are required for group mode");
-
-        if constexpr(!kIsDeterministic)
-        {
-            nsplits[0] = 1;
-            if constexpr(!kIsGroupMode)
-                return sizeof(AccDataType) * static_cast<long_index_t>(batch_size) * nhead_q *
-                       seqlen_q * hdim_q;
-            else
-                return sizeof(AccDataType) * static_cast<long_index_t>(nhead_q) *
-                       seqstart_qs[batch_size] * hdim_q;
-        }
-        else if constexpr(kIsGroupMode)
-        { // deterministic group mode
-            offsets[0] = 0;
-            index_t i  = 0;
-            for(; i < batch_size - 1; ++i)
-            {
-                nsplits[i]     = integer_divide_ceil(seqstart_ks[i + 1] - seqstart_ks[i], kN0);
-                offsets[i + 1] = offsets[i] + static_cast<long_index_t>(nhead_q) * nsplits[i] *
-                                                  (seqstart_qs[i + 1] - seqstart_qs[i]) * hdim_q;
-            }
-            nsplits[i] = integer_divide_ceil(seqstart_ks[i + 1] - seqstart_ks[i], kN0);
-            return sizeof(AccDataType) *
-                   (offsets[i] + static_cast<long_index_t>(nhead_q) * nsplits[i] *
-                                     (seqstart_qs[i + 1] - seqstart_qs[i]) * hdim_q);
-        }
-        else // deterministic non-group mode (kUsePersistent)
-        {
-            const index_t dqdqkdv_workers = get_num_cus();
-            const index_t jobs_per_head   = integer_divide_ceil(seqlen_k, kN0);
-            const index_t total_jobs      = batch_size * nhead_q * jobs_per_head;
-            const index_t jobs_per_worker = integer_divide_ceil(total_jobs, dqdqkdv_workers);
-            if(jobs_per_head % jobs_per_worker == 0)
-                nsplits[0] = jobs_per_head / jobs_per_worker;
-            else if(jobs_per_worker % jobs_per_head == 0)
-                nsplits[0] = 1;
-            else
-                nsplits[0] = 1 + integer_divide_ceil(jobs_per_head - 1, jobs_per_worker);
-            return sizeof(AccDataType) * static_cast<long_index_t>(batch_size) * nhead_q *
-                   nsplits[0] * seqlen_q * hdim_q;
-        }
-    }
-
-    template <bool kUseQrQtrDorPipeline, bool kHasMask>
-    CK_TILE_HOST static void PrepareWorkspaceDevice(void* device_ws,
-                                                    const void* host_ws,
-                                                    size_t device_ws_size,
-                                                    size_t host_ws_size)
-    {
-        constexpr bool NeedsZeroDqAcc = []() {
-            constexpr bool kUsePersistent =
-                !kUseQrQtrDorPipeline && kIsDeterministic && !kIsGroupMode;
-            // non-deterministic and persistent kernels use atomic-add to write dq
-            if constexpr(kUsePersistent || !kIsDeterministic)
-                return true;
-            // Some block may be skipped with causal mask and dq are not set to zeros
-            // In these cases we need to zero out it first
-            return kHasMask;
-        }();
-        if(host_ws_size > 0)
-            HIP_CHECK_ERROR(hipMemcpy(device_ws, host_ws, host_ws_size, hipMemcpyHostToDevice));
-        if(NeedsZeroDqAcc)
-            HIP_CHECK_ERROR(
-                hipMemset(reinterpret_cast<char*>(device_ws) + host_ws_size, 0, device_ws_size));
-    }
+    // Workspace preparation lives in include/ck_tile/host/ops/fmha/fmha_bwd_workspace.hpp
+    // as non-template free functions operating on fmha_bwd_workspace_spec. Generated
+    // kernel instances obtain a populated spec via make_fmha_bwd_workspace_spec<Kernel>()
+    // and call prepare_fmha_bwd_workspace_host / prepare_fmha_bwd_workspace_device
+    // directly. Keeping the HIP runtime out of this header lets device-only translation
+    // units include ops/fmha.hpp without dragging in host runtime symbols.
+    //
+    // The struct retains only the offset/size getters used by device-side kargs setup.
 };
 
 template <typename FmhaPipeline_,
@@ -279,26 +198,6 @@ struct FmhaBwdDQDKDVKernel
         #undef _TS_
         // clang-format on
     }
-    template <typename... Args>
-    CK_TILE_HOST static constexpr auto GetWorkspaceHostSize(Args&&... args)
-    {
-        return WorkspaceManager::template GetWorkspaceHostSize<kUseQrQtrDorPipeline>(
-            std::forward<Args>(args)...);
-    }
-    template <typename... Args>
-    CK_TILE_HOST static constexpr auto PrepareWorkspaceHost(Args&&... args)
-    {
-        return WorkspaceManager::template PrepareWorkspaceHost<kUseQrQtrDorPipeline,
-                                                               FmhaPipeline::BlockFmhaShape::kN0>(
-            std::forward<Args>(args)...);
-    }
-    template <typename... Args>
-    CK_TILE_HOST static constexpr void PrepareWorkspaceDevice(Args&&... args)
-    {
-        WorkspaceManager::template PrepareWorkspaceDevice<kUseQrQtrDorPipeline, kHasMask>(
-            std::forward<Args>(args)...);
-    }
-
     template <ck_tile::index_t I> // to avoid duplicated base class prblem, introduce an template
                                   // arg
     struct FmhaBwdEmptyKargs

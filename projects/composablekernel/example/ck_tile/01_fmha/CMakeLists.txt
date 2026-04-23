@@ -42,6 +42,13 @@ set_directory_properties(PROPERTIES CMAKE_CONFIGURE_DEPENDS "${CODE_GEN_SCRIPTS}
 
 list(JOIN INST_TARGETS , FMHA_TARGETS_ARG)
 
+# Default codegen receipt for FMHA BWD instances; can be overridden with
+# -DFMHA_BWD_RECEIPT=<n>. See generate.py --help and codegen/ops/fmha_bwd.py
+# for the list of supported receipts.
+if(NOT DEFINED FMHA_BWD_RECEIPT)
+  set(FMHA_BWD_RECEIPT 3)
+endif()
+
 string(REPLACE ";" "," FMHA_FWD_APIS "${FMHA_FWD_ENABLE_APIS}")
 set(FMHA_FWD_CODE_GEN_COMMON_ARGS
   ${CMAKE_CURRENT_LIST_DIR}/generate.py
@@ -53,10 +60,15 @@ set(FMHA_BWD_CODE_GEN_COMMON_ARGS
   ${CMAKE_CURRENT_LIST_DIR}/generate.py
   --targets ${FMHA_TARGETS_ARG}
   --api bwd
-  --receipt 3
+  --receipt ${FMHA_BWD_RECEIPT}
   --optdim 32,64,96,128,256
-  # --filter fmha_bwd_dot...@fmha_bwd_convert...@fmha_bwd...
 )
+# Optional dev-time scope reduction: pass a fnmatch pattern of the form
+# "<dot_do_o>@<convert_dq>@<dq_dk_dv>" via -DFMHA_BWD_FILTER=... to compile only
+# matching kernel instances. See CLAUDE.md for examples.
+if(FMHA_BWD_FILTER)
+  list(APPEND FMHA_BWD_CODE_GEN_COMMON_ARGS --filter ${FMHA_BWD_FILTER})
+endif()
 
 # Reduce building time by disabling instances that are not currently used in the gtests
 # TODO: Consider to use a special receipt for testing only, or even two receipts: a small subset of

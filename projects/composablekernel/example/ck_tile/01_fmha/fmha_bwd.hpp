@@ -5,6 +5,7 @@
 
 #include "ck_tile/core.hpp"
 #include "ck_tile/host/device_prop.hpp"
+#include "ck_tile/host/ops/fmha/fmha_bwd_workspace.hpp"
 #include "ck_tile/host/kernel_launch.hpp"
 #include "ck_tile/ops/fmha.hpp"
 #include "ck_tile/ops/epilogue.hpp"
@@ -483,6 +484,47 @@ void fmha_bwd_dq_dk_dv_dq_prepare_ws_device_(void* device_ws,
                                              const void* host_ws,
                                              size_t device_ws_size,
                                              size_t host_ws_size);
+
+namespace ck_tile {
+
+// Kernel-templated convenience wrappers used by the per-instance generated .cpp.
+// They build the workspace spec from the kernel type's compile-time traits and
+// forward to the non-template free functions in
+// ck_tile/host/ops/fmha/fmha_bwd_workspace.hpp. Host-only drivers should bypass
+// these and call the non-template entry points directly.
+template <typename Kernel>
+CK_TILE_HOST size_t fmha_bwd_workspace_host_size_(int batch_size)
+{
+    constexpr auto spec = make_fmha_bwd_workspace_spec<Kernel>();
+    return fmha_bwd_workspace_host_size(spec, batch_size);
+}
+
+template <typename Kernel>
+CK_TILE_HOST size_t prepare_fmha_bwd_workspace_host_(void* cpu_ws,
+                                                     ck_tile::index_t batch_size,
+                                                     ck_tile::index_t hdim_q,
+                                                     ck_tile::index_t nhead_q,
+                                                     ck_tile::index_t seqlen_q,
+                                                     ck_tile::index_t seqlen_k,
+                                                     const ck_tile::index_t* seqstart_qs,
+                                                     const ck_tile::index_t* seqstart_ks)
+{
+    constexpr auto spec = make_fmha_bwd_workspace_spec<Kernel>();
+    return prepare_fmha_bwd_workspace_host(
+        spec, cpu_ws, batch_size, hdim_q, nhead_q, seqlen_q, seqlen_k, seqstart_qs, seqstart_ks);
+}
+
+template <typename Kernel>
+CK_TILE_HOST void prepare_fmha_bwd_workspace_device_(void* device_ws,
+                                                     const void* host_ws,
+                                                     size_t device_ws_size,
+                                                     size_t host_ws_size)
+{
+    constexpr auto spec = make_fmha_bwd_workspace_spec<Kernel>();
+    prepare_fmha_bwd_workspace_device(spec, device_ws, host_ws, device_ws_size, host_ws_size);
+}
+
+} // namespace ck_tile
 
 template <ck_tile::index_t HDim_, typename DataType_, bool kIsGroupMode_, bool kPadS_, bool kPadDv_>
 struct fmha_bwd_dot_do_o_traits_

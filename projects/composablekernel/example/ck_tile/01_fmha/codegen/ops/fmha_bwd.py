@@ -172,7 +172,7 @@ template <>
 size_t fmha_bwd_dq_dk_dv_dq_ws_host_size_<dq_dk_dv_trait_{F_idx}, {F_arch.tag}>(int batch_size)
 {{
     using k_ = fmha_bwd_dq_dk_dv_kernel_{F_idx};
-    return k_::GetWorkspaceHostSize(batch_size);
+    return ck_tile::fmha_bwd_workspace_host_size_<k_>(batch_size);
 }}
 
 template <>
@@ -182,7 +182,7 @@ size_t fmha_bwd_dq_dk_dv_dq_prepare_ws_host_<dq_dk_dv_trait_{F_idx}, {F_arch.tag
     const ck_tile::index_t* seqstart_qs, const ck_tile::index_t* seqstart_ks)
 {{
     using k_ = fmha_bwd_dq_dk_dv_kernel_{F_idx};
-    return k_::PrepareWorkspaceHost(
+    return ck_tile::prepare_fmha_bwd_workspace_host_<k_>(
         cpu_ws, batch_size, hdim_q, nhead_q, seqlen_q, seqlen_k, seqstart_qs, seqstart_ks);
 }}
 
@@ -191,7 +191,8 @@ void fmha_bwd_dq_dk_dv_dq_prepare_ws_device_<dq_dk_dv_trait_{F_idx}, {F_arch.tag
     void* device_ws, const void* host_ws, size_t device_ws_size, size_t host_ws_size)
 {{
     using k_ = fmha_bwd_dq_dk_dv_kernel_{F_idx};
-    k_::PrepareWorkspaceDevice(device_ws, host_ws, device_ws_size, host_ws_size);
+    ck_tile::prepare_fmha_bwd_workspace_device_<k_>(
+        device_ws, host_ws, device_ws_size, host_ws_size);
 }}
 
 template <>

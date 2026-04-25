@@ -497,21 +497,11 @@ struct UniversalGemmKernel
                 }
                 if(kargs.K % vectorSizeA != 0)
                 {
-                    const auto remainder          = kargs.K % vectorSizeA;
-                    const auto remainder_in_bytes = remainder * sizeof(ADataType) / APackedSize;
-                    // oob can support to dword level
-                    if(remainder_in_bytes % 4 == 0)
+                    if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
                     {
-                        AsTensorIsValid = true;
+                        CK_TILE_ERROR("K is not a multiple of vector load size for A tensor!");
                     }
-                    else
-                    {
-                        if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
-                        {
-                            CK_TILE_ERROR("K is not a multiple of vector load size for A tensor!");
-                        }
-                        AsTensorIsValid = false;
-                    }
+                    AsTensorIsValid = false;
                 }
             }
             else
@@ -527,21 +517,11 @@ struct UniversalGemmKernel
                 }
                 if(kargs.M % vectorSizeA != 0)
                 {
-                    const auto remainder          = kargs.M % vectorSizeA;
-                    const auto remainder_in_bytes = remainder * sizeof(ADataType) / APackedSize;
-                    // oob can support to dword level
-                    if(remainder_in_bytes % 4 == 0)
+                    if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
                     {
-                        AsTensorIsValid = true;
+                        CK_TILE_ERROR("M is not a multiple of vector load size for A tensor!");
                     }
-                    else
-                    {
-                        if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
-                        {
-                            CK_TILE_ERROR("M is not a multiple of vector load size for A tensor!");
-                        }
-                        AsTensorIsValid = false;
-                    }
+                    AsTensorIsValid = false;
                 }
             }
         });
@@ -564,21 +544,11 @@ struct UniversalGemmKernel
                 }
                 if(kargs.N % vectorSizeB != 0)
                 {
-                    const auto remainder          = kargs.N % vectorSizeB;
-                    const auto remainder_in_bytes = remainder * sizeof(BDataType) / BPackedSize;
-                    // oob can support to dword level
-                    if(remainder_in_bytes % 4 == 0)
+                    if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
                     {
-                        BsTensorIsValid = true;
+                        CK_TILE_ERROR("N is not a multiple of vector load size for B tensor!");
                     }
-                    else
-                    {
-                        if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
-                        {
-                            CK_TILE_ERROR("N is not a multiple of vector load size for B tensor!");
-                        }
-                        BsTensorIsValid = false;
-                    }
+                    BsTensorIsValid = false;
                 }
             }
             else
@@ -596,21 +566,11 @@ struct UniversalGemmKernel
                 }
                 if(kargs.K % vectorSizeB != 0)
                 {
-                    const auto remainder          = kargs.K % vectorSizeB;
-                    const auto remainder_in_bytes = remainder * sizeof(BDataType) / BPackedSize;
-                    // oob can support to dword level
-                    if(remainder_in_bytes % 4 == 0)
+                    if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
                     {
-                        BsTensorIsValid = true;
+                        CK_TILE_ERROR("K is not a multiple of vector load size for B tensor!");
                     }
-                    else
-                    {
-                        if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
-                        {
-                            CK_TILE_ERROR("K is not a multiple of vector load size for B tensor!");
-                        }
-                        BsTensorIsValid = false;
-                    }
+                    BsTensorIsValid = false;
                 }
             }
         });

@@ -41,10 +41,6 @@ TYPED_TEST(TEST_SUITE_NAME, SmallM)
                     // TestCkTileGemmPipelineCompTDMWmma can handle non-dword-aligned cases
                     this->Run(M, N, K);
                 }
-                else if(M * sizeof(typename TestFixture::ADataType) % 4 == 0) // oob fit dword
-                {
-                    this->Run(M, N, K);
-                }
                 else
                 {
                     EXPECT_THROW((this->Run(M, N, K)), std::runtime_error);
@@ -111,10 +107,6 @@ TYPED_TEST(TEST_SUITE_NAME, MidLargeM)
                         // TestCkTileGemmPipelineCompTDMWmma can handle non-dword-aligned cases
                         this->Run(M, N, K);
                     }
-                    else if(M * sizeof(typename TestFixture::ADataType) % 4 == 0) // oob fit dword
-                    {
-                        this->Run(M, N, K);
-                    }
                     else
                     {
                         EXPECT_THROW((this->Run(M, N, K)), std::runtime_error);
@@ -133,7 +125,7 @@ TYPED_TEST(TEST_SUITE_NAME, PaddK)
 {
     std::vector<int> Ms{128};
     constexpr int N = 1024;
-    constexpr int K = 416;
+    constexpr int K = 432;
 
     if constexpr(TestFixture::PipelineType == GemmPipelineType::CompAsyncEightWaves)
         return;

@@ -62,8 +62,7 @@ namespace rocwmma
                                             TargetId,
                                             Constants::AMDGCN_ARCH_ID_GFX1200,
                                             Constants::AMDGCN_ARCH_ID_GFX1201,
-                                            Constants::AMDGCN_ARCH_ID_GFX1250,
-                                            Constants::AMDGCN_ARCH_ID_GFX1251> && Cond>;
+                                            Constants::AMDGCN_ARCH_ID_GFX1250> && Cond>;
 
         // Enabler for all of gfx11 and gfx12
         template <uint32_t TargetId, bool Cond = true>
@@ -80,8 +79,7 @@ namespace rocwmma
                                             Constants::AMDGCN_ARCH_ID_GFX1153,
                                             Constants::AMDGCN_ARCH_ID_GFX1200,
                                             Constants::AMDGCN_ARCH_ID_GFX1201,
-                                            Constants::AMDGCN_ARCH_ID_GFX1250,
-                                            Constants::AMDGCN_ARCH_ID_GFX1251> && Cond>;
+                                            Constants::AMDGCN_ARCH_ID_GFX1250> && Cond>;
 
         /*! \class amdgcn_wmma
         *  \brief  Builtin wrapper for wmma instructions
@@ -749,8 +747,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -781,12 +778,13 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputAMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaInputModifiers InputBMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -797,17 +795,16 @@ namespace rocwmma
             ROCWMMA_DEVICE static inline auto
                 exec(ARegsT const& regsA, BRegsT const& regsB, CRegsT const& regsC) -> DRegsT
             {
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result)
-                    = {__builtin_amdgcn_wmma_f32_16x16x32_f16(0u,
+                    = {__builtin_amdgcn_wmma_f32_16x16x32_f16((bool)InputAMod,
                                                               to_native_vector(regsA),
-                                                              0u,
+                                                              (bool)InputBMod,
                                                               to_native_vector(regsB),
-                                                              0u,
+                                                              (int16_t)InputCMod,
                                                               to_native_vector(regsC),
-                                                              false,
-                                                              false)};
+                                                              (bool)ReuseA,
+                                                              (bool)ReuseB)};
                 return result;
             }
         };
@@ -929,8 +926,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -961,12 +957,13 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputAMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaInputModifiers InputBMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -977,17 +974,16 @@ namespace rocwmma
             ROCWMMA_DEVICE static inline auto
                 exec(ARegsT const& regsA, BRegsT const& regsB, CRegsT const& regsC) -> DRegsT
             {
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result)
-                    = {__builtin_amdgcn_wmma_f16_16x16x32_f16(0u,
+                    = {__builtin_amdgcn_wmma_f16_16x16x32_f16((bool)InputAMod,
                                                               to_native_vector(regsA),
-                                                              0u,
+                                                              (bool)InputBMod,
                                                               to_native_vector(regsB),
-                                                              0u,
+                                                              (int16_t)InputCMod,
                                                               to_native_vector(regsC),
-                                                              false,
-                                                              false)};
+                                                              (bool)ReuseA,
+                                                              (bool)ReuseB)};
                 return result;
             }
         };
@@ -1104,8 +1100,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -1136,12 +1131,13 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputAMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaInputModifiers InputBMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -1152,17 +1148,16 @@ namespace rocwmma
             ROCWMMA_DEVICE static inline auto
                 exec(ARegsT const& regsA, BRegsT const& regsB, CRegsT const& regsC) -> DRegsT
             {
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result)
-                    = {__builtin_amdgcn_wmma_f32_16x16x32_bf16(0u,
+                    = {__builtin_amdgcn_wmma_f32_16x16x32_bf16((bool)InputAMod,
                                                                to_native_vector(regsA),
-                                                               0u,
+                                                               (bool)InputBMod,
                                                                to_native_vector(regsB),
-                                                               0u,
+                                                               (int16_t)InputCMod,
                                                                to_native_vector(regsC),
-                                                               false,
-                                                               false)};
+                                                               (bool)ReuseA,
+                                                               (bool)ReuseB)};
                 return result;
             }
         };
@@ -1284,8 +1279,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -1316,12 +1310,13 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputAMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaInputModifiers InputBMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -1332,17 +1327,16 @@ namespace rocwmma
             ROCWMMA_DEVICE static inline auto
                 exec(ARegsT const& regsA, BRegsT const& regsB, CRegsT const& regsC) -> DRegsT
             {
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result)
-                    = {__builtin_amdgcn_wmma_bf16_16x16x32_bf16(0u,
+                    = {__builtin_amdgcn_wmma_bf16_16x16x32_bf16((bool)InputAMod,
                                                                 to_native_vector(regsA),
-                                                                0u,
+                                                                (bool)InputBMod,
                                                                 to_native_vector(regsB),
-                                                                0u,
+                                                                (int16_t)InputCMod,
                                                                 to_native_vector(regsC),
-                                                                false,
-                                                                false)};
+                                                                (bool)ReuseA,
+                                                                (bool)ReuseB)};
                 return result;
             }
         };
@@ -1357,8 +1351,7 @@ namespace rocwmma
                            2u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaInputModifiers InputAMod = WmmaInputModifiers::NONE;
             constexpr static WmmaInputModifiers InputBMod = WmmaInputModifiers::NONE;
@@ -1391,8 +1384,7 @@ namespace rocwmma
                            4u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaInputModifiers InputAMod = WmmaInputModifiers::NONE;
             constexpr static WmmaInputModifiers InputBMod = WmmaInputModifiers::NONE;
@@ -1409,94 +1401,19 @@ namespace rocwmma
             ROCWMMA_DEVICE static inline auto
                 exec(ARegsT const& regsA, BRegsT const& regsB, CRegsT const& regsC) -> DRegsT
             {
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result)
-                    = {__builtin_amdgcn_wmma_f32_16x16x4_f32(0u,
+                    = {__builtin_amdgcn_wmma_f32_16x16x4_f32((bool)InputAMod,
                                                              to_native_vector(regsA),
-                                                             0u,
+                                                             (bool)InputBMod,
                                                              to_native_vector(regsB),
-                                                             0u,
+                                                             (int16_t)InputCMod,
                                                              to_native_vector(regsC),
-                                                             false,
-                                                             false)};
+                                                             (bool)ReuseA,
+                                                             (bool)ReuseB)};
                 return result;
             }
         };
-
-        // f64
-        template <uint32_t GfxTargetId>
-        struct amdgcn_wmma<float64_t,
-                           float64_t,
-                           float64_t,
-                           16u,
-                           16u,
-                           4u,
-                           GfxTargetId,
-                           enable_target_id_t<GfxTargetId, Constants::AMDGCN_ARCH_ID_GFX1251>>
-        {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
-
-            // Packed register types
-            using ARegsT = VRegF64x2;
-            using BRegsT = VRegF64x2;
-            using CRegsT = AccRegF64x8;
-            using DRegsT = AccRegF64x8;
-
-            ROCWMMA_DEVICE static inline auto
-                exec(ARegsT const& regsA, BRegsT const& regsB, CRegsT const& regsC) -> DRegsT
-            {
-                // TODO: flags
-                DRegsT result;
-                to_native_vector(result)
-                    = {__builtin_amdgcn_wmma_f64_16x16x4_f64(0u,
-                                                             to_native_vector(regsA),
-                                                             0u,
-                                                             to_native_vector(regsB),
-                                                             0u,
-                                                             to_native_vector(regsC))};
-                return result;
-            }
-        };
-
-        // TODO: disabled by compiler. Check again later if support is added.
-        // template <uint32_t GfxTargetId>
-        // struct amdgcn_wmma<float64_t,
-        //                    float64_t,
-        //                    float64_t,
-        //                    16u,
-        //                    16u,
-        //                    8u,
-        //                    GfxTargetId,
-        //                    enable_target_id_t<GfxTargetId, Constants::AMDGCN_ARCH_ID_GFX1251>>
-        // {
-        //     constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-        //     constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-        //     constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
-
-        //     // Packed register types
-        //     using ARegsT = VRegF64x4;
-        //     using BRegsT = VRegF64x4;
-        //     using CRegsT = AccRegF64x8;
-        //     using DRegsT = AccRegF64x8;
-
-        //     ROCWMMA_DEVICE static inline auto
-        //         exec(ARegsT const& regsA, BRegsT const& regsB, CRegsT const& regsC) -> DRegsT
-        //     {
-        //         // TODO: flags
-        //         DRegsT result;
-        //         to_native_vector(result)
-        //             = {__builtin_amdgcn_wmma_f64_16x16x8_f64(0u,
-        //                                                      to_native_vector(regsA),
-        //                                                      0u,
-        //                                                      to_native_vector(regsB),
-        //                                                      0u,
-        //                                                      to_native_vector(regsC))};
-        //         return result;
-        //     }
-        // };
 
         // int8
         template <uint32_t GfxTargetId>
@@ -1575,8 +1492,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -1606,8 +1522,7 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -1637,12 +1552,11 @@ namespace rocwmma
                            64u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegI32x8;
@@ -1653,7 +1567,6 @@ namespace rocwmma
             ROCWMMA_DEVICE static inline auto
                 exec(ARegsT const& regsA, BRegsT const& regsB, CRegsT const& regsC) -> DRegsT
             {
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result)
                     = {__builtin_amdgcn_wmma_i32_16x16x64_iu8((bool)InputSign,
@@ -1661,8 +1574,8 @@ namespace rocwmma
                                                               (bool)InputSign,
                                                               to_native_vector(regsB),
                                                               to_native_vector(regsC),
-                                                              false,
-                                                              false)};
+                                                              (bool)ReuseA,
+                                                              (bool)ReuseB)};
                 return result;
             }
         };
@@ -1752,8 +1665,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::UNSIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -1783,8 +1695,7 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::UNSIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -1814,12 +1725,11 @@ namespace rocwmma
                            64u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::UNSIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::UNSIGNED;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegUI32x8;
@@ -1830,7 +1740,6 @@ namespace rocwmma
             ROCWMMA_DEVICE static inline auto
                 exec(ARegsT const& regsA, BRegsT const& regsB, CRegsT const& regsC) -> DRegsT
             {
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result)
                     = {__builtin_amdgcn_wmma_i32_16x16x64_iu8((bool)InputSign,
@@ -1838,8 +1747,8 @@ namespace rocwmma
                                                               (bool)InputSign,
                                                               to_native_vector(regsB),
                                                               to_native_vector(regsC),
-                                                              false,
-                                                              false)};
+                                                              (bool)ReuseA,
+                                                              (bool)ReuseB)};
                 return result;
             }
         };
@@ -1926,8 +1835,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -1958,8 +1866,7 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -1990,12 +1897,11 @@ namespace rocwmma
                            64u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -2014,15 +1920,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f32_16x16x64_fp8_fp8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2036,12 +1941,11 @@ namespace rocwmma
                            128u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x16;
@@ -2060,15 +1964,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f32_16x16x128_fp8_fp8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2082,8 +1985,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -2114,8 +2016,7 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -2146,12 +2047,11 @@ namespace rocwmma
                            64u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -2170,15 +2070,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f16_16x16x64_fp8_fp8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2192,12 +2091,11 @@ namespace rocwmma
                            128u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x16;
@@ -2216,15 +2114,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f16_16x16x128_fp8_fp8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2310,8 +2207,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -2342,8 +2238,7 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -2374,12 +2269,11 @@ namespace rocwmma
                            64u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -2398,15 +2292,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f32_16x16x64_bf8_bf8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2420,12 +2313,11 @@ namespace rocwmma
                            128u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x16;
@@ -2444,15 +2336,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f32_16x16x128_bf8_bf8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2466,8 +2357,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -2498,8 +2388,7 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -2530,12 +2419,11 @@ namespace rocwmma
                            64u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -2554,15 +2442,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f16_16x16x64_bf8_bf8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2576,12 +2463,11 @@ namespace rocwmma
                            128u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x16;
@@ -2600,15 +2486,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f16_16x16x128_bf8_bf8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2665,8 +2550,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -2697,8 +2581,7 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -2729,12 +2612,11 @@ namespace rocwmma
                            64u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -2753,15 +2635,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f32_16x16x64_fp8_bf8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2775,12 +2656,11 @@ namespace rocwmma
                            128u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x16;
@@ -2799,15 +2679,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f32_16x16x128_fp8_bf8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2821,8 +2700,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -2853,8 +2731,7 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -2885,12 +2762,11 @@ namespace rocwmma
                            64u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -2909,15 +2785,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f16_16x16x64_fp8_bf8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -2931,12 +2806,11 @@ namespace rocwmma
                            128u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x16;
@@ -2955,15 +2829,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f16_16x16x128_fp8_bf8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -3019,8 +2892,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -3051,8 +2923,7 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -3083,12 +2954,11 @@ namespace rocwmma
                            64u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -3107,15 +2977,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f32_16x16x64_bf8_fp8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -3129,12 +2998,11 @@ namespace rocwmma
                            128u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x16;
@@ -3153,15 +3021,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f32_16x16x128_bf8_fp8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -3175,8 +3042,7 @@ namespace rocwmma
                            16u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -3207,8 +3073,7 @@ namespace rocwmma
                            32u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
             constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
             constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
@@ -3239,12 +3104,11 @@ namespace rocwmma
                            64u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x8;
@@ -3263,15 +3127,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f16_16x16x64_bf8_fp8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };
@@ -3285,12 +3148,11 @@ namespace rocwmma
                            128u,
                            GfxTargetId,
                            enable_target_id_t<GfxTargetId,
-                                              Constants::AMDGCN_ARCH_ID_GFX1250,
-                                              Constants::AMDGCN_ARCH_ID_GFX1251>>
+                                              Constants::AMDGCN_ARCH_ID_GFX1250>>
         {
-            constexpr static WmmaCtrlFlags InputSign = WmmaCtrlFlags::SIGNED;
-            constexpr static WmmaCtrlFlags AccumBits = WmmaCtrlFlags::LOW;
-            constexpr static WmmaCtrlFlags AccumSign = WmmaCtrlFlags::SIGNED;
+            constexpr static WmmaInputModifiers InputCMod = WmmaInputModifiers::NONE;
+            constexpr static WmmaCtrlFlags ReuseA = WmmaCtrlFlags::NO_REUSE;
+            constexpr static WmmaCtrlFlags ReuseB = WmmaCtrlFlags::NO_REUSE;
 
             // Packed register types
             using ARegsT = VRegF32x16;
@@ -3309,15 +3171,14 @@ namespace rocwmma
                 static_assert(sizeof(TypeIn) == sizeof(decay_t<decltype(regsB)>),
                               "Inconsistent data formats");
 
-                // TODO: flags
                 DRegsT result;
                 to_native_vector(result) = {__builtin_amdgcn_wmma_f16_16x16x128_bf8_fp8(
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsA)),
                     to_native_vector(reinterpret_cast<TypeIn const&>(regsB)),
-                    0u,
+                    (int16_t)InputCMod,
                     to_native_vector(regsC),
-                    false,
-                    false)};
+                    (bool)ReuseA,
+                    (bool)ReuseB)};
                 return result;
             }
         };

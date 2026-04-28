@@ -290,8 +290,7 @@ namespace rocwmma
                     if(arch != DeviceInfo::hipGcnArch_t::GFX950
                        && arch != DeviceInfo::hipGcnArch_t::GFX1200
                        && arch != DeviceInfo::hipGcnArch_t::GFX1201
-                       && arch != DeviceInfo::hipGcnArch_t::GFX1250
-                       && arch != DeviceInfo::hipGcnArch_t::GFX1251)
+                       && arch != DeviceInfo::hipGcnArch_t::GFX1250)
                     {
                         // Current KernelParams have f8: skip kernel on host.
                         next_kernel(kernels);

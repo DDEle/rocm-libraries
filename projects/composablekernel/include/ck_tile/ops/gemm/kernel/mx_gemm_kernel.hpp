@@ -121,6 +121,19 @@ struct MxGemmKernel
                           hostArgs.bs_scale_ptr};
     }
 
+    CK_TILE_HOST static bool IsSupportedArgument(const KernelArgs& kargs)
+    {
+        if(kargs.k_batch != 1)
+        {
+            if(ck_tile::EnvIsEnabled(CK_TILE_ENV(CK_TILE_LOGGING)))
+            {
+                CK_TILE_ERROR("SplitK (k_batch > 1) is not supported for MX GEMM!");
+            }
+            return false;
+        }
+        return BaseKernel::IsSupportedArgument(kargs);
+    }
+
     template <typename KernelArgs>
     CK_TILE_DEVICE static auto
     MakeScaleABlockWindow(const std::array<const int32_t*, NumATensor>& as_scale_ptr,

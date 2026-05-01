@@ -673,6 +673,8 @@ endif()
 message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
 
 if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+    add_compile_options(-Wno-lifetime-safety-intra-tu-suggestions)
+    add_compile_options(-Wno-lifetime-safety-cross-tu-suggestions)
     add_compile_options(-fcolor-diagnostics)
 endif()
 if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 4.9)

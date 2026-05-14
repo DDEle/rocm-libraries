@@ -28,7 +28,6 @@
 namespace ck_tile {
 
 // Per-CU state for group-mode deterministic persistent scheduling.
-// Packed into a single array to reduce kargs pointer count (5 pointers → 1).
 // alignas(16): enables aligned 128-bit loads; sizeof == 32 (6×4 + 8 pad).
 struct alignas(16) FmhaBwdGroupPersistentCuState
 {
@@ -103,7 +102,6 @@ struct FmhaBwdWorkspaceManager
         return 0;
     }
     // cu_state[num_cus]: per-CU persistent state packed into one array (group det only).
-    // Replaces separate cu_start_ibatch / cu_wlo / cu_isplit / cu_head_start / cu_c_start arrays.
     CK_TILE_HOST static size_t GetCuStateSize(const int num_cus)
     {
         if constexpr(kIsGroupMode && kIsDeterministic)
@@ -217,35 +215,20 @@ struct FmhaBwdWorkspaceManager
             }
             const index_t target_w = integer_divide_ceil(prefix_batch[batch_size], num_cus);
 
-            // Step 2: compute nsplits[b] and fill batch_states[b] (sq, nc, nsplits per batch)
+            // Step 2: fill batch_states[b].sq, .nc; nsplits is populated as  max(cs->isplit + 1)
+            // across CUs in step 3 so it tightly matches the actual sparse slot indices used by
+            // GPU.
             for(index_t b = 0; b < batch_size; ++b)
             {
                 const index_t sq   = seqstart_qs[b + 1] - seqstart_qs[b];
                 const index_t sq_w = sq_work(sq);
                 const index_t nc   = integer_divide_ceil(seqstart_ks[b + 1] - seqstart_ks[b], kN0);
-                const index_t rest_workload = (nc > 0) ? (nc - 1) * sq_w : 0;
-                const index_t ns            = 1 + (rest_workload > 0 && target_w > 0
-                                                       ? integer_divide_ceil(rest_workload, target_w)
-                                                       : 0);
-                nsplits[b]                  = ns;
-                batch_states[b].sq          = sq_w; // GPU uses sq_w for w_chunk tracking
-                batch_states[b].nc          = nc;
-                batch_states[b].nsplits     = ns;
+                batch_states[b].sq = sq_w; // GPU uses sq_w for w_chunk tracking
+                batch_states[b].nc = nc;
+                batch_states[b].nsplits = 1; // floor; bumped in step 3 by max(isplit + 1)
             }
 
-            // Step 3: compute per-batch dq_acc offsets (compact layout, depends on nsplits)
-            offsets[0] = 0;
-            index_t i  = 0;
-            for(; i < batch_size - 1; ++i)
-            {
-                offsets[i + 1] = offsets[i] + static_cast<long_index_t>(nhead_q) * nsplits[i] *
-                                                  (seqstart_qs[i + 1] - seqstart_qs[i]) * hdim_q;
-            }
-            const long_index_t dq_acc_elems =
-                offsets[i] + static_cast<long_index_t>(nhead_q) * nsplits[i] *
-                                 (seqstart_qs[i + 1] - seqstart_qs[i]) * hdim_q;
-
-            // Step 4: fill cu_states via two-pointer scan.
+            // Step 3: fill cu_states via two-pointer scan.
             // w_lo = global position of the first K-chunk: pb + head_start*hw + c_start*sq.
             // This makes w_chunk track true global K-chunk positions on GPU, so w_chunk < w_hi
             // correctly identifies boundaries without off-by-one overlap between adjacent CUs.
@@ -254,7 +237,7 @@ struct FmhaBwdWorkspaceManager
             for(index_t b = 0; b < batch_size; ++b)
             {
                 const index_t sq   = seqstart_qs[b + 1] - seqstart_qs[b];
-                const index_t sq_w = sq_work(sq); // kM0-aligned sq for work distribution
+                const index_t sq_w = sq_work(sq);
                 const index_t nc   = integer_divide_ceil(seqstart_ks[b + 1] - seqstart_ks[b], kN0);
                 const index_t hw   = nc * sq_w; // use sq_w so sq=0 batches get work
                 const index_t pb   = prefix_batch[b];
@@ -272,12 +255,22 @@ struct FmhaBwdWorkspaceManager
                         const index_t wc_start = max(w_lo - w_head, index_t(0));
                         const index_t c_start =
                             wc_start > 0 ? integer_divide_ceil(wc_start, sq_w) : 0;
-                        cu_states[c].isplit =
-                            wc_start > 0 ? integer_divide_ceil(wc_start, target_w) : 0;
+                        // denom = max(sq_w, target_w) keeps isplit in [0, nc-1] (theupper bound
+                        // assumed by GetWorkspaceDeviceSizeUpperBound): when target_w >= sq_w it
+                        // preserves intra-CU atomic sharing; when target_w < sq_w (sub-K-row
+                        // sharding) it collapses to per-K-row indexing (= c_start). Clamp absorbs
+                        // empty CUs whose rounded-up wc_start lands past the last K-row; they don't
+                        // write dq_acc on GPU so the slot value is harmless.
+                        const index_t denom = max(sq_w, target_w);
+                        const index_t raw_isp =
+                            wc_start > 0 ? integer_divide_ceil(wc_start, denom) : 0;
+                        cu_states[c].isplit     = min(raw_isp, max(nc - 1, index_t(0)));
                         cu_states[c].head_start = head_start;
                         cu_states[c].c_start    = c_start;
-                        // w_lo = true global start of first K-chunk for this CU
-                        cu_states[c].w_lo = pb + head_start * hw + c_start * sq_w;
+                        cu_states[c].w_lo       = pb + head_start * hw + c_start * sq_w;
+
+                        batch_states[b].nsplits =
+                            max(batch_states[b].nsplits, cu_states[c].isplit + 1);
                     }
                     else
                     {
@@ -306,6 +299,20 @@ struct FmhaBwdWorkspaceManager
                 cu_states[c].w_hi = cu_states[c + 1].w_lo;
             cu_states[num_cus - 1].w_hi = total_w;
 
+            for(index_t b = 0; b < batch_size; ++b)
+                nsplits[b] = batch_states[b].nsplits;
+
+            // Step 4: compute per-batch dq_acc offsets (compact layout, depends on nsplits)
+            offsets[0] = 0;
+            index_t i  = 0;
+            for(; i < batch_size - 1; ++i)
+            {
+                offsets[i + 1] = offsets[i] + static_cast<long_index_t>(nhead_q) * nsplits[i] *
+                                                  (seqstart_qs[i + 1] - seqstart_qs[i]) * hdim_q;
+            }
+            const long_index_t dq_acc_elems =
+                offsets[i] + static_cast<long_index_t>(nhead_q) * nsplits[i] *
+                                 (seqstart_qs[i + 1] - seqstart_qs[i]) * hdim_q;
             return sizeof(AccDataType) * dq_acc_elems;
         }
         else // deterministic batch mode (kUsePersistent)
@@ -1201,13 +1208,10 @@ struct FmhaBwdDQDKDVKernel
                 else
                 {
                     // Group mode persistent: variable seqlen per batch, dispatch via gist algo.
-                    // Per-CU state (w_lo, w_hi, ibatch, isplit, head_start, c_start) is packed
-                    // in a single struct array to minimise kargs pointer count (5 → 1).
                     // Remap block→CU: interleave SEs so consecutive blocks hit different SEs,
                     // spreading dq_acc writes across HBM channels.
                     const index_t cu_id = blockIdx.x / 8 + (blockIdx.x % 8) * 32;
 
-                    // Load all per-CU fields through a single pointer; pointer dies after loads.
                     const FmhaBwdGroupPersistentCuState* cs = kargs.cu_state_ptr + cu_id;
                     const index_t w_hi                      = amd_wave_read_first_lane(cs->w_hi);
                     index_t ibatch                          = amd_wave_read_first_lane(cs->ibatch);

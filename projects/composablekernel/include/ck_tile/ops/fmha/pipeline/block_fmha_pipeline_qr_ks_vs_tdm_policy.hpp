@@ -498,42 +498,56 @@ struct BlockFmhaPipelineQRKSVSTdmDefaultPolicy
         return k_block_dstr;
     }
 
-    // Step B2 (h hybrid): V goes back to async_load + ds_load_tr (B1 path).
-    // V dram dist reverted to B1 5D (mirrors
-    // block_fmha_pipeline_qr_ks_vs_async_trload_policy.hpp:615-641).
-    // The B2 (λ-2) trivial tile-major attempt produced element-permutation
-    // garbage because TDM box-major write writes plain row-major LDS but
-    // ds_load_tr_b128 expects a thread-permuted layout (5D dist is the
-    // reverse-engineered match). TDM box-major + thread-permuted layout are
-    // physically incompatible under simple dist changes — see (h) decision
-    // doc swe-status-lambda-pivot.md.
+    // Step C #2 (V→TDM): V dram dist switched from B1 5D async-style scatter
+    // to trivial tile-major, mirroring (lambda-K) MakeKDramTileDistribution
+    // above (and the GEMM v1 ColMajor-B `MakeBDramTileDistribution`
+    // template at gemm_pipeline_ag_bg_cr_comp_tdm_default_policy.hpp:117-126).
+    //
+    // Why this is now correct (supersedes the prior "physically incompatible"
+    // comment that this hunk replaces — see also
+    // mentor-reanalysis-ds-load-tr-correction.md):
+    //
+    // The earlier (B2 lambda-2) attempt to switch V to trivial tile-major
+    // produced element-permutation garbage. The diagnosis at the time
+    // assumed the failure was inherent to "TDM box-major write +
+    // ds_load_tr_b128 reader" — i.e. the reader supposedly required a
+    // thread-permuted LDS layout that TDM's box-major write cannot
+    // produce. Mentor's later re-analysis showed that diagnosis was
+    // incorrect: ds_load_tr_b128 reads from a *byte-position* in LDS and
+    // its in-shader transpose is a register-side rearrangement that is
+    // independent of how the writer scattered its bytes. The actual
+    // failure mode of the lambda-2 attempt was the V LDS read view
+    // having Xor=true while the writer is plain bytes — the same
+    // (β')-Q / (β)-K writer/reader byte alignment mismatch class of bug
+    // we already fixed for Q and K in B2.
+    //
+    // With piece 4 below (V LDS read view Xor=true → false), the writer
+    // and reader both align on plain row-major byte layout, and TDM
+    // box-major write into the row-major V LDS strip is consumed
+    // correctly by ds_load_tr_b128. The MakeVRegTileDistribution
+    // (TransposedDstrEncode) reg-side wrinkle is unaffected because it
+    // sits on the register side of ds_load_tr, not the LDS side.
     template <typename Problem>
-    CK_TILE_DEVICE static constexpr auto MakeVDramTileDistribution()
+    CK_TILE_HOST_DEVICE static constexpr auto MakeVDramTileDistribution()
     {
         constexpr index_t kBlockSize = Problem::kBlockSize;
         constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN1;
         constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN0;
+        constexpr index_t warpNum    = kBlockSize / get_warp_size();
 
-        constexpr index_t MaxVectorSize = 16 / sizeof(typename Problem::VDataType);
-
-        constexpr index_t ElemPerThread = (kNPerBlock * kKPerBlock) / kBlockSize;
-        static_assert(0 < ElemPerThread);
-        constexpr index_t kMaxVecLoad = min(ElemPerThread, MaxVectorSize);
-
-        constexpr index_t NPerThread     = kMaxVecLoad;
-        constexpr index_t NThreads       = kNPerBlock / NPerThread;
-        constexpr index_t KThreadPerWarp = get_warp_size() / NThreads;
-        constexpr index_t NumWarps       = kBlockSize / get_warp_size();
-        constexpr index_t KPerThread     = kKPerBlock / (KThreadPerWarp * NumWarps);
+        static_assert(kNPerBlock % warpNum == 0,
+                      "kNPerBlock must be divisible by warpNum for trivial tile-major V dist");
 
         return make_static_tile_distribution(
-            tile_distribution_encoding<sequence<1>,
-                                       tuple<sequence<KPerThread, NumWarps, KThreadPerWarp>,
-                                             sequence<NThreads, NPerThread>>,
-                                       tuple<sequence<1>, sequence<1, 2>>,
-                                       tuple<sequence<1>, sequence<2, 0>>,
-                                       sequence<1, 2>,
-                                       sequence<0, 1>>{});
+            tile_distribution_encoding<
+                sequence<>,                                                 // R: empty
+                tuple<sequence<warpNum, kNPerBlock / warpNum>,              // X[0]: N-axis, warp split
+                      sequence<kKPerBlock>>,                                // X[1]: K-axis, single full vector per thread
+                tuple<sequence<1>>,                                         // PsToRH (warp dim mapping)
+                tuple<sequence<0>>,                                         // PsToRH_lid
+                sequence<1, 2>,                                             // YsToD outer
+                sequence<1, 0>>{},                                          // YsToD inner
+            bool_constant<true>{});                                         // IsWarpLevelParallelOnly
     }
 
     template <typename Problem>

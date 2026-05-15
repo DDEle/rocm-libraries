@@ -228,13 +228,13 @@ struct BlockFmhaPipelineQRKSVSTdm
         }
 
         // ---------------------------------------------------------------------
-        // TDM configs for Q / K (Step B2)
+        // TDM configs for Q / K / V (Step B2 + Step C #2 V→TDM)
         // pad_enable + pad_amount + pad_interval are compile-time, sourced from
         // the policy. workgroup_mask defaults to 0 (no cluster multicast in B2).
-        // V uses async_load_tile path (h hybrid revert), no TDM config needed.
         // ---------------------------------------------------------------------
         TDMConfig tdm_config_q;
         TDMConfig tdm_config_k;
+        TDMConfig tdm_config_v;
         {
             constexpr auto LdsPaddingConfigQ =
                 Policy::template GetLdsPaddingConfigQ<Problem>();
@@ -247,6 +247,12 @@ struct BlockFmhaPipelineQRKSVSTdm
             tdm_config_k.pad_enable              = LdsPaddingConfigK[I0];
             tdm_config_k.pad_config.pad_amount   = LdsPaddingConfigK[I1];
             tdm_config_k.pad_config.pad_interval = LdsPaddingConfigK[number<2>{}];
+
+            constexpr auto LdsPaddingConfigV =
+                Policy::template GetLdsPaddingConfigV<Problem>();
+            tdm_config_v.pad_enable              = LdsPaddingConfigV[I0];
+            tdm_config_v.pad_config.pad_amount   = LdsPaddingConfigV[I1];
+            tdm_config_v.pad_config.pad_interval = LdsPaddingConfigV[number<2>{}];
         }
 
         // Q tile in LDS
@@ -346,7 +352,7 @@ struct BlockFmhaPipelineQRKSVSTdm
             reinterpret_cast<VDataType*>(static_cast<char*>(smem_ptr) +
                                          Policy::template GetSmemSizeK<Problem>() +
                                          Policy::template GetSmemSizeS<Problem>()),
-            Policy::template MakeVLdsBlockDescriptor<Problem, true>());
+            Policy::template MakeVLdsBlockDescriptor<Problem>());
         auto v_lds_write_window =
             make_tile_window(v_lds_write_view,
                              Policy::template MakeVLdsBlockDescriptor<Problem>().get_lengths(),
@@ -380,7 +386,16 @@ struct BlockFmhaPipelineQRKSVSTdm
             // (h hybrid) V uses async_load_tile (B1 verified path); K uses TDM above.
             // sync counters are independent: s_wait_tensorcnt for K (TDM),
             // block_sync_lds_direct_load<0> for V (async).
-            async_load_tile(v_lds_write_window, v_dram_window); // prefetch load v tile
+            // Step C #2 (V→TDM): switched from async_load_tile to load_tile_tdm.
+            // V LDS desc is plain row-major (writer side, MakeVLdsBlockDescriptor
+            // default), reader side now also plain (piece 4 dropped Xor=true on
+            // the v_lds_read_view call site above), and the V dram dist
+            // (MakeVDramTileDistribution) is now trivial tile-major mirroring
+            // K (piece 1). The byte alignment matches what TDM box-major DMA
+            // produces; ds_load_tr_b128 in PV reads this plain LDS layout
+            // correctly because its in-shader transpose is a register-side
+            // rearrangement independent of the writer scatter pattern.
+            load_tile_tdm(tdm_config_v, v_lds_write_window, v_dram_window); // prefetch load v tile
 
             // move V tile windows
             move_tile_window(v_dram_window, {kN0, 0});
@@ -764,13 +779,13 @@ struct BlockFmhaPipelineQRKSVSTdm
         }
 
         // ---------------------------------------------------------------------
-        // TDM configs for Q / K (Step B2)
+        // TDM configs for Q / K / V (Step B2 + Step C #2 V→TDM)
         // pad_enable + pad_amount + pad_interval are compile-time, sourced from
         // the policy. workgroup_mask defaults to 0 (no cluster multicast in B2).
-        // V uses async_load_tile path (h hybrid revert), no TDM config needed.
         // ---------------------------------------------------------------------
         TDMConfig tdm_config_q;
         TDMConfig tdm_config_k;
+        TDMConfig tdm_config_v;
         {
             constexpr auto LdsPaddingConfigQ =
                 Policy::template GetLdsPaddingConfigQ<Problem>();
@@ -783,6 +798,12 @@ struct BlockFmhaPipelineQRKSVSTdm
             tdm_config_k.pad_enable              = LdsPaddingConfigK[I0];
             tdm_config_k.pad_config.pad_amount   = LdsPaddingConfigK[I1];
             tdm_config_k.pad_config.pad_interval = LdsPaddingConfigK[number<2>{}];
+
+            constexpr auto LdsPaddingConfigV =
+                Policy::template GetLdsPaddingConfigV<Problem>();
+            tdm_config_v.pad_enable              = LdsPaddingConfigV[I0];
+            tdm_config_v.pad_config.pad_amount   = LdsPaddingConfigV[I1];
+            tdm_config_v.pad_config.pad_interval = LdsPaddingConfigV[number<2>{}];
         }
 
         // Q tile in LDS
@@ -868,7 +889,7 @@ struct BlockFmhaPipelineQRKSVSTdm
 
         auto v_lds_read_view = make_tensor_view<address_space_enum::lds>(
             reinterpret_cast<VDataType* __restrict__>(static_cast<char*>(smem_ptrv0)),
-            Policy::template MakeVLdsBlockDescriptor<Problem, true>());
+            Policy::template MakeVLdsBlockDescriptor<Problem>());
 
         auto v_lds_write_window =
             make_tile_window(v_lds_write_view,
@@ -892,8 +913,8 @@ struct BlockFmhaPipelineQRKSVSTdm
         static_assert(1 <= k1_loops);
         block_sync_lds<0>();
         load_tile_tdm(tdm_config_k, k_lds_write_window, k_dram_window);
-        // (h hybrid) V uses async_load_tile (B1 verified path); K stays TDM.
-        async_load_tile(v_lds_write_window, v_dram_window);
+        // Step C #2 (V→TDM): switched from async_load_tile to load_tile_tdm.
+        load_tile_tdm(tdm_config_v, v_lds_write_window, v_dram_window);
 
         move_tile_window(k_dram_window, {kN0, 0});
         k_lds_write_window.set_bottom_tensor_view_data_ptr(
@@ -917,8 +938,8 @@ struct BlockFmhaPipelineQRKSVSTdm
             block_sync_lds<k_lds_insts>();
             move_tile_window(v_dram_window, {kN0, 0});
             v_lds_write_window.set_bottom_tensor_view_data_ptr(v_lds_write_ptr);
-            // (h hybrid) V uses async_load_tile (B1 verified path); K stays TDM.
-            async_load_tile(v_lds_write_window, v_dram_window);
+            // Step C #2 (V→TDM): switched from async_load_tile to load_tile_tdm.
+            load_tile_tdm(tdm_config_v, v_lds_write_window, v_dram_window);
 
             // STAGE 1, QK gemm
             clear_tile(s_acc); // initialize C

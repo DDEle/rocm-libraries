@@ -2648,6 +2648,19 @@ struct FmhaFwdKernel
                     make_tuple(number<FmhaPipeline::kK1>{}, number<FmhaPipeline::kN1>{}),
                     sequence<kPadSeqLenK, false>{});
 
+                // [Step C #2 V→TDM] Same rationale as the qr_tdm dispatch in
+                // make_q_dram and make_k_dram above: TDM box-major DMA can't
+                // honor software XOR'd dram views, the unmerge/xor/merge_v3
+                // chain below is dead code for TDM, and the framework #1 fix's
+                // calculate_offset(unit_vec) would otherwise produce an
+                // XOR-polluted stride. Return the affine pad-only view so the
+                // box copy reads the right rows.
+                if constexpr(kPipelineName == "qr_tdm")
+                {
+                    return v_dram_pad;
+                }
+                else
+                {
 #if CK_TILE_FMHA_HANDLE_XOR_LENGTH_FOLD
                 constexpr index_t LDSLayerSize =
                     256 * numeric_traits<VDataType>::PackedSize / sizeof(VDataType);
@@ -2738,6 +2751,7 @@ struct FmhaFwdKernel
                         make_tuple(sequence<0>{}, sequence<1, 2>{}),
                         make_tuple(sequence<0>{}, sequence<1>{}));
                 }
+                } // end else (qr_tdm dispatch above)
             };
 
             const auto v_dram = [&]() {

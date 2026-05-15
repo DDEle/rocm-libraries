@@ -8,10 +8,12 @@
 #include "ck_tile/ops/fmha/block/block_attention_bias_enum.hpp"
 #include "ck_tile/ops/fmha/pipeline/block_fmha_bwd_dq_dk_dv_pipeline_selector.hpp"
 
+#include <algorithm>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 // S[seqlen_q, seqlen_k] = Q[seqlen_q, hdim_q] @ K[seqlen_k, hdim_q]
 // S'[seqlen_q, seqlen_k] = S[seqlen_q, seqlen_k] * Scale[1]
@@ -195,16 +197,37 @@ struct FmhaBwdWorkspaceManager
             auto* prefix_batch    = reinterpret_cast<index_t*>(reinterpret_cast<char*>(cpu_ws) +
                                                             GetDqAccSplitsSize<false>(batch_size) +
                                                             GetDqAccOffsetsSize(batch_size));
-            auto* cu_states       = reinterpret_cast<FmhaBwdGroupPersistentCuState*>(
+            auto* cu_states_out   = reinterpret_cast<FmhaBwdGroupPersistentCuState*>(
                 reinterpret_cast<char*>(cpu_ws) + GetCuStateOffset(batch_size));
             auto* batch_states = reinterpret_cast<FmhaBwdBatchState*>(
                 reinterpret_cast<char*>(cpu_ws) + GetBatchStateOffset(batch_size));
+
+            // Build CU states in logical-CU order; copied to cu_states_out
+            // with an XCD-contiguous remap at the end.
+            std::vector<FmhaBwdGroupPersistentCuState> cu_states(num_cus);
 
             // sq_work: sq aligned to kM0 for work-distribution purposes.
             // If sq==0, use kM0 so CUs are still dispatched and write dK/dV=0.
             const auto sq_work = [](index_t sq) -> index_t {
                 return sq == 0 ? kM0 : integer_least_multiple(sq, kM0);
             };
+
+            // No K work anywhere (all seqlen_k==0): no dQ accumulation, so no
+            // CU partition. Mark cu_states inactive (ibatch sentinel), neutral
+            // per-batch defaults, 0 dq_acc bytes. GPU early-returns on the
+            // sentinel and never reads batch_states / nsplits / offsets, so any
+            // consistent zero-ish fill is fine. dK/dV still zero-filled via
+            // NeedsZeroDqAcc path.
+            if(seqstart_ks[batch_size] == 0)
+            {
+                std::fill_n(batch_states, batch_size, FmhaBwdBatchState{0, 0, 1});
+                std::fill_n(nsplits, batch_size, index_t{1});
+                std::fill_n(offsets, batch_size, long_index_t{0});
+                std::fill_n(cu_states_out,
+                            num_cus,
+                            FmhaBwdGroupPersistentCuState{0, 0, batch_size, 0, 0, 0});
+                return 0;
+            }
 
             prefix_batch[0] = 0;
             for(index_t b = 0; b < batch_size; ++b)
@@ -298,6 +321,24 @@ struct FmhaBwdWorkspaceManager
             for(index_t c = 0; c < num_cus - 1; ++c)
                 cu_states[c].w_hi = cu_states[c + 1].w_lo;
             cu_states[num_cus - 1].w_hi = total_w;
+
+            // XCD-contiguous remap so each XCD's round-robin blockIdx.x values
+            // map to a contiguous range of logical CUs. Mirrors
+            // GemmSpatiallyLocalTilePartitioner::RemapXCD; tall_xcds handles the
+            // non-divisible case.
+            constexpr index_t NUM_XCDS = 8;
+            const index_t ids_per_xcd  = (num_cus + NUM_XCDS - 1) / NUM_XCDS;
+            const index_t tall_xcds    = (num_cus % NUM_XCDS == 0) ? NUM_XCDS : num_cus % NUM_XCDS;
+            for(index_t b = 0; b < num_cus; ++b)
+            {
+                const index_t xcd      = b % NUM_XCDS;
+                const index_t local_id = b / NUM_XCDS;
+                const index_t logical  = (xcd < tall_xcds)
+                                             ? xcd * ids_per_xcd + local_id
+                                             : tall_xcds * ids_per_xcd +
+                                                  (xcd - tall_xcds) * (ids_per_xcd - 1) + local_id;
+                cu_states_out[b]       = cu_states[logical];
+            }
 
             for(index_t b = 0; b < batch_size; ++b)
                 nsplits[b] = batch_states[b].nsplits;
@@ -1208,11 +1249,8 @@ struct FmhaBwdDQDKDVKernel
                 else
                 {
                     // Group mode persistent: variable seqlen per batch, dispatch via gist algo.
-                    // Remap block→CU: interleave SEs so consecutive blocks hit different SEs,
-                    // spreading dq_acc writes across HBM channels.
-                    const index_t cu_id = blockIdx.x / 8 + (blockIdx.x % 8) * 32;
-
-                    const FmhaBwdGroupPersistentCuState* cs = kargs.cu_state_ptr + cu_id;
+                    // cu_state_ptr is XCD-remapped on host, so blockIdx.x indexes directly.
+                    const FmhaBwdGroupPersistentCuState* cs = kargs.cu_state_ptr + blockIdx.x;
                     const index_t w_hi                      = amd_wave_read_first_lane(cs->w_hi);
                     index_t ibatch                          = amd_wave_read_first_lane(cs->ibatch);
                     index_t isplit                          = amd_wave_read_first_lane(cs->isplit);

@@ -184,6 +184,39 @@ namespace TensileLite
             const uint32_t mTiles       = (uint32_t)((M + FUSED_A2A_M_TILE - 1) / FUSED_A2A_M_TILE);
             const uint32_t target       = mTiles * tilesPerRank;
 
+            // Fail-fast on shapes that violate the fused-A2A design constraints
+            // (spec section 0). The kernel maps a whole PUSH workgroup to a
+            // SINGLE dst_rank (n_col_base_wg = WorkGroup1 * MacroTile1), which is
+            // only correct when each rank's shard is an integer number of
+            // N-tiles -- i.e. n_shard is a multiple of the 256-wide macro-tile.
+            // If n_shard < MacroTile1 (or not a multiple), one workgroup spans
+            // several ranks: its lanes are all attributed to one rank, so data
+            // is scattered to the wrong recv buffer AND, under DRAIN, ranks with
+            // no supplying workgroup poll a flag slot no one ever sets -> the
+            // GPU hangs forever. Reject such shapes on the host instead of
+            // launching into a deadlock. Supported stage-1 shapes need
+            // N % W == 0, n_shard % 256 == 0 (=> n_shard >= 256, all W ranks
+            // covered), and M % 256 == 0.
+            if(N % (size_t)W != 0 || (nShard % FUSED_A2A_N_TILE) != 0
+               || (M % (size_t)FUSED_A2A_M_TILE) != 0)
+            {
+                std::cerr
+                    << "[fused-a2a] ERROR: problem shape violates fused-A2A "
+                       "constraints (spec section 0).\n"
+                    << "  M=" << M << " N=" << N << " W=" << W
+                    << " n_shard=N/W=" << nShard << " MacroTile=" << FUSED_A2A_N_TILE
+                    << "\n"
+                    << "  require: N % W == 0, (N/W) % " << FUSED_A2A_N_TILE
+                    << " == 0 (so n_shard >= " << FUSED_A2A_N_TILE
+                    << " and every rank is covered), M % " << FUSED_A2A_M_TILE
+                    << " == 0.\n"
+                    << "  e.g. W=4 needs N >= " << ((size_t)W * FUSED_A2A_N_TILE)
+                    << " (n_shard >= 256). Refusing to launch (would deadlock in "
+                       "the DRAIN barrier)."
+                    << std::endl;
+                return -1;
+            }
+
             // The fused PUSH store writes the FULL macro-tile (MT0 rows), NOT
             // just the logical M rows, and the recv SRD uses no edge clamp
             // (num_records = BufferOOB). So a PUSH WG's lanes address recv rows

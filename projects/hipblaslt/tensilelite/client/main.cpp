@@ -81,6 +81,14 @@ namespace TensileLite
 {
     namespace Client
     {
+        // Single-process multi-GPU fused GEMM.A2A entry point (Task 10).
+        // Defined in FusedA2AClient.cpp. Dispatched from main() when
+        // --fused-a2a is set; returns a process exit code.
+        int runFusedA2A(po::variables_map const&                                       args,
+                        std::shared_ptr<MasterSolutionLibrary<ContractionProblemGemm>> library,
+                        std::shared_ptr<Hardware>                                      hardware,
+                        ClientProblemFactory&                                          problemFactory);
+
         __global__ void flush_icache()
         {
             asm __volatile__("s_icache_inv \n\t"
@@ -284,6 +292,9 @@ namespace TensileLite
                 ("dump-tensors",             po::value<bool>()->default_value(false), "Binary dump tensors instead of printing.")
 
                 ("device-idx",               po::value<int>()->default_value(0), "Device index")
+                ("fused-a2a",                po::value<bool>()->default_value(false), "Run the single-process multi-GPU fused GEMM.A2A setup+launch entry point instead of the single-GPU benchmark loop (Task 10 smoke).")
+                ("fused-a2a-world",          po::value<int>()->default_value(4), "World size (number of GPUs) for --fused-a2a.")
+                ("fused-a2a-drain",          po::value<int>()->default_value(1), "Runtime DRAIN flag passed to the fused kernel (1=on).")
                 ("use-default-stream",       po::value<bool>()->default_value(false), "Use default Hip stream to run kernels.")
                 ("platform-idx",             po::value<int>()->default_value(0), "OpenCL Platform Index")
 
@@ -1116,6 +1127,16 @@ int main(int argc, const char* argv[])
             std::string str = "Lazy loading failed. (" + std::to_string(int(result)) + ").";
             std::runtime_error(str.c_str());
         }
+    }
+
+    // Fused GEMM.A2A single-process multi-GPU entry point (Task 10). This is a
+    // self-contained setup+launch path that does NOT use the single-GPU
+    // benchmark loop below; dispatch here and return immediately.
+    if(args["fused-a2a"].as<bool>())
+    {
+        int rc = runFusedA2A(args, library, hardware, problemFactory);
+        flushTimingBuffer();
+        return rc;
     }
 
     auto problems        = problemFactory.problems();

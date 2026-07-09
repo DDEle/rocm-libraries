@@ -37,7 +37,7 @@ from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, \
   VCvtFP8toF32, VCvtI32toF32, VCvtPkBF8toF32, VCvtPkF32toBF16, VCvtPkF32toFP16, VCvtPkFP8toF32, \
   VFmaF64, VFmaMixF32, VAndB32, VLShiftLeftB32, VPermlane16SwapB32, VPermlane32SwapB32, \
   VLShiftRightB32, VMacF32, VMadMixF32, VMaxF32, VMovB32, VMovB64, VMulF32, VMulF64, \
-  VMulLOU32, VMulPKF16, VMulPKF32, VPackF16toB32, VReadfirstlaneB32, VRndneF32, VCvtBF16toFP32
+  VMulLOU32, VMulPKF16, VMulPKF32, VPackF16toB32, VReadfirstlaneB32, VRndneF32, VCvtBF16toFP32, VSubU32
 from rocisa.functions import vectorStaticMultiply
 
 from ..Common import DataDirection, SemanticVersion, isSubtileMultiDU
@@ -51,6 +51,9 @@ from ..AsmAddressCalculation import AddrCalculation
 from ..Components.PackData import formatting, PackData_F16, PackData_BF16, PackData_FLOAT8, PackData_FLOAT8_fnuz
 from rocisa.instruction import ECvtF16toF32, ECvtPkFP8toF32, ECvtPkBF8toF32
 from ..KernelWriterModules import hasSequentialValuC
+# NOTE: fusedA2AKernArgLayout / FUSED_A2A_MAX_RANKS are imported lazily inside the
+# fused-A2A methods (from .Signature) to avoid a circular import at module load time
+# (Component.py does `from .Components import *`, which re-enters this module).
 
 from math import ceil, log2
 
@@ -1846,16 +1849,19 @@ class GlobalWriteBatchWriter:
                 storeCodeModule.add(SCBranchSCC0(labelName=fallbackLabel.getLabelName(),
                                                  comment=f"only d0={tt0-1} valid -> scalar fallback"))
                 tmpStoreCode = self._emit16bitSubtilePairedStore(partnerAddrCalc, sumIdx0, sumIdx1, prefixOffset, tt0 - 1, blockIdxM=blockIdxM, blockIdxN=blockIdxN)
-                self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
+                self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode,
+                                      self._fusedA2APushBuilder([partnerElementIdx, elementIdx]))
                 storeCodeModule.add(SBranch(labelName=afterPairedLabel.getLabelName(),
                                             comment="skip scalar fallback"))
                 storeCodeModule.add(fallbackLabel)
                 tmpFallbackCode = self._emit16bitSubtileScalarStore(partnerAddrCalc, sumIdx0, prefixOffset, tt0 - 1, blockIdxM=blockIdxM, blockIdxN=blockIdxN)
-                self._addSubtileStore(storeCodeModule, blockIdxN, tmpFallbackCode)
+                self._addSubtileStore(storeCodeModule, blockIdxN, tmpFallbackCode,
+                                      self._fusedA2APushBuilder([partnerElementIdx]))
                 storeCodeModule.add(afterPairedLabel)
               else:
                 tmpStoreCode = self._emit16bitSubtilePairedStore(partnerAddrCalc, sumIdx0, sumIdx1, prefixOffset, tt0 - 1, blockIdxM=blockIdxM, blockIdxN=blockIdxN)
-                self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
+                self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode,
+                                      self._fusedA2APushBuilder([partnerElementIdx, elementIdx]))
               if skipLabel is not None:
                 storeCodeModule.add(skipLabel)
               self.storesIssued += 1
@@ -1868,7 +1874,8 @@ class GlobalWriteBatchWriter:
               sumIdx0 = self.ss.elementSumIdx[elementIdx]
               prefixOffset = self.parentWriter.states.c.startVgprValu
               tmpStoreCode = self._emit16bitSubtileScalarStore(addrCalc, sumIdx0, prefixOffset, tt0, blockIdxM=blockIdxM, blockIdxN=blockIdxN)
-              self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
+              self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode,
+                                    self._fusedA2APushBuilder([elementIdx]))
               if orphanSkipLabel is not None:
                 storeCodeModule.add(orphanSkipLabel)
               self.storesIssued += 1
@@ -1890,7 +1897,8 @@ class GlobalWriteBatchWriter:
               sumIdx0 = self.ss.elementSumIdx[elementIdx]
               prefixOffset = self.parentWriter.states.c.startVgprValu
               tmpStoreCode = self._emit16bitSubtileScalarStore(addrCalc, sumIdx0, prefixOffset, tt0, blockIdxM=blockIdxM, blockIdxN=blockIdxN)
-              self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
+              self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode,
+                                    self._fusedA2APushBuilder([elementIdx]))
               if orphanSkipLabel is not None:
                 storeCodeModule.add(orphanSkipLabel)
               self.storesIssued += 1
@@ -2067,32 +2075,313 @@ class GlobalWriteBatchWriter:
   # N-tile threshold splitting PUSH (all-to-all) columns from locally-owned columns.
   _FUSED_A2A_AN_TILES = 40
 
-  def _addSubtileStore(self, targetModule, blockIdxN: int, storeModule: Module):
+  def _addSubtileStore(self, targetModule, blockIdxN: int, storeModule: Module, pushBuilder=None):
     """Add a 16bit subtile store, routing through the fused-A2A dispatch when enabled.
 
     When FusedGemmA2A is off the store Module is added verbatim (output byte-identical
-    to the non-fused path); when on, the N-tile dispatch skeleton decides the branch.
+    to the non-fused path); when on, a RUNTIME dispatch on WorkGroup1 (the owning N-tile)
+    decides between the local D store (storeModule) and the remote all-to-all PUSH store
+    (built by pushBuilder).
+
+    pushBuilder: optional zero-arg callable returning a Module that stores this element
+                 to the remote recv[W,M,n_shard] layout.  Required for the PUSH branch;
+                 when None the local storeModule is used for both branches (skeleton).
     """
     if self.kernel["FusedGemmA2A"]:
-      self._fusedA2ADispatch(targetModule, blockIdxN, storeModule)
+      self._fusedA2ADispatch(targetModule, blockIdxN, storeModule, pushBuilder)
     else:
       targetModule.add(storeModule)
 
-  def _fusedA2ADispatch(self, targetModule, blockIdxN: int, storeModule: Module):
-    """Route a D-store by N-tile coordinate for FusedGemmA2A (dispatch skeleton).
+  def _fusedA2APushBuilder(self, elementIdxList):
+    """Return a zero-arg callable building the PUSH store for the given store elements.
 
-    N tiles below _FUSED_A2A_AN_TILES are the all-to-all "PUSH" columns (Task 7 will
-    replace their store with a remote push); N tiles at/above are locally owned and use
-    the regular local store.  Both branches currently emit the SAME local store so that
-    the dispatch decision runs per element without changing GEMM numerics (L1).
+    elementIdxList: the element indices whose (sumIdx, coordOffset0, coordOffset1) form the
+                    subtile M-blocks packed into this store (1 for scalar/orphan, 2 for paired).
+    Returns None when FusedGemmA2A is off so callers can pass it unconditionally.
     """
-    if blockIdxN < self._FUSED_A2A_AN_TILES:
-      targetModule.addComment0(f"fused-A2A dispatch: PUSH branch (blockIdxN={blockIdxN} < {self._FUSED_A2A_AN_TILES})")
-      # TODO Task 7: PUSH store (remote all-to-all); local store for now.
-      targetModule.add(storeModule)
+    if not self.kernel["FusedGemmA2A"]:
+      return None
+    groups = [(self.ss.elementSumIdx[ei], self.ss.elementCoord0[ei], self.ss.elementCoord1[ei])
+              for ei in elementIdxList]
+    return lambda: self._emitFusedA2APushStore(groups)
+
+  def _fusedA2ADispatch(self, targetModule, blockIdxN: int, storeModule: Module, pushBuilder=None):
+    """Route a D-store by owning N-tile for FusedGemmA2A (RUNTIME decision).
+
+    A workgroup owns one MacroTile1-wide N column-block, identified at RUNTIME by
+    WorkGroup1 (the global N-tile index).  Workgroups whose N-tile is in the first AN
+    columns (WorkGroup1 < _FUSED_A2A_AN_TILES) are the all-to-all "PUSH" workgroups:
+    their output is redirected to the remote recv[W,M,n_shard] buffer (built by
+    pushBuilder) instead of the local D output.  Workgroups at/above are locally owned
+    and use the regular local store.
+
+    Both code paths are emitted and guarded by a runtime SCC compare/branch on
+    WorkGroup1 vs _FUSED_A2A_AN_TILES, so each WG executes exactly one path at run time.
+    (blockIdxN = element[0] is only the N wave-block WITHIN a macro-tile (0..15) and must
+    NOT gate this decision; the owning N-tile is a per-WG runtime value in WorkGroup1.)
+    _FUSED_A2A_AN_TILES is a hardcoded constant for now; deriving it from a real problem
+    parameter is a separate follow-up.
+
+    When pushBuilder is None (dispatch-only skeleton) the PUSH branch falls back to the
+    local store so GEMM numerics stay intact.
+    """
+    kw = self.parentWriter
+    localLabel = Label(kw.labels.getNameInc("fusedA2A_dispatch_local"),
+                       f"fused-A2A: WorkGroup1 >= {self._FUSED_A2A_AN_TILES} -> local store")
+    afterLabel = Label(kw.labels.getNameInc("fusedA2A_dispatch_after"),
+                       "fused-A2A: after PUSH/local dispatch")
+    # Runtime gate: PUSH when WorkGroup1 < AN_tiles, else local store.
+    tmpS = kw.sgprPool.checkOut(1, tag="fusedA2A_dispatchGate", preventOverflow=False)
+    targetModule.addComment0(f"fused-A2A dispatch: runtime gate WorkGroup1 < {self._FUSED_A2A_AN_TILES} ? PUSH : local")
+    targetModule.add(SMovB32(dst=sgpr(tmpS), src=self._FUSED_A2A_AN_TILES,
+                             comment=f"AN_tiles = {self._FUSED_A2A_AN_TILES}"))
+    targetModule.add(SCmpGtU32(src0=sgpr(tmpS), src1=sgpr("WorkGroup1"),
+                               comment=f"AN_tiles > WorkGroup1? (this WG's N-tile in PUSH region)"))
+    targetModule.add(SCBranchSCC0(labelName=localLabel.getLabelName(),
+                                  comment="WorkGroup1 >= AN_tiles -> local store"))
+    kw.sgprPool.checkIn(tmpS)
+    # PUSH branch (WorkGroup1 < AN_tiles): remote all-to-all store.
+    targetModule.addComment0("fused-A2A dispatch: PUSH branch (remote recv[W,M,n_shard])")
+    if pushBuilder is not None:
+      targetModule.add(pushBuilder())
     else:
-      targetModule.addComment0(f"fused-A2A dispatch: local branch (blockIdxN={blockIdxN} >= {self._FUSED_A2A_AN_TILES})")
       targetModule.add(storeModule)
+    targetModule.add(SBranch(labelName=afterLabel.getLabelName(), comment="skip local store"))
+    # Local branch (WorkGroup1 >= AN_tiles): regular local D store.
+    targetModule.add(localLabel)
+    targetModule.addComment0("fused-A2A dispatch: local branch (local D store)")
+    targetModule.add(storeModule)
+    targetModule.add(afterLabel)
+
+  def _fusedA2ALoadRecvBase(self, module, recvBaseSgpr, shardBaseSgpr, nShardSgpr, tmpSgpr):
+    """Switch-load recv_ptr[dst_rank] into recvBaseSgpr and dst_rank*n_shard into shardBaseSgpr.
+
+    recv_ptr[dst_rank] is NOT in an SGPR (Task 5 registered it as kernarg metadata only),
+    so per the Task 5 contract this reads exactly one recv base pointer on demand via a
+    switch over the compile-time-constant kernarg slots.  dst_rank is a per-WG runtime
+    constant: since n_shard is a multiple of MacroTile1 (design guarantees (AN/W)%256==0),
+    every 256-column macro-tile lies entirely within one destination rank's shard, so
+    dst_rank = (WorkGroup1 * MacroTile1) / n_shard is the same for all lanes in the WG.
+
+    Rather than divide by the runtime n_shard, the switch scans candidate ranks j
+    (0..MAX-1): rank j is the destination when this WG's first N column
+    (n_col_base_wg = WorkGroup1*MT1) is >= j*n_shard.  Ranks are contiguous, so the
+    HIGHEST matching j wins; the forward scan keeps overwriting recvBase/shardBase with
+    each qualifying rank.  Ranks j >= FusedW never qualify (n_col_base_wg < AN = W*n_shard),
+    so unused slots are harmless even though all MAX slots are visited at compile time.
+
+    Args:
+      module:        Module to append instructions to.
+      recvBaseSgpr:  2-SGPR pair (aligned) to receive recv_ptr[dst_rank].
+      shardBaseSgpr: 1 SGPR to receive dst_rank*n_shard (element units).
+      nShardSgpr:    1 SGPR pre-loaded with FusedNShard (n_shard, element units).
+      tmpSgpr:       2 scratch SGPRs; tmpSgpr+0 holds n_col_base_wg, tmpSgpr+1 shard_lo.
+    """
+    from .Signature import fusedA2AKernArgLayout, FUSED_A2A_MAX_RANKS
+    layout = fusedA2AKernArgLayout()
+    fusedBase = self.parentWriter.states.fusedA2AKernArgBase
+
+    # n_col_base_wg = WorkGroup1 * MacroTile1  (this WG's first output N column).
+    module.add(SMulI32(dst=sgpr(tmpSgpr), src0=sgpr("WorkGroup1"), src1=self.kernel["MacroTile1"],
+                       comment="n_col_base_wg = WorkGroup1 * MT1"))
+
+    # Rank 0 default: recv base = recv_ptr_0, shard_base = 0 (winner unless a higher rank matches).
+    module.add(self.parentWriter.argLoader.loadKernArg(recvBaseSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["recv_ptr_0"]), dword=2))
+    module.add(SMovB32(dst=sgpr(shardBaseSgpr), src=0, comment="shard_base = 0 (rank 0)"))
+
+    for j in range(1, FUSED_A2A_MAX_RANKS):
+      skipLabel = Label(self.parentWriter.labels.getNameInc("fusedA2A_recv_skip%u" % j),
+                        f"n_col_base_wg below rank {j}")
+      # shard_lo = j * n_shard; if n_col_base_wg < shard_lo this rank (and all higher) lose.
+      module.add(SMulI32(dst=sgpr(tmpSgpr + 1), src0=sgpr(nShardSgpr), src1=j,
+                         comment=f"cand shard_lo = {j} * n_shard"))
+      module.add(SCmpGtU32(src0=sgpr(tmpSgpr + 1), src1=sgpr(tmpSgpr),
+                           comment=f"shard_lo > n_col_base_wg? (WG below rank {j})"))
+      module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
+                              comment=f"below rank {j}: keep current winner"))
+      # Rank j qualifies (highest so far): overwrite winner recv base + shard_base.
+      module.add(self.parentWriter.argLoader.loadKernArg(recvBaseSgpr, "KernArgAddress",
+        sgprOffset=hex(fusedBase + layout["recv_ptr_%u" % j]), dword=2))
+      module.add(SMovB32(dst=sgpr(shardBaseSgpr), src=sgpr(tmpSgpr + 1),
+                         comment=f"shard_base = {j} * n_shard"))
+      module.add(skipLabel)
+    module.add(SWaitCnt(kmcnt=0, comment="wait recv_ptr[dst_rank] load"))
+
+  # Number of consecutive M-rows a lane owns per subtile output group (MFMA vector width).
+  _FUSED_A2A_MROWS = 4
+
+  def _emitFusedA2APushStore(self, groups) -> Module:
+    """Emit the remote all-to-all PUSH store for one subtile store element.
+
+    Redirects the PUSH-column output from the local D buffer (column-major [M, GN], M
+    contiguous) to the remote recv buffer laid out row-major [W, M, n_shard] (n_shard
+    contiguous) -- the byte-identical layout the baseline all_to_all produces on the
+    destination rank (design spec section 1 / section 3.3 repack rule
+    out[:, :AN].view(M, W, n_shard).transpose -> [W, M, n_shard]).
+
+    recv element offset (elements, before *bpe), on destination card recv_ptr[dst_rank]:
+        my_rank * (M * n_shard)      slot for the source rank (recv[my_rank])
+      + m_global * n_shard           row within the slot
+      + n_local                      column within the shard, n_local = n_global - dst_rank*n_shard
+    where dst_rank = n_global // n_shard (per-WG constant), m/n_global are per-lane.
+
+    Because recv is transposed relative to D (M is the slow/strided dim here, not the fast
+    dim), the lane's 4 consecutive M-rows are n_shard*bpe apart -- so this emits one
+    buffer_store_b16 per M-row (a scatter) rather than the contiguous dwordx2 the local
+    store uses.
+
+    Device scope only (plain buffer_store): this validates the L2 layout.  The
+    system-scope fence + counter/flag handshake are deferred to Task 8.
+
+    Args:
+      groups: list of (sumIdx, coordOffset0, coordOffset1) tuples, one per subtile M-block
+              packed into this store (1 for a scalar/orphan element, 2 for a paired element).
+              coordOffset0/1 are the compile-time element M/N offsets from coord0/coord1.
+    """
+    kw = self.parentWriter
+    module = Module("fusedA2APushStore")
+    isFp16 = self.kernel["ProblemType"]["DestDataType"].isHalf()
+    VCvtPkF32to16 = VCvtPkF32toFP16 if isFp16 else VCvtPkF32toBF16
+    typeStr = "fp16" if isFp16 else "bf16"
+    bpe = kw.states.bpeCexternalGSU1  # 16bit dest == 2
+    prefixOffset = kw.states.c.startVgprValu
+
+    ntd = self.kernel["NonTemporalD"]
+    isGlc = bool(ntd & 0x1)
+    isSlc = bool(ntd & 0x2)
+    isNT  = bool(ntd & 0x4)
+
+    module.addComment1(f"fused-A2A PUSH store -> recv[W,M,n_shard] ({typeStr}, device scope)")
+
+    # --- kernarg reads (on demand, per Task 5 contract): my_rank + n_shard ---
+    myRankSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_myRank", preventOverflow=False)
+    nShardSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_nShard", preventOverflow=False)
+    from .Signature import fusedA2AKernArgLayout
+    layout = fusedA2AKernArgLayout()
+    fusedBase = kw.states.fusedA2AKernArgBase
+    module.add(kw.argLoader.loadKernArg(myRankSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedMyRank"]), dword=1))
+    module.add(kw.argLoader.loadKernArg(nShardSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedNShard"]), dword=1))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank / FusedNShard"))
+
+    # --- switch-load recv_ptr[dst_rank] + shard_base (dst_rank*n_shard) ---
+    recvSrd = kw.sgprPool.checkOutAligned(4, 4, tag="fusedA2A_recvSrd", preventOverflow=False)
+    shardBaseSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_shardBase", preventOverflow=False)
+    tmpSgpr2 = kw.sgprPool.checkOut(2, tag="fusedA2A_recvSwitchTmp", preventOverflow=False)
+    # recv base pointer lands in recvSrd+0/+1 (SRD base words).
+    self._fusedA2ALoadRecvBase(module, recvSrd, shardBaseSgpr, nShardSgpr, tmpSgpr2)
+
+    # slotElem = my_rank * M * n_shard  (recv[my_rank] slot base, in elements).
+    slotSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_slot", preventOverflow=False)
+    module.add(SMulI32(dst=sgpr(slotSgpr), src0=sgpr(myRankSgpr), src1=sgpr("SizeI"),
+                       comment="my_rank * M"))
+    module.add(SMulI32(dst=sgpr(slotSgpr), src0=sgpr(slotSgpr), src1=sgpr(nShardSgpr),
+                       comment="slotElem = my_rank * M * n_shard"))
+
+    # Finish the recv SRD: limit word (BufferOOB) + config word (Srd127_96).
+    module.add(SMovB32(dst=sgpr(recvSrd + 2), src="BufferOOB", comment="recv SRD num_records"))
+    module.add(SMovB32(dst=sgpr(recvSrd + 3), src="Srd127_96", comment="recv SRD config"))
+
+    # --- per-lane address VGPRs ---
+    # nShardBpe (per M-row byte step) into a VGPR for the scatter.
+    vRecvAddr  = kw.vgprPool.checkOut(1, tag="fusedA2A_recvAddr")
+    vNLocal    = kw.vgprPool.checkOut(1, tag="fusedA2A_nLocal")
+    vTmp       = kw.vgprPool.checkOut(1, tag="fusedA2A_tmp")
+    vPack      = kw.vgprPool.checkOut(2, tag="fusedA2A_pack")  # 2 dwords = 4 16bit values
+    vNShardBpe = kw.vgprPool.checkOut(1, tag="fusedA2A_nShardBpe")
+
+    coord0 = kw.vgprs.coord0
+    coord1 = kw.vgprs.coord1
+
+    # nShardBpe = n_shard * bpe  (byte stride between adjacent M-rows in recv).
+    module.add(SMulI32(dst=sgpr(tmpSgpr2), src0=sgpr(nShardSgpr), src1=bpe,
+                       comment="n_shard * bpe (M-row byte stride)"))
+    module.add(VMovB32(dst=vgpr(vNShardBpe), src=sgpr(tmpSgpr2), comment="n_shard*bpe -> vgpr"))
+
+    def vc(sumIdx, vi):
+      idx = sumIdx + vi - prefixOffset
+      return vgpr("ValuC+" + str(idx))
+
+    for (sumIdx, coordOffset0, coordOffset1) in groups:
+      module.addComment1(f"PUSH group coordOff0={coordOffset0} coordOff1={coordOffset1}: pack 4 M-rows, scatter b16")
+      # Pack the 4 f32 accumulators (this lane's 4 M-rows at fixed N-col) into 2 dwords.
+      module.add(VCvtPkF32to16(dst=vgpr(vPack + 0), src0=vc(sumIdx, 0), src1=vc(sumIdx, 1),
+                               comment=f"M-row+0/+1 -> {typeStr}"))
+      module.add(VCvtPkF32to16(dst=vgpr(vPack + 1), src0=vc(sumIdx, 2), src1=vc(sumIdx, 3),
+                               comment=f"M-row+2/+3 -> {typeStr}"))
+      module.add(SNop(waitState=0, comment=f"delay after pk_{typeStr}"))
+
+      # n_local = coord1 + coordOffset1 - shard_base   (per-lane N within the shard).
+      # coordOffset0/1 are compile-time ints; move to an SGPR first because v_add_u32
+      # rejects large inline literals on gfx950 (tmpSgpr2 is free after the recv switch).
+      if coordOffset1:
+        module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset1, comment=f"coordOffset1={coordOffset1}"))
+        module.add(VAddU32(dst=vgpr(vNLocal), src0=vgpr(coord1), src1=sgpr(tmpSgpr2),
+                           comment=f"n_global = coord1 + {coordOffset1}"))
+        module.add(VSubU32(dst=vgpr(vNLocal), src0=vgpr(vNLocal), src1=sgpr(shardBaseSgpr),
+                           comment="n_local = n_global - shard_base"))
+      else:
+        module.add(VSubU32(dst=vgpr(vNLocal), src0=vgpr(coord1), src1=sgpr(shardBaseSgpr),
+                           comment="n_local = coord1 - shard_base"))
+
+      # m_base = coord0 + coordOffset0  (per-lane global M row of the group's first value).
+      # recvElemBase = (slotElem + m_base * n_shard) + n_local
+      #             --> byte = recvElemBase * bpe
+      if coordOffset0:
+        module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset0, comment=f"coordOffset0={coordOffset0}"))
+        module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(coord0), src1=sgpr(tmpSgpr2),
+                           comment=f"m_base = coord0 + {coordOffset0}"))
+        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr),
+                             comment="m_base * n_shard"))
+      else:
+        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(coord0), src1=sgpr(nShardSgpr),
+                             comment="m_base * n_shard"))
+      module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(slotSgpr),
+                         comment="+ slotElem (my_rank*M*n_shard)"))
+      module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vTmp), src1=vgpr(vNLocal),
+                         comment="recvElemBase = slot + m_base*n_shard + n_local"))
+      module.add(VLShiftLeftB32(dst=vgpr(vRecvAddr), shiftHex=int(log2(bpe)), src=vgpr(vRecvAddr),
+                                comment="recv byte offset = recvElemBase * bpe"))
+
+      # Scatter: one buffer_store_b16 per M-row (rows are n_shard*bpe apart in recv).
+      for row in range(self._FUSED_A2A_MROWS):
+        # 16bit value for this row: lo/hi of vPack dword row//2.
+        srcVgpr = vPack + (row // 2)
+        # Extract the correct 16bit half into vTmp when row is odd (hi half).
+        if row % 2 == 1:
+          module.add(VLShiftRightB32(dst=vgpr(vTmp), shiftHex=16, src=vgpr(srcVgpr),
+                                     comment=f"M-row+{row}: hi 16bit -> lo"))
+          storeSrc = vTmp
+        else:
+          storeSrc = srcVgpr
+        module.add(BufferStoreB16(
+          src=vgpr(storeSrc),
+          vaddr=vgpr(vRecvAddr),
+          saddr=sgpr(recvSrd, 4),
+          soffset=0,
+          mubuf=MUBUFModifiers(offen=True, offset12=0, glc=isGlc, slc=isSlc, nt=isNT),
+          comment=f"recv scatter M-row+{row} (device scope)"))
+        if row != self._FUSED_A2A_MROWS - 1:
+          module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vRecvAddr), src1=vgpr(vNShardBpe),
+                             comment="advance recv addr by n_shard*bpe (next M-row)"))
+
+    module.add(SNop(waitState=0, comment="WAR: latch store src before next batch overwrites pack"))
+
+    # Release temporaries.
+    kw.vgprPool.checkIn(vNShardBpe)
+    kw.vgprPool.checkIn(vPack)
+    kw.vgprPool.checkIn(vTmp)
+    kw.vgprPool.checkIn(vNLocal)
+    kw.vgprPool.checkIn(vRecvAddr)
+    kw.sgprPool.checkIn(slotSgpr)
+    kw.sgprPool.checkIn(tmpSgpr2)
+    kw.sgprPool.checkIn(shardBaseSgpr)
+    kw.sgprPool.checkIn(recvSrd)
+    kw.sgprPool.checkIn(nShardSgpr)
+    kw.sgprPool.checkIn(myRankSgpr)
+    return module
 
   def _emitSubtileOobGuard(self, targetModule, blockIdxM: int, blockIdxN: int, labelPrefix: str = "subtile_skip_store"):
     """Emit M/N OOB guard branches for UseSubtileImpl NonEdge stores.

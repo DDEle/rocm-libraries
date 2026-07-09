@@ -125,7 +125,7 @@ namespace TensileLite
         } // namespace
 
         // Entry point invoked from main() when --fused-a2a is passed. Returns a
-        // process exit code (0 == smoke passed).
+        // process exit code (0 == all iterations passed numeric validation).
         int runFusedA2A(po::variables_map const&                                       args,
                         std::shared_ptr<MasterSolutionLibrary<ContractionProblemGemm>> library,
                         std::shared_ptr<Hardware>                                      hardware,
@@ -447,7 +447,6 @@ namespace TensileLite
                 HIP_CHECK_EXC(hipEventCreate(&stopEv[d]));
             }
 
-            std::vector<double> latAllUs;   // every iteration's max-card latency
             std::vector<double> latMeasUs;  // post-warmup only (for percentiles)
             int  passIters   = 0;
             bool raceFail     = false;
@@ -655,7 +654,6 @@ namespace TensileLite
                               << " (hipOk=" << ok << " L2=" << l2Pass << " L1=" << l1Pass << ")\n";
                 }
 
-                latAllUs.push_back(maxCardUs);
                 if(it >= warmup)
                     latMeasUs.push_back(maxCardUs);
 

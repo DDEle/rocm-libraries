@@ -2180,16 +2180,16 @@ class GlobalWriteBatchWriter:
                 storeCodeModule.add(SCBranchSCC0(labelName=fallbackLabel.getLabelName(),
                                                  comment=f"only d0={tt0-1} valid -> scalar fallback"))
                 tmpStoreCode = self._emit16bitSubtilePairedStore(partnerAddrCalc, sumIdx0, sumIdx1, prefixOffset, tt0 - 1, blockIdxM=blockIdxM, blockIdxN=blockIdxN)
-                storeCodeModule.add(tmpStoreCode)
+                self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
                 storeCodeModule.add(SBranch(labelName=afterPairedLabel.getLabelName(),
                                             comment="skip scalar fallback"))
                 storeCodeModule.add(fallbackLabel)
                 tmpFallbackCode = self._emit16bitSubtileScalarStore(partnerAddrCalc, sumIdx0, prefixOffset, tt0 - 1, blockIdxM=blockIdxM, blockIdxN=blockIdxN)
-                storeCodeModule.add(tmpFallbackCode)
+                self._addSubtileStore(storeCodeModule, blockIdxN, tmpFallbackCode)
                 storeCodeModule.add(afterPairedLabel)
               else:
                 tmpStoreCode = self._emit16bitSubtilePairedStore(partnerAddrCalc, sumIdx0, sumIdx1, prefixOffset, tt0 - 1, blockIdxM=blockIdxM, blockIdxN=blockIdxN)
-                storeCodeModule.add(tmpStoreCode)
+                self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
               if skipLabel is not None:
                 storeCodeModule.add(skipLabel)
               self.storesIssued += 1
@@ -2202,7 +2202,7 @@ class GlobalWriteBatchWriter:
               sumIdx0 = self.ss.elementSumIdx[elementIdx]
               prefixOffset = self.parentWriter.states.c.startVgprValu
               tmpStoreCode = self._emit16bitSubtileScalarStore(addrCalc, sumIdx0, prefixOffset, tt0, blockIdxM=blockIdxM, blockIdxN=blockIdxN)
-              storeCodeModule.add(tmpStoreCode)
+              self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
               if orphanSkipLabel is not None:
                 storeCodeModule.add(orphanSkipLabel)
               self.storesIssued += 1
@@ -2224,7 +2224,7 @@ class GlobalWriteBatchWriter:
               sumIdx0 = self.ss.elementSumIdx[elementIdx]
               prefixOffset = self.parentWriter.states.c.startVgprValu
               tmpStoreCode = self._emit16bitSubtileScalarStore(addrCalc, sumIdx0, prefixOffset, tt0, blockIdxM=blockIdxM, blockIdxN=blockIdxN)
-              storeCodeModule.add(tmpStoreCode)
+              self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
               if orphanSkipLabel is not None:
                 storeCodeModule.add(orphanSkipLabel)
               self.storesIssued += 1
@@ -2250,6 +2250,7 @@ class GlobalWriteBatchWriter:
                                      mGuardOffset=1, rowScaleShift=rowScaleShift)
             storeCodeModule.add(self.getEdgeMovInstType()(EXEC(), sgpr(self.tmpS01, self.laneSGPRC), "apply exec mask"))
           # _emitOverrideRows reused from the top of this store loop (see _lookaheadRowInc).
+          # TODO Task 7: also route regular/TD store paths through _fusedA2ADispatch.
           tmpStoreCode = self.parentWriter.addStore(self.kernel, self.ss, 'D', addrCalc, sumIdx, self.tmpS01, self.edge, elementIdx, self.batchIdx,
                                                    overrideAfterPrimerRows=_emitOverrideRows, comment="store D")
           storeCodeModule.add(tmpStoreCode)
@@ -2398,6 +2399,36 @@ class GlobalWriteBatchWriter:
     module.add(VPermlane32SwapB32(dst=vgpr(vPack+1), src=vgpr(vPack+3), comment="swap dwords 1↔3"))
 
     return module
+
+  # N-tile threshold splitting PUSH (all-to-all) columns from locally-owned columns.
+  _FUSED_A2A_AN_TILES = 40
+
+  def _addSubtileStore(self, targetModule, blockIdxN: int, storeModule: Module):
+    """Add a 16bit subtile store, routing through the fused-A2A dispatch when enabled.
+
+    When FusedGemmA2A is off the store Module is added verbatim (output byte-identical
+    to the non-fused path); when on, the N-tile dispatch skeleton decides the branch.
+    """
+    if self.kernel["FusedGemmA2A"]:
+      self._fusedA2ADispatch(targetModule, blockIdxN, storeModule)
+    else:
+      targetModule.add(storeModule)
+
+  def _fusedA2ADispatch(self, targetModule, blockIdxN: int, storeModule: Module):
+    """Route a D-store by N-tile coordinate for FusedGemmA2A (dispatch skeleton).
+
+    N tiles below _FUSED_A2A_AN_TILES are the all-to-all "PUSH" columns (Task 7 will
+    replace their store with a remote push); N tiles at/above are locally owned and use
+    the regular local store.  Both branches currently emit the SAME local store so that
+    the dispatch decision runs per element without changing GEMM numerics (L1).
+    """
+    if blockIdxN < self._FUSED_A2A_AN_TILES:
+      targetModule.addComment0(f"fused-A2A dispatch: PUSH branch (blockIdxN={blockIdxN} < {self._FUSED_A2A_AN_TILES})")
+      # TODO Task 7: PUSH store (remote all-to-all); local store for now.
+      targetModule.add(storeModule)
+    else:
+      targetModule.addComment0(f"fused-A2A dispatch: local branch (blockIdxN={blockIdxN} >= {self._FUSED_A2A_AN_TILES})")
+      targetModule.add(storeModule)
 
   def _emitSubtileOobGuard(self, targetModule, blockIdxM: int, blockIdxN: int, labelPrefix: str = "subtile_skip_store"):
     """Emit M/N OOB guard branches for UseSubtileImpl NonEdge stores.

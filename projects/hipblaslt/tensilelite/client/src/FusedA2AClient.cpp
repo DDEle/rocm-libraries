@@ -125,14 +125,22 @@ namespace TensileLite
         } // namespace
 
         // Entry point invoked from main() when --fused-a2a is passed. Returns a
-        // process exit code (0 == all iterations passed numeric validation).
+        // process exit code (0 == all iterations passed: numeric validation when
+        // --fused-a2a-validate=1, else clean exit on all iterations).
         int runFusedA2A(po::variables_map const&                                       args,
                         std::shared_ptr<MasterSolutionLibrary<ContractionProblemGemm>> library,
                         std::shared_ptr<Hardware>                                      hardware,
                         ClientProblemFactory&                                          problemFactory)
         {
-            const int W     = args["fused-a2a-world"].as<int>();
-            const int drain = args["fused-a2a-drain"].as<int>() ? 1 : 0;
+            const int  W        = args["fused-a2a-world"].as<int>();
+            const int  drain    = args["fused-a2a-drain"].as<int>() ? 1 : 0;
+            // validate=1 (default): compute host golden + numerically check every
+            // iteration (correctness bridge, current behavior). validate=0: SKIP
+            // the golden triple-loop and both compares — used on the full
+            // production shape whose CPU golden (~309 GMAC) is prohibitively slow;
+            // race detection then degrades to "kernel exited cleanly" (no HIP
+            // error / no DRAIN hang), i.e. clean-exit, not byte-verified.
+            const bool validate = args["fused-a2a-validate"].as<int>() != 0;
 
             std::cout << "[fused-a2a] single-process " << W << "-GPU setup + launch smoke\n";
 
@@ -187,7 +195,10 @@ namespace TensileLite
             // Task 11 fixes the previously-hardcoded AN (was N-wide) by passing it
             // as the FusedAN kernarg. Chosen so AN < N (a local segment exists) and
             // (AN/W)%256==0. See task-11-brief.md (M=256 N=1536 AN=1024 W=4).
-            const size_t AN = 1024;
+            // AN is supplied via --fused-a2a-an so it can match the shape being run
+            // (medium: AN=2048, full: AN=10240) without editing this source; the
+            // default (1024) preserves the prior hardcoded value for old callers.
+            const size_t AN = (size_t)args["fused-a2a-an"].as<int>();
             if(AN % (size_t)W != 0)
             {
                 std::cerr << "[fused-a2a] AN(" << AN << ") not divisible by W(" << W << ")"
@@ -305,16 +316,29 @@ namespace TensileLite
                     hB[k * bBoundStride + n * bFreeStride] = bVal(k, n);
 
             // Host golden GEMM: Dgold[m,n] = bf16( sum_k f32(A[m,k]) * f32(B[k,n]) ).
-            std::vector<BFloat16> Dgold((size_t)M * N, BFloat16(0.0f));
-            for(size_t m = 0; m < M; m++)
+            // Only computed when validate=1; the triple loop is O(M*N*K) MACs and is
+            // the expensive part we SKIP on the full shape (~309 GMAC). When
+            // validate=0 Dgold stays empty and the numeric compares below are
+            // bypassed entirely (not computed-then-ignored).
+            std::vector<BFloat16> Dgold;
+            if(validate)
             {
-                for(size_t n = 0; n < N; n++)
+                Dgold.assign((size_t)M * N, BFloat16(0.0f));
+                for(size_t m = 0; m < M; m++)
                 {
-                    float acc = 0.0f;
-                    for(size_t k = 0; k < K; k++)
-                        acc += (float)aVal(m, k) * (float)bVal(k, n);
-                    Dgold[m * N + n] = BFloat16(acc); // row-major [M,N] golden store
+                    for(size_t n = 0; n < N; n++)
+                    {
+                        float acc = 0.0f;
+                        for(size_t k = 0; k < K; k++)
+                            acc += (float)aVal(m, k) * (float)bVal(k, n);
+                        Dgold[m * N + n] = BFloat16(acc); // row-major [M,N] golden store
+                    }
                 }
+            }
+            else
+            {
+                std::cout << "[fused-a2a] validate=0: SKIPPING host golden GEMM + numeric "
+                             "compares (race = clean-exit only, not byte-verified)\n";
             }
 
             // --- Phase 1: per-device fresh allocation (spec §3.1). ---
@@ -416,7 +440,8 @@ namespace TensileLite
                 warmup = iters - 1; // keep at least one measured iteration
 
             std::cout << "[fused-a2a] repeat: iters=" << iters << " warmup=" << warmup
-                      << " (post-warmup measured=" << (iters - warmup) << ")\n";
+                      << " (post-warmup measured=" << (iters - warmup) << ") validate="
+                      << (validate ? "1 (numeric)" : "0 (clean-exit only)") << "\n";
 
             // bf16 tolerance: ~3 decimal digits. Compare in fp32. (shared by
             // both validation segments, all iterations)
@@ -432,8 +457,13 @@ namespace TensileLite
             const size_t rowStride  = (size_t)nShard;             // elems per M-row
 
             // Persistent host scratch (reused each iteration, no per-iter alloc).
-            std::vector<uint16_t> hRecv((size_t)W * Mpad * nShardPad);
-            std::vector<uint16_t> hOut(dBytes / sizeof(uint16_t));
+            // Only sized when validating; empty otherwise (no D2H copy-back either).
+            std::vector<uint16_t> hRecv, hOut;
+            if(validate)
+            {
+                hRecv.resize((size_t)W * Mpad * nShardPad);
+                hOut.resize(dBytes / sizeof(uint16_t));
+            }
 
             // Per-iteration events: start/stop on each device's stream to time the
             // fused launch. Because DRAIN=ON gates each kernel's exit on receiving
@@ -561,9 +591,11 @@ namespace TensileLite
                 }
 
                 // -- Dual-segment numeric validation (Task 11), EVERY iteration. --
+                // Skipped entirely when validate=0 (l2Pass/l1Pass default to `ok`,
+                // so the per-iteration verdict reduces to "kernel exited cleanly").
                 bool l2Pass = ok;
                 bool l1Pass = ok;
-                if(ok)
+                if(ok && validate)
                 {
                     // ---- L2: recv (PUSH segment). For destination card dst, slot
                     // src must hold columns [dst*nShard, dst*nShard+nShard) of Dgold
@@ -672,8 +704,14 @@ namespace TensileLite
             }
 
             // --- Race verdict + latency percentiles. ---
+            // Wording reflects the mode: validate=1 -> numerically verified;
+            // validate=0 -> exited cleanly (no HIP error / no DRAIN hang), not
+            // byte-verified. Under DRAIN=ON a clean exit still means the barrier
+            // released (data received), just not content-checked.
             std::cout << "[fused-a2a] race: " << passIters << "/" << iters
-                      << " iterations passed" << (raceFail ? "  (FAIL)" : "  (PASS)") << "\n";
+                      << (validate ? " iterations passed (numeric)"
+                                   : " iterations exited cleanly (clean-exit, not byte-verified)")
+                      << (raceFail ? "  (FAIL)" : "  (PASS)") << "\n";
             if(raceFail)
                 std::cout << "[fused-a2a] race: first failing iteration = " << firstFailIt << "\n";
 
@@ -728,8 +766,10 @@ namespace TensileLite
 
             std::cout << "[fused-a2a] overall " << (raceFail ? "FAILED" : "PASSED") << std::endl;
             // Exit codes: 2 = a kernel returned a HIP error in some iteration;
-            // 3 = all kernels ran but some iteration failed numeric validation;
-            // 0 = every iteration passed the dual-segment check (race PASS).
+            // 3 = all kernels ran but some iteration failed numeric validation
+            //     (only reachable when validate=1);
+            // 0 = every iteration passed (validate=1: dual-segment numeric check;
+            //     validate=0: clean exit on all iterations).
             if(anyHipError)
                 return 2;
             return raceFail ? 3 : 0;

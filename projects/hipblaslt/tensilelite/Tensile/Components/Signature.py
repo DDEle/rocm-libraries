@@ -442,9 +442,17 @@ class SignatureDefault(Signature):
             signature.addArg("FusedW",      SVK.SIG_VALUE, "u32")
             signature.addArg("FusedNShard", SVK.SIG_VALUE, "u32")
             signature.addArg("FusedDrain",  SVK.SIG_VALUE, "u32")
-            # Publish the segment base for the epilogue (Task 6-9). Absolute
-            # offset of arg X = fusedA2AKernArgBase + fusedA2AKernArgLayout()[X].
-            writer.states.fusedA2AKernArgBase = fusedBase
+            # Publish the segment base for the epilogue (Task 6-9). The epilogue
+            # dereferences fused args against sgprKernArgAddress, which the
+            # prologue has already advanced past the common-args header by
+            # commonArgsSize (Bypass_ArgType3_to_ArgType0 "Shift common args" in
+            # KernelWriterAssembly.py; argType 0/3 single-GEMM path, the only
+            # path fused stage-1 takes). Normal GEMM arg loads reset to that
+            # shifted base; the fused loads use metadata offsets that INCLUDE the
+            # header, so subtract commonArgsSize once here to rebase them onto the
+            # same shifted address. Absolute offset of arg X (relative to the
+            # shifted base) = fusedA2AKernArgBase + fusedA2AKernArgLayout()[X].
+            writer.states.fusedA2AKernArgBase = fusedBase - userArgumentsInfo.commonArgsSize
 
         activationType = ActivationType("all")
         for name in activationType.getAdditionalArgStringList():

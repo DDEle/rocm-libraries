@@ -25,7 +25,7 @@ from rocisa.container import SMEMModifiers, VOP3PModifiers, MUBUFModifiers, GLOB
   SDWAModifiers, replaceHolder, EXEC, VCC, vgpr, sgpr, ContinuousRegister, mgpr
 from rocisa.enum import CvtType, HighBitSel, RoundType, SaturateCastType, SelectBit, CacheScope
 from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, BufferWbl2, \
-  GlobalAtomicAddU32, GlobalStoreB32, \
+  GlobalAtomicAddU32, GlobalLoadB32, GlobalStoreB32, \
   BufferAtomicCmpswapB64, BufferStoreB16, BufferStoreB32, BufferStoreB64, BufferStoreB128, DSBPermuteB32, FlatAtomicCmpswapB32, \
   SAddCU32, SAddU32, SAndB32, \
   SAndB64, SAtomicDec, SBarrier, SBranch, SCBranchExecNZ, SCBranchExecZ, \
@@ -2435,6 +2435,40 @@ class GlobalWriteBatchWriter:
       module.add(skipLabel)
     module.add(SWaitCnt(kmcnt=0, comment="wait flag_ptr[dst_rank] load"))
 
+  def _fusedA2ALoadFlagBaseByRank(self, module, flagBaseSgpr, rankSgpr):
+    """Switch-load flag_ptr[rankSgpr] into flagBaseSgpr, selecting on a runtime rank SGPR.
+
+    Sibling of _fusedA2ALoadFlagBaseAndRank, but the rank is an explicit runtime value
+    (used by DRAIN: the elected last WG polls THIS card's own flag buffer flag_ptr[my_rank]).
+    flag_ptr[j] is kernarg metadata only (Task 5), so this reads exactly one flag base on
+    demand via a compile-time switch: rank 0 is the default; for each candidate j the load
+    fires only when rankSgpr == j.  Slots j >= FusedW are never selected at run time.
+
+    Args:
+      module:       Module to append instructions to.
+      flagBaseSgpr: 2-SGPR pair (aligned) to receive flag_ptr[rankSgpr].
+      rankSgpr:     1 SGPR holding the rank index to select.
+    """
+    from .Signature import fusedA2AKernArgLayout, FUSED_A2A_MAX_RANKS
+    layout = fusedA2AKernArgLayout()
+    fusedBase = self.parentWriter.states.fusedA2AKernArgBase
+
+    # Rank 0 default: flag base = flag_ptr_0 (overwritten if rankSgpr matches a higher rank).
+    module.add(self.parentWriter.argLoader.loadKernArg(flagBaseSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["flag_ptr_0"]), dword=2))
+
+    for j in range(1, FUSED_A2A_MAX_RANKS):
+      skipLabel = Label(self.parentWriter.labels.getNameInc("fusedA2A_selfflag_skip%u" % j),
+                        f"rank != {j}")
+      module.add(SCmpEQU32(src0=sgpr(rankSgpr), src1=j,
+                           comment=f"rank == {j}?"))
+      module.add(SCBranchSCC0(labelName=skipLabel.getLabelName(),
+                              comment=f"rank != {j}: keep current base"))
+      module.add(self.parentWriter.argLoader.loadKernArg(flagBaseSgpr, "KernArgAddress",
+        sgprOffset=hex(fusedBase + layout["flag_ptr_%u" % j]), dword=2))
+      module.add(skipLabel)
+    module.add(SWaitCnt(kmcnt=0, comment="wait flag_ptr[my_rank] load"))
+
   # READY value written into the destination card's flag slot (design spec 2.3).
   _FUSED_A2A_FLAG_READY = 1
 
@@ -2579,7 +2613,88 @@ class GlobalWriteBatchWriter:
       modifier=GLOBALModifiers(glc=True, slc=True, scope=CacheScope.SCOPE_NONE, isStore=True),
       comment="flag_ptr[dst_rank][my_rank] = READY (system scope, sc0 sc1)"))
     module.add(SWaitCnt(vscnt=0, comment="fused-A2A: wait flag store issued"))
-    # TODO Task 9/13: DRAIN-side self-flag poll (if j==my_rank self-set, else poll flag[j]).
+
+    # --- DRAIN barrier (design spec 2.4): make kernel-exit == this card received ---
+    # all its incoming data.  The WG that elected counter[dst_rank] (=j), after setting
+    # rank j's remote flag above, confirms THIS card's recv[j] slot arrived here by
+    # polling THIS card's own flag buffer at flag_ptr[my_rank] + j*4.  j==my_rank has no
+    # remote producer (recv[my_rank] is written locally), so it self-sets that slot
+    # instead of polling (else it would spin on a signal that never comes).  Gated at
+    # RUNTIME by the FusedDrain kernarg (not a compile-time gate: a compile-time gate
+    # would fork the fused kernel into drain-on/off variants).  Still single-lane EXEC.
+    skipDrainLabel = Label(kw.labels.getNameInc("fusedA2A_drain_skip"),
+                           "fused-A2A: FusedDrain==0 -> no drain barrier")
+    drainPollLabel = Label(kw.labels.getNameInc("fusedA2A_drain_poll"),
+                           "fused-A2A: DRAIN poll self flag[j] until READY")
+    drainSelfSetLabel = Label(kw.labels.getNameInc("fusedA2A_drain_selfset"),
+                              "fused-A2A: DRAIN j==my_rank -> self-set flag[my_rank]")
+
+    # runtime gate: FusedDrain == 0 -> skip the whole barrier.
+    drainSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_drainFlag", preventOverflow=False)
+    module.add(kw.argLoader.loadKernArg(drainSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedDrain"]), dword=1))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedDrain"))
+    module.add(SCmpEQU32(src0=sgpr(drainSgpr), src1=0, comment="FusedDrain == 0?"))
+    kw.sgprPool.checkIn(drainSgpr)
+    module.add(SCBranchSCC1(labelName=skipDrainLabel.getLabelName(),
+                            comment="FusedDrain==0 -> skip drain barrier"))
+
+    # self flag base = flag_ptr[my_rank] (THIS card's own flag buffer). Reuses flagBaseSgpr
+    # (its previous remote value flag_ptr[dst_rank] is no longer needed after the store above).
+    self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, myRankSgpr)
+
+    # j == my_rank -> self-set (no remote producer); else poll.
+    module.add(SCmpEQU32(src0=sgpr(dstRankSgpr), src1=sgpr(myRankSgpr),
+                         comment="dst_rank == my_rank? (recv[my_rank] is local, no remote producer)"))
+    module.add(SCBranchSCC1(labelName=drainSelfSetLabel.getLabelName(),
+                            comment="j==my_rank -> self-set flag[my_rank], skip poll"))
+
+    # poll path: flag[j] address = flag_ptr[my_rank] + j*4 (source rank j's slot on this card).
+    module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr2), src=sgpr(dstRankSgpr), shiftHex=2,
+                              comment="j * 4 (self flag slot byte offset)"))
+    module.add(SAddU32(dst=sgpr(flagBaseSgpr), src0=sgpr(flagBaseSgpr), src1=sgpr(tmpSgpr2),
+                       comment="self flag[j] lo = flag_ptr[my_rank] + j*4"))
+    module.add(SAddCU32(dst=sgpr(flagBaseSgpr + 1), src0=sgpr(flagBaseSgpr + 1), src1=0,
+                        comment="self flag[j] hi (carry)"))
+    module.add(VMovB32(dst=vgpr(vFlagAddr + 0), src=sgpr(flagBaseSgpr + 0), comment="self flag addr lo -> vgpr"))
+    module.add(VMovB32(dst=vgpr(vFlagAddr + 1), src=sgpr(flagBaseSgpr + 1), comment="self flag addr hi -> vgpr"))
+    # spin: system-scope load (sc0 sc1) bypasses this card's stale L2 (0) to read the HBM
+    # truth written by the remote producer; loop until == READY.
+    module.add(drainPollLabel)
+    module.add(GlobalLoadB32(
+      dst=vgpr(vReady), vaddr=vgpr(vFlagAddr, 2), saddr=offSaddr,
+      modifier=GLOBALModifiers(glc=True, slc=True, scope=CacheScope.SCOPE_NONE, isStore=False),
+      comment="poll self flag[j] (system scope, sc0 sc1)"))
+    module.add(SWaitCnt(vlcnt=0, comment="fused-A2A: wait poll load"))
+    module.add(VReadfirstlaneB32(dst=sgpr(tmpSgpr2), src=vgpr(vReady), comment="flag[j] -> sgpr"))
+    module.add(SCmpEQU32(src0=sgpr(tmpSgpr2), src1=self._FUSED_A2A_FLAG_READY,
+                         comment="flag[j] == READY?"))
+    module.add(SCBranchSCC0(labelName=drainPollLabel.getLabelName(),
+                            comment="not READY yet -> spin (poll again)"))
+    module.add(SBranch(labelName=skipDrainLabel.getLabelName(),
+                       comment="flag[j] READY -> drain done"))
+
+    # self-set path (j==my_rank): system-scope store of READY to flag_ptr[my_rank] + my_rank*4
+    # (matches the remote-flag store + poll load scope so the system-scope downstream reader sees it).
+    module.add(drainSelfSetLabel)
+    module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr2), src=sgpr(myRankSgpr), shiftHex=2,
+                              comment="my_rank * 4 (self flag slot byte offset)"))
+    module.add(SAddU32(dst=sgpr(flagBaseSgpr), src0=sgpr(flagBaseSgpr), src1=sgpr(tmpSgpr2),
+                       comment="self flag[my_rank] lo = flag_ptr[my_rank] + my_rank*4"))
+    module.add(SAddCU32(dst=sgpr(flagBaseSgpr + 1), src0=sgpr(flagBaseSgpr + 1), src1=0,
+                        comment="self flag[my_rank] hi (carry)"))
+    module.add(VMovB32(dst=vgpr(vFlagAddr + 0), src=sgpr(flagBaseSgpr + 0), comment="self flag addr lo -> vgpr"))
+    module.add(VMovB32(dst=vgpr(vFlagAddr + 1), src=sgpr(flagBaseSgpr + 1), comment="self flag addr hi -> vgpr"))
+    module.add(VMovB32(dst=vgpr(vReady), src=self._FUSED_A2A_FLAG_READY, comment="READY value"))
+    module.add(GlobalStoreB32(
+      vaddr=vgpr(vFlagAddr, 2), src=vgpr(vReady), saddr=offSaddr,
+      modifier=GLOBALModifiers(glc=True, slc=True, scope=CacheScope.SCOPE_NONE, isStore=True),
+      comment="flag_ptr[my_rank][my_rank] = READY (system scope, sc0 sc1)"))
+    module.add(SWaitCnt(vscnt=0, comment="fused-A2A: wait self-set flag store issued"))
+    module.add(skipDrainLabel)
+    # No buffer_inv here: this kernel does not read recv; acquire is the recv-reader's job.
+    # TODO Task 13: multi-card DRAIN validation (poll path across real xGMI producers).
+
     kw.vgprPool.checkIn(vReady)
     kw.vgprPool.checkIn(vFlagAddr)
 

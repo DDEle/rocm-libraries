@@ -295,6 +295,8 @@ namespace TensileLite
                 ("fused-a2a",                po::value<bool>()->default_value(false), "Run the single-process multi-GPU fused GEMM.A2A setup+launch entry point instead of the single-GPU benchmark loop (Task 10 smoke).")
                 ("fused-a2a-world",          po::value<int>()->default_value(4), "World size (number of GPUs) for --fused-a2a.")
                 ("fused-a2a-drain",          po::value<int>()->default_value(1), "Runtime DRAIN flag passed to the fused kernel (1=on).")
+                ("fused-a2a-iters",          po::value<int>()->default_value(100), "Number of repeat iterations for --fused-a2a (race detection + latency sampling). Each iteration re-zeroes counter/flag/recv and re-validates.")
+                ("fused-a2a-warmup",         po::value<int>()->default_value(10), "Number of leading --fused-a2a iterations excluded from the p50/p90 latency percentiles (they still run and count toward the race check).")
                 ("use-default-stream",       po::value<bool>()->default_value(false), "Use default Hip stream to run kernels.")
                 ("platform-idx",             po::value<int>()->default_value(0), "OpenCL Platform Index")
 

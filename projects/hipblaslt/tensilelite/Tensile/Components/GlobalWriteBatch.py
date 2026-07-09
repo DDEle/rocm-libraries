@@ -2417,9 +2417,6 @@ class GlobalWriteBatchWriter:
 
     return module
 
-  # N-tile threshold splitting PUSH (all-to-all) columns from locally-owned columns.
-  _FUSED_A2A_AN_TILES = 40
-
   def _addSubtileStore(self, targetModule, blockIdxN: int, storeModule: Module, pushBuilder=None):
     """Add a 16bit subtile store, routing through the fused-A2A dispatch when enabled.
 
@@ -2455,33 +2452,47 @@ class GlobalWriteBatchWriter:
 
     A workgroup owns one MacroTile1-wide N column-block, identified at RUNTIME by
     WorkGroup1 (the global N-tile index).  Workgroups whose N-tile is in the first AN
-    columns (WorkGroup1 < _FUSED_A2A_AN_TILES) are the all-to-all "PUSH" workgroups:
-    their output is redirected to the remote recv[W,M,n_shard] buffer (built by
-    pushBuilder) instead of the local D output.  Workgroups at/above are locally owned
-    and use the regular local store.
+    columns (WorkGroup1 < AN_tiles) are the all-to-all "PUSH" workgroups: their output
+    is redirected to the remote recv[W,M,n_shard] buffer (built by pushBuilder) instead
+    of the local D output.  Workgroups at/above are locally owned and use the regular
+    local store.
+
+    AN_tiles is derived at RUNTIME from the FusedAN kernarg (the A2A column count):
+    AN_tiles = FusedAN / MacroTile1.  MacroTile1 is the compile-time constant
+    self.kernel["MacroTile1"] (256 for the champion config) and is a power of two, so
+    the divide is a right shift by log2(MacroTile1).  The design guarantees AN is a
+    whole number of macro-tiles (AN % 256 == 0), so the shift is exact.
 
     Both code paths are emitted and guarded by a runtime SCC compare/branch on
-    WorkGroup1 vs _FUSED_A2A_AN_TILES, so each WG executes exactly one path at run time.
+    WorkGroup1 vs AN_tiles, so each WG executes exactly one path at run time.
     (blockIdxN = element[0] is only the N wave-block WITHIN a macro-tile (0..15) and must
     NOT gate this decision; the owning N-tile is a per-WG runtime value in WorkGroup1.)
-    _FUSED_A2A_AN_TILES is a hardcoded constant for now; deriving it from a real problem
-    parameter is a separate follow-up.
 
     When pushBuilder is None (dispatch-only skeleton) the PUSH branch falls back to the
     local store so GEMM numerics stay intact.
     """
+    from .Signature import fusedA2AKernArgLayout
     kw = self.parentWriter
+    mt1 = self.kernel["MacroTile1"]
+    log2mt1 = int(log2(mt1))
     localLabel = Label(kw.labels.getNameInc("fusedA2A_dispatch_local"),
-                       f"fused-A2A: WorkGroup1 >= {self._FUSED_A2A_AN_TILES} -> local store")
+                       "fused-A2A: WorkGroup1 >= AN_tiles -> local store")
     afterLabel = Label(kw.labels.getNameInc("fusedA2A_dispatch_after"),
                        "fused-A2A: after PUSH/local dispatch")
     # Runtime gate: PUSH when WorkGroup1 < AN_tiles, else local store.
+    # AN_tiles = FusedAN >> log2(MacroTile1); FusedAN is read on demand from the
+    # fused kernarg segment (metadata-only, per the Task 5 contract).
+    layout = fusedA2AKernArgLayout()
+    fusedBase = kw.states.fusedA2AKernArgBase
     tmpS = kw.sgprPool.checkOut(1, tag="fusedA2A_dispatchGate", preventOverflow=False)
-    targetModule.addComment0(f"fused-A2A dispatch: runtime gate WorkGroup1 < {self._FUSED_A2A_AN_TILES} ? PUSH : local")
-    targetModule.add(SMovB32(dst=sgpr(tmpS), src=self._FUSED_A2A_AN_TILES,
-                             comment=f"AN_tiles = {self._FUSED_A2A_AN_TILES}"))
+    targetModule.addComment0("fused-A2A dispatch: runtime gate WorkGroup1 < (FusedAN/MT1) ? PUSH : local")
+    targetModule.add(kw.argLoader.loadKernArg(tmpS, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedAN"]), dword=1))
+    targetModule.add(SWaitCnt(kmcnt=0, comment="wait FusedAN"))
+    targetModule.add(SLShiftRightB32(dst=sgpr(tmpS), shiftHex=log2mt1, src=sgpr(tmpS),
+                                     comment=f"AN_tiles = FusedAN >> log2(MT1={mt1})"))
     targetModule.add(SCmpGtU32(src0=sgpr(tmpS), src1=sgpr("WorkGroup1"),
-                               comment=f"AN_tiles > WorkGroup1? (this WG's N-tile in PUSH region)"))
+                               comment="AN_tiles > WorkGroup1? (this WG's N-tile in PUSH region)"))
     targetModule.add(SCBranchSCC0(labelName=localLabel.getLabelName(),
                                   comment="WorkGroup1 >= AN_tiles -> local store"))
     kw.sgprPool.checkIn(tmpS)
@@ -2837,10 +2848,19 @@ class GlobalWriteBatchWriter:
     skipReleaseLabel = Label(kw.labels.getNameInc("fusedA2A_handshake_notlast"),
                              "fused-A2A: not the last WG for dst_rank -> skip release")
 
-    # --- runtime PUSH gate (same as the store dispatch): PUSH iff WorkGroup1 < AN_tiles. ---
+    # --- runtime PUSH gate (same as the store dispatch): PUSH iff WorkGroup1 < AN_tiles,
+    #     with AN_tiles = FusedAN >> log2(MacroTile1) read on demand from kernarg. ---
+    from .Signature import fusedA2AKernArgLayout
+    layout = fusedA2AKernArgLayout()
+    fusedBase = kw.states.fusedA2AKernArgBase
+    mt1 = self.kernel["MacroTile1"]
+    log2mt1 = int(log2(mt1))
     gateSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsGate", preventOverflow=False)
-    module.add(SMovB32(dst=sgpr(gateSgpr), src=self._FUSED_A2A_AN_TILES,
-                       comment=f"AN_tiles = {self._FUSED_A2A_AN_TILES}"))
+    module.add(kw.argLoader.loadKernArg(gateSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedAN"]), dword=1))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedAN"))
+    module.add(SLShiftRightB32(dst=sgpr(gateSgpr), shiftHex=log2mt1, src=sgpr(gateSgpr),
+                               comment=f"AN_tiles = FusedAN >> log2(MT1={mt1})"))
     module.add(SCmpGtU32(src0=sgpr(gateSgpr), src1=sgpr("WorkGroup1"),
                          comment="AN_tiles > WorkGroup1? (this WG in PUSH region)"))
     kw.sgprPool.checkIn(gateSgpr)
@@ -2854,10 +2874,8 @@ class GlobalWriteBatchWriter:
     # (1) ensure this WG's scatter stores are in L2 before touching the counter.
     module.add(SWaitCnt(vscnt=0, comment="fused-A2A: my PUSH stores reached L2 (spec 2.3 step 2)"))
 
-    # --- kernarg reads (on demand, Task 5 contract): my_rank, target, n_shard. ---
-    from .Signature import fusedA2AKernArgLayout
-    layout = fusedA2AKernArgLayout()
-    fusedBase = kw.states.fusedA2AKernArgBase
+    # --- kernarg reads (on demand, Task 5 contract): my_rank, target, n_shard.
+    #     layout / fusedBase already bound above for the PUSH gate. ---
     myRankSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsMyRank", preventOverflow=False)
     targetSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsTarget", preventOverflow=False)
     nShardSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsNShard", preventOverflow=False)

@@ -39,6 +39,8 @@
 
 #include <hip/hip_runtime.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -55,8 +57,8 @@ namespace TensileLite
         // 8 of each (unused slots j>=W filled with nullptr).
         static constexpr int    FUSED_A2A_MAX_RANKS      = 8;
         // Expected byte growth of args after appending the fused segment:
-        //   (2*8 + 1) pointers * 8B + 5 scalars * 4B = 156B.
-        static constexpr size_t FUSED_A2A_SEGMENT_BYTES  = (2 * FUSED_A2A_MAX_RANKS + 1) * 8 + 5 * 4;
+        //   (2*8 + 1) pointers * 8B + 6 scalars * 4B = 160B.
+        static constexpr size_t FUSED_A2A_SEGMENT_BYTES  = (2 * FUSED_A2A_MAX_RANKS + 1) * 8 + 6 * 4;
         // A2A shards along N; kernel epilogue uses 256-wide N-tiles.
         static constexpr uint32_t FUSED_A2A_N_TILE = 256;
         static constexpr uint32_t FUSED_A2A_M_TILE = 256;
@@ -79,7 +81,8 @@ namespace TensileLite
                                     uint32_t                   target,
                                     uint32_t                   worldSize,
                                     uint32_t                   nShard,
-                                    uint32_t                   drain)
+                                    uint32_t                   drain,
+                                    uint32_t                   an)
             {
                 size_t before = args.size();
 
@@ -102,6 +105,7 @@ namespace TensileLite
                 args.append<uint32_t>("FusedW", worldSize);
                 args.append<uint32_t>("FusedNShard", nShard);
                 args.append<uint32_t>("FusedDrain", drain);
+                args.append<uint32_t>("FusedAN", an);
 
                 size_t grew = args.size() - before;
                 if(grew != FUSED_A2A_SEGMENT_BYTES)
@@ -170,18 +174,23 @@ namespace TensileLite
             // --- Derive fused shape from the problem (spec §0 relations, but
             //     using THIS problem's real M/N/K, not the big §0 defaults). ---
             const size_t M = problem->freeSizeA(0); // GEMM free dim M
-            const size_t N = problem->freeSizeB(0); // GEMM free dim N == A2A columns
-            if(N % (size_t)W != 0)
+            const size_t N = problem->freeSizeB(0); // GEMM free dim N (all output cols)
+            const size_t K = problem->boundSize(0); // GEMM contraction dim K
+            // A2A column count: the FIRST `AN` output columns go all-to-all (PUSH
+            // to remote recv); the remaining [AN, N) columns stay local in `out`.
+            // Task 11 fixes the previously-hardcoded AN (was N-wide) by passing it
+            // as the FusedAN kernarg. Chosen so AN < N (a local segment exists) and
+            // (AN/W)%256==0. See task-11-brief.md (M=256 N=1536 AN=1024 W=4).
+            const size_t AN = 1024;
+            if(AN % (size_t)W != 0)
             {
-                std::cerr << "[fused-a2a] N(" << N << ") not divisible by W(" << W << ")"
+                std::cerr << "[fused-a2a] AN(" << AN << ") not divisible by W(" << W << ")"
                           << std::endl;
                 return 1;
             }
-            const uint32_t nShard       = (uint32_t)(N / (size_t)W);
-            // tiles_per_rank / M_tiles use ceil so tiny smoke shapes still yield
-            // a non-zero target (spec §0 assumes 256-aligned; small yaml may not).
-            const uint32_t tilesPerRank = (uint32_t)((nShard + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE);
-            const uint32_t mTiles       = (uint32_t)((M + FUSED_A2A_M_TILE - 1) / FUSED_A2A_M_TILE);
+            const uint32_t nShard       = (uint32_t)(AN / (size_t)W);
+            const uint32_t tilesPerRank = (uint32_t)(nShard / FUSED_A2A_N_TILE);
+            const uint32_t mTiles       = (uint32_t)(M / FUSED_A2A_M_TILE);
             const uint32_t target       = mTiles * tilesPerRank;
 
             // Fail-fast on shapes that violate the fused-A2A design constraints
@@ -194,23 +203,25 @@ namespace TensileLite
             // is scattered to the wrong recv buffer AND, under DRAIN, ranks with
             // no supplying workgroup poll a flag slot no one ever sets -> the
             // GPU hangs forever. Reject such shapes on the host instead of
-            // launching into a deadlock. Supported stage-1 shapes need
-            // N % W == 0, n_shard % 256 == 0 (=> n_shard >= 256, all W ranks
-            // covered), and M % 256 == 0.
-            if(N % (size_t)W != 0 || (nShard % FUSED_A2A_N_TILE) != 0
-               || (M % (size_t)FUSED_A2A_M_TILE) != 0)
+            // launching into a deadlock. Constraints now apply to AN (the A2A
+            // width), not the whole N: AN % W == 0, (AN/W) % 256 == 0
+            // (=> n_shard >= 256, all W ranks covered), M % 256 == 0, AN % 256 == 0
+            // (whole tiles), and AN <= N (local segment fits inside the output).
+            if(AN % (size_t)W != 0 || (nShard % FUSED_A2A_N_TILE) != 0
+               || (M % (size_t)FUSED_A2A_M_TILE) != 0
+               || (AN % (size_t)FUSED_A2A_N_TILE) != 0 || AN > N)
             {
                 std::cerr
                     << "[fused-a2a] ERROR: problem shape violates fused-A2A "
                        "constraints (spec section 0).\n"
-                    << "  M=" << M << " N=" << N << " W=" << W
-                    << " n_shard=N/W=" << nShard << " MacroTile=" << FUSED_A2A_N_TILE
+                    << "  M=" << M << " N=" << N << " AN=" << AN << " W=" << W
+                    << " n_shard=AN/W=" << nShard << " MacroTile=" << FUSED_A2A_N_TILE
                     << "\n"
-                    << "  require: N % W == 0, (N/W) % " << FUSED_A2A_N_TILE
+                    << "  require: AN % W == 0, (AN/W) % " << FUSED_A2A_N_TILE
                     << " == 0 (so n_shard >= " << FUSED_A2A_N_TILE
                     << " and every rank is covered), M % " << FUSED_A2A_M_TILE
-                    << " == 0.\n"
-                    << "  e.g. W=4 needs N >= " << ((size_t)W * FUSED_A2A_N_TILE)
+                    << " == 0, AN % " << FUSED_A2A_N_TILE << " == 0, AN <= N.\n"
+                    << "  e.g. W=4 needs AN >= " << ((size_t)W * FUSED_A2A_N_TILE)
                     << " (n_shard >= 256). Refusing to launch (would deadlock in "
                        "the DRAIN barrier)."
                     << std::endl;
@@ -233,9 +244,72 @@ namespace TensileLite
             const size_t cBytes       = problem->c().totalAllocatedBytes();
             const size_t dBytes       = problem->d().totalAllocatedBytes();
 
-            std::cout << "[fused-a2a] M=" << M << " N=" << N << " nShard=" << nShard
-                      << " tilesPerRank=" << tilesPerRank << " mTiles=" << mTiles
-                      << " target=" << target << " drain=" << drain << "\n";
+            std::cout << "[fused-a2a] M=" << M << " N=" << N << " K=" << K << " AN=" << AN
+                      << " nShard=" << nShard << " tilesPerRank=" << tilesPerRank
+                      << " mTiles=" << mTiles << " target=" << target << " drain=" << drain
+                      << "\n";
+
+            // --- Host golden setup (Task 11 numeric validation) ---------------
+            // The GEMM is a TN GEMM (op(A)=A^T, op(B)=B), bf16 in, fp32 accumulate,
+            // alpha=1, beta=0, C=0. Physical layouts come straight from the tensor
+            // descriptors (no hardcoded assumption): A element (m,k) sits at
+            //   m*aFreeStride + k*aBoundStride, similarly for B(k,n) and D(m,n).
+            // Every card runs the SAME A,B, so there is ONE golden Dgold[M,N].
+            const auto&  aDesc = problem->a();
+            const auto&  bDesc = problem->b();
+            const auto&  dDesc = problem->d();
+            const size_t aFreeAx  = problem->freeIndicesA()[0].i;   // A axis carrying M
+            const size_t aBoundAx = problem->boundIndices()[0].a;   // A axis carrying K
+            const size_t bFreeAx  = problem->freeIndicesB()[0].i;   // B axis carrying N
+            const size_t bBoundAx = problem->boundIndices()[0].b;   // B axis carrying K
+            const size_t aFreeStride  = aDesc.strides()[aFreeAx];
+            const size_t aBoundStride = aDesc.strides()[aBoundAx];
+            const size_t bFreeStride  = bDesc.strides()[bFreeAx];
+            const size_t bBoundStride = bDesc.strides()[bBoundAx];
+            // D free-index axes: freeIndices()[j].d is the D dim for free index j.
+            // Free index 0 is the A(M) index, free index 1 is the B(N) index.
+            const size_t dMAx = problem->freeIndices()[0].d;
+            const size_t dNAx = problem->freeIndices()[1].d;
+            const size_t dMStride = dDesc.strides()[dMAx];
+            const size_t dNStride = dDesc.strides()[dNAx];
+            std::cout << "[fused-a2a] layout A(freeStride=" << aFreeStride << " boundStride="
+                      << aBoundStride << ") B(freeStride=" << bFreeStride << " boundStride="
+                      << bBoundStride << ") D(mStride=" << dMStride << " nStride=" << dNStride
+                      << ")\n";
+
+            // Deterministic small-magnitude bf16 inputs (indexed by logical coords,
+            // written into the physical slot via the descriptor strides). Small
+            // integers scaled by 0.5/0.25 keep the fp32 partial sums representable
+            // and the final bf16 round predictable.
+            const size_t aElems = aDesc.totalAllocatedElements();
+            const size_t bElems = bDesc.totalAllocatedElements();
+            std::vector<BFloat16> hA(aElems, BFloat16(0.0f));
+            std::vector<BFloat16> hB(bElems, BFloat16(0.0f));
+            auto aVal = [](size_t m, size_t k) {
+                return BFloat16((float)(((int)((m * 3 + k) % 7)) - 3) * 0.5f);
+            };
+            auto bVal = [](size_t k, size_t n) {
+                return BFloat16((float)(((int)((k + n * 2) % 5)) - 2) * 0.25f);
+            };
+            for(size_t m = 0; m < M; m++)
+                for(size_t k = 0; k < K; k++)
+                    hA[m * aFreeStride + k * aBoundStride] = aVal(m, k);
+            for(size_t k = 0; k < K; k++)
+                for(size_t n = 0; n < N; n++)
+                    hB[k * bBoundStride + n * bFreeStride] = bVal(k, n);
+
+            // Host golden GEMM: Dgold[m,n] = bf16( sum_k f32(A[m,k]) * f32(B[k,n]) ).
+            std::vector<BFloat16> Dgold((size_t)M * N, BFloat16(0.0f));
+            for(size_t m = 0; m < M; m++)
+            {
+                for(size_t n = 0; n < N; n++)
+                {
+                    float acc = 0.0f;
+                    for(size_t k = 0; k < K; k++)
+                        acc += (float)aVal(m, k) * (float)bVal(k, n);
+                    Dgold[m * N + n] = BFloat16(acc); // row-major [M,N] golden store
+                }
+            }
 
             // --- Phase 1: per-device fresh allocation (spec §3.1). ---
             std::vector<void*> recv(W, nullptr), flag(W, nullptr), counter(W, nullptr);
@@ -253,9 +327,11 @@ namespace TensileLite
                 HIP_CHECK_EXC(hipMalloc(&wB[d], bBytes));
                 HIP_CHECK_EXC(hipMalloc(&cC[d], cBytes));
                 HIP_CHECK_EXC(hipMalloc(&outD[d], dBytes));
-                // Give GEMM operands deterministic, valid contents; zero recv/out.
-                HIP_CHECK_EXC(hipMemset(xA[d], 0, aBytes));
-                HIP_CHECK_EXC(hipMemset(wB[d], 0, bBytes));
+                // Give GEMM operands deterministic real contents (same on every
+                // card); zero C, out, recv. A/B are host-filled bf16 patterns so
+                // the kernel computes a non-trivial GEMM we can check numerically.
+                HIP_CHECK_EXC(hipMemcpy(xA[d], hA.data(), aBytes, hipMemcpyHostToDevice));
+                HIP_CHECK_EXC(hipMemcpy(wB[d], hB.data(), bBytes, hipMemcpyHostToDevice));
                 HIP_CHECK_EXC(hipMemset(cC[d], 0, cBytes));
                 HIP_CHECK_EXC(hipMemset(outD[d], 0, dBytes));
                 HIP_CHECK_EXC(hipMemset(recv[d], 0, recvBytes));
@@ -374,7 +450,8 @@ namespace TensileLite
                                    target,
                                    (uint32_t)W,
                                    nShard,
-                                   (uint32_t)drain);
+                                   (uint32_t)drain,
+                                   (uint32_t)AN);
                 std::cout << "[fused-a2a] dev " << d << " kernarg: host base(before append)="
                           << beforeSize << " size(after)=" << last.args.size() << "\n";
 
@@ -401,6 +478,98 @@ namespace TensileLite
                 }
             }
 
+            // --- Task 11 dual-segment numeric validation --------------------
+            // Only meaningful if every kernel exited cleanly.
+            bool l2Pass = ok;
+            bool l1Pass = ok;
+            if(ok)
+            {
+                // bf16 tolerance: ~3 decimal digits. Compare in fp32.
+                auto closeBf16 = [](float got, float want) {
+                    float diff = std::fabs(got - want);
+                    float tol  = 1e-2f * std::max(1.0f, std::fabs(want));
+                    return diff <= tol;
+                };
+
+                // The kernel's recv scatter uses row stride = n_shard (FusedNShard)
+                // and slot stride = M * n_shard (M = logical SizeI), matching the
+                // _emitFusedA2APushStore offset formula. recv is a bf16 buffer.
+                const size_t slotStride = (size_t)M * (size_t)nShard; // elems per src slot
+                const size_t rowStride  = (size_t)nShard;             // elems per M-row
+
+                // ---- L2: recv (PUSH segment). For destination card dst, slot src
+                // must hold columns [dst*nShard, dst*nShard+nShard) of Dgold
+                // transposed into [src, m, n_local]. Every source ran the same GEMM,
+                // so all W src slots carry the identical shard.
+                std::vector<uint16_t> hRecv((size_t)W * Mpad * nShardPad);
+                for(int dst = 0; dst < W && l2Pass; dst++)
+                {
+                    HIP_CHECK_EXC(hipSetDevice(dst));
+                    HIP_CHECK_EXC(hipMemcpy(hRecv.data(), recv[dst],
+                                            recvBytes, hipMemcpyDeviceToHost));
+                    size_t mism = 0;
+                    for(int src = 0; src < W; src++)
+                    {
+                        for(size_t m = 0; m < M; m++)
+                        {
+                            for(uint32_t nl = 0; nl < nShard; nl++)
+                            {
+                                size_t off = (size_t)src * slotStride + m * rowStride + nl;
+                                BFloat16 g;
+                                g.data = hRecv[off];
+                                float got  = (float)g;
+                                float want = (float)Dgold[m * N + (size_t)dst * nShard + nl];
+                                if(!closeBf16(got, want))
+                                {
+                                    if(mism < 5)
+                                        std::cerr << "[fused-a2a] L2 MISMATCH card=" << dst
+                                                  << " src=" << src << " m=" << m << " nl=" << nl
+                                                  << " got=" << got << " want=" << want << "\n";
+                                    mism++;
+                                }
+                            }
+                        }
+                    }
+                    std::cout << "[fused-a2a] L2 recv card " << dst << ": "
+                              << (mism == 0 ? "PASS" : "FAIL") << " (mismatches=" << mism << ")\n";
+                    if(mism)
+                        l2Pass = false;
+                }
+
+                // ---- L1: out (local segment). out[M,N] columns [AN, N) must equal
+                // Dgold; columns [0, AN) went to recv and are NOT written -> skip.
+                std::vector<uint16_t> hOut(dBytes / sizeof(uint16_t));
+                for(int d = 0; d < W && l1Pass; d++)
+                {
+                    HIP_CHECK_EXC(hipSetDevice(d));
+                    HIP_CHECK_EXC(hipMemcpy(hOut.data(), outD[d], dBytes, hipMemcpyDeviceToHost));
+                    size_t mism = 0;
+                    for(size_t m = 0; m < M; m++)
+                    {
+                        for(size_t n = AN; n < N; n++)
+                        {
+                            size_t off = m * dMStride + n * dNStride; // D physical addr
+                            BFloat16 g;
+                            g.data = hOut[off];
+                            float got  = (float)g;
+                            float want = (float)Dgold[m * N + n];
+                            if(!closeBf16(got, want))
+                            {
+                                if(mism < 5)
+                                    std::cerr << "[fused-a2a] L1 MISMATCH card=" << d
+                                              << " m=" << m << " n=" << n << " got=" << got
+                                              << " want=" << want << "\n";
+                                mism++;
+                            }
+                        }
+                    }
+                    std::cout << "[fused-a2a] L1 out card " << d << ": "
+                              << (mism == 0 ? "PASS" : "FAIL") << " (mismatches=" << mism << ")\n";
+                    if(mism)
+                        l1Pass = false;
+                }
+            }
+
             // Cleanup.
             for(int d = 0; d < W; d++)
             {
@@ -424,7 +593,13 @@ namespace TensileLite
             }
 
             std::cout << "[fused-a2a] smoke " << (ok ? "PASSED" : "FAILED") << std::endl;
-            return ok ? 0 : 2;
+            const bool numPass = ok && l2Pass && l1Pass;
+            std::cout << "[fused-a2a] validation L2(recv)=" << (l2Pass ? "PASS" : "FAIL")
+                      << " L1(out)=" << (l1Pass ? "PASS" : "FAIL") << " => "
+                      << (numPass ? "PASS" : "FAIL") << std::endl;
+            if(!ok)
+                return 2;
+            return numPass ? 0 : 3;
         }
 
     } // namespace Client

@@ -22,9 +22,14 @@
 //      tail — which is what fills the previously-garbage fused kernarg and makes
 //      the hipErrorIllegalAddress(700) crash disappear.
 //
-// Scope: setup + launch smoke only. NO numeric/layout validation (that is
-// Task 11-13). Success == no HIP error (other than the benign
-// hipErrorPeerAccessAlreadyEnabled) and every kernel exits cleanly.
+// Scope: setup once, then repeat launch + dual-segment numeric validation for
+// N iterations (Task 13a). Each iteration RE-ZEROES counter/flag/recv before
+// the launch so the DRAIN handshake is actually exercised (race detection), and
+// times the launch with per-device hipEvents (the iteration's latency is the MAX
+// across the W cards, since DRAIN gates each kernel's exit on data receipt).
+// After the loop it reports "race: N/N iterations passed" and p50/p90 latency.
+// Success == every iteration passes the L2(recv)+L1(out) check with no HIP error
+// (the benign hipErrorPeerAccessAlreadyEnabled aside).
 
 #include <Tensile/ContractionProblem.hpp>
 #include <Tensile/ContractionSolution.hpp>
@@ -42,6 +47,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <vector>
@@ -390,184 +396,314 @@ namespace TensileLite
                 (void)loadedAny;
             }
 
-            // --- Phase 2: zero counter/flag, then solve + append + launch on
-            //     all W devices (spec §3.2). ---
+            // --- Repeat loop (Task 13a): race detection + p50/p90 latency. ---
+            // The launch → sync → validate sequence is repeated `iters` times.
+            // Each iteration RE-ZEROES counter/flag/recv on all W devices before
+            // the launch (otherwise a run leaves counters at target and flags at
+            // READY, so the DRAIN barrier releases trivially and the race test is
+            // vacuous). recv is re-zeroed too so a stale-correct recv from the
+            // previous iteration cannot mask a broken scatter this iteration. The
+            // GEMM operands (A/B), P2P access, streams, and code-object adapters
+            // are set up ONCE above and reused. per iteration we rebuild the
+            // KernelInvocation via solution->solve() + appendFusedSegment() so the
+            // kernarg carries exactly one fused segment (reusing the same
+            // invocation would append the tail repeatedly).
+            const int iters  = std::max(1, args["fused-a2a-iters"].as<int>());
+            int       warmup = args["fused-a2a-warmup"].as<int>();
+            if(warmup < 0)
+                warmup = 0;
+            if(warmup >= iters)
+                warmup = iters - 1; // keep at least one measured iteration
+
+            std::cout << "[fused-a2a] repeat: iters=" << iters << " warmup=" << warmup
+                      << " (post-warmup measured=" << (iters - warmup) << ")\n";
+
+            // bf16 tolerance: ~3 decimal digits. Compare in fp32. (shared by
+            // both validation segments, all iterations)
+            auto closeBf16 = [](float got, float want) {
+                float diff = std::fabs(got - want);
+                float tol  = 1e-2f * std::max(1.0f, std::fabs(want));
+                return diff <= tol;
+            };
+            // The kernel's recv scatter uses row stride = n_shard (FusedNShard)
+            // and slot stride = M * n_shard (M = logical SizeI), matching the
+            // _emitFusedA2APushStore offset formula. recv is a bf16 buffer.
+            const size_t slotStride = (size_t)M * (size_t)nShard; // elems per src slot
+            const size_t rowStride  = (size_t)nShard;             // elems per M-row
+
+            // Persistent host scratch (reused each iteration, no per-iter alloc).
+            std::vector<uint16_t> hRecv((size_t)W * Mpad * nShardPad);
+            std::vector<uint16_t> hOut(dBytes / sizeof(uint16_t));
+
+            // Per-iteration events: start/stop on each device's stream to time the
+            // fused launch. Because DRAIN=ON gates each kernel's exit on receiving
+            // its data, the iteration's latency is the MAX across the W cards (the
+            // slowest card gates all-to-all completion).
+            std::vector<hipEvent_t> startEv(W, nullptr), stopEv(W, nullptr);
             for(int d = 0; d < W; d++)
             {
                 HIP_CHECK_EXC(hipSetDevice(d));
-                HIP_CHECK_EXC(hipMemset(counter[d], 0, counterBytes)); // inc from 0
-                HIP_CHECK_EXC(hipMemset(flag[d], 0, flagBytes));       // NOT_READY
-            }
-            for(int d = 0; d < W; d++)
-                HIP_CHECK_EXC(hipDeviceSynchronize());
-
-            // Launch each device (single-process, sequential enqueue to W
-            // streams). DRAIN=ON: the last WG polls this device's own flag, which
-            // is set by peers — so all W must be launched for the barrier to
-            // release. We enqueue all first, then synchronize.
-            std::vector<std::vector<KernelInvocation>> perDeviceKernels(W);
-            for(int d = 0; d < W; d++)
-            {
-                HIP_CHECK_EXC(hipSetDevice(d));
-
-                // Build this device's GEMM inputs pointing at ITS fresh operands.
-                ContractionInputs inputs;
-                inputs.a     = xA[d];
-                inputs.b     = wB[d];
-                inputs.c     = cC[d];
-                inputs.d     = outD[d];
-                inputs.alpha = static_cast<float>(1);
-                inputs.beta  = static_cast<float>(0);
-                inputs.gpu   = true;
-
-                auto kernels = solution->solve(*problem, inputs, *hardware, nullptr, 0, streams[d]);
-                if(kernels.empty())
-                {
-                    std::cerr << "[fused-a2a] solve() produced no kernels on device " << d
-                              << std::endl;
-                    return 1;
-                }
-
-                // recv/flag pointer views for device d: slot j = peer j's buffer.
-                // recv_ptr_[j] is peer j's recv base (where device d PUSHes its
-                // shard to). recv_ptr_[myRank] is this device's own recv base.
-                std::vector<void*> recvView(W), flagView(W);
-                for(int j = 0; j < W; j++)
-                {
-                    recvView[j] = recv[j];
-                    flagView[j] = flag[j];
-                }
-
-                // The fused segment must sit at the very tail; append to the LAST
-                // invocation's args (the single-call fused GEMM has one).
-                KernelInvocation& last = kernels.back();
-                size_t beforeSize = last.args.size();
-                appendFusedSegment(last.args,
-                                   recvView,
-                                   flagView,
-                                   counter[d],
-                                   (uint32_t)d,     // my_rank
-                                   target,
-                                   (uint32_t)W,
-                                   nShard,
-                                   (uint32_t)drain,
-                                   (uint32_t)AN);
-                std::cout << "[fused-a2a] dev " << d << " kernarg: host base(before append)="
-                          << beforeSize << " size(after)=" << last.args.size() << "\n";
-
-                perDeviceKernels[d] = std::move(kernels);
-                HIP_CHECK_EXC(adapters[d]->launchKernels(perDeviceKernels[d], streams[d], nullptr,
-                                                         nullptr));
+                HIP_CHECK_EXC(hipEventCreate(&startEv[d]));
+                HIP_CHECK_EXC(hipEventCreate(&stopEv[d]));
             }
 
-            // Wait for every device and report.
-            bool ok = true;
-            for(int d = 0; d < W; d++)
+            std::vector<double> latAllUs;   // every iteration's max-card latency
+            std::vector<double> latMeasUs;  // post-warmup only (for percentiles)
+            int  passIters   = 0;
+            bool raceFail     = false;
+            int  firstFailIt  = -1;
+            bool anyHipError  = false;
+
+            for(int it = 0; it < iters; it++)
             {
-                HIP_CHECK_EXC(hipSetDevice(d));
-                hipError_t se = hipStreamSynchronize(streams[d]);
-                if(se != hipSuccess)
+                const bool verbose = (it == 0); // full per-card breakdown only on iter 0
+
+                // -- Re-zero counter/flag/recv on every device BEFORE launch. --
+                for(int d = 0; d < W; d++)
                 {
-                    std::cerr << "[fused-a2a] device " << d
-                              << " kernel FAILED: " << hipGetErrorString(se) << std::endl;
-                    ok = false;
+                    HIP_CHECK_EXC(hipSetDevice(d));
+                    HIP_CHECK_EXC(hipMemset(counter[d], 0, counterBytes)); // inc from 0
+                    HIP_CHECK_EXC(hipMemset(flag[d], 0, flagBytes));       // NOT_READY
+                    HIP_CHECK_EXC(hipMemset(recv[d], 0, recvBytes));       // clear prior recv
                 }
-                else
+                for(int d = 0; d < W; d++)
                 {
-                    std::cout << "[fused-a2a] device " << d << " kernel exited cleanly\n";
+                    HIP_CHECK_EXC(hipSetDevice(d));
+                    HIP_CHECK_EXC(hipDeviceSynchronize());
                 }
-            }
 
-            // --- Task 11 dual-segment numeric validation --------------------
-            // Only meaningful if every kernel exited cleanly.
-            bool l2Pass = ok;
-            bool l1Pass = ok;
-            if(ok)
-            {
-                // bf16 tolerance: ~3 decimal digits. Compare in fp32.
-                auto closeBf16 = [](float got, float want) {
-                    float diff = std::fabs(got - want);
-                    float tol  = 1e-2f * std::max(1.0f, std::fabs(want));
-                    return diff <= tol;
-                };
-
-                // The kernel's recv scatter uses row stride = n_shard (FusedNShard)
-                // and slot stride = M * n_shard (M = logical SizeI), matching the
-                // _emitFusedA2APushStore offset formula. recv is a bf16 buffer.
-                const size_t slotStride = (size_t)M * (size_t)nShard; // elems per src slot
-                const size_t rowStride  = (size_t)nShard;             // elems per M-row
-
-                // ---- L2: recv (PUSH segment). For destination card dst, slot src
-                // must hold columns [dst*nShard, dst*nShard+nShard) of Dgold
-                // transposed into [src, m, n_local]. Every source ran the same GEMM,
-                // so all W src slots carry the identical shard.
-                std::vector<uint16_t> hRecv((size_t)W * Mpad * nShardPad);
-                for(int dst = 0; dst < W && l2Pass; dst++)
+                // -- Solve + append fused segment + record start + launch. DRAIN=ON:
+                //    the last WG polls this device's own flag (set by peers), so all
+                //    W must be launched for the barrier to release. Enqueue all,
+                //    then synchronize. --
+                std::vector<std::vector<KernelInvocation>> perDeviceKernels(W);
+                for(int d = 0; d < W; d++)
                 {
-                    HIP_CHECK_EXC(hipSetDevice(dst));
-                    HIP_CHECK_EXC(hipMemcpy(hRecv.data(), recv[dst],
-                                            recvBytes, hipMemcpyDeviceToHost));
-                    size_t mism = 0;
-                    for(int src = 0; src < W; src++)
+                    HIP_CHECK_EXC(hipSetDevice(d));
+
+                    ContractionInputs inputs;
+                    inputs.a     = xA[d];
+                    inputs.b     = wB[d];
+                    inputs.c     = cC[d];
+                    inputs.d     = outD[d];
+                    inputs.alpha = static_cast<float>(1);
+                    inputs.beta  = static_cast<float>(0);
+                    inputs.gpu   = true;
+
+                    auto kernels
+                        = solution->solve(*problem, inputs, *hardware, nullptr, 0, streams[d]);
+                    if(kernels.empty())
                     {
+                        std::cerr << "[fused-a2a] solve() produced no kernels on device " << d
+                                  << " (iter " << it << ")" << std::endl;
+                        return 1;
+                    }
+
+                    // recv/flag pointer views for device d: slot j = peer j's buffer.
+                    std::vector<void*> recvView(W), flagView(W);
+                    for(int j = 0; j < W; j++)
+                    {
+                        recvView[j] = recv[j];
+                        flagView[j] = flag[j];
+                    }
+
+                    KernelInvocation& last       = kernels.back();
+                    size_t            beforeSize = last.args.size();
+                    appendFusedSegment(last.args,
+                                       recvView,
+                                       flagView,
+                                       counter[d],
+                                       (uint32_t)d, // my_rank
+                                       target,
+                                       (uint32_t)W,
+                                       nShard,
+                                       (uint32_t)drain,
+                                       (uint32_t)AN);
+                    // Print kernarg size only on iter 0 to avoid log spam; a constant
+                    // size across iterations confirms exactly one fused segment.
+                    if(it == 0)
+                        std::cout << "[fused-a2a] dev " << d
+                                  << " kernarg: host base(before append)=" << beforeSize
+                                  << " size(after)=" << last.args.size() << "\n";
+
+                    perDeviceKernels[d] = std::move(kernels);
+                    HIP_CHECK_EXC(hipEventRecord(startEv[d], streams[d]));
+                    HIP_CHECK_EXC(adapters[d]->launchKernels(perDeviceKernels[d], streams[d],
+                                                             nullptr, nullptr));
+                    HIP_CHECK_EXC(hipEventRecord(stopEv[d], streams[d]));
+                }
+
+                // -- Wait for every device; collect per-card elapsed time. --
+                bool   ok       = true;
+                double maxCardUs = 0.0;
+                for(int d = 0; d < W; d++)
+                {
+                    HIP_CHECK_EXC(hipSetDevice(d));
+                    hipError_t se = hipStreamSynchronize(streams[d]);
+                    if(se != hipSuccess)
+                    {
+                        std::cerr << "[fused-a2a] device " << d << " kernel FAILED (iter " << it
+                                  << "): " << hipGetErrorString(se) << std::endl;
+                        ok          = false;
+                        anyHipError = true;
+                    }
+                    else
+                    {
+                        float ms = 0.0f;
+                        HIP_CHECK_EXC(hipEventElapsedTime(&ms, startEv[d], stopEv[d]));
+                        double us = (double)ms * 1000.0;
+                        if(us > maxCardUs)
+                            maxCardUs = us;
+                        if(verbose)
+                            std::cout << "[fused-a2a] device " << d
+                                      << " kernel exited cleanly (" << std::fixed
+                                      << std::setprecision(1) << us << " us)\n";
+                    }
+                }
+
+                // -- Dual-segment numeric validation (Task 11), EVERY iteration. --
+                bool l2Pass = ok;
+                bool l1Pass = ok;
+                if(ok)
+                {
+                    // ---- L2: recv (PUSH segment). For destination card dst, slot
+                    // src must hold columns [dst*nShard, dst*nShard+nShard) of Dgold
+                    // as [src, m, n_local]. All W src slots carry the identical shard.
+                    for(int dst = 0; dst < W && l2Pass; dst++)
+                    {
+                        HIP_CHECK_EXC(hipSetDevice(dst));
+                        HIP_CHECK_EXC(
+                            hipMemcpy(hRecv.data(), recv[dst], recvBytes, hipMemcpyDeviceToHost));
+                        size_t mism = 0;
+                        for(int src = 0; src < W; src++)
+                        {
+                            for(size_t m = 0; m < M; m++)
+                            {
+                                for(uint32_t nl = 0; nl < nShard; nl++)
+                                {
+                                    size_t   off = (size_t)src * slotStride + m * rowStride + nl;
+                                    BFloat16 g;
+                                    g.data     = hRecv[off];
+                                    float got  = (float)g;
+                                    float want = (float)Dgold[m * N + (size_t)dst * nShard + nl];
+                                    if(!closeBf16(got, want))
+                                    {
+                                        if(mism < 5)
+                                            std::cerr << "[fused-a2a] L2 MISMATCH iter=" << it
+                                                      << " card=" << dst << " src=" << src
+                                                      << " m=" << m << " nl=" << nl << " got=" << got
+                                                      << " want=" << want << "\n";
+                                        mism++;
+                                    }
+                                }
+                            }
+                        }
+                        if(verbose || mism)
+                            std::cout << "[fused-a2a] L2 recv card " << dst << ": "
+                                      << (mism == 0 ? "PASS" : "FAIL")
+                                      << " (mismatches=" << mism << ")\n";
+                        if(mism)
+                            l2Pass = false;
+                    }
+
+                    // ---- L1: out (local segment). out[M,N] columns [AN, N) must
+                    // equal Dgold; columns [0, AN) went to recv (not written) -> skip.
+                    for(int d = 0; d < W && l1Pass; d++)
+                    {
+                        HIP_CHECK_EXC(hipSetDevice(d));
+                        HIP_CHECK_EXC(
+                            hipMemcpy(hOut.data(), outD[d], dBytes, hipMemcpyDeviceToHost));
+                        size_t mism = 0;
                         for(size_t m = 0; m < M; m++)
                         {
-                            for(uint32_t nl = 0; nl < nShard; nl++)
+                            for(size_t n = AN; n < N; n++)
                             {
-                                size_t off = (size_t)src * slotStride + m * rowStride + nl;
+                                size_t   off = m * dMStride + n * dNStride; // D physical addr
                                 BFloat16 g;
-                                g.data = hRecv[off];
+                                g.data     = hOut[off];
                                 float got  = (float)g;
-                                float want = (float)Dgold[m * N + (size_t)dst * nShard + nl];
+                                float want = (float)Dgold[m * N + n];
                                 if(!closeBf16(got, want))
                                 {
                                     if(mism < 5)
-                                        std::cerr << "[fused-a2a] L2 MISMATCH card=" << dst
-                                                  << " src=" << src << " m=" << m << " nl=" << nl
+                                        std::cerr << "[fused-a2a] L1 MISMATCH iter=" << it
+                                                  << " card=" << d << " m=" << m << " n=" << n
                                                   << " got=" << got << " want=" << want << "\n";
                                     mism++;
                                 }
                             }
                         }
+                        if(verbose || mism)
+                            std::cout << "[fused-a2a] L1 out card " << d << ": "
+                                      << (mism == 0 ? "PASS" : "FAIL")
+                                      << " (mismatches=" << mism << ")\n";
+                        if(mism)
+                            l1Pass = false;
                     }
-                    std::cout << "[fused-a2a] L2 recv card " << dst << ": "
-                              << (mism == 0 ? "PASS" : "FAIL") << " (mismatches=" << mism << ")\n";
-                    if(mism)
-                        l2Pass = false;
                 }
 
-                // ---- L1: out (local segment). out[M,N] columns [AN, N) must equal
-                // Dgold; columns [0, AN) went to recv and are NOT written -> skip.
-                std::vector<uint16_t> hOut(dBytes / sizeof(uint16_t));
-                for(int d = 0; d < W && l1Pass; d++)
+                // -- Per-iteration verdict + latency bookkeeping. --
+                const bool iterPass = ok && l2Pass && l1Pass;
+                if(iterPass)
+                    passIters++;
+                else
                 {
-                    HIP_CHECK_EXC(hipSetDevice(d));
-                    HIP_CHECK_EXC(hipMemcpy(hOut.data(), outD[d], dBytes, hipMemcpyDeviceToHost));
-                    size_t mism = 0;
-                    for(size_t m = 0; m < M; m++)
-                    {
-                        for(size_t n = AN; n < N; n++)
-                        {
-                            size_t off = m * dMStride + n * dNStride; // D physical addr
-                            BFloat16 g;
-                            g.data = hOut[off];
-                            float got  = (float)g;
-                            float want = (float)Dgold[m * N + n];
-                            if(!closeBf16(got, want))
-                            {
-                                if(mism < 5)
-                                    std::cerr << "[fused-a2a] L1 MISMATCH card=" << d
-                                              << " m=" << m << " n=" << n << " got=" << got
-                                              << " want=" << want << "\n";
-                                mism++;
-                            }
-                        }
-                    }
-                    std::cout << "[fused-a2a] L1 out card " << d << ": "
-                              << (mism == 0 ? "PASS" : "FAIL") << " (mismatches=" << mism << ")\n";
-                    if(mism)
-                        l1Pass = false;
+                    if(!raceFail)
+                        firstFailIt = it;
+                    raceFail = true;
+                    std::cerr << "[fused-a2a] RACE FAIL at iter " << it
+                              << " (hipOk=" << ok << " L2=" << l2Pass << " L1=" << l1Pass << ")\n";
                 }
+
+                latAllUs.push_back(maxCardUs);
+                if(it >= warmup)
+                    latMeasUs.push_back(maxCardUs);
+
+                // Compact progress line (skip iter 0, which printed full breakdown).
+                if(it != 0)
+                    std::cout << "[fused-a2a] iter " << it << "/" << (iters - 1) << " "
+                              << (iterPass ? "PASS" : "FAIL") << " maxCard=" << std::fixed
+                              << std::setprecision(1) << maxCardUs << " us"
+                              << (it < warmup ? " (warmup)" : "") << "\n";
+            }
+
+            for(int d = 0; d < W; d++)
+            {
+                (void)hipEventDestroy(startEv[d]);
+                (void)hipEventDestroy(stopEv[d]);
+            }
+
+            // --- Race verdict + latency percentiles. ---
+            std::cout << "[fused-a2a] race: " << passIters << "/" << iters
+                      << " iterations passed" << (raceFail ? "  (FAIL)" : "  (PASS)") << "\n";
+            if(raceFail)
+                std::cout << "[fused-a2a] race: first failing iteration = " << firstFailIt << "\n";
+
+            // Percentiles over post-warmup samples. p50 = sorted[floor(0.5*n)],
+            // p90 = sorted[floor(0.9*n)]. Single-process 4-GPU P2P on ONE node
+            // (not real multi-node xGMI) — a relative on-node datum, not a
+            // production figure. Deliberately NOT compared to any baseline.
+            if(!latMeasUs.empty())
+            {
+                std::vector<double> s = latMeasUs;
+                std::sort(s.begin(), s.end());
+                const size_t n     = s.size();
+                auto         pct   = [&](double p) { return s[std::min(n - 1, (size_t)(p * n))]; };
+                const double p50   = pct(0.5);
+                const double p90   = pct(0.9);
+                const double lmin  = s.front();
+                const double lmax  = s.back();
+                std::cout << std::fixed << std::setprecision(1)
+                          << "[fused-a2a] latency (post-warmup, " << n << " iters, MAX across " << W
+                          << " cards/iter): p50=" << p50 << " us p90=" << p90 << " us min=" << lmin
+                          << " us max=" << lmax << " us\n";
+                std::cout << "[fused-a2a] latency NOTE: single-process " << W
+                          << "-GPU P2P on ONE node (not multi-node xGMI); relative on-node "
+                             "datum only.\n";
+            }
+            else
+            {
+                std::cout << "[fused-a2a] latency: no post-warmup samples collected\n";
             }
 
             // Cleanup.
@@ -592,14 +728,13 @@ namespace TensileLite
                     (void)hipStreamDestroy(streams[d]);
             }
 
-            std::cout << "[fused-a2a] smoke " << (ok ? "PASSED" : "FAILED") << std::endl;
-            const bool numPass = ok && l2Pass && l1Pass;
-            std::cout << "[fused-a2a] validation L2(recv)=" << (l2Pass ? "PASS" : "FAIL")
-                      << " L1(out)=" << (l1Pass ? "PASS" : "FAIL") << " => "
-                      << (numPass ? "PASS" : "FAIL") << std::endl;
-            if(!ok)
+            std::cout << "[fused-a2a] overall " << (raceFail ? "FAILED" : "PASSED") << std::endl;
+            // Exit codes: 2 = a kernel returned a HIP error in some iteration;
+            // 3 = all kernels ran but some iteration failed numeric validation;
+            // 0 = every iteration passed the dual-segment check (race PASS).
+            if(anyHipError)
                 return 2;
-            return numPass ? 0 : 3;
+            return raceFail ? 3 : 0;
         }
 
     } // namespace Client

@@ -188,6 +188,10 @@ def _create_kernel(cfg, mi_wave_group=None, inst_k=32, bpe=2):
         "MIWaveGroup": MIWaveGroup,
         "WavefrontSize": WAVESIZE,
         "UseSubtileImpl": True,
+        # Non-fused store-D default. GlobalWriteBatch reads kernel["FusedGemmA2A"]
+        # unconditionally (no .get); production derives it via Solution.py, but the
+        # hand-built kernel dict here must supply it or the store path KeyErrors.
+        "FusedGemmA2A": 0,
         "ISA": (9, 5, 0),
         "NonTemporalA": 0,
         "NonTemporalB": 0,

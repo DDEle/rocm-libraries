@@ -541,8 +541,17 @@ def _build_sgprs_for_test(writer):
     return writer.sgprs
 
 
-def _build_prologue(sgprs, num_agprs, mt0, mt1, stride_d=None, use_input_buf=True):
+def _build_prologue(sgprs, num_agprs, mt0, mt1, stride_d=None, use_input_buf=True,
+                    source_swap=False):
     """Generate prologue that loads kernel args and initializes the SRDs.
+
+    source_swap: if True, the D buffer is ROW-MAJOR (N contiguous) to match the
+        production UseInitialStridesCD layout: StrideDI (StrideD0, the M-row stride)
+        = the kernarg stride value (row_stride = round_mt1), and StrideDJ (StrideD1J,
+        the N stride) = 1.  This makes the SourceSwap N-wide store's 4 N-cols
+        physically contiguous so it can coalesce into a buffer_store_dwordx2.  When
+        False the buffer is column-major (StrideDI=1, StrideDJ=stride_d), the original
+        convention used by the non-SourceSwap tests.
 
     Kernarg layout (matches args descriptor in the test):
       offset  0: u64 input buffer ptr   (SrdInput base)
@@ -646,17 +655,29 @@ def _build_prologue(sgprs, num_agprs, mt0, mt1, stride_d=None, use_input_buf=Tru
     m.add(SMovB32(dst=sgpr(sgprs["WorkGroup0"]), src=0, comment="WorkGroup0 = 0"))
     m.add(SMovB32(dst=sgpr(sgprs["WorkGroup1"]), src=0, comment="WorkGroup1 = 0"))
 
-    # StrideCJ = StrideDJ (loaded from kernargs above)
-    m.add(SMovB32(dst=sgpr(sgprs["StrideCJ"]), src=sgpr(sgprs["StrideDJ"]),
-                  comment="StrideCJ = StrideDJ"))
+    if source_swap:
+        # Row-major D (production UseInitialStridesCD): the kernarg stride is the M-row
+        # stride (row_stride = round_mt1) -> StrideDI; N is the contiguous dim -> StrideDJ=1.
+        if "StrideDI" in sgprs:
+            m.add(SMovB32(dst=sgpr(sgprs["StrideDI"]), src=sgpr(sgprs["StrideDJ"]),
+                          comment="StrideDI = row_stride (row-major M-row stride)"))
+        if "StrideCI" in sgprs:
+            m.add(SMovB32(dst=sgpr(sgprs["StrideCI"]), src=sgpr(sgprs["StrideDJ"]),
+                          comment="StrideCI = StrideDI"))
+        m.add(SMovB32(dst=sgpr(sgprs["StrideDJ"]), src=1, comment="StrideDJ = 1 (N contiguous)"))
+        m.add(SMovB32(dst=sgpr(sgprs["StrideCJ"]), src=1, comment="StrideCJ = 1"))
+    else:
+        # StrideCJ = StrideDJ (loaded from kernargs above)
+        m.add(SMovB32(dst=sgpr(sgprs["StrideCJ"]), src=sgpr(sgprs["StrideDJ"]),
+                      comment="StrideCJ = StrideDJ"))
 
-    # StrideDI / StrideCI = 1 (I/M is the contiguous dim of the column-major D buffer).
-    # Referenced only when UseInitialStridesCD=True; setting to 1 reproduces the exact
-    # column-major store addressing (coord0*1 + coord1*StrideDJ) of the const-stride path.
-    if "StrideDI" in sgprs:
-        m.add(SMovB32(dst=sgpr(sgprs["StrideDI"]), src=1, comment="StrideDI = 1"))
-    if "StrideCI" in sgprs:
-        m.add(SMovB32(dst=sgpr(sgprs["StrideCI"]), src=1, comment="StrideCI = 1"))
+        # StrideDI / StrideCI = 1 (I/M is the contiguous dim of the column-major D buffer).
+        # Referenced only when UseInitialStridesCD=True; setting to 1 reproduces the exact
+        # column-major store addressing (coord0*1 + coord1*StrideDJ) of the const-stride path.
+        if "StrideDI" in sgprs:
+            m.add(SMovB32(dst=sgpr(sgprs["StrideDI"]), src=1, comment="StrideDI = 1"))
+        if "StrideCI" in sgprs:
+            m.add(SMovB32(dst=sgpr(sgprs["StrideCI"]), src=1, comment="StrideCI = 1"))
 
     # NumWorkGroups0/1 = 1 (only one workgroup in each dimension)
     m.add(SMovB32(dst=sgpr(sgprs["NumWorkGroups0"]), src=1, comment="NumWorkGroups0 = 1"))
@@ -1181,7 +1202,9 @@ def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
     # macrotile footprint is allocated and initialized to the sentinel value.
     round_mt0 = ((size_i + cfg.mt_a - 1) // cfg.mt_a) * cfg.mt_a
     round_mt1 = ((size_j + cfg.mt_b - 1) // cfg.mt_b) * cfg.mt_b
-    stride_d = round_mt0
+    # Column-major buffer (non-SS): leading dim = round_mt0 (M contiguous) -> StrideDJ.
+    # Row-major buffer (SourceSwap): leading dim = round_mt1 (N contiguous) -> StrideDI.
+    stride_d = round_mt1 if source_swap else round_mt0
 
     if init_mode == "wave_id":
         prologue = _build_prologue(sgprs, len(agpr_indices), cfg.mt_a, cfg.mt_b,
@@ -1216,8 +1239,12 @@ def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
     else:
         vaddr = writer.vgprPool.checkOut(1, "vaddr", preventOverflow=False)
         vtmp2 = writer.vgprPool.checkOut(1, "vtmp2", preventOverflow=False)
+        # SourceSwap uses a ROW-MAJOR D buffer (N contiguous): stride_d (= round_mt1) is
+        # the M-row stride routed to StrideDI, StrideDJ=1.  Non-SS keeps the column-major
+        # buffer (stride_d = round_mt0 -> StrideDJ, StrideDI=1).
         prologue = _build_prologue(sgprs, len(agpr_indices), cfg.mt_a, cfg.mt_b,
-                                   stride_d=stride_d, use_input_buf=True)
+                                   stride_d=stride_d, use_input_buf=True,
+                                   source_swap=source_swap)
         args = [
             ("input",    8, "global_buffer", "u8"),
             ("output",   8, "global_buffer", "u8"),
@@ -1322,20 +1349,17 @@ def test_storeD_mfma_layout(cfg, use_bf16, tmp_path):
         _verify_matrix_positions(out, round_mt0, round_mt1)
 
 
-@pytest.mark.xfail(reason="wide-store along N not yet implemented (Task 3)", strict=True)
 @pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: c.label)
 def test_storeD_sourceswap_rowmajor_bf16(cfg, tmp_path):
     """BF16 store-D roundtrip with SourceSwap=True + row-major D.
 
     Under SourceSwap the lane's 4 accumulators lie along N (contiguous in
-    row-major D), so the subtile store must emit a wide store along N — not the
-    per-M-row b16 scatter used before this change.  Verifies every output element
-    equals row*MT_b+col at its (row,col) position.
-
-    Expected to FAIL until Task 3 lands the N-wide store: with the store source
-    unchanged the accs (populated along N by the transposed init) are still
-    scattered along M, so the roundtrip mismatches by position (value mismatch,
-    not a crash).  This is the clean red-light baseline for Task 3.
+    row-major D, StrideD1J==1), so the subtile store emits a wide store along N
+    (buffer_store_dwordx2) — not the per-M-row b16 scatter used before Task 3.
+    The D output buffer is ROW-MAJOR (N contiguous): StrideDI = row stride,
+    StrideDJ = 1, so the 4 N-cols of one lane are physically contiguous and
+    coalesce into one dwordx2.  Verifies every output element equals
+    row*MT_b+col at its (row,col) position.
     """
     init_rocisa()
     out, tileInfoD, expected_set, round_mt0, round_mt1 = _run_storeD(
@@ -1691,14 +1715,15 @@ def _verify_bf16_matrix_positions_rowmajor(out, round_mt0, round_mt1, size_i=Non
     """Verify bf16 output matches the row-major serial matrix down-cast to bf16 (RNE).
 
     Input (host) matrix is ROW-MAJOR: D_ref[row][col] = float(row * MT_b + col).
-    The GPU output buffer is still read column-major (stride round_mt0) by the harness,
-    but under a correct SourceSwap N-wide store every output element at (row, col) must
-    equal bf16_rne(row * MT_b + col).
+    The SourceSwap store writes to a ROW-MAJOR D buffer (N contiguous, StrideD1J=1),
+    so the output buffer is read ROW-MAJOR (order='C', stride round_mt1): every output
+    element at (row, col) must equal bf16_rne(row * MT_b + col), i.e. flat position
+    row*round_mt1 + col holds the value for logical (row, col).
 
     Args:
         out:        Flat tuple of bf16-upcast-to-f32 values from the GPU output buffer.
-        round_mt0:  Number of rows (leading dimension of the column-major output buffer).
-        round_mt1:  Number of cols.
+        round_mt0:  Number of rows.
+        round_mt1:  Number of cols (leading dimension of the row-major output buffer).
         size_i:     Valid row count (defaults to round_mt0 — full tile).
         size_j:     Valid col count (defaults to round_mt1 — full tile).
     """
@@ -1706,7 +1731,7 @@ def _verify_bf16_matrix_positions_rowmajor(out, round_mt0, round_mt1, size_i=Non
         size_i = round_mt0
     if size_j is None:
         size_j = round_mt1
-    D = np.array(out, dtype=np.float32).reshape(round_mt0, round_mt1, order='F')
+    D = np.array(out, dtype=np.float32).reshape(round_mt0, round_mt1, order='C')
     ref_f32 = np.fromfunction(lambda r, c: r * round_mt1 + c,
                               (round_mt0, round_mt1), dtype=np.float32)
     ref = _bf16_rne(ref_f32)

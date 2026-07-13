@@ -30,6 +30,13 @@
 // After the loop it reports "race: N/N iterations passed" and p50/p90 latency.
 // Success == every iteration passes the L2(recv)+L1(out) check with no HIP error
 // (the benign hipErrorPeerAccessAlreadyEnabled aside).
+//
+// L1 validates the local out segment two independent ways (ROCM-27524 scheme D):
+// (a) through the D descriptor strides, and (b) through a HARDCODED row-major
+// stride (off=m*N+n) read straight from the copied-back raw bytes. (b) proves
+// out's physical layout really is [M,N] with N contiguous -- it cannot be
+// satisfied by a column-major out that merely agrees with a column-major
+// descriptor (the original bug's false-green disguise).
 
 #include <Tensile/ContractionProblem.hpp>
 #include <Tensile/ContractionSolution.hpp>
@@ -639,36 +646,93 @@ namespace TensileLite
 
                     // ---- L1: out (local segment). out[M,N] columns [AN, N) must
                     // equal Dgold; columns [0, AN) went to recv (not written) -> skip.
+                    //
+                    // TWO checks per card, both must pass (l1Pass &= both):
+                    //   (a) descriptor-driven: off = m*dMStride + n*dNStride. This
+                    //       reads out through the SAME strides the kernel was told
+                    //       to write with. It confirms out matches golden UNDER the
+                    //       descriptor's own layout -- but it CANNOT distinguish a
+                    //       true row-major out from a column-major out that the
+                    //       descriptor also happens to describe column-major (the
+                    //       original bug's disguise: descriptor and kernel agree on
+                    //       a layout the DOWNSTREAM does not want, so numeric PASS
+                    //       is a false green).
+                    //   (b) raw-bytes row-major: off = m*N + n, HARDCODED row-major
+                    //       physical stride (N contiguous), independent of the
+                    //       descriptor. This proves the physical byte layout of out
+                    //       really is [M,N] with N contiguous, which is what the
+                    //       A2A downstream consumes. If out were physically
+                    //       column-major, (a) could still pass while (b) fails --
+                    //       so (b) is the anti-false-green proof required by scheme
+                    //       D (ROCM-27524 gemm-a2a-out-rowmajor-plan.md validation
+                    //       point 2). When the descriptor is row-major (dNStride==1,
+                    //       dMStride==N) the two offset formulas coincide and both
+                    //       read the same bytes; (b) still stands as an explicit,
+                    //       descriptor-independent statement of the physical layout.
+                    const bool descRowMajor = (dNStride == 1 && dMStride == N);
+                    if(verbose)
+                        std::cout << "[fused-a2a] D descriptor layout: dMStride=" << dMStride
+                                  << " dNStride=" << dNStride << " -> "
+                                  << (descRowMajor ? "ROW-MAJOR [M,N] (N contiguous)"
+                                                   : "NOT row-major (column-major or padded)")
+                                  << "  (raw-bytes L1 check uses hardcoded off=m*N+n"
+                                     " regardless)\n";
                     for(int d = 0; d < W && l1Pass; d++)
                     {
                         HIP_CHECK_EXC(hipSetDevice(d));
                         HIP_CHECK_EXC(
                             hipMemcpy(hOut.data(), outD[d], dBytes, hipMemcpyDeviceToHost));
-                        size_t mism = 0;
+                        size_t mismDesc = 0; // (a) descriptor-driven
+                        size_t mismRaw  = 0; // (b) raw-bytes row-major (off=m*N+n)
                         for(size_t m = 0; m < M; m++)
                         {
                             for(size_t n = AN; n < N; n++)
                             {
-                                size_t   off = m * dMStride + n * dNStride; // D physical addr
-                                BFloat16 g;
-                                g.data     = hOut[off];
-                                float got  = (float)g;
                                 float want = (float)Dgold[m * N + n];
-                                if(!closeBf16(got, want))
+
+                                // (a) descriptor-driven read.
                                 {
-                                    if(mism < 5)
-                                        std::cerr << "[fused-a2a] L1 MISMATCH iter=" << it
-                                                  << " card=" << d << " m=" << m << " n=" << n
-                                                  << " got=" << got << " want=" << want << "\n";
-                                    mism++;
+                                    size_t   off = m * dMStride + n * dNStride;
+                                    BFloat16 g;
+                                    g.data    = hOut[off];
+                                    float got = (float)g;
+                                    if(!closeBf16(got, want))
+                                    {
+                                        if(mismDesc < 5)
+                                            std::cerr << "[fused-a2a] L1(desc) MISMATCH iter=" << it
+                                                      << " card=" << d << " m=" << m << " n=" << n
+                                                      << " got=" << got << " want=" << want << "\n";
+                                        mismDesc++;
+                                    }
+                                }
+
+                                // (b) raw-bytes row-major read: hardcoded off=m*N+n,
+                                //     NOT via the descriptor strides. Proves N is
+                                //     physically contiguous in out.
+                                {
+                                    size_t   off = m * N + n;
+                                    BFloat16 g;
+                                    g.data    = hOut[off];
+                                    float got = (float)g;
+                                    if(!closeBf16(got, want))
+                                    {
+                                        if(mismRaw < 5)
+                                            std::cerr << "[fused-a2a] L1(raw row-major m*N+n) "
+                                                         "MISMATCH iter="
+                                                      << it << " card=" << d << " m=" << m
+                                                      << " n=" << n << " got=" << got
+                                                      << " want=" << want << "\n";
+                                        mismRaw++;
+                                    }
                                 }
                             }
                         }
-                        if(verbose || mism)
-                            std::cout << "[fused-a2a] L1 out card " << d << ": "
-                                      << (mism == 0 ? "PASS" : "FAIL")
-                                      << " (mismatches=" << mism << ")\n";
-                        if(mism)
+                        if(verbose || mismDesc || mismRaw)
+                            std::cout << "[fused-a2a] L1 out card " << d
+                                      << ": desc=" << (mismDesc == 0 ? "PASS" : "FAIL") << "("
+                                      << mismDesc << ") rawRowMajor="
+                                      << (mismRaw == 0 ? "PASS" : "FAIL") << "(" << mismRaw << ")\n";
+                        if(mismDesc || mismRaw)
                             l1Pass = false;
                     }
                 }

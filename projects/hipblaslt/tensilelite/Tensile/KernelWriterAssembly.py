@@ -16172,22 +16172,27 @@ class KernelWriterAssembly(KernelWriter):
           emitFusedA2AGate(actLoopModule, self.argLoader, self.sgprPool,
                            self.states.fusedA2AKernArgBase, kernel["MacroTile1"],
                            localLabel.getLabelName())
-          # PUSH pass
-          self.states.fusedA2ADispatchMode = "PUSH"
-          actLoopModule.add(_emit_batch_loop())
-          actLoopModule.add(SBranch(labelName=afterLabel.getLabelName(), comment="skip local store"))
-          # rollback codegen-time ss state so LOCAL pass regenerates from batch-loop start.
-          # resetState() clears singleCol*AddrUpdated + lastCoordOffset1 but NOT firstBatch,
-          # so set firstBatch manually; biasLocalBarrierInit must match the pass-1 start (False).
-          ss.resetState()
-          ss.firstBatch = True
-          biasLocalBarrierInit = False
-          actLoopModule.add(localLabel)
-          # LOCAL pass
-          self.states.fusedA2ADispatchMode = "LOCAL"
-          actLoopModule.add(_emit_batch_loop())
-          actLoopModule.add(afterLabel)
-          self.states.fusedA2ADispatchMode = "BOTH"
+          # try/finally guarantees the dispatch mode is restored to "BOTH" even if
+          # codegen raises mid-pass, so the flag never leaks "PUSH"/"LOCAL" into a
+          # subsequent kernel.
+          try:
+            # PUSH pass
+            self.states.fusedA2ADispatchMode = "PUSH"
+            actLoopModule.add(_emit_batch_loop())
+            actLoopModule.add(SBranch(labelName=afterLabel.getLabelName(), comment="skip local store"))
+            # rollback codegen-time ss state so LOCAL pass regenerates from batch-loop start.
+            # resetState() clears singleCol*AddrUpdated + lastCoordOffset1 but NOT firstBatch,
+            # so set firstBatch manually; biasLocalBarrierInit must match the pass-1 start (False).
+            ss.resetState()
+            ss.firstBatch = True
+            biasLocalBarrierInit = False
+            actLoopModule.add(localLabel)
+            # LOCAL pass
+            self.states.fusedA2ADispatchMode = "LOCAL"
+            actLoopModule.add(_emit_batch_loop())
+            actLoopModule.add(afterLabel)
+          finally:
+            self.states.fusedA2ADispatchMode = "BOTH"
         else:
           actLoopModule.add(_emit_batch_loop())
 

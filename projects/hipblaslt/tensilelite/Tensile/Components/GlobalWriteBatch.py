@@ -2349,6 +2349,9 @@ class GlobalWriteBatchWriter:
             storeCodeModule.add(self.getEdgeMovInstType()(EXEC(), sgpr(self.tmpS01, self.laneSGPRC), "apply exec mask"))
           # _emitOverrideRows reused from the top of this store loop (see _lookaheadRowInc).
           # TODO Task 7: also route regular/TD store paths through _fusedA2ADispatch.
+          # Until then, under the hoisted two-pass gate this local D store is emitted in
+          # BOTH passes (PUSH and LOCAL); the runtime gate runs only one pass per WG, so
+          # the copy in the not-taken pass is dead code (a .co-size cost, not a bug).
           tmpStoreCode = self.parentWriter.addStore(self.kernel, self.ss, 'D', addrCalc, sumIdx, self.tmpS01, self.edge, elementIdx, self.batchIdx,
                                                    overrideAfterPrimerRows=_emitOverrideRows, comment="store D")
           storeCodeModule.add(tmpStoreCode)

@@ -2578,10 +2578,8 @@ class GlobalWriteBatchWriter:
     vRecvAddr = kw.vgprPool.checkOut(1, tag="fusedA2A_recvAddr")
     vNLocal   = kw.vgprPool.checkOut(1, tag="fusedA2A_nLocal")
     vTmp      = kw.vgprPool.checkOut(1, tag="fusedA2A_tmp")
+    vLane     = kw.vgprPool.checkOut(1, tag="fusedA2A_lane")  # wave/lane decomposition scratch
     vPack     = kw.vgprPool.checkOutAligned(2, 2, tag="fusedA2A_pack")  # 2 dwords, 64-bit aligned for dwordx2
-
-    coord0 = kw.vgprs.coord0
-    coord1 = kw.vgprs.coord1
 
     def vc(sumIdx):
       idx = sumIdx - prefixOffset
@@ -2596,29 +2594,80 @@ class GlobalWriteBatchWriter:
                              comment=f"N-col 2,3 -> {typeStr}"))
     module.add(SNop(waitState=0, comment=f"delay after pk_{typeStr}"))
 
-    # n_local = coord1 + coordOffset1 - shard_base  (first N-col within the shard; +1,+2,+3
-    # contiguous in recv follow from n_shard being the fast dim).
+    # --- per-lane (M-row, N-col) via the SourceSwap subtile lane decomposition ---
+    # Recompute the lane->(M,N) mapping from Serial, mirroring the local N-wide store's
+    # _emitSubtileNColVaddr, INSTEAD of reusing kw.vgprs.coord0/coord1.  Under SourceSwap
+    # the pre-computed coord VGPRs carry a different lane decomposition (ComputeStoreVgprs-
+    # MFMASwap's lsuTid), so at wave_id1>=1 (N >= wave_cols) they scatter the 4 N-cols to
+    # the wrong columns -- the L2 recv permutation.  The local store passes precisely
+    # because it does NOT trust the coord VGPRs; this path now matches it bit-for-bit.
+    ws        = self.kernel["WavefrontSize"]
+    wg0       = self.kernel["MIWaveGroup"][0]
+    wg1       = self.kernel["MIWaveGroup"][1]
+    mt0       = self.kernel["MacroTile0"]
+    mt1       = self.kernel["MacroTile1"]
+    wave_rows = mt0 // wg0
+    wave_cols = mt1 // wg1
+    wsLog2    = int(log2(ws))
+    if wg0 & (wg0 - 1) != 0:
+      raise NotImplementedError(f"Non-power-of-2 MIWaveGroup[0]={wg0} not supported in recv N-wide store")
+
+    # n_global = wg1*MT1 + wave_id1*wave_cols + lane_group*4 + coordOffset1
+    #   lane_group = (lane_id >> 4) & 3   (SourceSwap: 4-col N groups within a lane)
+    #   wave_id1   = (Serial >> log2(ws)) >> log2(wg0)
+    # Then n_local = n_global - shard_base (the 4 partners land at n_local+0..3, n_shard fast).
+    module.add(VLShiftRightB32(dst=vgpr(vNLocal), shiftHex=4, src=vgpr("Serial"),
+                               comment="lane_id >> 4"))
+    module.add(VAndB32(dst=vgpr(vNLocal), src0=3, src1=vgpr(vNLocal),
+                       comment="lane_group = (lane_id >> 4) & 3"))
+    module.add(VLShiftLeftB32(dst=vgpr(vNLocal), shiftHex=2, src=vgpr(vNLocal),
+                              comment="lane_group * 4 (N-col base within lane)"))
+    if wg1 > 1:
+      module.add(VLShiftRightB32(dst=vgpr(vLane), shiftHex=wsLog2, src=vgpr("Serial"),
+                                 comment=f"waveId = Serial >> {wsLog2}"))
+      module.add(VLShiftRightB32(dst=vgpr(vLane), shiftHex=int(log2(wg0)), src=vgpr(vLane),
+                                 comment=f"wave_id1 = waveId >> log2(wg0={wg0})"))
+      module.add(SMovB32(dst=sgpr(tmpSgpr2), src=wave_cols, comment=f"wave_cols={wave_cols}"))
+      module.add(VMulLOU32(dst=vgpr(vLane), src0=vgpr(vLane), src1=sgpr(tmpSgpr2),
+                           comment="wave_id1 * wave_cols"))
+      module.add(VAddU32(dst=vgpr(vNLocal), src0=vgpr(vNLocal), src1=vgpr(vLane),
+                         comment="n_global += wave_id1 * wave_cols"))
+    module.add(SMulI32(dst=sgpr(tmpSgpr2), src0=sgpr("WorkGroup1"), src1=mt1,
+                       comment="wg1 * MT1 (N workgroup offset)"))
+    module.add(VAddU32(dst=vgpr(vNLocal), src0=vgpr(vNLocal), src1=sgpr(tmpSgpr2),
+                       comment="n_global += wg1 * MT1"))
     if coordOffset1:
       module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset1, comment=f"coordOffset1={coordOffset1}"))
-      module.add(VAddU32(dst=vgpr(vNLocal), src0=vgpr(coord1), src1=sgpr(tmpSgpr2),
-                         comment=f"n_global = coord1 + {coordOffset1}"))
-      module.add(VSubU32(dst=vgpr(vNLocal), src0=vgpr(vNLocal), src1=sgpr(shardBaseSgpr),
-                         comment="n_local = n_global - shard_base"))
-    else:
-      module.add(VSubU32(dst=vgpr(vNLocal), src0=vgpr(coord1), src1=sgpr(shardBaseSgpr),
-                         comment="n_local = coord1 - shard_base"))
+      module.add(VAddU32(dst=vgpr(vNLocal), src0=vgpr(vNLocal), src1=sgpr(tmpSgpr2),
+                         comment=f"n_global += coordOffset1={coordOffset1}"))
+    module.add(VSubU32(dst=vgpr(vNLocal), src0=vgpr(vNLocal), src1=sgpr(shardBaseSgpr),
+                       comment="n_local = n_global - shard_base"))
 
-    # m_base = coord0 + coordOffset0 (fixed M-row for all 4 N-cols under SourceSwap).
-    # recvElemBase = slotElem + m_base * n_shard + n_local  -->  byte = recvElemBase * bpe
+    # m_base = wg0*MT0 + wave_id0*wave_rows + (lane_id & 15) + coordOffset0  (global M row;
+    # fixed for all 4 N-cols under SourceSwap).  recvElemBase = slotElem + m_base*n_shard + n_local.
+    #   wave_id0 = (Serial >> log2(ws)) & (wg0-1)
+    module.add(VAndB32(dst=vgpr(vTmp), src0=15, src1=vgpr("Serial"),
+                       comment="row_in_wave = lane_id & 15 (SourceSwap: lane -> M-row)"))
     if coordOffset0:
       module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset0, comment=f"coordOffset0={coordOffset0}"))
-      module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(coord0), src1=sgpr(tmpSgpr2),
-                         comment=f"m_base = coord0 + {coordOffset0}"))
-      module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr),
-                           comment="m_base * n_shard"))
-    else:
-      module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(coord0), src1=sgpr(nShardSgpr),
-                           comment="m_base * n_shard"))
+      module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(tmpSgpr2),
+                         comment=f"m_base += coordOffset0={coordOffset0}"))
+    module.add(SMulI32(dst=sgpr(tmpSgpr2), src0=sgpr("WorkGroup0"), src1=mt0,
+                       comment="wg0 * MT0 (M workgroup offset)"))
+    module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(tmpSgpr2),
+                       comment="m_base += wg0 * MT0"))
+    if wg0 > 1:
+      module.add(VLShiftRightB32(dst=vgpr(vLane), shiftHex=wsLog2, src=vgpr("Serial"),
+                                 comment=f"waveId = Serial >> {wsLog2}"))
+      module.add(VAndB32(dst=vgpr(vLane), src0=wg0 - 1, src1=vgpr(vLane),
+                         comment=f"wave_id0 = waveId & {wg0-1}"))
+      module.add(SMovB32(dst=sgpr(tmpSgpr2), src=wave_rows, comment=f"wave_rows={wave_rows}"))
+      module.add(VMulLOU32(dst=vgpr(vLane), src0=vgpr(vLane), src1=sgpr(tmpSgpr2),
+                           comment="wave_id0 * wave_rows"))
+      module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=vgpr(vLane),
+                         comment="m_base += wave_id0 * wave_rows"))
+    module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr),
+                         comment="m_base * n_shard"))
     module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(slotSgpr),
                        comment="+ slotElem (my_rank*M*n_shard)"))
     module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vTmp), src1=vgpr(vNLocal),
@@ -2640,6 +2689,7 @@ class GlobalWriteBatchWriter:
 
     # Release temporaries.
     kw.vgprPool.checkIn(vPack)
+    kw.vgprPool.checkIn(vLane)
     kw.vgprPool.checkIn(vTmp)
     kw.vgprPool.checkIn(vNLocal)
     kw.vgprPool.checkIn(vRecvAddr)

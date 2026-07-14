@@ -71,6 +71,28 @@ def _scmpGtU32(writer, src, imm, comment=""):
         writer.sgprPool.checkIn(tmpSgpr)
         return module
 
+def emitFusedA2AGate(module, argLoader, sgprPool, fusedBase, mt1, localLabelName):
+  """Emit the runtime FusedGemmA2A PUSH/local dispatch gate into `module`:
+  branch to localLabelName when WorkGroup1 >= AN_tiles (local WG), else fall
+  through (PUSH WG). AN_tiles = FusedAN >> log2(mt1). Uses a scratch SGPR
+  (checked out from sgprPool + checked back in). Caller-agnostic: works from
+  both GlobalWriteBatchWriter (kw.*) and KernelWriter (self.*)."""
+  from .Signature import fusedA2AKernArgLayout
+  layout = fusedA2AKernArgLayout()
+  log2mt1 = int(log2(mt1))
+  tmpS = sgprPool.checkOut(1, tag="fusedA2A_dispatchGate", preventOverflow=False)
+  module.addComment0("fused-A2A dispatch: runtime gate WorkGroup1 < (FusedAN/MT1) ? PUSH : local")
+  module.add(argLoader.loadKernArg(tmpS, "KernArgAddress",
+    sgprOffset=hex(fusedBase + layout["FusedAN"]), dword=1))
+  module.add(SWaitCnt(kmcnt=0, comment="wait FusedAN"))
+  module.add(SLShiftRightB32(dst=sgpr(tmpS), shiftHex=log2mt1, src=sgpr(tmpS),
+                             comment=f"AN_tiles = FusedAN >> log2(MT1={mt1})"))
+  module.add(SCmpGtU32(src0=sgpr(tmpS), src1=sgpr("WorkGroup1"),
+                       comment="AN_tiles > WorkGroup1? (this WG's N-tile in PUSH region)"))
+  module.add(SCBranchSCC0(labelName=localLabelName,
+                          comment="WorkGroup1 >= AN_tiles -> local store"))
+  sgprPool.checkIn(tmpS)
+
 class GlobalWriteBatchComponent(GlobalWriteComponents):
   kernel = {"ProblemType": {"OperationType": "GEMM" }}
   def __call__(self, kernel: Solution, tPA, tPB, activation: ActivationModule, ss: StoreState, \
@@ -2194,39 +2216,32 @@ class GlobalWriteBatchWriter:
     When pushBuilder is None (dispatch-only skeleton) the PUSH branch falls back to the
     local store so GEMM numerics stay intact.
     """
-    from .Signature import fusedA2AKernArgLayout
+    mode = getattr(self.parentWriter.states, "fusedA2ADispatchMode", "BOTH")
     kw = self.parentWriter
-    mt1 = self.kernel["MacroTile1"]
-    log2mt1 = int(log2(mt1))
+    if mode == "PUSH":
+      # Caller hoisted the gate; emit only the PUSH version.
+      targetModule.addComment0("fused-A2A dispatch: PUSH branch (hoisted gate)")
+      targetModule.add(pushBuilder() if pushBuilder is not None else storeModule)
+      return
+    if mode == "LOCAL":
+      # Caller hoisted the gate; emit only the local version.
+      targetModule.addComment0("fused-A2A dispatch: local branch (hoisted gate)")
+      targetModule.add(storeModule)
+      return
+    # mode == "BOTH": legacy per-store gate + both versions.
     localLabel = Label(kw.labels.getNameInc("fusedA2A_dispatch_local"),
                        "fused-A2A: WorkGroup1 >= AN_tiles -> local store")
     afterLabel = Label(kw.labels.getNameInc("fusedA2A_dispatch_after"),
                        "fused-A2A: after PUSH/local dispatch")
-    # Runtime gate: PUSH when WorkGroup1 < AN_tiles, else local store.
-    # AN_tiles = FusedAN >> log2(MacroTile1); FusedAN is read on demand from the
-    # fused kernarg segment (metadata-only, per the Task 5 contract).
-    layout = fusedA2AKernArgLayout()
-    fusedBase = kw.states.fusedA2AKernArgBase
-    tmpS = kw.sgprPool.checkOut(1, tag="fusedA2A_dispatchGate", preventOverflow=False)
-    targetModule.addComment0("fused-A2A dispatch: runtime gate WorkGroup1 < (FusedAN/MT1) ? PUSH : local")
-    targetModule.add(kw.argLoader.loadKernArg(tmpS, "KernArgAddress",
-      sgprOffset=hex(fusedBase + layout["FusedAN"]), dword=1))
-    targetModule.add(SWaitCnt(kmcnt=0, comment="wait FusedAN"))
-    targetModule.add(SLShiftRightB32(dst=sgpr(tmpS), shiftHex=log2mt1, src=sgpr(tmpS),
-                                     comment=f"AN_tiles = FusedAN >> log2(MT1={mt1})"))
-    targetModule.add(SCmpGtU32(src0=sgpr(tmpS), src1=sgpr("WorkGroup1"),
-                               comment="AN_tiles > WorkGroup1? (this WG's N-tile in PUSH region)"))
-    targetModule.add(SCBranchSCC0(labelName=localLabel.getLabelName(),
-                                  comment="WorkGroup1 >= AN_tiles -> local store"))
-    kw.sgprPool.checkIn(tmpS)
-    # PUSH branch (WorkGroup1 < AN_tiles): remote all-to-all store.
+    emitFusedA2AGate(targetModule, kw.argLoader, kw.sgprPool,
+                     kw.states.fusedA2AKernArgBase, self.kernel["MacroTile1"],
+                     localLabel.getLabelName())
     targetModule.addComment0("fused-A2A dispatch: PUSH branch (remote recv[W,M,n_shard])")
     if pushBuilder is not None:
       targetModule.add(pushBuilder())
     else:
       targetModule.add(storeModule)
     targetModule.add(SBranch(labelName=afterLabel.getLabelName(), comment="skip local store"))
-    # Local branch (WorkGroup1 >= AN_tiles): regular local D store.
     targetModule.add(localLabel)
     targetModule.addComment0("fused-A2A dispatch: local branch (local D store)")
     targetModule.add(storeModule)

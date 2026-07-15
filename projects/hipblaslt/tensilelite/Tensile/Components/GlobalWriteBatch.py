@@ -2726,7 +2726,7 @@ class GlobalWriteBatchWriter:
     vRecvAddr  = kw.vgprPool.checkOut(1, tag="fusedA2A_recvAddr")
     vFLocal    = kw.vgprPool.checkOut(1, tag="fusedA2A_fLocal")
     vTmp       = kw.vgprPool.checkOut(1, tag="fusedA2A_tmp")
-    vPack      = kw.vgprPool.checkOut(2, tag="fusedA2A_pack")  # 2 dwords = 4 16bit values
+    vPack      = kw.vgprPool.checkOutAligned(2, 2, tag="fusedA2A_pack")  # 2 dwords, 64-bit aligned for dwordx2
 
     coord0 = kw.vgprs.coord0
     coord1 = kw.vgprs.coord1

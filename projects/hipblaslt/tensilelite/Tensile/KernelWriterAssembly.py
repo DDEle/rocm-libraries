@@ -16589,11 +16589,11 @@ class KernelWriterAssembly(KernelWriter):
           # biasLocalBarrierInit to the batch-loop start so the LOCAL pass regenerates
           # identical addresses/waitcnts from the same starting state.
           localLabel = Label(self.labels.getNameInc("fusedA2A_hoist_local"),
-                             "fused-A2A hoisted: WG>=AN_tiles -> local")
+                             "fused-A2A hoisted: WG>=AM_tiles -> local")
           afterLabel = Label(self.labels.getNameInc("fusedA2A_hoist_after"),
                              "fused-A2A hoisted: after PUSH/local")
           emitFusedA2AGate(actLoopModule, self.argLoader, self.sgprPool,
-                           self.states.fusedA2AKernArgBase, kernel["MacroTile1"],
+                           self.states.fusedA2AKernArgBase, kernel["MacroTile0"],
                            localLabel.getLabelName())
           # try/finally guarantees the dispatch mode is restored to "BOTH" even if
           # codegen raises mid-pass, so the flag never leaks "PUSH"/"LOCAL" into a

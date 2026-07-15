@@ -200,10 +200,11 @@ namespace TensileLite
             // same MT0/MT1 (the runtime WG grid is CeilDivide(M,macroTile.x) x
             // CeilDivide(N,macroTile.y), ContractionProblem.cpp:795-796). `target`
             // is an EXACT per-dst-rank count of contributing PUSH workgroups
-            // ((M/MT0)*(n_shard/MT1)) compared for equality kernel-side; a hardcoded
-            // 256 against a 128 macro-tile makes target 4x too small (latent
-            // early-release race) and over-restricts admissible shapes via the
-            // M%256/AN%256 guards. macroTile.x = MT0 (M dim), macroTile.y = MT1 (N dim).
+            // ((n_shard/MT0)*(N/MT1) = feature-tiles-in-shard * token-tiles, since
+            // post-swap feature=WG0 is scattered and token=WG1 is replicated) compared
+            // for equality kernel-side; a hardcoded 256 against a 128 macro-tile makes
+            // the tile factors wrong and over-restricts admissible shapes via the
+            // M%256/AM%256 guards. macroTile.x = MT0 (M dim), macroTile.y = MT1 (N dim).
             const uint32_t FUSED_A2A_M_TILE = (uint32_t)solution->sizeMapping.macroTile.x;
             const uint32_t FUSED_A2A_N_TILE = (uint32_t)solution->sizeMapping.macroTile.y;
             if(FUSED_A2A_M_TILE == 0 || FUSED_A2A_N_TILE == 0)
@@ -250,9 +251,16 @@ namespace TensileLite
             const uint32_t nShard       = (uint32_t)(AM / (size_t)W);
             // tilesPerRank: whole feature-tiles per rank shard (nShard is feature).
             const uint32_t tilesPerRank = (uint32_t)(nShard / FUSED_A2A_M_TILE);
-            // mTiles: feature-tiles across the full feature dim M.
+            // tokenTiles: token-tiles across the full token dim N. Post-swap the
+            // A2A-scattered dim is FEATURE (WG0), so TOKEN (WG1) is the replicated
+            // dim -- every token-tile workgroup in a rank's feature shard contributes
+            // one PUSH to that rank. FusedTarget (the per-dst-rank contributing-WG
+            // count, compared for equality kernel-side) is therefore
+            // tilesPerRank (feature-tiles in the shard) * tokenTiles (all N-tiles).
+            const uint32_t tokenTiles   = (uint32_t)(N / FUSED_A2A_N_TILE);
+            // mTiles: feature-tiles across the full feature dim M (diagnostic only).
             const uint32_t mTiles       = (uint32_t)(M / FUSED_A2A_M_TILE);
-            const uint32_t target       = mTiles * tilesPerRank;
+            const uint32_t target       = tilesPerRank * tokenTiles;
 
             // Fail-fast on shapes that violate the fused-A2A design constraints
             // (spec section 0). The kernel maps a whole PUSH workgroup to a
@@ -308,7 +316,8 @@ namespace TensileLite
 
             std::cout << "[fused-a2a] nFeature(M)=" << nFeature << " nToken(N)=" << nToken
                       << " K=" << K << " AM=" << AM << " nShard=" << nShard
-                      << " tilesPerRank=" << tilesPerRank << " mTiles=" << mTiles
+                      << " tilesPerRank=" << tilesPerRank << " tokenTiles=" << tokenTiles
+                      << " mTiles=" << mTiles
                       << " target=" << target << " drain=" << drain << "\n";
 
             // --- Host golden setup (Task 11 numeric validation) ---------------

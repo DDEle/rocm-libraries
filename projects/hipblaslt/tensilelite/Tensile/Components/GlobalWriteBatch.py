@@ -71,26 +71,26 @@ def _scmpGtU32(writer, src, imm, comment=""):
         writer.sgprPool.checkIn(tmpSgpr)
         return module
 
-def emitFusedA2AGate(module, argLoader, sgprPool, fusedBase, mt1, localLabelName):
+def emitFusedA2AGate(module, argLoader, sgprPool, fusedBase, mt0, localLabelName):
   """Emit the runtime FusedGemmA2A PUSH/local dispatch gate into `module`:
-  branch to localLabelName when WorkGroup1 >= AN_tiles (local WG), else fall
-  through (PUSH WG). AN_tiles = FusedAN >> log2(mt1). Uses a scratch SGPR
+  branch to localLabelName when WorkGroup0 >= AM_tiles (local WG), else fall
+  through (PUSH WG). AM_tiles = FusedAM >> log2(mt0). Uses a scratch SGPR
   (checked out from sgprPool + checked back in). Caller-agnostic: works from
   both GlobalWriteBatchWriter (kw.*) and KernelWriter (self.*)."""
   from .Signature import fusedA2AKernArgLayout
   layout = fusedA2AKernArgLayout()
-  log2mt1 = int(log2(mt1))
+  log2mt0 = int(log2(mt0))
   tmpS = sgprPool.checkOut(1, tag="fusedA2A_dispatchGate", preventOverflow=False)
-  module.addComment0("fused-A2A dispatch: runtime gate WorkGroup1 < (FusedAN/MT1) ? PUSH : local")
+  module.addComment0("fused-A2A dispatch: runtime gate WorkGroup0 < (FusedAM/MT0) ? PUSH : local")
   module.add(argLoader.loadKernArg(tmpS, "KernArgAddress",
-    sgprOffset=hex(fusedBase + layout["FusedAN"]), dword=1))
-  module.add(SWaitCnt(kmcnt=0, comment="wait FusedAN"))
-  module.add(SLShiftRightB32(dst=sgpr(tmpS), shiftHex=log2mt1, src=sgpr(tmpS),
-                             comment=f"AN_tiles = FusedAN >> log2(MT1={mt1})"))
-  module.add(SCmpGtU32(src0=sgpr(tmpS), src1=sgpr("WorkGroup1"),
-                       comment="AN_tiles > WorkGroup1? (this WG's N-tile in PUSH region)"))
+    sgprOffset=hex(fusedBase + layout["FusedAM"]), dword=1))
+  module.add(SWaitCnt(kmcnt=0, comment="wait FusedAM"))
+  module.add(SLShiftRightB32(dst=sgpr(tmpS), shiftHex=log2mt0, src=sgpr(tmpS),
+                             comment=f"AM_tiles = FusedAM >> log2(MT0={mt0})"))
+  module.add(SCmpGtU32(src0=sgpr(tmpS), src1=sgpr("WorkGroup0"),
+                       comment="AM_tiles > WorkGroup0? (this WG's M-tile in PUSH region)"))
   module.add(SCBranchSCC0(labelName=localLabelName,
-                          comment="WorkGroup1 >= AN_tiles -> local store"))
+                          comment="WorkGroup0 >= AM_tiles -> local store"))
   sgprPool.checkIn(tmpS)
 
 class GlobalWriteBatchComponent(GlobalWriteComponents):
@@ -2169,7 +2169,7 @@ class GlobalWriteBatchWriter:
     """Add a 16bit subtile store, routing through the fused-A2A dispatch when enabled.
 
     When FusedGemmA2A is off the store Module is added verbatim (output byte-identical
-    to the non-fused path); when on, a RUNTIME dispatch on WorkGroup1 (the owning N-tile)
+    to the non-fused path); when on, a RUNTIME dispatch on WorkGroup0 (the owning M-tile)
     decides between the local D store (storeModule) and the remote all-to-all PUSH store
     (built by pushBuilder).
 
@@ -2196,25 +2196,25 @@ class GlobalWriteBatchWriter:
     return lambda: self._emitFusedA2APushStore(groups)
 
   def _fusedA2ADispatch(self, targetModule, blockIdxN: int, storeModule: Module, pushBuilder=None):
-    """Route a D-store by owning N-tile for FusedGemmA2A (RUNTIME decision).
+    """Route a D-store by owning M-tile for FusedGemmA2A (RUNTIME decision).
 
-    A workgroup owns one MacroTile1-wide N column-block, identified at RUNTIME by
-    WorkGroup1 (the global N-tile index).  Workgroups whose N-tile is in the first AN
-    columns (WorkGroup1 < AN_tiles) are the all-to-all "PUSH" workgroups: their output
+    A workgroup owns one MacroTile0-wide M row-block, identified at RUNTIME by
+    WorkGroup0 (the global M-tile index).  Workgroups whose M-tile is in the first AM
+    rows (WorkGroup0 < AM_tiles) are the all-to-all "PUSH" workgroups: their output
     is redirected to the remote recv[W,M,n_shard] buffer (built by pushBuilder) instead
     of the local D output.  Workgroups at/above are locally owned and use the regular
     local store.
 
-    AN_tiles is derived at RUNTIME from the FusedAN kernarg (the A2A column count):
-    AN_tiles = FusedAN / MacroTile1.  MacroTile1 is the compile-time constant
-    self.kernel["MacroTile1"] (256 for the champion config) and is a power of two, so
-    the divide is a right shift by log2(MacroTile1).  The design guarantees AN is a
-    whole number of macro-tiles (AN % 256 == 0), so the shift is exact.
+    AM_tiles is derived at RUNTIME from the FusedAM kernarg (the A2A feature-row count):
+    AM_tiles = FusedAM / MacroTile0.  MacroTile0 is the compile-time constant
+    self.kernel["MacroTile0"] (256 for the champion config) and is a power of two, so
+    the divide is a right shift by log2(MacroTile0).  The design guarantees AM is a
+    whole number of macro-tiles (AM % 256 == 0), so the shift is exact.
 
     Both code paths are emitted and guarded by a runtime SCC compare/branch on
-    WorkGroup1 vs AN_tiles, so each WG executes exactly one path at run time.
+    WorkGroup0 vs AM_tiles, so each WG executes exactly one path at run time.
     (blockIdxN = element[0] is only the N wave-block WITHIN a macro-tile (0..15) and must
-    NOT gate this decision; the owning N-tile is a per-WG runtime value in WorkGroup1.)
+    NOT gate this decision; the owning M-tile is a per-WG runtime value in WorkGroup0.)
 
     When pushBuilder is None (dispatch-only skeleton) the PUSH branch falls back to the
     local store so GEMM numerics stay intact.
@@ -2233,11 +2233,11 @@ class GlobalWriteBatchWriter:
       return
     # mode == "BOTH": legacy per-store gate + both versions.
     localLabel = Label(kw.labels.getNameInc("fusedA2A_dispatch_local"),
-                       "fused-A2A: WorkGroup1 >= AN_tiles -> local store")
+                       "fused-A2A: WorkGroup0 >= AM_tiles -> local store")
     afterLabel = Label(kw.labels.getNameInc("fusedA2A_dispatch_after"),
                        "fused-A2A: after PUSH/local dispatch")
     emitFusedA2AGate(targetModule, kw.argLoader, kw.sgprPool,
-                     kw.states.fusedA2AKernArgBase, self.kernel["MacroTile1"],
+                     kw.states.fusedA2AKernArgBase, self.kernel["MacroTile0"],
                      localLabel.getLabelName())
     targetModule.addComment0("fused-A2A dispatch: PUSH branch (remote recv[W,M,n_shard])")
     if pushBuilder is not None:
@@ -2256,15 +2256,15 @@ class GlobalWriteBatchWriter:
     recv_ptr[dst_rank] is NOT in an SGPR (Task 5 registered it as kernarg metadata only),
     so per the Task 5 contract this reads exactly one recv base pointer on demand via a
     switch over the compile-time-constant kernarg slots.  dst_rank is a per-WG runtime
-    constant: since n_shard is a multiple of MacroTile1 (design guarantees (AN/W)%256==0),
-    every 256-column macro-tile lies entirely within one destination rank's shard, so
-    dst_rank = (WorkGroup1 * MacroTile1) / n_shard is the same for all lanes in the WG.
+    constant: since n_shard is a multiple of MacroTile0 (design guarantees (AM/W)%256==0),
+    every 256-row macro-tile lies entirely within one destination rank's shard, so
+    dst_rank = (WorkGroup0 * MacroTile0) / n_shard is the same for all lanes in the WG.
 
     Rather than divide by the runtime n_shard, the switch scans candidate ranks j
-    (0..MAX-1): rank j is the destination when this WG's first N column
-    (n_col_base_wg = WorkGroup1*MT1) is >= j*n_shard.  Ranks are contiguous, so the
+    (0..MAX-1): rank j is the destination when this WG's first feature row
+    (n_col_base_wg = WorkGroup0*MT0) is >= j*n_shard.  Ranks are contiguous, so the
     HIGHEST matching j wins; the forward scan keeps overwriting recvBase/shardBase with
-    each qualifying rank.  Ranks j >= FusedW never qualify (n_col_base_wg < AN = W*n_shard),
+    each qualifying rank.  Ranks j >= FusedW never qualify (n_col_base_wg < AM = W*n_shard),
     so unused slots are harmless even though all MAX slots are visited at compile time.
 
     Args:
@@ -2278,9 +2278,9 @@ class GlobalWriteBatchWriter:
     layout = fusedA2AKernArgLayout()
     fusedBase = self.parentWriter.states.fusedA2AKernArgBase
 
-    # n_col_base_wg = WorkGroup1 * MacroTile1  (this WG's first output N column).
-    module.add(SMulI32(dst=sgpr(tmpSgpr), src0=sgpr("WorkGroup1"), src1=self.kernel["MacroTile1"],
-                       comment="n_col_base_wg = WorkGroup1 * MT1"))
+    # n_col_base_wg = WorkGroup0 * MacroTile0  (this WG's first output feature row).
+    module.add(SMulI32(dst=sgpr(tmpSgpr), src0=sgpr("WorkGroup0"), src1=self.kernel["MacroTile0"],
+                       comment="n_col_base_wg = WorkGroup0 * MT0"))
 
     # Rank 0 default: recv base = recv_ptr_0, shard_base = 0 (winner unless a higher rank matches).
     module.add(self.parentWriter.argLoader.loadKernArg(recvBaseSgpr, "KernArgAddress",
@@ -2705,7 +2705,7 @@ class GlobalWriteBatchWriter:
     """Switch-load flag_ptr[dst_rank] into flagBaseSgpr and the integer dst_rank into dstRankSgpr.
 
     Same highest-matching-rank scan as _fusedA2ALoadRecvBase (dst_rank is the
-    largest j with j*n_shard <= n_col_base_wg = WorkGroup1*MT1), but captures the
+    largest j with j*n_shard <= n_col_base_wg = WorkGroup0*MT0), but captures the
     numeric dst_rank (for counter[dst_rank]) and reads flag_ptr[dst_rank] (Task 5
     kernarg metadata, not in prologue SGPR).
 
@@ -2720,9 +2720,9 @@ class GlobalWriteBatchWriter:
     layout = fusedA2AKernArgLayout()
     fusedBase = self.parentWriter.states.fusedA2AKernArgBase
 
-    # n_col_base_wg = WorkGroup1 * MacroTile1 (this WG's first output N column).
-    module.add(SMulI32(dst=sgpr(tmpSgpr), src0=sgpr("WorkGroup1"), src1=self.kernel["MacroTile1"],
-                       comment="n_col_base_wg = WorkGroup1 * MT1"))
+    # n_col_base_wg = WorkGroup0 * MacroTile0 (this WG's first output feature row).
+    module.add(SMulI32(dst=sgpr(tmpSgpr), src0=sgpr("WorkGroup0"), src1=self.kernel["MacroTile0"],
+                       comment="n_col_base_wg = WorkGroup0 * MT0"))
 
     # Rank 0 default: flag base = flag_ptr_0, dst_rank = 0 (winner unless higher rank matches).
     module.add(self.parentWriter.argLoader.loadKernArg(flagBaseSgpr, "KernArgAddress",
@@ -2785,7 +2785,7 @@ class GlobalWriteBatchWriter:
     """Emit the cross-card handshake for PUSH workgroups (design spec section 2.3).
 
     Runs ONCE per WG (last batch of the store path), gated at RUNTIME to PUSH WGs
-    (WorkGroup1 < AN_tiles, same gate as the PUSH store dispatch).  Sequence, per
+    (WorkGroup0 < AM_tiles, same gate as the PUSH store dispatch).  Sequence, per
     the design spec 2.3 timing (rank_0 supplying rank_1 example):
       (1) s_waitcnt vscnt(0)         -- this WG's scatter stores reached L2 before
                                         it decrements the counter (correctness key:
@@ -2810,24 +2810,24 @@ class GlobalWriteBatchWriter:
     skipReleaseLabel = Label(kw.labels.getNameInc("fusedA2A_handshake_notlast"),
                              "fused-A2A: not the last WG for dst_rank -> skip release")
 
-    # --- runtime PUSH gate (same as the store dispatch): PUSH iff WorkGroup1 < AN_tiles,
-    #     with AN_tiles = FusedAN >> log2(MacroTile1) read on demand from kernarg. ---
+    # --- runtime PUSH gate (same as the store dispatch): PUSH iff WorkGroup0 < AM_tiles,
+    #     with AM_tiles = FusedAM >> log2(MacroTile0) read on demand from kernarg. ---
     from .Signature import fusedA2AKernArgLayout
     layout = fusedA2AKernArgLayout()
     fusedBase = kw.states.fusedA2AKernArgBase
-    mt1 = self.kernel["MacroTile1"]
-    log2mt1 = int(log2(mt1))
+    mt0 = self.kernel["MacroTile0"]
+    log2mt0 = int(log2(mt0))
     gateSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsGate", preventOverflow=False)
     module.add(kw.argLoader.loadKernArg(gateSgpr, "KernArgAddress",
-      sgprOffset=hex(fusedBase + layout["FusedAN"]), dword=1))
-    module.add(SWaitCnt(kmcnt=0, comment="wait FusedAN"))
-    module.add(SLShiftRightB32(dst=sgpr(gateSgpr), shiftHex=log2mt1, src=sgpr(gateSgpr),
-                               comment=f"AN_tiles = FusedAN >> log2(MT1={mt1})"))
-    module.add(SCmpGtU32(src0=sgpr(gateSgpr), src1=sgpr("WorkGroup1"),
-                         comment="AN_tiles > WorkGroup1? (this WG in PUSH region)"))
+      sgprOffset=hex(fusedBase + layout["FusedAM"]), dword=1))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedAM"))
+    module.add(SLShiftRightB32(dst=sgpr(gateSgpr), shiftHex=log2mt0, src=sgpr(gateSgpr),
+                               comment=f"AM_tiles = FusedAM >> log2(MT0={mt0})"))
+    module.add(SCmpGtU32(src0=sgpr(gateSgpr), src1=sgpr("WorkGroup0"),
+                         comment="AM_tiles > WorkGroup0? (this WG in PUSH region)"))
     kw.sgprPool.checkIn(gateSgpr)
     module.add(SCBranchSCC0(labelName=afterLabel.getLabelName(),
-                            comment="WorkGroup1 >= AN_tiles -> not a PUSH WG, skip handshake"))
+                            comment="WorkGroup0 >= AM_tiles -> not a PUSH WG, skip handshake"))
 
     # Restore full EXEC: the store loop may leave a partial edge mask, but the
     # wave-0 election reads VReadfirstlaneB32(Serial) which needs lane 0 active.

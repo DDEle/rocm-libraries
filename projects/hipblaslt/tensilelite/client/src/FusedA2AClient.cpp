@@ -72,9 +72,6 @@ namespace TensileLite
         // Expected byte growth of args after appending the fused segment:
         //   (2*8 + 1) pointers * 8B + 6 scalars * 4B = 160B.
         static constexpr size_t FUSED_A2A_SEGMENT_BYTES  = (2 * FUSED_A2A_MAX_RANKS + 1) * 8 + 6 * 4;
-        // A2A shards along N; kernel epilogue uses 256-wide N-tiles.
-        static constexpr uint32_t FUSED_A2A_N_TILE = 256;
-        static constexpr uint32_t FUSED_A2A_M_TILE = 256;
 
         namespace
         {
@@ -192,6 +189,30 @@ namespace TensileLite
             }
             std::cout << "[fused-a2a] solution: " << solution->name() << std::endl;
 
+            // Tile sizes MUST come from THIS solution's macro-tile, not a hardcoded
+            // 256: the kernel epilogue gates PUSH/local and computes dst_rank +
+            // FusedTarget from the compile-time MacroTile0/MacroTile1 (see
+            // GlobalWriteBatch.py _fusedA2ADispatch / _emitFusedA2AHandshake, which
+            // use self.kernel["MacroTile1"]). sizeMapping.macroTile.{x,y} are those
+            // same MT0/MT1 (the runtime WG grid is CeilDivide(M,macroTile.x) x
+            // CeilDivide(N,macroTile.y), ContractionProblem.cpp:795-796). `target`
+            // is an EXACT per-dst-rank count of contributing PUSH workgroups
+            // ((M/MT0)*(n_shard/MT1)) compared for equality kernel-side; a hardcoded
+            // 256 against a 128 macro-tile makes target 4x too small (latent
+            // early-release race) and over-restricts admissible shapes via the
+            // M%256/AN%256 guards. macroTile.x = MT0 (M dim), macroTile.y = MT1 (N dim).
+            const uint32_t FUSED_A2A_M_TILE = (uint32_t)solution->sizeMapping.macroTile.x;
+            const uint32_t FUSED_A2A_N_TILE = (uint32_t)solution->sizeMapping.macroTile.y;
+            if(FUSED_A2A_M_TILE == 0 || FUSED_A2A_N_TILE == 0)
+            {
+                std::cerr << "[fused-a2a] solution macro-tile is zero (MT0="
+                          << FUSED_A2A_M_TILE << " MT1=" << FUSED_A2A_N_TILE
+                          << "); cannot derive fused-A2A tile sizes" << std::endl;
+                return 1;
+            }
+            std::cout << "[fused-a2a] macro-tile from solution: MT0(M)=" << FUSED_A2A_M_TILE
+                      << " MT1(N)=" << FUSED_A2A_N_TILE << "\n";
+
             // --- Derive fused shape from the problem (spec §0 relations, but
             //     using THIS problem's real M/N/K, not the big §0 defaults). ---
             const size_t M = problem->freeSizeA(0); // GEMM free dim M
@@ -221,15 +242,15 @@ namespace TensileLite
             // (spec section 0). The kernel maps a whole PUSH workgroup to a
             // SINGLE dst_rank (n_col_base_wg = WorkGroup1 * MacroTile1), which is
             // only correct when each rank's shard is an integer number of
-            // N-tiles -- i.e. n_shard is a multiple of the 256-wide macro-tile.
+            // N-tiles -- i.e. n_shard is a multiple of the MacroTile1-wide tile.
             // If n_shard < MacroTile1 (or not a multiple), one workgroup spans
             // several ranks: its lanes are all attributed to one rank, so data
             // is scattered to the wrong recv buffer AND, under DRAIN, ranks with
             // no supplying workgroup poll a flag slot no one ever sets -> the
             // GPU hangs forever. Reject such shapes on the host instead of
             // launching into a deadlock. Constraints now apply to AN (the A2A
-            // width), not the whole N: AN % W == 0, (AN/W) % 256 == 0
-            // (=> n_shard >= 256, all W ranks covered), M % 256 == 0, AN % 256 == 0
+            // width), not the whole N: AN % W == 0, (AN/W) % MT1 == 0
+            // (=> n_shard >= MT1, all W ranks covered), M % MT0 == 0, AN % MT1 == 0
             // (whole tiles), and AN <= N (local segment fits inside the output).
             if(AN % (size_t)W != 0 || (nShard % FUSED_A2A_N_TILE) != 0
                || (M % (size_t)FUSED_A2A_M_TILE) != 0
@@ -246,8 +267,8 @@ namespace TensileLite
                     << " and every rank is covered), M % " << FUSED_A2A_M_TILE
                     << " == 0, AN % " << FUSED_A2A_N_TILE << " == 0, AN <= N.\n"
                     << "  e.g. W=4 needs AN >= " << ((size_t)W * FUSED_A2A_N_TILE)
-                    << " (n_shard >= 256). Refusing to launch (would deadlock in "
-                       "the DRAIN barrier)."
+                    << " (n_shard >= " << FUSED_A2A_N_TILE
+                    << "). Refusing to launch (would deadlock in the DRAIN barrier)."
                     << std::endl;
                 return -1;
             }
@@ -256,7 +277,7 @@ namespace TensileLite
             // just the logical M rows, and the recv SRD uses no edge clamp
             // (num_records = BufferOOB). So a PUSH WG's lanes address recv rows
             // up to the padded macro-tile height. Size recv to the M rounded up
-            // to the 256-wide macro-tile so those padding-row writes stay inside
+            // to the MacroTile0-wide tile so those padding-row writes stay inside
             // the allocation. (Same reasoning for n_shard rounded to the N-tile.)
             const size_t Mpad      = ((M + FUSED_A2A_M_TILE - 1) / FUSED_A2A_M_TILE) * FUSED_A2A_M_TILE;
             const size_t nShardPad = ((size_t)nShard + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE * FUSED_A2A_N_TILE;

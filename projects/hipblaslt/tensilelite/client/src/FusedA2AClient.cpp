@@ -115,10 +115,10 @@ namespace TensileLite
                 args.append<uint32_t>("FusedW", worldSize);
                 args.append<uint32_t>("FusedNShard", nShard);
                 args.append<uint32_t>("FusedDrain", drain);
-                // Phase A: kernarg string stays "FusedAN" (renamed to FusedAM in
-                // Task 6 alongside Signature.py); the value `an` now carries AM
-                // (A2A width along FEATURE) from the swapped client.
-                args.append<uint32_t>("FusedAN", an);
+                // Kernarg "FusedAM" (renamed from FusedAN in Task 6 alongside
+                // Signature.py); the value `an` carries AM (A2A width along
+                // FEATURE) from the swapped client.
+                args.append<uint32_t>("FusedAM", an);
 
                 size_t grew = args.size() - before;
                 if(grew != FUSED_A2A_SEGMENT_BYTES)
@@ -606,9 +606,8 @@ namespace TensileLite
                                        (uint32_t)W,
                                        nShard,
                                        (uint32_t)drain,
-                                       // Phase A: kernarg is still named "FusedAN"
-                                       // (Signature.py) until Task 6; pass AM as the
-                                       // value to keep the client/kernel ABI matched.
+                                       // kernarg "FusedAM" (Signature.py); pass AM as
+                                       // the value to keep the client/kernel ABI matched.
                                        (uint32_t)AM);
                     // Print kernarg size only on iter 0 to avoid log spam; a constant
                     // size across iterations confirms exactly one fused segment.

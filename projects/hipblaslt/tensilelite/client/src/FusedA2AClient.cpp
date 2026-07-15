@@ -289,18 +289,16 @@ namespace TensileLite
                 return -1;
             }
 
-            // The fused PUSH store writes the FULL macro-tile (MT0 rows), NOT
-            // just the logical M rows, and the recv SRD uses no edge clamp
-            // (num_records = BufferOOB). So a PUSH WG's lanes address recv rows
-            // up to the padded macro-tile height. Size recv to M(feature) rounded up
-            // to the MacroTile0-wide tile so those padding-row writes stay inside
-            // the allocation. n_shard is rounded to the kernel's column-tile width:
-            // in Phase A codegen is frozen and the PUSH store still tiles the shard
-            // in MacroTile1-wide column tiles, so keep the N-tile rounding here to
-            // stay byte-identical with what the (unchanged) kernel writes.
-            const size_t Mpad      = ((M + FUSED_A2A_M_TILE - 1) / FUSED_A2A_M_TILE) * FUSED_A2A_M_TILE;
-            const size_t nShardPad = ((size_t)nShard + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE * FUSED_A2A_N_TILE;
-            const size_t recvBytes    = (size_t)W * Mpad * nShardPad * sizeof(uint16_t); // bf16
+            // recv is feature-contiguous [W, token, feature_shard]: token is the outer
+            // (strided-by-n_shard) axis, feature-shard is the inner stride-1 axis. The
+            // fused PUSH store writes the FULL macro-tile edge (not just the logical
+            // token count) and the recv SRD uses no edge clamp (num_records=BufferOOB),
+            // so a PUSH WG's lanes address token rows up to the padded MT1 tile. Size
+            // token to the MacroTile1-wide tile so those padding-row writes stay inside
+            // the allocation. n_shard is already a multiple of MacroTile0 (host
+            // constraint (AM/W)%MT0==0), so the contiguous feature extent is n_shard.
+            const size_t nTokenPad = ((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE) * FUSED_A2A_N_TILE;
+            const size_t recvBytes    = (size_t)W * nTokenPad * nShard * sizeof(uint16_t); // bf16
             const size_t flagBytes    = (size_t)W * sizeof(uint32_t);
             const size_t counterBytes = (size_t)W * sizeof(uint32_t);
             const size_t aBytes       = problem->a().totalAllocatedBytes();
@@ -504,23 +502,22 @@ namespace TensileLite
                 float tol  = 1e-2f * std::max(1.0f, std::fabs(want));
                 return diff <= tol;
             };
-            // The kernel's recv scatter uses row stride = n_shard (FusedNShard)
-            // and slot stride = M * n_shard (M = logical SizeI), matching the
-            // _emitFusedA2APushStore offset formula. recv is a bf16 buffer.
-            // Phase A byte-identity: codegen is FROZEN this task, so the recv write
-            // path (and the row-major [M,N] Dgold) are produced exactly as before;
-            // the L2 offset/golden arithmetic below therefore stays byte-unchanged.
-            // Only the SEMANTICS flip: m is now a FEATURE row (SizeI=M=feature) and
-            // the shard index is a TOKEN sub-segment of N. See task3-index-derivation.md.
-            const size_t slotStride = (size_t)M * (size_t)nShard; // elems per src slot
-            const size_t rowStride  = (size_t)nShard;             // elems per feature-row
+            // recv is feature-contiguous [W, token, feature_shard]: the kernel's PUSH
+            // store uses token stride = n_shard (FusedNShard) and slot stride =
+            // N_token * n_shard (N = logical SizeJ = nToken), with feature-shard as the
+            // stride-1 inner axis. This mirrors the _emitFusedA2APushStore offset formula
+            // (slotElem + t*n_shard + f_local). recv is a bf16 buffer. slotStride uses the
+            // UNPADDED N to match the kernel's SizeJ slot multiply. See
+            // task3-index-derivation.md.
+            const size_t slotStride = (size_t)N * (size_t)nShard; // elems per src slot (nToken*nShard)
+            const size_t rowStride  = (size_t)nShard;             // per-token stride (feature-shard contiguous)
 
             // Persistent host scratch (reused each iteration, no per-iter alloc).
             // Only sized when validating; empty otherwise (no D2H copy-back either).
             std::vector<uint16_t> hRecv, hOut;
             if(validate)
             {
-                hRecv.resize((size_t)W * Mpad * nShardPad);
+                hRecv.resize((size_t)W * nTokenPad * nShard);
                 hOut.resize(dBytes / sizeof(uint16_t));
             }
 
@@ -658,13 +655,13 @@ namespace TensileLite
                 bool l1Pass = ok;
                 if(ok && validate)
                 {
-                    // ---- L2: recv (PUSH segment). For destination card dst, slot
-                    // src must hold the token sub-segment [dst*nShard, dst*nShard+
-                    // nShard) of Dgold as [src, m(feature-row), n_local(token-sub)].
-                    // All W src slots carry the identical shard. Phase A: codegen +
-                    // Dgold are frozen, so the offset/golden arithmetic is byte-
-                    // identical to the pre-swap baseline; only the m/n roles flipped
-                    // (m=feature, shard=token). See task3-index-derivation.md.
+                    // ---- L2: recv (PUSH segment). recv is feature-contiguous
+                    // [W, token, feature_shard]. For destination card dst, slot src must
+                    // hold the feature sub-segment [dst*nShard, dst*nShard+nShard) of
+                    // Dgold across all N tokens, laid out as [src, t(token, outer),
+                    // f(feature-local, inner/contiguous)]. Token is NOT sharded -- every
+                    // rank holds all N tokens. All W src slots carry the identical shard
+                    // in single-card emulation. See task3-index-derivation.md.
                     for(int dst = 0; dst < W && l2Pass; dst++)
                     {
                         HIP_CHECK_EXC(hipSetDevice(dst));
@@ -673,21 +670,23 @@ namespace TensileLite
                         size_t mism = 0;
                         for(int src = 0; src < W; src++)
                         {
-                            for(size_t m = 0; m < M; m++)
+                            for(size_t t = 0; t < N; t++)
                             {
-                                for(uint32_t nl = 0; nl < nShard; nl++)
+                                for(uint32_t f = 0; f < nShard; f++)
                                 {
-                                    size_t   off = (size_t)src * slotStride + m * rowStride + nl;
+                                    size_t   off = (size_t)src * slotStride + t * rowStride + f;
                                     BFloat16 g;
                                     g.data     = hRecv[off];
                                     float got  = (float)g;
-                                    float want = (float)Dgold[m * N + (size_t)dst * nShard + nl];
+                                    // global feature = dst*nShard + f, token = t;
+                                    // Dgold row-major [M,N] -> Dgold[feature*N + token].
+                                    float want = (float)Dgold[((size_t)dst * nShard + f) * N + t];
                                     if(!closeBf16(got, want))
                                     {
                                         if(mism < 5)
                                             std::cerr << "[fused-a2a] L2 MISMATCH iter=" << it
                                                       << " card=" << dst << " src=" << src
-                                                      << " m=" << m << " nl=" << nl << " got=" << got
+                                                      << " t=" << t << " f=" << f << " got=" << got
                                                       << " want=" << want << "\n";
                                         mism++;
                                     }

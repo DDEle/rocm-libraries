@@ -2647,22 +2647,26 @@ class GlobalWriteBatchWriter:
   def _emitFusedA2APushStore(self, groups) -> Module:
     """Emit the remote all-to-all PUSH store for one subtile store element.
 
-    Redirects the PUSH-column output from the local D buffer (column-major [M, GN], M
-    contiguous) to the remote recv buffer laid out row-major [W, M, n_shard] (n_shard
-    contiguous) -- the byte-identical layout the baseline all_to_all produces on the
-    destination rank (design spec section 1 / section 3.3 repack rule
-    out[:, :AN].view(M, W, n_shard).transpose -> [W, M, n_shard]).
+    Redirects the PUSH-column output to the remote recv buffer laid out feature-contiguous
+    [W, token, feature_shard] -- the byte-identical layout the baseline all_to_all produces
+    on the destination rank.  After the M/N swap the A2A-scattered dim is feature = M (GEMM
+    index-0); each destination rank owns a feature shard of width n_shard = AM/W.  One recv
+    slot is logically [token, feature_shard] row-major: token is the outer/slow axis and
+    feature_shard is the inner/contiguous (stride-1) axis.  Token is NOT sharded -- every
+    rank holds all N tokens.
 
     recv element offset (elements, before *bpe), on destination card recv_ptr[dst_rank]:
-        my_rank * (M * n_shard)      slot for the source rank (recv[my_rank])
-      + m_global * n_shard           row within the slot
-      + n_local                      column within the shard, n_local = n_global - dst_rank*n_shard
-    where dst_rank = n_global // n_shard (per-WG constant), m/n_global are per-lane.
+        my_rank * (N_token * n_shard)   slot for the source rank (recv[my_rank])
+      + t * n_shard                     token row within the slot (strided by n_shard)
+      + f_local                         feature within the shard (CONTIGUOUS, stride 1),
+                                        f_local = feat_global - dst_rank*n_shard
+    where dst_rank = feat_global // n_shard (per-WG constant), t/feat_global are per-lane.
+    coord0 holds the per-lane global FEATURE (M) index; coord1 holds the per-lane global
+    TOKEN (N) index; shard_base = dst_rank*n_shard is a FEATURE offset.
 
-    Because recv is transposed relative to D (M is the slow/strided dim here, not the fast
-    dim), the lane's 4 consecutive M-rows are n_shard*bpe apart -- so this emits one
-    buffer_store_b16 per M-row (a scatter) rather than the contiguous dwordx2 the local
-    store uses.
+    Because feature is the contiguous recv axis, the lane's 4 consecutive feature rows
+    (accumulators vc0..3) land at 4 consecutive recv elements -> one buffer_store_dwordx2,
+    identical in shape to the local col-major store this L2 layout mirrors.
 
     Device scope only (plain buffer_store): this validates the L2 layout.  The
     system-scope fence + counter/flag handshake are deferred to Task 8.
@@ -2670,7 +2674,8 @@ class GlobalWriteBatchWriter:
     Args:
       groups: list of (sumIdx, coordOffset0, coordOffset1) tuples, one per subtile M-block
               packed into this store (1 for a scalar/orphan element, 2 for a paired element).
-              coordOffset0/1 are the compile-time element M/N offsets from coord0/coord1.
+              coordOffset0/1 are the compile-time element feature/token offsets from
+              coord0/coord1.
     """
     kw = self.parentWriter
     module = Module("fusedA2APushStore")
@@ -2685,7 +2690,7 @@ class GlobalWriteBatchWriter:
     isSlc = bool(ntd & 0x2)
     isNT  = bool(ntd & 0x4)
 
-    module.addComment1(f"fused-A2A PUSH store -> recv[W,M,n_shard] ({typeStr}, device scope)")
+    module.addComment1(f"fused-A2A PUSH store -> recv[W,token,n_shard] ({typeStr}, device scope)")
 
     # --- kernarg reads (on demand, per Task 5 contract): my_rank + n_shard ---
     myRankSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_myRank", preventOverflow=False)
@@ -2706,107 +2711,91 @@ class GlobalWriteBatchWriter:
     # recv base pointer lands in recvSrd+0/+1 (SRD base words).
     self._fusedA2ALoadRecvBase(module, recvSrd, shardBaseSgpr, nShardSgpr, tmpSgpr2)
 
-    # slotElem = my_rank * M * n_shard  (recv[my_rank] slot base, in elements).
+    # slotElem = my_rank * N_token * n_shard  (recv[my_rank] slot base, in elements).
     slotSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_slot", preventOverflow=False)
-    module.add(SMulI32(dst=sgpr(slotSgpr), src0=sgpr(myRankSgpr), src1=sgpr("SizeI"),
-                       comment="my_rank * M"))
+    module.add(SMulI32(dst=sgpr(slotSgpr), src0=sgpr(myRankSgpr), src1=sgpr("SizeJ"),
+                       comment="my_rank * N_token"))
     module.add(SMulI32(dst=sgpr(slotSgpr), src0=sgpr(slotSgpr), src1=sgpr(nShardSgpr),
-                       comment="slotElem = my_rank * M * n_shard"))
+                       comment="slotElem = my_rank * N_token * n_shard"))
 
     # Finish the recv SRD: limit word (BufferOOB) + config word (Srd127_96).
     module.add(SMovB32(dst=sgpr(recvSrd + 2), src="BufferOOB", comment="recv SRD num_records"))
     module.add(SMovB32(dst=sgpr(recvSrd + 3), src="Srd127_96", comment="recv SRD config"))
 
     # --- per-lane address VGPRs ---
-    # nShardBpe (per M-row byte step) into a VGPR for the scatter.
     vRecvAddr  = kw.vgprPool.checkOut(1, tag="fusedA2A_recvAddr")
-    vNLocal    = kw.vgprPool.checkOut(1, tag="fusedA2A_nLocal")
+    vFLocal    = kw.vgprPool.checkOut(1, tag="fusedA2A_fLocal")
     vTmp       = kw.vgprPool.checkOut(1, tag="fusedA2A_tmp")
     vPack      = kw.vgprPool.checkOut(2, tag="fusedA2A_pack")  # 2 dwords = 4 16bit values
-    vNShardBpe = kw.vgprPool.checkOut(1, tag="fusedA2A_nShardBpe")
 
     coord0 = kw.vgprs.coord0
     coord1 = kw.vgprs.coord1
-
-    # nShardBpe = n_shard * bpe  (byte stride between adjacent M-rows in recv).
-    module.add(SMulI32(dst=sgpr(tmpSgpr2), src0=sgpr(nShardSgpr), src1=bpe,
-                       comment="n_shard * bpe (M-row byte stride)"))
-    module.add(VMovB32(dst=vgpr(vNShardBpe), src=sgpr(tmpSgpr2), comment="n_shard*bpe -> vgpr"))
 
     def vc(sumIdx, vi):
       idx = sumIdx + vi - prefixOffset
       return vgpr("ValuC+" + str(idx))
 
     for (sumIdx, coordOffset0, coordOffset1) in groups:
-      module.addComment1(f"PUSH group coordOff0={coordOffset0} coordOff1={coordOffset1}: pack 4 M-rows, scatter b16")
-      # Pack the 4 f32 accumulators (this lane's 4 M-rows at fixed N-col) into 2 dwords.
+      module.addComment1(f"PUSH group coordOff0={coordOffset0} coordOff1={coordOffset1}: pack 4 feature rows, dwordx2")
+      # Pack the 4 f32 accumulators (this lane's 4 consecutive feature rows) into 2 dwords.
+      # vc0/vc1 -> vPack+0 (feat+0 lo16, feat+1 hi16), vc2/vc3 -> vPack+1 (feat+2/+3): the
+      # VCvtPk low-half=src0 order makes the 2 dwords ascending feature-contiguous, matching
+      # the local col-major store this L2 layout mirrors.
       module.add(VCvtPkF32to16(dst=vgpr(vPack + 0), src0=vc(sumIdx, 0), src1=vc(sumIdx, 1),
-                               comment=f"M-row+0/+1 -> {typeStr}"))
+                               comment=f"feat+0/+1 -> {typeStr}"))
       module.add(VCvtPkF32to16(dst=vgpr(vPack + 1), src0=vc(sumIdx, 2), src1=vc(sumIdx, 3),
-                               comment=f"M-row+2/+3 -> {typeStr}"))
+                               comment=f"feat+2/+3 -> {typeStr}"))
       module.add(SNop(waitState=0, comment=f"delay after pk_{typeStr}"))
 
-      # n_local = coord1 + coordOffset1 - shard_base   (per-lane N within the shard).
+      # f_local = coord0 + coordOffset0 - shard_base  (per-lane feature within the shard).
       # coordOffset0/1 are compile-time ints; move to an SGPR first because v_add_u32
       # rejects large inline literals on gfx950 (tmpSgpr2 is free after the recv switch).
-      if coordOffset1:
-        module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset1, comment=f"coordOffset1={coordOffset1}"))
-        module.add(VAddU32(dst=vgpr(vNLocal), src0=vgpr(coord1), src1=sgpr(tmpSgpr2),
-                           comment=f"n_global = coord1 + {coordOffset1}"))
-        module.add(VSubU32(dst=vgpr(vNLocal), src0=vgpr(vNLocal), src1=sgpr(shardBaseSgpr),
-                           comment="n_local = n_global - shard_base"))
-      else:
-        module.add(VSubU32(dst=vgpr(vNLocal), src0=vgpr(coord1), src1=sgpr(shardBaseSgpr),
-                           comment="n_local = coord1 - shard_base"))
-
-      # m_base = coord0 + coordOffset0  (per-lane global M row of the group's first value).
-      # recvElemBase = (slotElem + m_base * n_shard) + n_local
-      #             --> byte = recvElemBase * bpe
       if coordOffset0:
         module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset0, comment=f"coordOffset0={coordOffset0}"))
-        module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(coord0), src1=sgpr(tmpSgpr2),
-                           comment=f"m_base = coord0 + {coordOffset0}"))
-        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr),
-                             comment="m_base * n_shard"))
+        module.add(VAddU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(tmpSgpr2),
+                           comment=f"feat_global = coord0 + {coordOffset0}"))
+        module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=sgpr(shardBaseSgpr),
+                           comment="f_local = feat_global - shard_base"))
       else:
-        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(coord0), src1=sgpr(nShardSgpr),
-                             comment="m_base * n_shard"))
+        module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(shardBaseSgpr),
+                           comment="f_local = coord0 - shard_base"))
+
+      # t = coord1 + coordOffset1  (per-lane global token; NOT sharded).
+      # recvElemBase = (slotElem + t * n_shard) + f_local
+      #             --> byte = recvElemBase * bpe
+      if coordOffset1:
+        module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset1, comment=f"coordOffset1={coordOffset1}"))
+        module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=sgpr(tmpSgpr2),
+                           comment=f"t = coord1 + {coordOffset1}"))
+        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr),
+                             comment="t * n_shard"))
+      else:
+        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=sgpr(nShardSgpr),
+                             comment="t * n_shard"))
       module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(slotSgpr),
-                         comment="+ slotElem (my_rank*M*n_shard)"))
-      module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vTmp), src1=vgpr(vNLocal),
-                         comment="recvElemBase = slot + m_base*n_shard + n_local"))
+                         comment="+ slotElem (my_rank*N_token*n_shard)"))
+      module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vTmp), src1=vgpr(vFLocal),
+                         comment="recvElemBase = slot + t*n_shard + f_local"))
       module.add(VLShiftLeftB32(dst=vgpr(vRecvAddr), shiftHex=int(log2(bpe)), src=vgpr(vRecvAddr),
                                 comment="recv byte offset = recvElemBase * bpe"))
 
-      # Scatter: one buffer_store_b16 per M-row (rows are n_shard*bpe apart in recv).
-      for row in range(self._FUSED_A2A_MROWS):
-        # 16bit value for this row: lo/hi of vPack dword row//2.
-        srcVgpr = vPack + (row // 2)
-        # Extract the correct 16bit half into vTmp when row is odd (hi half).
-        if row % 2 == 1:
-          module.add(VLShiftRightB32(dst=vgpr(vTmp), shiftHex=16, src=vgpr(srcVgpr),
-                                     comment=f"M-row+{row}: hi 16bit -> lo"))
-          storeSrc = vTmp
-        else:
-          storeSrc = srcVgpr
-        module.add(BufferStoreB16(
-          src=vgpr(storeSrc),
-          vaddr=vgpr(vRecvAddr),
-          saddr=sgpr(recvSrd, 4),
-          soffset=0,
-          mubuf=MUBUFModifiers(offen=True, offset12=0, glc=isGlc, slc=isSlc, nt=isNT),
-          comment=f"recv scatter M-row+{row} (device scope)"))
-        if row != self._FUSED_A2A_MROWS - 1:
-          module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vRecvAddr), src1=vgpr(vNShardBpe),
-                             comment="advance recv addr by n_shard*bpe (next M-row)"))
+      # Feature is the contiguous recv axis: the 4 feature rows are stride-1, so vPack[0:2]
+      # (4 packed 16bit values) writes as one dwordx2 -- same shape as the local col-major
+      # store (the passing L1 reference).
+      module.add(BufferStoreB64(
+        src=vgpr(vPack + 0, 2),
+        vaddr=vgpr(vRecvAddr),
+        saddr=sgpr(recvSrd, 4),
+        soffset=0,
+        mubuf=MUBUFModifiers(offen=True, offset12=0, glc=isGlc, slc=isSlc, nt=isNT),
+        comment="recv dwordx2: 4 consecutive feature rows (device scope)"))
 
     module.add(SNop(waitState=0, comment="WAR: latch store src before next batch overwrites pack"))
 
     # Release temporaries.
-    kw.vgprPool.checkIn(vNShardBpe)
     kw.vgprPool.checkIn(vPack)
     kw.vgprPool.checkIn(vTmp)
-    kw.vgprPool.checkIn(vNLocal)
+    kw.vgprPool.checkIn(vFLocal)
     kw.vgprPool.checkIn(vRecvAddr)
     kw.sgprPool.checkIn(slotSgpr)
     kw.sgprPool.checkIn(tmpSgpr2)

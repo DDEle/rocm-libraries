@@ -2528,28 +2528,24 @@ class GlobalWriteBatchWriter:
     targetModule.add(afterLabel)
 
   def _fusedA2ALoadRecvBase(self, module, recvBaseSgpr, shardBaseSgpr, nShardSgpr, tmpSgpr):
-    """Switch-load recv_ptr[dst_rank] into recvBaseSgpr and dst_rank*n_shard into shardBaseSgpr.
+    """Load recv_ptr[dst_rank] into recvBaseSgpr and dst_rank*n_shard into shardBaseSgpr.
 
-    recv_ptr[dst_rank] is NOT in an SGPR (Task 5 registered it as kernarg metadata only),
-    so per the Task 5 contract this reads exactly one recv base pointer on demand via a
-    switch over the compile-time-constant kernarg slots.  dst_rank is a per-WG runtime
-    constant: since n_shard is a multiple of MacroTile0 (design guarantees (AM/W)%256==0),
-    every 256-row macro-tile lies entirely within one destination rank's shard, so
-    dst_rank = (WorkGroup0 * MacroTile0) / n_shard is the same for all lanes in the WG.
+    Two-phase approach to avoid SMEM WAW hazard (multiple s_load to the same SGPR pair):
+      Phase 1 (pure SALU): scan candidate ranks to determine dst_rank (no s_load issued).
+      Phase 2: compute kernarg offset = recv_ptr_0 + dst_rank*8 and issue a single
+               s_load_dwordx2.  One load -> zero WAW risk.
 
-    Rather than divide by the runtime n_shard, the switch scans candidate ranks j
-    (0..MAX-1): rank j is the destination when this WG's first feature row
-    (n_col_base_wg = WorkGroup0*MT0) is >= j*n_shard.  Ranks are contiguous, so the
-    HIGHEST matching j wins; the forward scan keeps overwriting recvBase/shardBase with
-    each qualifying rank.  Ranks j >= FusedW never qualify (n_col_base_wg < AM = W*n_shard),
-    so unused slots are harmless even though all MAX slots are visited at compile time.
+    dst_rank is a per-WG constant: n_shard is a multiple of MacroTile0 (design guarantees
+    (AM/W)%256==0), so every macro-tile lies within one rank's shard.  The scan finds the
+    highest j with j*n_shard <= n_col_base_wg = WorkGroup0*MT0.  Ranks j >= FusedW never
+    qualify (harmless compile-time unroll).
 
     Args:
       module:        Module to append instructions to.
       recvBaseSgpr:  2-SGPR pair (aligned) to receive recv_ptr[dst_rank].
       shardBaseSgpr: 1 SGPR to receive dst_rank*n_shard (element units).
       nShardSgpr:    1 SGPR pre-loaded with FusedNShard (n_shard, element units).
-      tmpSgpr:       2 scratch SGPRs; tmpSgpr+0 holds n_col_base_wg, tmpSgpr+1 shard_lo.
+      tmpSgpr:       2 scratch SGPRs; tmpSgpr+0 = n_col_base_wg, tmpSgpr+1 = scratch.
     """
     from .Signature import fusedA2AKernArgLayout, FUSED_A2A_MAX_RANKS
     layout = fusedA2AKernArgLayout()
@@ -2559,27 +2555,34 @@ class GlobalWriteBatchWriter:
     module.add(SMulI32(dst=sgpr(tmpSgpr), src0=sgpr("WorkGroup0"), src1=self.kernel["MacroTile0"],
                        comment="n_col_base_wg = WorkGroup0 * MT0"))
 
-    # Rank 0 default: recv base = recv_ptr_0, shard_base = 0 (winner unless a higher rank matches).
-    module.add(self.parentWriter.argLoader.loadKernArg(recvBaseSgpr, "KernArgAddress",
-      sgprOffset=hex(fusedBase + layout["recv_ptr_0"]), dword=2))
+    # Phase 1 (pure SALU): determine dst_rank and shard_base without issuing any s_load.
+    # tmpSgpr+1 = dst_rank (starts at 0, overwritten by each qualifying higher rank).
+    module.add(SMovB32(dst=sgpr(tmpSgpr + 1), src=0, comment="dst_rank = 0 (default)"))
     module.add(SMovB32(dst=sgpr(shardBaseSgpr), src=0, comment="shard_base = 0 (rank 0)"))
 
     for j in range(1, FUSED_A2A_MAX_RANKS):
       skipLabel = Label(self.parentWriter.labels.getNameInc("fusedA2A_recv_skip%u" % j),
                         f"n_col_base_wg below rank {j}")
-      # shard_lo = j * n_shard; if n_col_base_wg < shard_lo this rank (and all higher) lose.
-      module.add(SMulI32(dst=sgpr(tmpSgpr + 1), src0=sgpr(nShardSgpr), src1=j,
+      module.add(SMulI32(dst=sgpr(shardBaseSgpr), src0=sgpr(nShardSgpr), src1=j,
                          comment=f"cand shard_lo = {j} * n_shard"))
-      module.add(SCmpGtU32(src0=sgpr(tmpSgpr + 1), src1=sgpr(tmpSgpr),
+      module.add(SCmpGtU32(src0=sgpr(shardBaseSgpr), src1=sgpr(tmpSgpr),
                            comment=f"shard_lo > n_col_base_wg? (WG below rank {j})"))
       module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
                               comment=f"below rank {j}: keep current winner"))
-      # Rank j qualifies (highest so far): overwrite winner recv base + shard_base.
-      module.add(self.parentWriter.argLoader.loadKernArg(recvBaseSgpr, "KernArgAddress",
-        sgprOffset=hex(fusedBase + layout["recv_ptr_%u" % j]), dword=2))
-      module.add(SMovB32(dst=sgpr(shardBaseSgpr), src=sgpr(tmpSgpr + 1),
-                         comment=f"shard_base = {j} * n_shard"))
+      module.add(SMovB32(dst=sgpr(tmpSgpr + 1), src=j, comment=f"dst_rank = {j}"))
       module.add(skipLabel)
+    # Restore shard_base = dst_rank * n_shard (the loop clobbered shardBaseSgpr with candidates).
+    module.add(SMulI32(dst=sgpr(shardBaseSgpr), src0=sgpr(tmpSgpr + 1), src1=sgpr(nShardSgpr),
+                       comment="shard_base = dst_rank * n_shard"))
+
+    # Phase 2: single s_load_dwordx2 at recv_ptr_0 + dst_rank*8 (contiguous 8B-stride layout).
+    module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr + 1), src=sgpr(tmpSgpr + 1), shiftHex=3,
+                              comment="dst_rank * 8 (byte offset into recv_ptr[] array)"))
+    module.add(SAddU32(dst=sgpr(tmpSgpr + 1), src0=sgpr(tmpSgpr + 1),
+                       src1=fusedBase + layout["recv_ptr_0"],
+                       comment="kernarg offset = fusedBase + recv_ptr_0 + dst_rank*8"))
+    module.add(self.parentWriter.argLoader.loadKernArg(recvBaseSgpr, "KernArgAddress",
+      sgprOffset=sgpr(tmpSgpr + 1), dword=2))
     module.add(SWaitCnt(kmcnt=0, comment="wait recv_ptr[dst_rank] load"))
 
   # Number of consecutive M-rows a lane owns per subtile output group (MFMA vector width).
@@ -2747,19 +2750,18 @@ class GlobalWriteBatchWriter:
     return module
 
   def _fusedA2ALoadFlagBaseAndRank(self, module, flagBaseSgpr, dstRankSgpr, nShardSgpr, tmpSgpr):
-    """Switch-load flag_ptr[dst_rank] into flagBaseSgpr and the integer dst_rank into dstRankSgpr.
+    """Load flag_ptr[dst_rank] into flagBaseSgpr and the integer dst_rank into dstRankSgpr.
 
-    Same highest-matching-rank scan as _fusedA2ALoadRecvBase (dst_rank is the
-    largest j with j*n_shard <= n_col_base_wg = WorkGroup0*MT0), but captures the
-    numeric dst_rank (for counter[dst_rank]) and reads flag_ptr[dst_rank] (Task 5
-    kernarg metadata, not in prologue SGPR).
+    Two-phase approach (same as _fusedA2ALoadRecvBase) to avoid SMEM WAW hazard:
+      Phase 1 (pure SALU): scan candidate ranks to determine dst_rank.
+      Phase 2: single s_load_dwordx2 at flag_ptr_0 + dst_rank*8.
 
     Args:
       module:       Module to append instructions to.
       flagBaseSgpr: 2-SGPR pair (aligned) to receive flag_ptr[dst_rank].
       dstRankSgpr:  1 SGPR to receive dst_rank (integer rank index).
       nShardSgpr:   1 SGPR pre-loaded with FusedNShard (n_shard, element units).
-      tmpSgpr:      2 scratch SGPRs; tmpSgpr+0 holds n_col_base_wg, tmpSgpr+1 shard_lo.
+      tmpSgpr:      2 scratch SGPRs; tmpSgpr+0 = n_col_base_wg, tmpSgpr+1 = scratch.
     """
     from .Signature import fusedA2AKernArgLayout, FUSED_A2A_MAX_RANKS
     layout = fusedA2AKernArgLayout()
@@ -2769,9 +2771,7 @@ class GlobalWriteBatchWriter:
     module.add(SMulI32(dst=sgpr(tmpSgpr), src0=sgpr("WorkGroup0"), src1=self.kernel["MacroTile0"],
                        comment="n_col_base_wg = WorkGroup0 * MT0"))
 
-    # Rank 0 default: flag base = flag_ptr_0, dst_rank = 0 (winner unless higher rank matches).
-    module.add(self.parentWriter.argLoader.loadKernArg(flagBaseSgpr, "KernArgAddress",
-      sgprOffset=hex(fusedBase + layout["flag_ptr_0"]), dword=2))
+    # Phase 1 (pure SALU): determine dst_rank without issuing any s_load.
     module.add(SMovB32(dst=sgpr(dstRankSgpr), src=0, comment="dst_rank = 0 (default)"))
 
     for j in range(1, FUSED_A2A_MAX_RANKS):
@@ -2783,44 +2783,45 @@ class GlobalWriteBatchWriter:
                            comment=f"shard_lo > n_col_base_wg? (WG below rank {j})"))
       module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
                               comment=f"below rank {j}: keep current winner"))
-      module.add(self.parentWriter.argLoader.loadKernArg(flagBaseSgpr, "KernArgAddress",
-        sgprOffset=hex(fusedBase + layout["flag_ptr_%u" % j]), dword=2))
       module.add(SMovB32(dst=sgpr(dstRankSgpr), src=j, comment=f"dst_rank = {j}"))
       module.add(skipLabel)
+
+    # Phase 2: single s_load_dwordx2 at flag_ptr_0 + dst_rank*8 (contiguous 8B-stride layout).
+    module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr + 1), src=sgpr(dstRankSgpr), shiftHex=3,
+                              comment="dst_rank * 8 (byte offset into flag_ptr[] array)"))
+    module.add(SAddU32(dst=sgpr(tmpSgpr + 1), src0=sgpr(tmpSgpr + 1),
+                       src1=fusedBase + layout["flag_ptr_0"],
+                       comment="kernarg offset = fusedBase + flag_ptr_0 + dst_rank*8"))
+    module.add(self.parentWriter.argLoader.loadKernArg(flagBaseSgpr, "KernArgAddress",
+      sgprOffset=sgpr(tmpSgpr + 1), dword=2))
     module.add(SWaitCnt(kmcnt=0, comment="wait flag_ptr[dst_rank] load"))
 
-  def _fusedA2ALoadFlagBaseByRank(self, module, flagBaseSgpr, rankSgpr):
-    """Switch-load flag_ptr[rankSgpr] into flagBaseSgpr, selecting on a runtime rank SGPR.
+  def _fusedA2ALoadFlagBaseByRank(self, module, flagBaseSgpr, rankSgpr, tmpSgpr):
+    """Load flag_ptr[rankSgpr] into flagBaseSgpr using a computed kernarg offset.
 
     Sibling of _fusedA2ALoadFlagBaseAndRank, but the rank is an explicit runtime value
     (used by DRAIN: the elected last WG polls THIS card's own flag buffer flag_ptr[my_rank]).
-    flag_ptr[j] is kernarg metadata only (Task 5), so this reads exactly one flag base on
-    demand via a compile-time switch: rank 0 is the default; for each candidate j the load
-    fires only when rankSgpr == j.  Slots j >= FusedW are never selected at run time.
+    The flag_ptr[] array is contiguous with 8-byte stride in the kernarg segment, so
+    a single s_load_dwordx2 at flag_ptr_0 + rankSgpr*8 suffices -- no switch-load needed.
 
     Args:
       module:       Module to append instructions to.
       flagBaseSgpr: 2-SGPR pair (aligned) to receive flag_ptr[rankSgpr].
       rankSgpr:     1 SGPR holding the rank index to select.
+      tmpSgpr:      1 scratch SGPR for the computed kernarg offset.
     """
-    from .Signature import fusedA2AKernArgLayout, FUSED_A2A_MAX_RANKS
+    from .Signature import fusedA2AKernArgLayout
     layout = fusedA2AKernArgLayout()
     fusedBase = self.parentWriter.states.fusedA2AKernArgBase
 
-    # Rank 0 default: flag base = flag_ptr_0 (overwritten if rankSgpr matches a higher rank).
+    # Single s_load_dwordx2 at flag_ptr_0 + rankSgpr*8.
+    module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr), src=sgpr(rankSgpr), shiftHex=3,
+                              comment="rank * 8 (byte offset into flag_ptr[] array)"))
+    module.add(SAddU32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr),
+                       src1=fusedBase + layout["flag_ptr_0"],
+                       comment="kernarg offset = fusedBase + flag_ptr_0 + rank*8"))
     module.add(self.parentWriter.argLoader.loadKernArg(flagBaseSgpr, "KernArgAddress",
-      sgprOffset=hex(fusedBase + layout["flag_ptr_0"]), dword=2))
-
-    for j in range(1, FUSED_A2A_MAX_RANKS):
-      skipLabel = Label(self.parentWriter.labels.getNameInc("fusedA2A_selfflag_skip%u" % j),
-                        f"rank != {j}")
-      module.add(SCmpEQU32(src0=sgpr(rankSgpr), src1=j,
-                           comment=f"rank == {j}?"))
-      module.add(SCBranchSCC0(labelName=skipLabel.getLabelName(),
-                              comment=f"rank != {j}: keep current base"))
-      module.add(self.parentWriter.argLoader.loadKernArg(flagBaseSgpr, "KernArgAddress",
-        sgprOffset=hex(fusedBase + layout["flag_ptr_%u" % j]), dword=2))
-      module.add(skipLabel)
+      sgprOffset=sgpr(tmpSgpr), dword=2))
     module.add(SWaitCnt(kmcnt=0, comment="wait flag_ptr[my_rank] load"))
 
   # READY value written into the destination card's flag slot (design spec 2.3).
@@ -3002,7 +3003,7 @@ class GlobalWriteBatchWriter:
 
     # self flag base = flag_ptr[my_rank] (THIS card's own flag buffer). Reuses flagBaseSgpr
     # (its previous remote value flag_ptr[dst_rank] is no longer needed after the store above).
-    self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, myRankSgpr)
+    self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, myRankSgpr, tmpSgpr2)
 
     # j == my_rank -> self-set (no remote producer); else poll.
     module.add(SCmpEQU32(src0=sgpr(dstRankSgpr), src1=sgpr(myRankSgpr),

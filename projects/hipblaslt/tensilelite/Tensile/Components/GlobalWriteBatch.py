@@ -2608,9 +2608,12 @@ class GlobalWriteBatchWriter:
     coord0 holds the per-lane global FEATURE (M) index; coord1 holds the per-lane global
     TOKEN (N) index; shard_base = dst_rank*n_shard is a FEATURE offset.
 
-    Because feature is the contiguous recv axis, the lane's 4 consecutive feature rows
-    (accumulators vc0..3) land at 4 consecutive recv elements -> one buffer_store_dwordx2,
-    identical in shape to the local col-major store this L2 layout mirrors.
+    Because feature is the contiguous recv axis, consecutive feature rows land at
+    consecutive recv elements.  The primary path pairs the two sba groups and permutes
+    8 consecutive feature rows into one buffer_store_dwordx4 (see the dwordx4 note below);
+    the single-group buffer_store_dwordx2 (4 feature rows, no permute) is only the
+    runtime-dead 1-group fallback.  Both mirror the local col-major store this L2 layout
+    reflects, differing only in the recv address.
 
     Device scope only (plain buffer_store): this validates the L2 layout.  The
     system-scope fence + counter/flag handshake are deferred to Task 8.
@@ -2620,9 +2623,27 @@ class GlobalWriteBatchWriter:
               packed into this store (1 for a scalar/orphan element, 2 for a paired element).
               coordOffset0/1 are the compile-time element feature/token offsets from
               coord0/coord1.
+
+    dwordx4 upgrade: pairs the two sba groups (even/odd tt0) into 8 consecutive feature
+    rows, packs 8 f32 -> 4 dwords, shuffles across wave halves via _emitSubtilePackedPermute
+    (ds_bpermute + v_permlane32_swap), and stores them with one buffer_store_dwordx4 --
+    mirroring the local _emit16bitSubtilePairedStore, differing only in the recv address.
     """
     kw = self.parentWriter
     module = Module("fusedA2APushStore")
+    # dwordx4 upgrade targets the 2-group sba-paired case (§5.4/决策2): 8 feature rows -> one
+    # buffer_store_dwordx4.  The scaffolding (lines ~1846-1935) ALSO statically emits 1-group
+    # push builders for the scalar-fallback (line ~1889) and orphan (~1909/~1932) paths.  Those
+    # are runtime-dead on fused A2A (MIWaveTile[0] even + M tile-aligned guarantees pairing, so
+    # the SCBranchSCC0 guard at ~1880 never falls through), but they are UNCONDITIONALLY emitted
+    # in Python and must still assemble.  Keep the original dwordx2 emission for len==1 so
+    # codegen succeeds; the dwordx4 fast path handles the only branch actually taken.
+    assert len(groups) in (1, 2), \
+      f"fused-A2A store expects 1 (runtime-dead fallback) or 2 (paired) sba groups, got {len(groups)}"
+    paired = (len(groups) == 2)
+    (sumIdx0, coordOffset0, coordOffset1) = groups[0]   # sba=0 (address origin)
+    if paired:
+      (sumIdx1, _sba1Off0, _sba1Off1) = groups[1]       # sba=1 (packs into vPack+2/+3)
     isFp16 = self.kernel["ProblemType"]["DestDataType"].isHalf()
     VCvtPkF32to16 = VCvtPkF32toFP16 if isFp16 else VCvtPkF32toBF16
     typeStr = "fp16" if isFp16 else "bf16"
@@ -2670,7 +2691,12 @@ class GlobalWriteBatchWriter:
     vRecvAddr  = kw.vgprPool.checkOut(1, tag="fusedA2A_recvAddr")
     vFLocal    = kw.vgprPool.checkOut(1, tag="fusedA2A_fLocal")
     vTmp       = kw.vgprPool.checkOut(1, tag="fusedA2A_tmp")
-    vPack      = kw.vgprPool.checkOutAligned(2, 2, tag="fusedA2A_pack")  # 2 dwords, 64-bit aligned for dwordx2
+
+    # dwordx4: reuse the batch-level pack scratch (4 dwords, 2-aligned) + partner-lane
+    # perm address, identical to local _emit16bitSubtilePairedStore (§5.4 主逻辑同步).
+    vPack     = self.cvtVgprStruct.vgprBf16Temp   # +0..3, 2-aligned for dwordx4
+    vPermAddr = self.cvtVgprStruct.vgprPermAddr
+    vLGDelta  = self.cvtVgprStruct.vgprLaneGroupDelta   # LG*8 bytes; permute makes each lane-group own 8 rows
 
     coord0 = kw.vgprs.coord0
     coord1 = kw.vgprs.coord1
@@ -2679,55 +2705,76 @@ class GlobalWriteBatchWriter:
       idx = sumIdx + vi - prefixOffset
       return vgpr("ValuC+" + str(idx))
 
-    for (sumIdx, coordOffset0, coordOffset1) in groups:
-      module.addComment1(f"PUSH group coordOff0={coordOffset0} coordOff1={coordOffset1}: pack 4 feature rows, dwordx2")
-      # Pack the 4 f32 accumulators (this lane's 4 consecutive feature rows) into 2 dwords.
-      # vc0/vc1 -> vPack+0 (feat+0 lo16, feat+1 hi16), vc2/vc3 -> vPack+1 (feat+2/+3): the
-      # VCvtPk low-half=src0 order makes the 2 dwords ascending feature-contiguous, matching
-      # the local col-major store this L2 layout mirrors.
-      module.add(VCvtPkF32to16(dst=vgpr(vPack + 0), src0=vc(sumIdx, 0), src1=vc(sumIdx, 1),
-                               comment=f"feat+0/+1 -> {typeStr}"))
-      module.add(VCvtPkF32to16(dst=vgpr(vPack + 1), src0=vc(sumIdx, 2), src1=vc(sumIdx, 3),
-                               comment=f"feat+2/+3 -> {typeStr}"))
-      module.add(SNop(waitState=0, comment=f"delay after pk_{typeStr}"))
-
-      # f_local = coord0 + coordOffset0 - shard_base  (per-lane feature within the shard).
-      # coordOffset0/1 are compile-time ints; move to an SGPR first because v_add_u32
-      # rejects large inline literals on gfx950 (tmpSgpr2 is free after the recv switch).
+    def emitRecvAddr(module):
+      """Compute the recv byte address into vRecvAddr.  Address公式与 dwordx2 版一致（决策4）：
+      起点用 groups[0]=sba0 的 coord。permute 后 8 连续 feature 起点 = coord0（已含 (lane/16)*4
+      的 LG 项，无需额外 vLGDelta）。Emitted directly for the len==1 fallback, or via the
+      permute latency window (addrWhilePermuting) for the len==2 fast path."""
+      # f_local = coord0 + coordOffset0 - shard_base
       if coordOffset0:
         module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset0, comment=f"coordOffset0={coordOffset0}"))
-        module.add(VAddU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(tmpSgpr2),
-                           comment=f"feat_global = coord0 + {coordOffset0}"))
-        module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=sgpr(shardBaseSgpr),
-                           comment="f_local = feat_global - shard_base"))
+        module.add(VAddU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(tmpSgpr2), comment=f"feat_global = coord0 + {coordOffset0}"))
+        module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=sgpr(shardBaseSgpr), comment="f_local = feat_global - shard_base"))
       else:
-        module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(shardBaseSgpr),
-                           comment="f_local = coord0 - shard_base"))
-
-      # t = coord1 + coordOffset1  (per-lane global token; NOT sharded).
-      # recvElemBase = (slotElem + t * n_shard) + f_local
-      #             --> byte = recvElemBase * bpe
+        module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(shardBaseSgpr), comment="f_local = coord0 - shard_base"))
+      # t = coord1 + coordOffset1 ; recvElemBase = slotElem + t*n_shard + f_local
       if coordOffset1:
         module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset1, comment=f"coordOffset1={coordOffset1}"))
-        module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=sgpr(tmpSgpr2),
-                           comment=f"t = coord1 + {coordOffset1}"))
-        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr),
-                             comment="t * n_shard"))
+        module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=sgpr(tmpSgpr2), comment=f"t = coord1 + {coordOffset1}"))
+        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr), comment="t * n_shard"))
       else:
-        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=sgpr(nShardSgpr),
-                             comment="t * n_shard"))
-      module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(slotSgpr),
-                         comment="+ slotElem (my_rank*N_token*n_shard)"))
-      module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vTmp), src1=vgpr(vFLocal),
-                         comment="recvElemBase = slot + t*n_shard + f_local"))
-      module.add(VLShiftLeftB32(dst=vgpr(vRecvAddr), shiftHex=int(log2(bpe)), src=vgpr(vRecvAddr),
-                                comment="recv byte offset = recvElemBase * bpe"))
+        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=sgpr(nShardSgpr), comment="t * n_shard"))
+      module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(slotSgpr), comment="+ slotElem (my_rank*N_token*n_shard)"))
+      module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vTmp), src1=vgpr(vFLocal), comment="recvElemBase = slot + t*n_shard + f_local"))
+      module.add(VLShiftLeftB32(dst=vgpr(vRecvAddr), shiftHex=int(log2(bpe)), src=vgpr(vRecvAddr), comment="recv byte offset = recvElemBase * bpe"))
 
-      # Feature is the contiguous recv axis: the 4 feature rows are stride-1, so vPack[0:2]
-      # (4 packed 16bit values) writes as one dwordx2 -- same shape as the local col-major
-      # store (the passing L1 reference).
+    if paired:
+      module.addComment1(f"PUSH sba-pair coordOff0={coordOffset0} coordOff1={coordOffset1}: pack 8 feature rows -> dwordx4")
+      # vPack/vPermAddr/vLGDelta are batch-level constants initialized only in the
+      # is16bitSubtile precompute block (~line 1362); every call site of this function
+      # is currently inside a matching `if is16bitSubtile:` guard.  Assert the invariant
+      # so a future refactor that moves a call site out of that guard fails at codegen
+      # instead of silently reading uninitialized permute registers (silent recv corruption).
+      assert self.kernel["UseSubtileImpl"] and not self.edge and self.kernel["WavefrontSize"] != 32, \
+        "fused-A2A dwordx4 paired store requires the is16bitSubtile precompute (vPermAddr/vLGDelta)"
+      # Pack 8 f32 accumulators into 4 dwords: sba0 -> vPack+0/+1, sba1 -> vPack+2/+3.
+      # VCvtPk low-half=src0 makes each dword ascending feature-contiguous.
+      module.add(VCvtPkF32to16(dst=vgpr(vPack+0), src0=vc(sumIdx0,0), src1=vc(sumIdx0,1), comment=f"sba0 feat 0/1 -> {typeStr}"))
+      module.add(VCvtPkF32to16(dst=vgpr(vPack+1), src0=vc(sumIdx0,2), src1=vc(sumIdx0,3), comment=f"sba0 feat 2/3 -> {typeStr}"))
+      module.add(VCvtPkF32to16(dst=vgpr(vPack+2), src0=vc(sumIdx1,0), src1=vc(sumIdx1,1), comment=f"sba1 feat 0/1 -> {typeStr}"))
+      module.add(VCvtPkF32to16(dst=vgpr(vPack+3), src0=vc(sumIdx1,2), src1=vc(sumIdx1,3), comment=f"sba1 feat 2/3 -> {typeStr}"))
+      module.add(SNop(waitState=0, comment=f"delay after pk_{typeStr}"))
+
+      # Shuffle 4 packed dwords across wave halves into 8 consecutive feature rows,
+      # overlapping the recv address arithmetic with the ds_bpermute latency window.
+      module.add(self._emitSubtilePackedPermute(vPack, vPermAddr, addrWhilePermuting=emitRecvAddr))
+
+      # permute assembles 8 consecutive feature rows per lane-group; coord0 only carries LG*4
+      # elements (LG*8 bytes), so add vLGDelta (LG*8 bytes) to reach the LG*16-byte block start,
+      # exactly as the local paired store does (§1.4 / _emit16bitSubtilePairedStore).
+      module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vRecvAddr), src1=vgpr(vLGDelta),
+                         comment="+ LG*8 bytes: permute -> 8 rows/lane-group; coord0 only has LG*4"))
+
+      # Feature is the stride-1 recv axis: 8 consecutive feature rows -> one dwordx4.
+      module.add(BufferStoreB128(
+        src=vgpr(vPack, 4),
+        vaddr=vgpr(vRecvAddr),
+        saddr=sgpr(recvSrd, 4),
+        soffset=0,
+        mubuf=MUBUFModifiers(offen=True, offset12=0, glc=isGlc, slc=isSlc, nt=isNT),
+        comment="recv dwordx4: 8 consecutive feature rows (device scope)"))
+    else:
+      # Runtime-dead 1-group fallback/orphan path (see assert note): the pairing invariant
+      # means this is never taken at run time, but the scaffolding still emits it, so it must
+      # assemble.  Pack this lane's 4 consecutive feature rows into 2 dwords -> one dwordx2,
+      # exactly the pre-upgrade shape (no permute).
+      module.addComment1(f"PUSH group coordOff0={coordOffset0} coordOff1={coordOffset1}: pack 4 feature rows -> dwordx2 (runtime-dead fallback)")
+      module.add(VCvtPkF32to16(dst=vgpr(vPack+0), src0=vc(sumIdx0,0), src1=vc(sumIdx0,1), comment=f"feat 0/1 -> {typeStr}"))
+      module.add(VCvtPkF32to16(dst=vgpr(vPack+1), src0=vc(sumIdx0,2), src1=vc(sumIdx0,3), comment=f"feat 2/3 -> {typeStr}"))
+      module.add(SNop(waitState=0, comment=f"delay after pk_{typeStr}"))
+      emitRecvAddr(module)
       module.add(BufferStoreB64(
-        src=vgpr(vPack + 0, 2),
+        src=vgpr(vPack+0, 2),
         vaddr=vgpr(vRecvAddr),
         saddr=sgpr(recvSrd, 4),
         soffset=0,
@@ -2737,7 +2784,6 @@ class GlobalWriteBatchWriter:
     module.add(SNop(waitState=0, comment="WAR: latch store src before next batch overwrites pack"))
 
     # Release temporaries.
-    kw.vgprPool.checkIn(vPack)
     kw.vgprPool.checkIn(vTmp)
     kw.vgprPool.checkIn(vFLocal)
     kw.vgprPool.checkIn(vRecvAddr)

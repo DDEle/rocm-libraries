@@ -2370,27 +2370,57 @@ class GlobalWriteBatchWriter:
       return vgpr("ValuC+" + str(idx))
 
     def emitRecvAddr(module):
-      """Compute the recv byte address into vRecvAddr.  Address公式与 dwordx2 版一致（决策4）：
-      起点用 groups[0]=sba0 的 coord。permute 后 8 连续 feature 起点 = coord0（已含 (lane/16)*4
-      的 LG 项，无需额外 vLGDelta）。Emitted directly for the len==1 fallback, or via the
-      permute latency window (addrWhilePermuting) for the len==2 fast path."""
-      # f_local = coord0 + coordOffset0 - shard_base
+      """BURST EXPERIMENT (throwaway, CORRECTNESS IGNORED): swap the lane roles so
+      16 consecutive lanes write 128 consecutive feature rows (one 256-byte burst)
+      and lane_group (lane//16, 0..3) drives 4 tokens (M128xN4 per dwordx4).  The
+      stored VALUES are wrong (the permuted vPack data no longer matches these
+      addresses), but every store stays in-bounds -> real xGMI traffic, identical
+      instruction count / dwordx4 width / byte volume as champion.  The only variable
+      is cross-lane spatial locality, so the W4 delta isolates the burst-coalescing
+      upper bound (handoff (A)/(B) fork).
+
+      Original geometry scatters: coord1 carries the raw lane%16 term -> adjacent
+      lanes differ by n_shard (2560 elem).  Here we strip the raw lane terms and
+      reassign the two axes:
+        feat_new  = (coord0 - shard_base) - LG*4 + Lt*8   # Lt -> 128 contiguous feat
+        token_new = (coord1 + coordOffset1) - Lt + LG     # LG -> 4 tokens (N4)
+      -LG*4 cancels coord0's raw lane-group term; -Lt cancels coord1's raw lane%16
+      term (see handoff §1.4).  Uses real slot/shard_base/n_shard so writes land in
+      the recv buffer.  A handful of corner lanes (my_rank 0, WG at shard start,
+      last token) can under/overshoot by <=120 elem; O(1e-5) of stores, BufferOOB
+      drops them safely, negligible for p50.  paired path drops +vLGDelta below."""
+      vLt = kw.vgprPool.checkOut(1, tag="burst_Lt")
+      vLG = kw.vgprPool.checkOut(1, tag="burst_LG")
+      module.add(VAndB32(dst=vgpr(vLt), src0=15, src1=vgpr("Serial"), comment="Lt = lane%16"))
+      module.add(VLShiftRightB32(dst=vgpr(vLG), shiftHex=4, src=vgpr("Serial"), comment="lane >> 4"))
+      module.add(VAndB32(dst=vgpr(vLG), src0=3, src1=vgpr(vLG), comment="LG = (lane>>4) & 3 (lane_group 0..3)"))
+
+      # feat_new = coord0 + coordOffset0 - shard_base - LG*4 + Lt*8
       if coordOffset0:
         module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset0, comment=f"coordOffset0={coordOffset0}"))
         module.add(VAddU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(tmpSgpr2), comment=f"feat_global = coord0 + {coordOffset0}"))
         module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=sgpr(shardBaseSgpr), comment="f_local = feat_global - shard_base"))
       else:
         module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(shardBaseSgpr), comment="f_local = coord0 - shard_base"))
-      # t = coord1 + coordOffset1 ; recvElemBase = slotElem + t*n_shard + f_local
+      module.add(VLShiftLeftB32(dst=vgpr(vTmp), shiftHex=2, src=vgpr(vLG), comment="LG*4 (raw coord0 lane-group term)"))
+      module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=vgpr(vTmp), comment="strip raw LG*4 from feature"))
+      module.add(VLShiftLeftB32(dst=vgpr(vTmp), shiftHex=3, src=vgpr(vLt), comment="Lt*8 (16 lanes -> 128 contiguous feat)"))
+      module.add(VAddU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=vgpr(vTmp), comment="feat_new = f_local - LG*4 + Lt*8"))
+
+      # token_new = coord1 + coordOffset1 - Lt + LG ; recvElem = slot + token_new*n_shard + feat_new
       if coordOffset1:
         module.add(SMovB32(dst=sgpr(tmpSgpr2), src=coordOffset1, comment=f"coordOffset1={coordOffset1}"))
         module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=sgpr(tmpSgpr2), comment=f"t = coord1 + {coordOffset1}"))
-        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr), comment="t * n_shard"))
+        module.add(VSubU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=vgpr(vLt), comment="strip raw Lt from token"))
       else:
-        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=sgpr(nShardSgpr), comment="t * n_shard"))
+        module.add(VSubU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=vgpr(vLt), comment="t = coord1 - Lt (strip raw Lt)"))
+      module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=vgpr(vLG), comment="token_new = t - Lt + LG"))
+      module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr), comment="token_new * n_shard"))
       module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(slotSgpr), comment="+ slotElem (my_rank*N_token*n_shard)"))
-      module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vTmp), src1=vgpr(vFLocal), comment="recvElemBase = slot + t*n_shard + f_local"))
-      module.add(VLShiftLeftB32(dst=vgpr(vRecvAddr), shiftHex=int(log2(bpe)), src=vgpr(vRecvAddr), comment="recv byte offset = recvElemBase * bpe"))
+      module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vTmp), src1=vgpr(vFLocal), comment="recvElem = slot + token_new*n_shard + feat_new"))
+      module.add(VLShiftLeftB32(dst=vgpr(vRecvAddr), shiftHex=int(log2(bpe)), src=vgpr(vRecvAddr), comment="recv byte offset = recvElem * bpe"))
+      kw.vgprPool.checkIn(vLt)
+      kw.vgprPool.checkIn(vLG)
 
     if paired:
       module.addComment1(f"PUSH sba-pair coordOff0={coordOffset0} coordOff1={coordOffset1}: pack 8 feature rows -> dwordx4")
@@ -2413,11 +2443,9 @@ class GlobalWriteBatchWriter:
       # overlapping the recv address arithmetic with the ds_bpermute latency window.
       module.add(self._emitSubtilePackedPermute(vPack, vPermAddr, addrWhilePermuting=emitRecvAddr))
 
-      # permute assembles 8 consecutive feature rows per lane-group; coord0 only carries LG*4
-      # elements (LG*8 bytes), so add vLGDelta (LG*8 bytes) to reach the LG*16-byte block start,
-      # exactly as the local paired store does (§1.4 / _emit16bitSubtilePairedStore).
-      module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vRecvAddr), src1=vgpr(vLGDelta),
-                         comment="+ LG*8 bytes: permute -> 8 rows/lane-group; coord0 only has LG*4"))
+      # BURST EXPERIMENT: no +vLGDelta.  The new geometry drives all 128 contiguous
+      # feature rows via Lt*8 in emitRecvAddr; the original LG feature correction is
+      # already stripped there (-LG*4), so adding it back would re-scatter the burst.
 
       # Feature is the stride-1 recv axis: 8 consecutive feature rows -> one dwordx4.
       module.add(BufferStoreB128(

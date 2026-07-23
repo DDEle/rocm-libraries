@@ -22,11 +22,12 @@
 
 from rocisa.code import Label, Module, RegSet, TextBlock
 from rocisa.container import SMEMModifiers, VOP3PModifiers, MUBUFModifiers, GLOBALModifiers, \
-  SDWAModifiers, replaceHolder, EXEC, VCC, vgpr, sgpr, ContinuousRegister, mgpr
+  SDWAModifiers, DSModifiers, replaceHolder, EXEC, VCC, vgpr, sgpr, ContinuousRegister, mgpr
 from rocisa.enum import CvtType, HighBitSel, RoundType, SaturateCastType, SelectBit, CacheScope
 from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, BufferWbl2, \
   GlobalAtomicAddU32, GlobalLoadB32, GlobalStoreB32, \
-  BufferAtomicCmpswapB64, BufferStoreB16, BufferStoreB32, BufferStoreB64, BufferStoreB128, DSBPermuteB32, FlatAtomicCmpswapB32, \
+  BufferAtomicCmpswapB64, BufferStoreB16, BufferStoreB32, BufferStoreB64, BufferStoreB128, \
+  DSBPermuteB32, DSStoreB64, DSLoadB128, FlatAtomicCmpswapB32, \
   SAddCU32, SAddU32, SAndB32, \
   SAndB64, SAtomicDec, SBarrier, SBranch, SCBranchExecNZ, SCBranchExecZ, \
   SCBranchSCC0, SCBranchSCC1, SCmpGtU32, SCmpKGtU32, SCSelectB32, SCmpEQI32, SCmpEQU32, SCmpGtI32, SCmpLeI32, SMinU32, SEndpgm, \
@@ -1682,7 +1683,23 @@ class GlobalWriteBatchWriter:
     vlcntTotalIssued = self.loadsBetaIssued + self.loadsEIssued + self.loadsGateIssued
     dscntTotalIssued = self.localLoadsBiasIssued + self.loadsScaleAVecIssued + self.loadsScaleBVecIssued + self.loadsScaleAlphaVecIssued
     waitCnter = [vlcntTotalIssued, dscntTotalIssued]
-    for elementIdx in range(0, len(self.batchElements)):
+
+    # fused-A2A LDS-repack PUSH store (burst-diagnosis direction C): replace the entire
+    # per-element PUSH store loop with a transpose-through-LDS burst store.  Only the
+    # hoisted PUSH pass takes this; the LOCAL pass and non-fused paths run the loop below.
+    fusedRepackMode = getattr(self.parentWriter.states, "fusedA2ADispatchMode", "BOTH")
+    useFusedRepack = (self.kernel["FusedGemmA2A"] and fusedRepackMode == "PUSH"
+                      and is16bitSubtile and not self.atomic
+                      and self.kernel["_GlobalAccumulation"] not in ("MultipleBufferSingleKernel", "MultipleBuffer"))
+    if useFusedRepack:
+      # Reuse the A/B double-buffer LDS as the transpose staging area.  A/B tiles are
+      # shared cross-wave, so a barrier after the last main-loop LDS read (and this batch's
+      # acc drain) is REQUIRED before any wave overwrites LDS (burst-diagnosis spec §6).
+      module.add(SWaitCnt(dscnt=0, comment="repack: drain main-loop A/B LDS reads"))
+      module.add(SBarrier(comment="repack: sync waves before reusing A/B LDS as transpose staging"))
+      module.add(self._emitFusedA2ARepackStore())
+
+    for elementIdx in ([] if useFusedRepack else range(0, len(self.batchElements))):
       element = self.batchElements[elementIdx]
       addrCalc: AddrCalculation = self.ss.elementAddr[elementIdx]
       addr = addrCalc.addrDVgpr
@@ -2793,6 +2810,261 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(recvSrd)
     kw.sgprPool.checkIn(nShardSgpr)
     kw.sgprPool.checkIn(myRankSgpr)
+    return module
+
+  # LDS staging geometry for the repack store (spec §3): one per-wave buffer holds a
+  # 128M x 16N tt1 block laid out in M-pack units (4 M = dwordx2 = 8 bytes).  The group
+  # stride is 34 (=32 data + 2 pad) dwordx2 slots for bank-conflict swizzling; the buffer
+  # spans 16 groups so its byte footprint is 16*34*8 = 4352, rounded to the next 8-byte
+  # multiple that clears the max in-buffer offset (541*8 = 4328).
+  _REPACK_GROUP_STRIDE = 34          # dwordx2 slots between M-pack groups (32 data + 2 pad)
+  _REPACK_BUF_BYTES    = 16 * 34 * 8  # per-wave LDS buffer size (bytes) = 4352
+
+  def _emitFusedA2ARepackStore(self) -> Module:
+    """Emit the LDS-repack PUSH store: transpose ValuC through LDS so recv stores burst.
+
+    First-version geometry validator (single tt1 serial, no pipeline, no VGPR reuse).
+    Replaces the whole per-element PUSH store loop for the champion 256x256 config.
+
+    Per wave (waves tile the macro-tile 2x2, no interleave -- see burst-diagnosis §2) the
+    tile is 128M x 128N split into 8 tt1 blocks of 128M x 16N.  For each tt1 block:
+
+      16 v_cvt_pk (2 f32 -> 1 dword)   pack this lane's 8 tt0 M-packs (4 M each) to bf16
+       8 ds_write dwordx2              scatter the 8 M-packs into the per-wave LDS buffer
+         s_waitcnt lgkm(0)            LDS writes must land before the transposed reads
+       4 ds_read  dwordx4             gather 8 consecutive M (2 M-packs) per lane, 4 N rows
+         s_waitcnt lgkm(0)            read data must be resident before the recv store
+       4 buffer_store dwordx4         256B feature-contiguous burst to recv[W,token,shard]
+
+    The ds_write / ds_read addresses live in the SAME LDS coordinate system (spec §3/§4);
+    the differing parameterization (write by tt0+writing-lane, read by r+reading-lane) is
+    exactly what performs the cross-lane M/N transpose.  The recv byte address is rebuilt
+    from the POST-transpose lane mapping (feat/token below), NOT from coord0/coord1 which
+    carry the pre-transpose lane semantics.
+
+    LDS is the A/B double-buffer region reused after the main loop drains (see caller's
+    pre-repack barrier).  Each wave owns a disjoint sub-region [wave_id*_REPACK_BUF_BYTES]
+    so the 4 concurrent waves never collide (v1 reuses one buffer per wave across all 8
+    tt1 blocks, serialized by the lgkm(0) waits).
+
+    Device scope only (plain buffer_store); the system-scope handshake is emitted
+    separately by _emitFusedA2AHandshake at the end of the store path.
+    """
+    kw = self.parentWriter
+    module = Module("fusedA2ARepackStore")
+
+    # --- champion-only guard: this repack layout is hard-wired to the 256x256 geometry.
+    # Anything outside champion (beta / activation / bias / scale / UseE / non-128 wave-M)
+    # must not silently take this path -- raise at codegen instead (handoff assert guard).
+    assert self.kernel["FusedGemmA2A"], "repack store is fused-A2A only"
+    assert self.kernel.get("UseSubtileImpl") and not self.edge, "repack store requires UseSubtileImpl non-edge"
+    assert self.kernel["BufferStore"], "repack store requires BufferStore"
+    assert self.kernel["WavefrontSize"] != 32, "repack store is wave64-only"
+    assert (self.kernel["ProblemType"]["DestDataType"].isBFloat16() or
+            self.kernel["ProblemType"]["DestDataType"].isHalf()), "repack store is 16bit-dest only"
+    assert self.kernel["ProblemType"]["HighPrecisionAccumulate"], "repack store requires HPA"
+    # NOTE: self.beta is a CODEGEN flag (champion yaml has UseBeta:True) but the fused-A2A
+    # PUSH branch never reads C at RUNTIME (runtime beta=0 for PUSH WGs) -- the existing
+    # _emitFusedA2APushStore stores ValuC directly in this same spot and champion passes.
+    # So beta is intentionally NOT asserted here; ValuC already carries alpha*acc.
+    assert not self.kernel["ActivationFuncCall"], "repack store: activation unsupported"
+    assert self.parentWriter.states.useBias == DataDirection.NONE, "repack store: bias unsupported"
+    assert not self.kernel["ProblemType"].get("UseScaleAlphaVec", 0), "repack store: scaleAlphaVec unsupported"
+    assert not self.kernel["ProblemType"].get("UseScaleAB", 0) and \
+           not self.kernel["ProblemType"].get("UseScaleCD", 0), "repack store: scaleAB/CD unsupported"
+    assert not self.kernel["ProblemType"]["UseE"], "repack store: UseE unsupported"
+    # Per-wave M == 128 is the load-bearing invariant: the whole layout (128M burst,
+    # 16 M-pack groups, tt0*2 group index) depends on it (spec §"codegen 硬前提").
+    waveM = self.kernel["MIWaveTile"][0] * self.kernel["MatrixInstM"]
+    assert waveM == 128, f"repack store requires per-wave M == 128, got {waveM}"
+
+    WS       = self.kernel["WavefrontSize"]
+    MT0      = self.kernel["MacroTile0"]
+    MT1      = self.kernel["MacroTile1"]
+    bpe      = kw.states.bpeCexternalGSU1     # 16bit dest == 2
+    prefixOffset = kw.states.c.startVgprValu
+    isFp16   = self.kernel["ProblemType"]["DestDataType"].isHalf()
+    VCvtPkF32to16 = VCvtPkF32toFP16 if isFp16 else VCvtPkF32toBF16
+    typeStr  = "fp16" if isFp16 else "bf16"
+
+    ntd   = self.kernel["NonTemporalD"]
+    isGlc = bool(ntd & 0x1)
+    isSlc = bool(ntd & 0x2)
+    isNT  = bool(ntd & 0x4)
+
+    # --- group the batch's store elements by tt1 (N wave-block), ordered by tt0 (M-tile).
+    # element = (tt1, tt0, vc1, vc0); ValuC source order == element order (store mechanism
+    # §2: element traversal and accToArchMapper are the same axis order, so no acc->ValuC
+    # permutation is needed -- reuse the champion consumption order directly).
+    groupsByTt1 = {}
+    for ei, elem in enumerate(self.batchElements):
+      groupsByTt1.setdefault(elem[0], []).append((elem[1], self.ss.elementSumIdx[ei]))
+    numTt0 = self.kernel["MIWaveTile"][0]
+    for tt1v, entries in groupsByTt1.items():
+      entries.sort(key=lambda e: e[0])
+      assert [tt0 for tt0, _ in entries] == list(range(numTt0)), \
+        f"repack store expects tt0 0..{numTt0-1} for tt1={tt1v}, got {[t for t,_ in entries]}"
+
+    module.addComment1(f"fused-A2A LDS-repack PUSH store -> recv[W,token,n_shard] ({typeStr}, device scope)")
+
+    # --- kernarg reads: my_rank + n_shard (same contract as _emitFusedA2APushStore) ---
+    myRankSgpr = kw.sgprPool.checkOut(1, tag="repack_myRank", preventOverflow=False)
+    nShardSgpr = kw.sgprPool.checkOut(1, tag="repack_nShard", preventOverflow=False)
+    from .Signature import fusedA2AKernArgLayout
+    layout = fusedA2AKernArgLayout()
+    fusedBase = kw.states.fusedA2AKernArgBase
+    module.add(kw.argLoader.loadKernArg(myRankSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedMyRank"]), dword=1))
+    module.add(kw.argLoader.loadKernArg(nShardSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedNShard"]), dword=1))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank / FusedNShard"))
+
+    # --- switch-load recv_ptr[dst_rank] + shard_base (dst_rank*n_shard) ---
+    recvSrd = kw.sgprPool.checkOutAligned(4, 4, tag="repack_recvSrd", preventOverflow=False)
+    shardBaseSgpr = kw.sgprPool.checkOut(1, tag="repack_shardBase", preventOverflow=False)
+    tmpSgpr2 = kw.sgprPool.checkOut(2, tag="repack_switchTmp", preventOverflow=False)
+    self._fusedA2ALoadRecvBase(module, recvSrd, shardBaseSgpr, nShardSgpr, tmpSgpr2)
+
+    # slotElem = my_rank * N_token * n_shard  (recv[my_rank] slot base, in elements).
+    slotSgpr = kw.sgprPool.checkOut(1, tag="repack_slot", preventOverflow=False)
+    module.add(SMulI32(dst=sgpr(slotSgpr), src0=sgpr(myRankSgpr), src1=sgpr("SizeJ"),
+                       comment="my_rank * N_token"))
+    module.add(SMulI32(dst=sgpr(slotSgpr), src0=sgpr(slotSgpr), src1=sgpr(nShardSgpr),
+                       comment="slotElem = my_rank * N_token * n_shard"))
+    module.add(SMovB32(dst=sgpr(recvSrd + 2), src="BufferOOB", comment="recv SRD num_records"))
+    module.add(SMovB32(dst=sgpr(recvSrd + 3), src="Srd127_96", comment="recv SRD config"))
+    # WG-tile feature/token bases (element units): feat += WG0*MT0, token += WG1*MT1.
+    wgFeatSgpr = kw.sgprPool.checkOut(1, tag="repack_wgFeat", preventOverflow=False)
+    wgTokSgpr  = kw.sgprPool.checkOut(1, tag="repack_wgTok", preventOverflow=False)
+    module.add(SMulI32(dst=sgpr(wgFeatSgpr), src0=sgpr("WorkGroup0"), src1=MT0,
+                       comment="feat WG base = WorkGroup0 * MT0"))
+    module.add(SMulI32(dst=sgpr(wgTokSgpr), src0=sgpr("WorkGroup1"), src1=MT1,
+                       comment="token WG base = WorkGroup1 * MT1"))
+    s34 = kw.sgprPool.checkOut(1, tag="repack_c34", preventOverflow=False)
+    sBuf = kw.sgprPool.checkOut(1, tag="repack_cbuf", preventOverflow=False)
+    module.add(SMovB32(dst=sgpr(s34), src=self._REPACK_GROUP_STRIDE, comment="LDS group stride 34"))
+    module.add(SMovB32(dst=sgpr(sBuf), src=self._REPACK_BUF_BYTES, comment="per-wave LDS buffer bytes"))
+
+    # --- lane-derived VGPRs (all independent of tt1/r: computed once) ---
+    vL        = kw.vgprPool.checkOut(1, tag="repack_L")        # lane in wave = Serial & (WS-1)
+    vWave     = kw.vgprPool.checkOut(1, tag="repack_wave")     # wave_id = Serial >> log2(WS)
+    vWaveBase = kw.vgprPool.checkOut(1, tag="repack_waveBase") # wave_id * buffer bytes (LDS)
+    vFeat     = kw.vgprPool.checkOut(1, tag="repack_feat")     # feat (M) element index
+    vFLocal   = kw.vgprPool.checkOut(1, tag="repack_fLocal")   # feat - shard_base
+    vTokBase  = kw.vgprPool.checkOut(1, tag="repack_tokBase")  # token base (WG+wave+lane, no tt1/r)
+    vWrBase   = kw.vgprPool.checkOut(1, tag="repack_wrBase")   # LDS ds_write base addr (bytes)
+    vRdBase   = kw.vgprPool.checkOut(1, tag="repack_rdBase")   # LDS ds_read base addr (bytes)
+    vTmp      = kw.vgprPool.checkOut(1, tag="repack_tmp")
+    vTmp2     = kw.vgprPool.checkOut(1, tag="repack_tmp2")
+
+    module.add(VAndB32(dst=vgpr(vL), src0=WS - 1, src1=vgpr("Serial"), comment="L = Serial & (WS-1)"))
+    module.add(VLShiftRightB32(dst=vgpr(vWave), shiftHex=int(log2(WS)), src=vgpr("Serial"), comment="wave_id = Serial >> log2(WS)"))
+    module.add(VMulLOU32(dst=vgpr(vWaveBase), src0=vgpr(vWave), src1=sgpr(sBuf), comment="LDS wave base = wave_id * buf_bytes"))
+
+    def mul34(dst, src):
+      # dst = src * 34 = (src<<5) + (src<<1)
+      module.add(VLShiftLeftB32(dst=vgpr(vTmp2), shiftHex=5, src=vgpr(src), comment="*32"))
+      module.add(VLShiftLeftB32(dst=vgpr(dst), shiftHex=1, src=vgpr(src), comment="*2"))
+      module.add(VAddU32(dst=vgpr(dst), src0=vgpr(dst), src1=vgpr(vTmp2), comment="*34"))
+
+    # feat (M) = WG0*MT0 + (wave&1)*128 + (L&15)*8
+    module.add(VAndB32(dst=vgpr(vTmp), src0=15, src1=vgpr(vL), comment="L & 15"))
+    module.add(VLShiftLeftB32(dst=vgpr(vFeat), shiftHex=3, src=vgpr(vTmp), comment="(L&15)*8"))
+    module.add(VAndB32(dst=vgpr(vTmp), src0=1, src1=vgpr(vWave), comment="wave & 1"))
+    module.add(VLShiftLeftB32(dst=vgpr(vTmp), shiftHex=7, src=vgpr(vTmp), comment="(wave&1)*128"))
+    module.add(VAddU32(dst=vgpr(vFeat), src0=vgpr(vFeat), src1=vgpr(vTmp), comment="+ (wave&1)*128"))
+    module.add(VAddU32(dst=vgpr(vFeat), src0=vgpr(vFeat), src1=sgpr(wgFeatSgpr), comment="+ WG0*MT0"))
+    module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(vFeat), src1=sgpr(shardBaseSgpr), comment="f_local = feat - shard_base"))
+
+    # token base = WG1*MT1 + (wave>>1)*128 + (L>>4)   (tt1*16 + r*4 added per store)
+    module.add(VLShiftRightB32(dst=vgpr(vTokBase), shiftHex=4, src=vgpr(vL), comment="L >> 4"))
+    module.add(VLShiftRightB32(dst=vgpr(vTmp), shiftHex=1, src=vgpr(vWave), comment="wave >> 1"))
+    module.add(VLShiftLeftB32(dst=vgpr(vTmp), shiftHex=7, src=vgpr(vTmp), comment="(wave>>1)*128"))
+    module.add(VAddU32(dst=vgpr(vTokBase), src0=vgpr(vTokBase), src1=vgpr(vTmp), comment="+ (wave>>1)*128"))
+    module.add(VAddU32(dst=vgpr(vTokBase), src0=vgpr(vTokBase), src1=sgpr(wgTokSgpr), comment="+ WG1*MT1"))
+
+    # LDS ds_write base (bytes) = waveBase + ( (L&15)*2 + ((L>>4)&1) + (L>>5)*34 ) * 8
+    module.add(VAndB32(dst=vgpr(vTmp), src0=15, src1=vgpr(vL), comment="L & 15"))
+    module.add(VLShiftLeftB32(dst=vgpr(vWrBase), shiftHex=1, src=vgpr(vTmp), comment="(L&15)*2"))
+    module.add(VLShiftRightB32(dst=vgpr(vTmp), shiftHex=4, src=vgpr(vL), comment="L >> 4"))
+    module.add(VAndB32(dst=vgpr(vTmp), src0=1, src1=vgpr(vTmp), comment="(L>>4)&1"))
+    module.add(VAddU32(dst=vgpr(vWrBase), src0=vgpr(vWrBase), src1=vgpr(vTmp), comment="+ (L>>4)&1"))
+    module.add(VLShiftRightB32(dst=vgpr(vTmp), shiftHex=5, src=vgpr(vL), comment="L >> 5"))
+    mul34(vTmp, vTmp)
+    module.add(VAddU32(dst=vgpr(vWrBase), src0=vgpr(vWrBase), src1=vgpr(vTmp), comment="+ (L>>5)*34"))
+    module.add(VLShiftLeftB32(dst=vgpr(vWrBase), shiftHex=3, src=vgpr(vWrBase), comment="* 8 bytes (M-pack unit)"))
+    module.add(VAddU32(dst=vgpr(vWrBase), src0=vgpr(vWrBase), src1=vgpr(vWaveBase), comment="+ per-wave LDS base"))
+
+    # LDS ds_read base (bytes) = waveBase + ( (L>>4)*2 + (L&15)*34 ) * 8
+    module.add(VLShiftRightB32(dst=vgpr(vTmp), shiftHex=4, src=vgpr(vL), comment="L >> 4"))
+    module.add(VLShiftLeftB32(dst=vgpr(vRdBase), shiftHex=1, src=vgpr(vTmp), comment="(L>>4)*2"))
+    module.add(VAndB32(dst=vgpr(vTmp), src0=15, src1=vgpr(vL), comment="L & 15 (block)"))
+    mul34(vTmp, vTmp)
+    module.add(VAddU32(dst=vgpr(vRdBase), src0=vgpr(vRdBase), src1=vgpr(vTmp), comment="+ block*34"))
+    module.add(VLShiftLeftB32(dst=vgpr(vRdBase), shiftHex=3, src=vgpr(vRdBase), comment="* 8 bytes (M-pack unit)"))
+    module.add(VAddU32(dst=vgpr(vRdBase), src0=vgpr(vRdBase), src1=vgpr(vWaveBase), comment="+ per-wave LDS base"))
+
+    # Setup-only lane scratch (vL/vWave/vWaveBase/vFeat/vTmp2) is fully folded into the
+    # bases computed above; release it before the tt1 loop so it does not stack on top of
+    # the per-tt1 read register.  This is a HARD ArchVGPR-budget constraint (not occupancy):
+    # gfx950 splits 512 VGPRs into ArchVGPR<=256 + AGPR<=256, and neither block may exceed
+    # 256.  champion is occ=1 (WG 256x256 / wave 128x128) with MIArchVgpr=false, so acc lives
+    # in AGPR and every repack register lands in ArchVGPR; a liberal checkout pushed ArchVGPR
+    # to 268 (>256) -> errorCode=4.  Live into the loop: vFLocal, vTokBase, vWrBase, vRdBase, vTmp.
+    for v in (vTmp2, vFeat, vWaveBase, vWave, vL):
+      kw.vgprPool.checkIn(v)
+
+    vPack = self.cvtVgprStruct.vgprBf16Temp   # +0..+1: dwordx2 pack scratch (2-aligned)
+    def vc(sumIdx, vi):
+      return vgpr("ValuC+" + str(sumIdx + vi - prefixOffset))
+
+    for tt1v in sorted(groupsByTt1.keys()):
+      entries = groupsByTt1[tt1v]  # [(tt0, sumIdx)] sorted by tt0
+      module.addComment1(f"repack tt1={tt1v}: 16 pk -> 8 ds_write dwordx2 -> 4x(ds_read dwordx4 + burst store)")
+
+      # 16 pk_cvt + 8 ds_write dwordx2 (interleaved: pack 2 -> store 1 M-pack per tt0).
+      for (tt0v, sumIdx) in entries:
+        module.add(VCvtPkF32to16(dst=vgpr(vPack+0), src0=vc(sumIdx, 0), src1=vc(sumIdx, 1), comment=f"tt0={tt0v} feat 0/1 -> {typeStr}"))
+        module.add(VCvtPkF32to16(dst=vgpr(vPack+1), src0=vc(sumIdx, 2), src1=vc(sumIdx, 3), comment=f"tt0={tt0v} feat 2/3 -> {typeStr}"))
+        wrOff = tt0v * 2 * self._REPACK_GROUP_STRIDE * 8   # tt0 term of off_write, in bytes
+        module.add(DSStoreB64(dstAddr=vgpr(vWrBase), src=vgpr(vPack, 2),
+                              ds=DSModifiers(offset=wrOff),
+                              comment=f"ds_write M-pack (x>>1 += tt0*2={tt0v*2})"))
+      module.add(SWaitCnt(dscnt=0, comment="LDS writes land before transposed reads"))
+
+      # 4x (ds_read dwordx4 -> burst store), reusing one dwordx4 register group (r=0..3).
+      # v1 serializes read/store per r to cap VGPR pressure; the pipelined 2-reg version
+      # is spec §5 step 2.  Each read gathers 8 consecutive M (2 M-packs) at one N row;
+      # each store is a 256B feature-contiguous burst to recv[W,token,shard].
+      vRead = kw.vgprPool.checkOutAligned(4, 4, tag="repack_read")
+      for r in range(4):
+        rdOff = r * 4 * 2 * 8   # y = r*4 -> (y*2)*8 bytes = r*64
+        module.add(DSLoadB128(dst=vgpr(vRead, 4), src=vgpr(vRdBase),
+                              ds=DSModifiers(offset=rdOff),
+                              comment=f"ds_read r={r}: 8 consecutive M @ N-row (y=r*4+(L>>4))"))
+        module.add(SWaitCnt(dscnt=0, comment="read data resident before recv store"))
+        tokConst = tt1v * 16 + r * 4
+        # VOP2 v_add_u32: literal must be src0 (src1 must be a VGPR); operand order swapped.
+        module.add(VAddU32(dst=vgpr(vTmp), src0=tokConst, src1=vgpr(vTokBase), comment=f"token = base + tt1*16 + r*4 ({tokConst})"))
+        module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr), comment="token * n_shard"))
+        module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(slotSgpr), comment="+ slotElem"))
+        module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=vgpr(vFLocal), comment="recvElem = slot + token*n_shard + f_local"))
+        module.add(VLShiftLeftB32(dst=vgpr(vTmp), shiftHex=int(log2(bpe)), src=vgpr(vTmp), comment="recv byte offset = recvElem * bpe"))
+        module.add(BufferStoreB128(
+          src=vgpr(vRead, 4),
+          vaddr=vgpr(vTmp),
+          saddr=sgpr(recvSrd, 4),
+          soffset=0,
+          mubuf=MUBUFModifiers(offen=True, offset12=0, glc=isGlc, slc=isSlc, nt=isNT),
+          comment=f"recv dwordx4 burst: 8 feature rows, r={r} (device scope)"))
+        module.add(SWaitCnt(vscnt=0, comment="drain burst before reusing read reg / LDS buffer"))
+      kw.vgprPool.checkIn(vRead)
+
+    # Release remaining temporaries.
+    for v in (vTmp, vRdBase, vWrBase, vTokBase, vFLocal):
+      kw.vgprPool.checkIn(v)
+    for s in (sBuf, s34, wgTokSgpr, wgFeatSgpr, slotSgpr, tmpSgpr2, shardBaseSgpr, recvSrd, nShardSgpr, myRankSgpr):
+      kw.sgprPool.checkIn(s)
     return module
 
   def _fusedA2ALoadFlagBaseAndRank(self, module, flagBaseSgpr, dstRankSgpr, nShardSgpr, tmpSgpr):

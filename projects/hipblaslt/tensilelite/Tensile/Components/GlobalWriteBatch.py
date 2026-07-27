@@ -22,14 +22,14 @@
 
 from rocisa.code import Label, Module, RegSet, TextBlock
 from rocisa.container import SMEMModifiers, VOP3PModifiers, MUBUFModifiers, GLOBALModifiers, \
-  SDWAModifiers, DSModifiers, replaceHolder, EXEC, VCC, vgpr, sgpr, ContinuousRegister, mgpr
+  SDWAModifiers, DSModifiers, replaceHolder, EXEC, VCC, vgpr, sgpr, accvgpr, ContinuousRegister, mgpr
 from rocisa.enum import CvtType, HighBitSel, RoundType, SaturateCastType, SelectBit, CacheScope
 from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, BufferWbl2, \
   GlobalAtomicAddU32, GlobalLoadB32, GlobalStoreB32, \
   BufferAtomicCmpswapB64, BufferStoreB16, BufferStoreB32, BufferStoreB64, BufferStoreB128, \
-  DSBPermuteB32, DSStoreB64, DSLoadB128, FlatAtomicCmpswapB32, \
+  DSBPermuteB32, DSStoreB64, DSLoadB128, VAccvgprReadB32, FlatAtomicCmpswapB32, \
   SAddCU32, SAddU32, SAndB32, \
-  SAndB64, SAtomicDec, SBarrier, SBranch, SCBranchExecNZ, SCBranchExecZ, \
+  SAndB64, SAtomicDec, SAtomicInc, SBarrier, SBranch, SCBranchExecNZ, SCBranchExecZ, \
   SCBranchSCC0, SCBranchSCC1, SCmpGtU32, SCmpKGtU32, SCSelectB32, SCmpEQI32, SCmpEQU32, SCmpGtI32, SCmpLeI32, SMinU32, SEndpgm, \
   SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SLShiftRightB64, SMovB32, SMovB64, SMulI32, \
   SNop, SOrB32, SOrB64, SOrSaveExecB32, SOrSaveExecB64, SSleep, SSubI32, SSubU32, \
@@ -183,6 +183,22 @@ class GlobalWriteBatchWriter:
       (not self.kernel["WorkGroupReduction"]) and \
       self.kernel["ProblemType"]["BiasSrc"] == "D":
       self.storeBiasD = 1
+
+  @property
+  def fusedRepackActive(self) -> bool:
+    """True when this emit() should replace the per-element PUSH store with the LDS-repack
+    store (_emitFusedA2ARepackStore).  Only the hoisted PUSH pass of a non-edge 16bit-subtile
+    HPA wave64 fused-A2A kernel; the LOCAL pass and all non-fused paths run the normal loop.
+    When active the repack streams its own acc->VGPR drain, so the batch acc-drain pass and
+    per-element ValuC use are skipped for this pass."""
+    mode = getattr(self.parentWriter.states, "fusedA2ADispatchMode", "BOTH")
+    return (self.kernel["FusedGemmA2A"] and mode == "PUSH"
+            and self.kernel.get("UseSubtileImpl") and not self.edge and not self.atomic
+            and self.kernel["_GlobalAccumulation"] not in ("MultipleBufferSingleKernel", "MultipleBuffer")
+            and (self.kernel["ProblemType"]["DestDataType"].isBFloat16() or
+                 self.kernel["ProblemType"]["DestDataType"].isHalf())
+            and self.kernel["ProblemType"]["HighPrecisionAccumulate"]
+            and self.kernel["WavefrontSize"] != 32)
 
   @property
   def needsAccumToDestConversion(self) -> bool:
@@ -812,7 +828,13 @@ class GlobalWriteBatchWriter:
     # banner is moved into the CLS header block below (after sgpr setup, before
     # the CLS label) so the per-iter store body is visually a single labelled
     # unit.
-    if self.kernel["_GlobalAccumulation"] != "MultipleBufferSingleKernel":
+    # fusedRepackActive streams its own acc drain + computes its own addresses, so it needs
+    # NO per-element ValuC/addr checkout.  Skipping setupStore here is what keeps ArchVGPR low
+    # at 1-batch (the 64-element ValuC checkout is exactly what overflowed).  elementAddr /
+    # elementSumIdx stay empty; the alpha pass and _epilog element loop are guarded to match.
+    if self.fusedRepackActive:
+      pass
+    elif self.kernel["_GlobalAccumulation"] != "MultipleBufferSingleKernel":
       self.ss.setupStoreElementsForBatch(self.kernel, self.gwvw, self.batchElements, self.batchElementSgprs, isOptNLL=False, factorDim=self.factorDim)
     else:
       self.ss.setupStoreElementsForBatch(self.kernel, self.gwvw, self.batchElements, self.batchElementSgprs, isOptNLL=True, factorDim=self.factorDim)
@@ -842,8 +864,9 @@ class GlobalWriteBatchWriter:
       module.add(self.parentWriter.getBomb()) # should not get here
 
     ########################################
-    # rC *= alpha
-    if not self.kernel["InterleaveAlpha"] and self.applyAlpha and self.parentWriter.alphaBeforeLoadC:
+    # rC *= alpha  (skipped for fusedRepackActive: alpha is applied inline per M-pack in the
+    # streaming drain, and elementSumIdx is empty here so this pass would index-error anyway)
+    if not self.kernel["InterleaveAlpha"] and self.applyAlpha and self.parentWriter.alphaBeforeLoadC and not self.fusedRepackActive:
       module.addComment1("rC *= alpha batchElements=%s"%self.batchElements)
       if self.codeMulAlpha is None:
         elementIdx = 0
@@ -919,7 +942,13 @@ class GlobalWriteBatchWriter:
     else:
       bufferOOB = None
 
-    for elementIdx, element in enumerate(self.batchElements):
+    # fusedRepackActive computes its own recv addresses and loads no C/E/bias, so the
+    # per-element D/C/E address-setup + input-load loop is skipped (elementAddr is empty).
+    # sumIdxGSUSYNC / addrCalc are consumed by the GSU prolog below; bind safe defaults
+    # since the loop that would set them is skipped (GSU=1 non-MBSK -> prolog is a no-op).
+    sumIdxGSUSYNC = 0
+    addrCalc = None
+    for elementIdx, element in ([] if self.fusedRepackActive else enumerate(self.batchElements)):
       addrCalc: AddrCalculation = self.ss.elementAddr[elementIdx]
       addrCVgpr    = addrCalc.addrCVgpr
       addrDVgpr    = addrCalc.addrDVgpr
@@ -1107,7 +1136,11 @@ class GlobalWriteBatchWriter:
 
     ########################################
     # AccVgpr read
-    if self.codeAccVgprRead is not None and (self.kernel["LocalSplitU"] == 1 or self.kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel"):
+    # fusedRepackActive streams its own acc->VGPR drain (per-M-pack, reused temps) inside
+    # _emitFusedA2ARepackStore, so skip the batch drain pass here (which would materialize all
+    # ValuC and blow ArchVGPR at 1-batch).  The codeAccVgprRead queue is left unconsumed;
+    # the repack builds VAccvgprReadB32 directly from the acc index formula (Q4a).
+    if self.codeAccVgprRead is not None and not self.fusedRepackActive and (self.kernel["LocalSplitU"] == 1 or self.kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel"):
       regsPerScalar = self.parentWriter.states.bpeCinternal // self.parentWriter.states.bpr # register per scalar
       #TODOBS: Need to change this, for LSU>1 + subtile impl case
       if self.kernel["MIArchVgpr"] and self.kernel["LocalSplitU"] > 1:
@@ -1180,8 +1213,8 @@ class GlobalWriteBatchWriter:
                                                    self.batchIdx, self.ss, self.gwvw, self.batchElements, \
                                                    self.beta, self.edge, sumIdxGSUSYNC, addrCalc))
 
-    # rC *= alpha
-    if not self.kernel["InterleaveAlpha"] and self.applyAlpha and not self.parentWriter.alphaBeforeLoadC:
+    # rC *= alpha  (skipped for fusedRepackActive: applied inline in the streaming drain)
+    if not self.kernel["InterleaveAlpha"] and self.applyAlpha and not self.parentWriter.alphaBeforeLoadC and not self.fusedRepackActive:
       module.addComment1("rC *= alpha batchElements=%s"%self.batchElements)
       if self.codeMulAlpha is None:
         elementIdx = 0
@@ -1204,6 +1237,10 @@ class GlobalWriteBatchWriter:
               module.add(rh)
 
   def _epilog(self, module: Module):
+    # fusedRepackActive skipped setupStore, so elementAddr/elementSumIdx are empty and there
+    # is nothing per-element to return to the pool (the repack manages its own temps).
+    if self.fusedRepackActive:
+      return
     # return registers to pool:
     lastDataD       = -1
     lastDataE       = -1
@@ -1304,7 +1341,8 @@ class GlobalWriteBatchWriter:
     # edge has v_cndmask so loads or stores may not issue, hard to track vmcnt:
     interleaveStoreVmcnt = self.parentWriter.states.interleaveStoreVmcnt and not self.edge
 
-    for elementIdx in range(len(self.batchElements)):
+    # debug force-value loop reads elementSumIdx; skip for repack (empty, debug-only anyway)
+    for elementIdx in ([] if self.fusedRepackActive else range(len(self.batchElements))):
       for vi in range(self.gwvw):
         sumIdxV = self.ss.elementSumIdx[elementIdx] + vi
         newSumIdxV = sumIdxV - self.parentWriter.states.c.startVgprValu
@@ -1419,10 +1457,7 @@ class GlobalWriteBatchWriter:
     # fused-A2A LDS-repack PUSH store (burst-diagnosis direction C): replace the entire
     # per-element PUSH store loop with a transpose-through-LDS burst store.  Only the
     # hoisted PUSH pass takes this; the LOCAL pass and non-fused paths run the loop below.
-    fusedRepackMode = getattr(self.parentWriter.states, "fusedA2ADispatchMode", "BOTH")
-    useFusedRepack = (self.kernel["FusedGemmA2A"] and fusedRepackMode == "PUSH"
-                      and is16bitSubtile and not self.atomic
-                      and self.kernel["_GlobalAccumulation"] not in ("MultipleBufferSingleKernel", "MultipleBuffer"))
+    useFusedRepack = self.fusedRepackActive
     if useFusedRepack:
       # Reuse the A/B double-buffer LDS as the transpose staging area.  A/B tiles are
       # shared cross-wave, so a barrier after the last main-loop LDS read (and this batch's
@@ -2483,6 +2518,7 @@ class GlobalWriteBatchWriter:
   # multiple that clears the max in-buffer offset (541*8 = 4328).
   _REPACK_GROUP_STRIDE = 34          # dwordx2 slots between M-pack groups (32 data + 2 pad)
   _REPACK_BUF_BYTES    = 16 * 34 * 8  # per-wave LDS buffer size (bytes) = 4352
+  _REPACK_NUM_LDS_BUF  = 3            # tt1-inter pipeline: 3 rotating LDS buffers (tt1%3)
 
   def _emitFusedA2ARepackStore(self) -> Module:
     """Emit the LDS-repack PUSH store: transpose ValuC through LDS so recv stores burst.
@@ -2546,7 +2582,6 @@ class GlobalWriteBatchWriter:
     MT0      = self.kernel["MacroTile0"]
     MT1      = self.kernel["MacroTile1"]
     bpe      = kw.states.bpeCexternalGSU1     # 16bit dest == 2
-    prefixOffset = kw.states.c.startVgprValu
     isFp16   = self.kernel["ProblemType"]["DestDataType"].isHalf()
     VCvtPkF32to16 = VCvtPkF32toFP16 if isFp16 else VCvtPkF32toBF16
     typeStr  = "fp16" if isFp16 else "bf16"
@@ -2556,18 +2591,18 @@ class GlobalWriteBatchWriter:
     isSlc = bool(ntd & 0x2)
     isNT  = bool(ntd & 0x4)
 
-    # --- group the batch's store elements by tt1 (N wave-block), ordered by tt0 (M-tile).
-    # element = (tt1, tt0, vc1, vc0); ValuC source order == element order (store mechanism
-    # §2: element traversal and accToArchMapper are the same axis order, so no acc->ValuC
-    # permutation is needed -- reuse the champion consumption order directly).
-    groupsByTt1 = {}
-    for ei, elem in enumerate(self.batchElements):
-      groupsByTt1.setdefault(elem[0], []).append((elem[1], self.ss.elementSumIdx[ei]))
+    # --- group the batch's store elements by tt1 (N wave-block); record the tt0 (M-tile)
+    # set present per tt1.  Streaming drain (below) sources acc DIRECTLY by the (tt1,tt0)
+    # formula accBase=(tt1*MIWaveTile[0]+tt0)*4 (acc->element is identity for champion,
+    # .s-verified: ValuC+16<-acc0), so we do NOT need elementSumIdx / pre-drained ValuC.
+    # element = (tt1, tt0, vc1, vc0).
     numTt0 = self.kernel["MIWaveTile"][0]
-    for tt1v, entries in groupsByTt1.items():
-      entries.sort(key=lambda e: e[0])
-      assert [tt0 for tt0, _ in entries] == list(range(numTt0)), \
-        f"repack store expects tt0 0..{numTt0-1} for tt1={tt1v}, got {[t for t,_ in entries]}"
+    groupsByTt1 = {}
+    for elem in self.batchElements:
+      groupsByTt1.setdefault(elem[0], set()).add(elem[1])
+    for tt1v, tt0set in groupsByTt1.items():
+      assert sorted(tt0set) == list(range(numTt0)), \
+        f"repack store expects tt0 0..{numTt0-1} for tt1={tt1v}, got {sorted(tt0set)}"
 
     module.addComment1(f"fused-A2A LDS-repack PUSH store -> recv[W,token,n_shard] ({typeStr}, device scope)")
 
@@ -2606,8 +2641,12 @@ class GlobalWriteBatchWriter:
                        comment="token WG base = WorkGroup1 * MT1"))
     s34 = kw.sgprPool.checkOut(1, tag="repack_c34", preventOverflow=False)
     sBuf = kw.sgprPool.checkOut(1, tag="repack_cbuf", preventOverflow=False)
+    # 3-buffer rotation (tt1%3) for the tt1-inter pipeline; wave stride spans all 3 buffers
+    # so the 4 concurrent waves never collide.  Per-wave footprint = 3*4352 = 13056 B; the
+    # individual buffer offset (b*_REPACK_BUF_BYTES) is folded into each ds op's DS offset.
     module.add(SMovB32(dst=sgpr(s34), src=self._REPACK_GROUP_STRIDE, comment="LDS group stride 34"))
-    module.add(SMovB32(dst=sgpr(sBuf), src=self._REPACK_BUF_BYTES, comment="per-wave LDS buffer bytes"))
+    module.add(SMovB32(dst=sgpr(sBuf), src=self._REPACK_NUM_LDS_BUF * self._REPACK_BUF_BYTES,
+                       comment="per-wave LDS span = 3 buffers * buf_bytes"))
 
     # --- lane-derived VGPRs (all independent of tt1/r: computed once) ---
     vL        = kw.vgprPool.checkOut(1, tag="repack_L")        # lane in wave = Serial & (WS-1)
@@ -2678,56 +2717,163 @@ class GlobalWriteBatchWriter:
     for v in (vTmp2, vFeat, vWaveBase, vWave, vL):
       kw.vgprPool.checkIn(v)
 
-    vPack = self.cvtVgprStruct.vgprBf16Temp   # +0..+1: dwordx2 pack scratch (2-aligned)
-    def vc(sumIdx, vi):
-      return vgpr("ValuC+" + str(sumIdx + vi - prefixOffset))
+    # Streaming-drain + pack scratch.  Sized for the widest r-slot: beat 0 packs 4 tt0 per
+    # slot (16 tt0 / 4 slots), steady beats pack 2.  Independent checkout (not the shared cvt
+    # bf16 temp) so up to 4 M-packs can be in flight.  Both land far below the main-loop
+    # ArchVGPR high-water mark, so their width does not raise next_free_vgpr.
+    MAX_TT0_PER_SLOT = 4
+    vAcc  = kw.vgprPool.checkOutAligned(MAX_TT0_PER_SLOT * 4, 2, tag="repack_accTmp")  # 4 f32/tt0
+    vPack = kw.vgprPool.checkOutAligned(MAX_TT0_PER_SLOT * 2, 2, tag="repack_pack")    # 2 dword/tt0
 
-    for tt1v in sorted(groupsByTt1.keys()):
-      entries = groupsByTt1[tt1v]  # [(tt0, sumIdx)] sorted by tt0
-      module.addComment1(f"repack tt1={tt1v}: 16 pk -> 8 ds_write dwordx2 -> 4x(ds_read dwordx4 + burst store)")
+    tt1s = sorted(groupsByTt1.keys())        # 8 tt1 blocks (tt1=0..7)
+    nTt1 = len(tt1s)
+    NB = self._REPACK_NUM_LDS_BUF            # 3 rotating LDS buffers (tt1%3)
+    bufBytes = self._REPACK_BUF_BYTES
 
-      # 16 pk_cvt + 8 ds_write dwordx2 (interleaved: pack 2 -> store 1 M-pack per tt0).
-      for (tt0v, sumIdx) in entries:
-        module.add(VCvtPkF32to16(dst=vgpr(vPack+0), src0=vc(sumIdx, 0), src1=vc(sumIdx, 1), comment=f"tt0={tt0v} feat 0/1 -> {typeStr}"))
-        module.add(VCvtPkF32to16(dst=vgpr(vPack+1), src0=vc(sumIdx, 2), src1=vc(sumIdx, 3), comment=f"tt0={tt0v} feat 2/3 -> {typeStr}"))
-        wrOff = tt0v * 2 * self._REPACK_GROUP_STRIDE * 8   # tt0 term of off_write, in bytes
-        module.add(DSStoreB64(dstAddr=vgpr(vWrBase), src=vgpr(vPack, 2),
+    # tt1-inter software pipeline (spec §5): store (pk+ds_write) -> load (ds_read) -> [+2 beats]
+    # -> buffer_store, across all 8 tt1 blocks.  3 rotating LDS buffers (tt1%NB) keep 3 tt1's
+    # data alive at once; 2 read register groups (tt1%2, 16 VGPR each = 32 total) let load and
+    # buffer_store use disjoint regs.  buffer_store(t) is deferred 2 beats after load(t) so the
+    # 4 dwordx4 bursts pipeline on xGMI; the beat-end dscnt waits (derived from the FIFO lgkm
+    # queue, ISA A4: same-type LDS ops complete in issue order) keep exactly the right ops
+    # outstanding.  The per-beat r-slot interleave below reorders ops WITHIN a beat but not
+    # across beats, so each beat still issues the same LDS-op count -> the waits are unchanged.
+    vRead = kw.vgprPool.checkOutAligned(32, 4, tag="repack_read2")
+    def regGrp(tt1v):
+      return vRead + (tt1v % 2) * 16       # 16 VGPR = 4 dwordx4 groups per tt1
+
+    # sDelta = per-r recv byte stride = 4*token * n_shard * bpe = n_shard<<3 (bpe=2).  Between
+    # consecutive bursts of one tt1, tokConst grows by 4, so the recv byte offset grows by
+    # exactly this constant: r=0 computes the full address, r>0 just adds sDelta (saves 4 VALU
+    # on 3 of every 4 bursts).
+    sDelta = kw.sgprPool.checkOut(1, tag="repack_sDelta", preventOverflow=False)
+    module.add(SLShiftLeftB32(dst=sgpr(sDelta), src=sgpr(nShardSgpr), shiftHex=3,
+                              comment="sDelta = 4*n_shard*bpe = n_shard<<3 (per-r recv byte stride)"))
+
+    def emitDrainTt0(tt1v, tt0v, slot):
+      # Stream-drain ONE tt0 (one M-pack) from AGPR into vAcc sub-slice `slot`.
+      # 4 v_accvgpr_read (AGPR->vAcc); acc index is the identity formula (Q4a):
+      #   accBase=(tt1*MIWaveTile[0]+tt0)*4.  `slot` gives a disjoint vAcc slice so the
+      # several tt0 drained in one r-slot don't alias (pack/write happens after the ds_read).
+      a = vAcc + slot * 4
+      accBase = (tt1v * numTt0 + tt0v) * 4
+      for j in range(4):
+        module.add(VAccvgprReadB32(dst=vgpr(a + j), src=accvgpr(accBase + j),
+                                   comment=f"tt1={tt1v} tt0={tt0v} drain acc{accBase + j} -> vAcc+{slot*4+j}"))
+
+    def emitPackWriteSlot(items):
+      # Pack + ds_write the tt0 drained this r-slot, batched per the target rhythm:
+      # all pk-mul (alpha) first, then all pk_cvt, then all ds_write.  items = [(tt1v,tt0v,slot)].
+      # rC *= alpha inlined here (batch alpha pass skipped for repack; runs on drained f32).
+      if self.applyAlpha:
+        for (tt1v, tt0v, slot) in items:
+          a = vAcc + slot * 4
+          module.add(VMulPKF32(dst=vgpr(a+0, 2), src0=sgpr("Alpha", 2), src1=vgpr(a+0, 2), vop3=VOP3PModifiers(op_sel_hi=[0,1,1]), comment=f"tt1={tt1v} tt0={tt0v} *= alpha (pk)"))
+          module.add(VMulPKF32(dst=vgpr(a+2, 2), src0=sgpr("Alpha", 2), src1=vgpr(a+2, 2), vop3=VOP3PModifiers(op_sel_hi=[0,1,1]), comment=f"tt1={tt1v} tt0={tt0v} *= alpha (pk)"))
+      for (tt1v, tt0v, slot) in items:
+        a = vAcc + slot * 4
+        p = vPack + slot * 2
+        module.add(VCvtPkF32to16(dst=vgpr(p+0), src0=vgpr(a+0), src1=vgpr(a+1), comment=f"tt1={tt1v} tt0={tt0v} feat 0/1 -> {typeStr}"))
+        module.add(VCvtPkF32to16(dst=vgpr(p+1), src0=vgpr(a+2), src1=vgpr(a+3), comment=f"tt1={tt1v} tt0={tt0v} feat 2/3 -> {typeStr}"))
+      for (tt1v, tt0v, slot) in items:
+        p = vPack + slot * 2
+        buf = tt1v % NB
+        wrOff = buf * bufBytes + tt0v * 2 * self._REPACK_GROUP_STRIDE * 8
+        module.add(DSStoreB64(dstAddr=vgpr(vWrBase), src=vgpr(p, 2),
                               ds=DSModifiers(offset=wrOff),
-                              comment=f"ds_write M-pack (x>>1 += tt0*2={tt0v*2})"))
-      module.add(SWaitCnt(dscnt=0, comment="LDS writes land before transposed reads"))
+                              comment=f"ds_write tt1={tt1v} M-pack buf{buf} (x>>1 += tt0*2={tt0v*2})"))
 
-      # 4x (ds_read dwordx4 -> burst store), reusing one dwordx4 register group (r=0..3).
-      # v1 serializes read/store per r to cap VGPR pressure; the pipelined 2-reg version
-      # is spec §5 step 2.  Each read gathers 8 consecutive M (2 M-packs) at one N row;
-      # each store is a 256B feature-contiguous burst to recv[W,token,shard].
-      vRead = kw.vgprPool.checkOutAligned(4, 4, tag="repack_read")
-      for r in range(4):
-        rdOff = r * 4 * 2 * 8   # y = r*4 -> (y*2)*8 bytes = r*64
-        module.add(DSLoadB128(dst=vgpr(vRead, 4), src=vgpr(vRdBase),
-                              ds=DSModifiers(offset=rdOff),
-                              comment=f"ds_read r={r}: 8 consecutive M @ N-row (y=r*4+(L>>4))"))
-        module.add(SWaitCnt(dscnt=0, comment="read data resident before recv store"))
-        tokConst = tt1v * 16 + r * 4
-        # VOP2 v_add_u32: literal must be src0 (src1 must be a VGPR); operand order swapped.
-        module.add(VAddU32(dst=vgpr(vTmp), src0=tokConst, src1=vgpr(vTokBase), comment=f"token = base + tt1*16 + r*4 ({tokConst})"))
+    def emitLoadR(tt1v, r):
+      # ONE ds_read dwordx4 from LDS buffer (tt1%NB), N-row r, into this tt1's reg group.
+      buf = tt1v % NB
+      bufOff = buf * bufBytes
+      grp = regGrp(tt1v)
+      rdOff = bufOff + r * 4 * 2 * 8      # y = r*4 -> (y*2)*8 bytes
+      module.add(DSLoadB128(dst=vgpr(grp + r*4, 4), src=vgpr(vRdBase),
+                            ds=DSModifiers(offset=rdOff),
+                            comment=f"ds_read tt1={tt1v} r={r}: 8 consecutive M @ N-row -> reg{tt1v % 2}"))
+
+    def emitBufferStoreR(tt1v, r):
+      # ONE buffer_store dwordx4 burst to recv[W,token,shard] from this tt1's reg group.
+      # r=0 computes the full recv byte offset; r>0 just adds sDelta (address increment).
+      grp = regGrp(tt1v)
+      if r == 0:
+        tokConst = tt1v * 16
+        module.add(VAddU32(dst=vgpr(vTmp), src0=tokConst, src1=vgpr(vTokBase), comment=f"token = base + tt1*16 ({tokConst})"))
         module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr), comment="token * n_shard"))
         module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(slotSgpr), comment="+ slotElem"))
         module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=vgpr(vFLocal), comment="recvElem = slot + token*n_shard + f_local"))
         module.add(VLShiftLeftB32(dst=vgpr(vTmp), shiftHex=int(log2(bpe)), src=vgpr(vTmp), comment="recv byte offset = recvElem * bpe"))
-        module.add(BufferStoreB128(
-          src=vgpr(vRead, 4),
-          vaddr=vgpr(vTmp),
-          saddr=sgpr(recvSrd, 4),
-          soffset=0,
-          mubuf=MUBUFModifiers(offen=True, offset12=0, glc=isGlc, slc=isSlc, nt=isNT),
-          comment=f"recv dwordx4 burst: 8 feature rows, r={r} (device scope)"))
-        module.add(SWaitCnt(vscnt=0, comment="drain burst before reusing read reg / LDS buffer"))
-      kw.vgprPool.checkIn(vRead)
+      else:
+        module.add(VAddU32(dst=vgpr(vTmp), src0=sgpr(sDelta), src1=vgpr(vTmp), comment=f"recv byte offset += sDelta (r={r}: token += 4)"))
+      module.add(BufferStoreB128(
+        src=vgpr(grp + r*4, 4),
+        vaddr=vgpr(vTmp),
+        saddr=sgpr(recvSrd, 4),
+        soffset=0,
+        mubuf=MUBUFModifiers(offen=True, offset12=0, glc=isGlc, slc=isSlc, nt=isNT),
+        comment=f"recv dwordx4 burst: tt1={tt1v} r={r} (device scope)"))
+
+    # Explicit beat schedule reproducing the validated N=8 pipeline (spec §5). Each entry:
+    #   (buffer_store tt1 | None, load tt1 | None, [store tt1 ...], dscnt-wait | None)
+    # Emit order within a beat: buffer_store (vmem; latches its src regs before this beat's
+    # load overwrites the OTHER reg group) -> load (4 ds_read) -> store (16 pk + 8 ds_write).
+    # Steady wait = 12 = one beat's LDS issue (4 read + 8 write): after the wait only THIS
+    # beat's 12 ds ops remain outstanding, so next beat's buffer_store / buffer reuse is safe
+    # (ISA A4: same-type LDS ops complete in issue order).  Prologue fills 2 stores at beat 0
+    # so store leads load by 2; epilogue drains (4, 0) then a final vscnt(0) for the bursts.
+    # Champion is always 8 tt1 (assert waveM==128); this table is the verified N=8 solution.
+    assert nTt1 == 8, f"repack pipeline table is hard-wired to 8 tt1 blocks, got {nTt1}"
+    schedule = [
+      (None, None, [0, 1], 8),   # beat 0: store buf0, buf1
+      (None, 0,    [2],    12),  # beat 1: load buf0->regA, store buf2
+      (None, 1,    [3],    12),  # beat 2: load buf1->regB, store buf0(tt1=3)
+      (0,    2,    [4],    12),  # beat 3: bstore tt1=0(regA), load buf2->regA, store buf1(tt1=4)
+      (1,    3,    [5],    12),  # beat 4: bstore tt1=1(regB), load buf0->regB, store buf2(tt1=5)
+      (2,    4,    [6],    12),  # beat 5: bstore tt1=2(regA), load buf1->regA, store buf0(tt1=6)
+      (3,    5,    [7],    12),  # beat 6: bstore tt1=3(regB), load buf2->regB, store buf1(tt1=7)
+      (4,    6,    [],     4),   # beat 7: bstore tt1=4(regA), load buf0->regA
+      (5,    7,    [],     0),   # beat 8: bstore tt1=5(regB), load buf1->regB
+      (6,    None, [],     None),# beat 9: bstore tt1=6(regA)
+      (7,    None, [],     None),# beat 10: bstore tt1=7(regB)
+    ]
+    for beat, (tB, tL, tSs, wait) in enumerate(schedule):
+      bs = tt1s[tB] if tB is not None else '-'
+      ld = tt1s[tL] if tL is not None else '-'
+      st = [tt1s[t] for t in tSs]
+      module.addComment1(f"--- pipeline beat {beat}: bstore={bs} load={ld} store={st} (r-interleaved) ---")
+      # Flatten this beat's store-stage work into a flat (tt1v,tt0v) list, then split evenly
+      # across the 4 r-slots (steady beat: 8 tt0 -> 2/slot; beat 0: 16 tt0 -> 4/slot).  Each
+      # r-slot emits, in this literal order (per user rhythm):
+      #   buffer_store(tB,r) -> drain slot's tt0 (accvgpr) -> ds_read(tL,r) -> pack+ds_write.
+      # buffer_store precedes ds_read of the SAME r: in steady beats tB and tL share a reg
+      # group, and buffer_store reads its 4 src regs at issue before ds_read overwrites them
+      # (vmem src latched at issue).  Ordering ops WITHIN the beat leaves the per-beat LDS-op
+      # count unchanged, so the beat-end dscnt wait is identical to the block version.
+      storeTt0 = [(tt1s[t], tt0v) for t in tSs for tt0v in range(numTt0)]
+      nPerSlot = (len(storeTt0) + 3) // 4 if storeTt0 else 0
+      for r in range(4):
+        if tB is not None:
+          emitBufferStoreR(tt1s[tB], r)
+        slotItems = storeTt0[r * nPerSlot:(r + 1) * nPerSlot]
+        drained = [(tt1v, tt0v, s) for s, (tt1v, tt0v) in enumerate(slotItems)]
+        for (tt1v, tt0v, s) in drained:
+          emitDrainTt0(tt1v, tt0v, s)
+        if tL is not None:
+          emitLoadR(tt1s[tL], r)
+        if drained:
+          emitPackWriteSlot(drained)
+      if wait is not None:
+        module.add(SWaitCnt(dscnt=wait, comment=f"beat {beat}: keep {wait} ds (LDS) ops outstanding"))
+    module.add(SWaitCnt(vscnt=0, comment="drain all recv bursts"))
+    kw.vgprPool.checkIn(vRead)
+    kw.vgprPool.checkIn(vPack)
+    kw.vgprPool.checkIn(vAcc)
 
     # Release remaining temporaries.
     for v in (vTmp, vRdBase, vWrBase, vTokBase, vFLocal):
       kw.vgprPool.checkIn(v)
-    for s in (sBuf, s34, wgTokSgpr, wgFeatSgpr, slotSgpr, tmpSgpr2, shardBaseSgpr, recvSrd, nShardSgpr, myRankSgpr):
+    for s in (sDelta, sBuf, s34, wgTokSgpr, wgFeatSgpr, slotSgpr, tmpSgpr2, shardBaseSgpr, recvSrd, nShardSgpr, myRankSgpr):
       kw.sgprPool.checkIn(s)
     return module
 
@@ -2908,28 +3054,26 @@ class GlobalWriteBatchWriter:
     # WG. Mirrors the file's mask-EXEC-before-atomic idiom (see lines 3112, 3160).
     module.add(self.getEdgeMovInstType()(EXEC(), 1, "fused-A2A: isolate lane 0 for the once-per-WG counter atomic + flag store"))
 
-    # (3) counter[dst_rank] address = counter_ptr + dst_rank*4; atomic_add returns pre-op.
+    # (3) counter[dst_rank] address = counter_ptr + dst_rank*4; s_atomic_inc returns pre-op.
+    # s_atomic_inc sdst, sbase, soffset: old = *[sbase+soffset]; *addr = (old >= sdst) ? 0 : old+1;
+    # sdst = old.  Set sdst = 0xFFFFFFFF so the (old >= sdst) reset never fires — pure +1.
+    # SMEM atomic keeps everything in SGPRs: no VGPR address/data shuffle, no v_readfirstlane.
     module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr2), src=sgpr(dstRankSgpr), shiftHex=2,
                               comment="dst_rank * 4 (u32 counter byte offset)"))
     module.add(SAddU32(dst=sgpr(counterPtrSgpr), src0=sgpr(counterPtrSgpr), src1=sgpr(tmpSgpr2),
                        comment="counter[dst_rank] lo = counter_ptr + dst_rank*4"))
     module.add(SAddCU32(dst=sgpr(counterPtrSgpr + 1), src0=sgpr(counterPtrSgpr + 1), src1=0,
                         comment="counter[dst_rank] hi (carry)"))
-    vCntAddr = kw.vgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsCntAddr")
-    vOne     = kw.vgprPool.checkOut(1, tag="fusedA2A_hsOne")
-    vOld     = kw.vgprPool.checkOut(1, tag="fusedA2A_hsOld")
-    module.add(VMovB32(dst=vgpr(vCntAddr + 0), src=sgpr(counterPtrSgpr + 0), comment="counter addr lo -> vgpr"))
-    module.add(VMovB32(dst=vgpr(vCntAddr + 1), src=sgpr(counterPtrSgpr + 1), comment="counter addr hi -> vgpr"))
-    module.add(VMovB32(dst=vgpr(vOne), src=1, comment="counter increment = 1"))
+    module.add(SMovB32(dst=sgpr(tmpSgpr2), src=hex(0xFFFFFFFF),
+                       comment="s_atomic_inc data = max u32 (inc never wraps to 0)"))
     offSaddr = vgpr("off", 1, False, False, True)
-    module.add(GlobalAtomicAddU32(
-      dst=vgpr(vOld), vaddr=vgpr(vCntAddr, 2), data=vgpr(vOne), saddr=offSaddr,
-      modifier=GLOBALModifiers(glc=True, slc=False, scope=CacheScope.SCOPE_NONE),
-      comment="old = atomic_add(counter[dst_rank], 1) device scope, return pre-op (sc0)"))
-    module.add(SWaitCnt(vlcnt=0, comment="fused-A2A: wait counter atomic return (load counter)"))
+    module.add(SAtomicInc(dst=sgpr(tmpSgpr2), base=sgpr(counterPtrSgpr, 2), soffset=0,
+                          smem=SMEMModifiers(glc=True),
+                          comment="old = s_atomic_inc(counter[dst_rank]) return pre-op (glc)"))
+    module.add(SWaitCnt(kmcnt=0, comment="fused-A2A: wait SMEM atomic return"))
 
     # (4) last WG for dst_rank iff old+1 == FusedTarget; else skip the release.
-    module.add(VReadfirstlaneB32(dst=sgpr(tmpSgpr2), src=vgpr(vOld), comment="old -> sgpr"))
+    # tmpSgpr2 now holds old (the pre-op value returned by s_atomic_inc).
     module.add(SAddU32(dst=sgpr(tmpSgpr2), src0=sgpr(tmpSgpr2), src1=1, comment="old + 1"))
     module.add(SCmpEQU32(src0=sgpr(tmpSgpr2), src1=sgpr(targetSgpr),
                          comment="old+1 == FusedTarget? (this WG is the last for dst_rank)"))
@@ -3043,9 +3187,6 @@ class GlobalWriteBatchWriter:
     kw.vgprPool.checkIn(vFlagAddr)
 
     module.add(skipReleaseLabel)
-    kw.vgprPool.checkIn(vOld)
-    kw.vgprPool.checkIn(vOne)
-    kw.vgprPool.checkIn(vCntAddr)
     kw.sgprPool.checkIn(tmpSgpr2)
     kw.sgprPool.checkIn(dstRankSgpr)
     kw.sgprPool.checkIn(flagBaseSgpr)

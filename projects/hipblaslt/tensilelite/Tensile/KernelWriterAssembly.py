@@ -16124,9 +16124,22 @@ class KernelWriterAssembly(KernelWriter):
           # unaffected (one deepcopy of the same starting queue yields identical output).
           passAccVgprRead = deepcopy(codeAccVgprRead) if codeAccVgprRead is not None else None
           passMulAlpha    = deepcopy(codeMulAlpha) if codeMulAlpha is not None else None
-          for batchIdx in range(0, numBatchesCLS):
-            elementStartIdx = batchIdx * numElementsPerBatch
-            elementStopIdx = min( elementStartIdx + numElementsPerBatch, len(element) )
+          # fused-A2A PUSH pass with the LDS-repack store: force ONE batch (all tt1 in a
+          # single globalWriteBatch call) so the repack can pipeline across every tt1 block.
+          # The generic batch split (numElementsPerBatch) is limited by per-element mask
+          # SGPRs, but the repack store issues its own addresses and uses NO per-element
+          # mask SGPRs, and its VGPR/SGPR footprint is independent of the element count --
+          # so a single 64-element batch neither overflows nor changes the LOCAL pass.
+          passNumElementsPerBatch = numElementsPerBatch
+          passNumBatchesCLS       = numBatchesCLS
+          if kernel["FusedGemmA2A"] and self.states.fusedA2ADispatchMode == "PUSH" \
+             and kernel.get("UseSubtileImpl") and not edge and not atomic \
+             and kernel["_GlobalAccumulation"] not in ("MultipleBufferSingleKernel", "MultipleBuffer"):
+            passNumElementsPerBatch = len(element)
+            passNumBatchesCLS       = 1
+          for batchIdx in range(0, passNumBatchesCLS):
+            elementStartIdx = batchIdx * passNumElementsPerBatch
+            elementStopIdx = min( elementStartIdx + passNumElementsPerBatch, len(element) )
             elementsThisBatch = element[elementStartIdx:elementStopIdx]
             #print("BATCH[%u/%u]: element[%u:%u] VGPRs=%u" % (batchIdx, numBatches, elementStartIdx, elementStopIdx,ss.numVgprsPerElement ))
             # elementVgprs can be large and should be perfectly tuned to the number of available
@@ -16153,7 +16166,7 @@ class KernelWriterAssembly(KernelWriter):
                 elementsThisBatch, self.vgprs.addrE, self.vgprs.addrD, self.vgprs.addrC, self.vgprs.addrBias, \
                 self.vgprs.addrScaleAVec, self.vgprs.addrScaleBVec, self.vgprs.addrScaleAlphaVec, \
                 biasLocalBarrierInit, tmpVgpr, tmpVgprDynamic, cvtVgprStruct, activationSetPCStruct, \
-                activationTypeStr, elementSgprs, tmpSgpr, passAccVgprRead, passMulAlpha, factorDim, numBatches, \
+                activationTypeStr, elementSgprs, tmpSgpr, passAccVgprRead, passMulAlpha, factorDim, passNumBatchesCLS, \
                 _next_firing_rowInc, _direct_next_rowInc))
             biasLocalBarrierInit = True
           return m

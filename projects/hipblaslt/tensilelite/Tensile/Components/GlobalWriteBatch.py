@@ -2371,59 +2371,77 @@ class GlobalWriteBatchWriter:
 
     def emitRecvAddr(module):
       """BURST EXPERIMENT (throwaway, CORRECTNESS IGNORED): swap the lane roles so
-      16 consecutive lanes write 128 consecutive feature rows (one 256-byte burst)
-      and lane_group (lane//16, 0..3) drives 4 tokens (M128xN4 per dwordx4).  The
-      stored VALUES are wrong (the permuted vPack data no longer matches these
-      addresses), but every store stays in-bounds -> real xGMI traffic, identical
-      instruction count / dwordx4 width / byte volume as champion.  The only variable
-      is cross-lane spatial locality, so the W4 delta isolates the burst-coalescing
-      upper bound (handoff (A)/(B) fork).
+      8 consecutive lanes write 64 consecutive feature rows (one 128-byte burst) and
+      lane//8 (0..7) drives 8 tokens (M64xN8 per dwordx4).  The stored VALUES are
+      wrong (the permuted vPack data no longer matches these addresses), but every
+      store stays in-bounds -> real xGMI traffic, identical instruction count /
+      dwordx4 width / byte volume as champion.  The only variable is cross-lane
+      spatial locality, so the W4 delta isolates the burst-coalescing benefit at a
+      128-byte burst (vs the M128xN4 / 256-byte variant) -- a smaller contiguous
+      feature run (64) is cheaper to stage in the tight 32KB LDS for a real repack.
 
       Original geometry scatters: coord1 carries the raw lane%16 term -> adjacent
-      lanes differ by n_shard (2560 elem).  Here we strip the raw lane terms and
-      reassign the two axes:
-        feat_new  = (coord0 - shard_base) - LG*4 + Lt*8   # Lt -> 128 contiguous feat
-        token_new = (coord1 + tokOffset) - Lt + LG        # LG -> 4 tokens (N4)
-      -LG*4 cancels coord0's raw lane-group term; -Lt cancels coord1's raw lane%16
-      term (see handoff §1.4).  Uses real slot/shard_base/n_shard so writes land in
-      the recv buffer.  A handful of corner lanes (my_rank 0, WG at shard start,
-      last token) can under/overshoot by <=120 elem; O(1e-5) of stores, BufferOOB
-      drops them safely, negligible for p50.  paired path drops +vLGDelta below.
-
-      v2: the feature axis carries no per-store offset (one burst already spans the
-      full 128-feature wave width); champion's coordOffset0 is folded into the token
-      axis instead, giving 32 distinct token bases 0,4,...,124 so the 32 stores tile
-      128 feat x 128 tok exactly once with no overlap."""
-      assert coordOffset0 % 32 == 0, \
-        f"burst overlap fix assumes champion feature offsets are multiples of 32, got {coordOffset0}"
-      tokOffset = coordOffset1 + (coordOffset0 // 32) * 4
+      lanes differ by n_shard (2560 elem); coord0 carries a raw (lane//16)*4 term
+      (see handoff §1.4).  Strip BOTH raw lane terms, then reassign the two axes
+      with the M64xN8 lane split:
+        Lt8  = lane%8         ; LG8 = (lane//8) & 7
+        feat_new  = (coord0 + featOffset - shard_base) - LG16*4 + Lt8*8  # 8 lanes -> 64 feat
+        token_new = (coord1 + tokOffset) - Lt + LG8          # LG8 -> 8 tokens (N8)
+      -LG16*4 cancels coord0's raw lane-group term; -Lt cancels coord1's raw lane%16
+      term.  Uses real slot/shard_base/n_shard so writes land in the recv buffer.
+      Lt8*8 max=56 < tile width 256 < shard 2560; LG8 max +7 keeps token < N=2048;
+      a handful of corner lanes can over/undershoot by O(10) elem, BufferOOB drops
+      them safely, negligible for p50.  paired path drops +vLGDelta below."""
       vLt = kw.vgprPool.checkOut(1, tag="burst_Lt")
+      # v2 overlap fix: one M64N8 burst spans 64 feat x 8 tok, but champion's offset grid
+      # steps feature by 32 -- smaller than the burst's own 64-feature reach, so consecutive
+      # stores overlapped by 32 elem (37.5% duplicate writes).  Relinearise the (4 feat x
+      # 8 tok) grid into 32 slots and re-emit at the burst's true granularity so the 32
+      # stores tile 128 feat x 128 tok exactly once.
+      assert coordOffset0 % 32 == 0 and coordOffset1 % 16 == 0, \
+        f"burst overlap fix expects champion offsets (feat%32, tok%16), got {coordOffset0}, {coordOffset1}"
+      _slot = (coordOffset1 // 16) * 4 + (coordOffset0 // 32)   # 0..31
+      featOffset = (_slot & 1) * 64
+      tokOffset  = (_slot >> 1) * 8
+
       vLG = kw.vgprPool.checkOut(1, tag="burst_LG")
-      module.add(VAndB32(dst=vgpr(vLt), src0=15, src1=vgpr("Serial"), comment="Lt = lane%16"))
+      vLt8 = kw.vgprPool.checkOut(1, tag="burst_Lt8")
+      vLG8 = kw.vgprPool.checkOut(1, tag="burst_LG8")
+      module.add(VAndB32(dst=vgpr(vLt), src0=15, src1=vgpr("Serial"), comment="Lt = lane%16 (strip coord1 raw term)"))
       module.add(VLShiftRightB32(dst=vgpr(vLG), shiftHex=4, src=vgpr("Serial"), comment="lane >> 4"))
-      module.add(VAndB32(dst=vgpr(vLG), src0=3, src1=vgpr(vLG), comment="LG = (lane>>4) & 3 (lane_group 0..3)"))
+      module.add(VAndB32(dst=vgpr(vLG), src0=3, src1=vgpr(vLG), comment="LG16 = (lane>>4)&3 (strip coord0 raw LG16*4)"))
+      module.add(VAndB32(dst=vgpr(vLt8), src0=7, src1=vgpr("Serial"), comment="Lt8 = lane%8 (8 lanes -> 64 contig feat)"))
+      module.add(VLShiftRightB32(dst=vgpr(vLG8), shiftHex=3, src=vgpr("Serial"), comment="lane >> 3"))
+      module.add(VAndB32(dst=vgpr(vLG8), src0=7, src1=vgpr(vLG8), comment="LG8 = (lane>>3)&7 (8 tokens N8)"))
 
-      # feat_new = coord0 - shard_base - LG*4 + Lt*8   (no coordOffset0 term)
-      module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(shardBaseSgpr), comment="f_local = coord0 - shard_base"))
-      module.add(VLShiftLeftB32(dst=vgpr(vTmp), shiftHex=2, src=vgpr(vLG), comment="LG*4 (raw coord0 lane-group term)"))
-      module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=vgpr(vTmp), comment="strip raw LG*4 from feature"))
-      module.add(VLShiftLeftB32(dst=vgpr(vTmp), shiftHex=3, src=vgpr(vLt), comment="Lt*8 (16 lanes -> 128 contiguous feat)"))
-      module.add(VAddU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=vgpr(vTmp), comment="feat_new = f_local - LG*4 + Lt*8"))
+      # feat_new = coord0 + featOffset - shard_base - LG16*4 + Lt8*8
+      if featOffset:
+        module.add(SMovB32(dst=sgpr(tmpSgpr2), src=featOffset, comment=f"featOffset={featOffset} (remapped)"))
+        module.add(VAddU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(tmpSgpr2), comment=f"feat_global = coord0 + {featOffset}"))
+        module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=sgpr(shardBaseSgpr), comment="f_local = feat_global - shard_base"))
+      else:
+        module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(coord0), src1=sgpr(shardBaseSgpr), comment="f_local = coord0 - shard_base"))
+      module.add(VLShiftLeftB32(dst=vgpr(vTmp), shiftHex=2, src=vgpr(vLG), comment="LG16*4 (raw coord0 lane-group term)"))
+      module.add(VSubU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=vgpr(vTmp), comment="strip raw LG16*4 from feature"))
+      module.add(VLShiftLeftB32(dst=vgpr(vTmp), shiftHex=3, src=vgpr(vLt8), comment="Lt8*8 (8 lanes -> 64 contiguous feat)"))
+      module.add(VAddU32(dst=vgpr(vFLocal), src0=vgpr(vFLocal), src1=vgpr(vTmp), comment="feat_new = f_local - LG16*4 + Lt8*8"))
 
-      # token_new = coord1 + tokOffset - Lt + LG ; recvElem = slot + token_new*n_shard + feat_new
+      # token_new = coord1 + tokOffset - Lt + LG8 ; recvElem = slot + token_new*n_shard + feat_new
       if tokOffset:
-        module.add(SMovB32(dst=sgpr(tmpSgpr2), src=tokOffset, comment=f"tokOffset={tokOffset} (= coordOffset1 {coordOffset1} + coordOffset0 {coordOffset0}/32*4)"))
+        module.add(SMovB32(dst=sgpr(tmpSgpr2), src=tokOffset, comment=f"tokOffset={tokOffset} (remapped)"))
         module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=sgpr(tmpSgpr2), comment=f"t = coord1 + {tokOffset}"))
         module.add(VSubU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=vgpr(vLt), comment="strip raw Lt from token"))
       else:
         module.add(VSubU32(dst=vgpr(vTmp), src0=vgpr(coord1), src1=vgpr(vLt), comment="t = coord1 - Lt (strip raw Lt)"))
-      module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=vgpr(vLG), comment="token_new = t - Lt + LG"))
+      module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=vgpr(vLG8), comment="token_new = t - Lt + LG8"))
       module.add(VMulLOU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(nShardSgpr), comment="token_new * n_shard"))
       module.add(VAddU32(dst=vgpr(vTmp), src0=vgpr(vTmp), src1=sgpr(slotSgpr), comment="+ slotElem (my_rank*N_token*n_shard)"))
       module.add(VAddU32(dst=vgpr(vRecvAddr), src0=vgpr(vTmp), src1=vgpr(vFLocal), comment="recvElem = slot + token_new*n_shard + feat_new"))
       module.add(VLShiftLeftB32(dst=vgpr(vRecvAddr), shiftHex=int(log2(bpe)), src=vgpr(vRecvAddr), comment="recv byte offset = recvElem * bpe"))
       kw.vgprPool.checkIn(vLt)
       kw.vgprPool.checkIn(vLG)
+      kw.vgprPool.checkIn(vLt8)
+      kw.vgprPool.checkIn(vLG8)
 
     if paired:
       module.addComment1(f"PUSH sba-pair coordOff0={coordOffset0} coordOff1={coordOffset1}: pack 8 feature rows -> dwordx4")

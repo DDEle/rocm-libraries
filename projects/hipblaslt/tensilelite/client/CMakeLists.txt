@@ -21,6 +21,32 @@ else()
     find_package(amd_smi)
 endif()
 
+# hsakmt (KFD thunk) + hsa-runtime64 are needed by SdmaQueue.cpp for the
+# fused-A2A SDMA queue. ROCm 7.x's hsakmt cmake config declares a link
+# dependency on the imported target numa::numa but never provides it, so
+# find_package(hsakmt) fails at generate time ("target numa::numa not found")
+# unless we define it first from the system libnuma. Mirror MORI's workaround
+# (mori/src/application/CMakeLists.txt).
+if(NOT WIN32)
+    if(NOT TARGET numa::numa)
+        find_library(NUMA_LIBRARY NAMES numa)
+        find_path(NUMA_INCLUDE_DIR NAMES numa.h)
+        if(NUMA_LIBRARY)
+            add_library(numa::numa UNKNOWN IMPORTED)
+            set_target_properties(numa::numa PROPERTIES IMPORTED_LOCATION "${NUMA_LIBRARY}")
+            if(NUMA_INCLUDE_DIR)
+                set_target_properties(numa::numa PROPERTIES
+                    INTERFACE_INCLUDE_DIRECTORIES "${NUMA_INCLUDE_DIR}")
+            endif()
+        else()
+            message(FATAL_ERROR "libnuma not found but required by hsakmt::hsakmt. "
+                                "Install it (e.g. 'apt install libnuma-dev').")
+        endif()
+    endif()
+    find_package(hsa-runtime64 REQUIRED)
+    find_package(hsakmt REQUIRED)
+endif()
+
 target_link_libraries(tensilelite-client-common
     PUBLIC
         hip::device
@@ -31,6 +57,10 @@ target_link_libraries(tensilelite-client-common
 )
 if(amd_smi_FOUND)
     target_link_libraries(tensilelite-client-common PUBLIC amd_smi)
+endif()
+if(NOT WIN32)
+    target_link_libraries(tensilelite-client-common
+        PUBLIC hsakmt::hsakmt hsa-runtime64::hsa-runtime64)
 endif()
 
 # When mxDataGenerator is enabled, hipblaslt::mxdatagen propagates the

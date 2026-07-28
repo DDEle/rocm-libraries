@@ -15,6 +15,7 @@ target_sources(tensilelite-client-common
         "${CMAKE_CURRENT_SOURCE_DIR}/ReferenceValidator.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ResultFileReporter.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ResultReporter.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/SdmaQueue.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/MetaRunListener.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Reference.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ProgressListener.cpp"

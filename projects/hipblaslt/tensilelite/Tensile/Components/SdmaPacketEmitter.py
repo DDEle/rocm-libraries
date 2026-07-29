@@ -309,19 +309,35 @@ class SdmaPacketEmitter:
         return module
 
     def emitComputeFlagAddr(self, module, w, flagBaseS, myRankS, outAddrS, tmpS):
-        """Compute the ATOMIC target flag_ptr[p] + myRank*4 into outAddrS (2
+        """Compute the ATOMIC target flag_ptr[p] + myRank*8 into outAddrS (2
         SGPRs), a 64-bit add. flagBaseS is flag_ptr[p] (already selected by the
-        caller via _fusedA2ALoadFlagBaseByRank); the *4 is the u32 flag-slot
-        stride, matching the existing handshake's flag[my_rank] addressing
-        (GlobalWriteBatch._emitFusedA2AHandshake). tmpS is one scratch SGPR.
+        caller via _fusedA2ALoadFlagBaseByRank). tmpS is one scratch SGPR.
 
-        NOTE the ADD64 packet writes 8 bytes at a 4-byte-strided slot -- see the
-        report's risk note; this emitter faithfully implements the §1.3 address.
+        Stride is 8, NOT 4: the route raises a flag with an ADD64 (MORI ships
+        ADD64 but no ADD32, so the atomic write is 8 bytes wide), so the flag
+        buffer must be a u64 array with 8-byte slots. A u32 array + *4 stride
+        would let myRank=3's 8-byte write run 4 bytes past the W*4-byte
+        allocation -- a heap overrun, not merely a neighbor-slot clobber. This
+        is the plan §1.3 corrected form (myRank*8; the earlier *4 was a plan
+        defect, and §1.1's flag[myRank][j] was a typo -- the flag is indexed by
+        SOURCE rank only, tokenTiles packets accumulating into one slot, per the
+        §1.1 "== tokenTiles" drain predicate).
+
+        DEPENDENCY -- T7 must change three things ATOMICALLY with wiring this in
+        (changing any one alone breaks the currently-correct non-SDMA path, which
+        still uses *4 + a READY sentinel):
+          1. host: flagBytes = W * sizeof(uint64_t)   (FusedA2AClient.cpp)
+          2. kernel: every flag address calc shift 2->3 (_emitFusedA2AHandshake /
+             _fusedA2ALoadFlagBase*)
+          3. DRAIN: poll "== tokenTiles" (an accumulated count) instead of the
+             one-shot READY sentinel -- the SDMA ATOMIC ADDs, it does not store.
+        This emitter is not yet wired into any kernel, so changing it here is
+        inert until T7 lands the other two.
         """
-        module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(myRankS), shiftHex=2,
-                                  comment="myRank * 4 (u32 flag-slot byte offset)"))
+        module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(myRankS), shiftHex=3,
+                                  comment="myRank * 8 (u64 flag-slot byte offset; see T7 dependency)"))
         module.add(SAddU32(dst=sgpr(outAddrS + 0), src0=sgpr(flagBaseS + 0), src1=sgpr(tmpS),
-                           comment="flag addr lo = flag_ptr[p] + myRank*4"))
+                           comment="flag addr lo = flag_ptr[p] + myRank*8"))
         module.add(SAddCU32(dst=sgpr(outAddrS + 1), src0=sgpr(flagBaseS + 1), src1=0,
                             comment="flag addr hi (carry)"))
         return module

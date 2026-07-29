@@ -121,6 +121,10 @@ endif()
 if(TENSILELITE_ENABLE_SDMA_A2A AND NOT WIN32)
     target_link_libraries(tensilelite-client-common
         PRIVATE hsakmt::hsakmt hsa-runtime64::hsa-runtime64)
+    # FusedA2AClient.cpp gates its SdmaQueueSet setup on this macro; without it
+    # the fused run fails fast instead of handing the kernel a null queue array.
+    target_compile_definitions(tensilelite-client-common
+        PRIVATE TENSILELITE_ENABLE_SDMA_A2A)
 endif()
 
 # When mxDataGenerator is enabled, hipblaslt::mxdatagen propagates the

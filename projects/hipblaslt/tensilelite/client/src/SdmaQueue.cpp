@@ -12,6 +12,8 @@
 
 #include "hsa/hsa.h"
 #include "hsa/hsa_ext_amd.h"
+#include "hsakmt/hsakmt.h"
+#include "hsakmt/hsakmttypes.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -136,7 +138,16 @@ namespace TensileLite
         // -------------------------------------------------------------------
         // SdmaQueue
         // -------------------------------------------------------------------
+        // Pimpl: holds the hsakmt types kept out of the header (the KFD queue
+        // resource + the ring pointer). All KFD resource lifetime lives here.
+        struct SdmaQueue::Impl
+        {
+            void*            queueBuffer = nullptr; // ring (Uncached)
+            HsaQueueResource queue{};               // KFD queue resource
+        };
+
         SdmaQueue::SdmaQueue(uint32_t localNode, uint32_t engineId)
+            : impl_(std::make_unique<Impl>())
         {
             ensureHsaKfd();
 
@@ -150,68 +161,105 @@ namespace TensileLite
             memFlags.ui32.ExecuteAccess = 1;
             memFlags.ui32.Uncached      = 1;
 
-            CHK_KMT(hsaKmtAllocMemory(localNode, SDMA_QUEUE_SIZE, memFlags, &queueBuffer_));
-            CHK_KMT(hsaKmtMapMemoryToGPU(queueBuffer_, SDMA_QUEUE_SIZE, nullptr));
+            // Any failure after the first resource is acquired must release
+            // everything acquired so far: this object is not yet fully
+            // constructed, so ~SdmaQueue() will NOT run. Acquire inside a try,
+            // and on any throw run the same teardown the destructor would, then
+            // rethrow.
+            try
+            {
+                CHK_KMT(hsaKmtAllocMemory(
+                    localNode, SDMA_QUEUE_SIZE, memFlags, &impl_->queueBuffer));
+                CHK_KMT(hsaKmtMapMemoryToGPU(impl_->queueBuffer, SDMA_QUEUE_SIZE, nullptr));
 
-            std::memset(&queue_, 0, sizeof(HsaQueueResource));
-            CHK_KMT(hsaKmtCreateQueueExt(localNode,
-                                         HSA_QUEUE_SDMA_BY_ENG_ID,
-                                         100, // queue percentage
-                                         HSA_QUEUE_PRIORITY_MAXIMUM,
-                                         engineId,
-                                         queueBuffer_,
-                                         SDMA_QUEUE_SIZE,
-                                         nullptr,
-                                         &queue_));
+                std::memset(&impl_->queue, 0, sizeof(HsaQueueResource));
+                CHK_KMT(hsaKmtCreateQueueExt(localNode,
+                                             HSA_QUEUE_SDMA_BY_ENG_ID,
+                                             100, // queue percentage
+                                             HSA_QUEUE_PRIORITY_MAXIMUM,
+                                             engineId,
+                                             impl_->queueBuffer,
+                                             SDMA_QUEUE_SIZE,
+                                             nullptr,
+                                             &impl_->queue));
 
-            // Software cursors in uncached device memory (shared producer state).
-            CHK_HIP(hipMalloc(&deviceHandle_, sizeof(SdmaQueueDeviceHandle)));
-            CHK_HIP(hipExtMallocWithFlags(
-                (void**)&cachedWptr_, sizeof(uint64_t), hipDeviceMallocUncached));
-            CHK_HIP(hipExtMallocWithFlags(
-                (void**)&committedWptr_, sizeof(uint64_t), hipDeviceMallocUncached));
+                // Software cursors in uncached device memory (shared producer state).
+                CHK_HIP(hipMalloc(&deviceHandle_, sizeof(SdmaQueueDeviceHandle)));
+                CHK_HIP(hipExtMallocWithFlags(
+                    (void**)&cachedWptr_, sizeof(uint64_t), hipDeviceMallocUncached));
+                CHK_HIP(hipExtMallocWithFlags(
+                    (void**)&committedWptr_, sizeof(uint64_t), hipDeviceMallocUncached));
 
-            // Seed the cursors to the current HARDWARE write pointer so the
-            // first reserved index is contiguous with whatever the queue was
-            // created at (MORI does exactly this).
-            const uint64_t hwWptr = (uint64_t)*(queue_.Queue_write_ptr_aql);
-            const uint64_t hwRptr = (uint64_t)*(queue_.Queue_read_ptr_aql);
-            hostWptr_             = hwWptr;
+                // Seed the cursors to the current HARDWARE write pointer so the
+                // first reserved index is contiguous with whatever the queue was
+                // created at (MORI does exactly this).
+                const uint64_t hwWptr = (uint64_t)*(impl_->queue.Queue_write_ptr_aql);
+                const uint64_t hwRptr = (uint64_t)*(impl_->queue.Queue_read_ptr_aql);
+                hostWptr_             = hwWptr;
 
-            hostHandle_ = SdmaQueueDeviceHandle{
-                /*queueBuf*/ static_cast<uint32_t*>(queueBuffer_),
-                /*rptr*/ queue_.Queue_read_ptr_aql,
-                /*wptr*/ queue_.Queue_write_ptr_aql,
-                /*doorbell*/ queue_.Queue_DoorBell_aql,
-                /*cachedWptr*/ cachedWptr_,
-                /*committedWptr*/ committedWptr_,
-                // Per-producer private cache SEED (= hw read ptr). Not shared;
-                // see the long note in SdmaQueue.hpp.
-                /*cachedHwReadIndex*/ hwRptr,
-            };
+                hostHandle_ = SdmaQueueDeviceHandle{
+                    /*queueBuf*/ static_cast<uint32_t*>(impl_->queueBuffer),
+                    /*rptr*/ (uint64_t*)impl_->queue.Queue_read_ptr_aql,
+                    /*wptr*/ (uint64_t*)impl_->queue.Queue_write_ptr_aql,
+                    /*doorbell*/ (uint64_t*)impl_->queue.Queue_DoorBell_aql,
+                    /*cachedWptr*/ cachedWptr_,
+                    /*committedWptr*/ committedWptr_,
+                    // Per-producer private cache SEED (= hw read ptr). Not shared;
+                    // see the long note in SdmaQueue.hpp.
+                    /*cachedHwReadIndex*/ hwRptr,
+                };
 
-            CHK_HIP(hipMemcpy(
-                deviceHandle_, &hostHandle_, sizeof(SdmaQueueDeviceHandle), hipMemcpyHostToDevice));
-            CHK_HIP(hipMemcpy(cachedWptr_, &hwWptr, sizeof(uint64_t), hipMemcpyHostToDevice));
-            CHK_HIP(hipMemcpy(committedWptr_, &hwWptr, sizeof(uint64_t), hipMemcpyHostToDevice));
+                CHK_HIP(hipMemcpy(deviceHandle_,
+                                  &hostHandle_,
+                                  sizeof(SdmaQueueDeviceHandle),
+                                  hipMemcpyHostToDevice));
+                CHK_HIP(hipMemcpy(cachedWptr_, &hwWptr, sizeof(uint64_t), hipMemcpyHostToDevice));
+                CHK_HIP(
+                    hipMemcpy(committedWptr_, &hwWptr, sizeof(uint64_t), hipMemcpyHostToDevice));
+            }
+            catch(...)
+            {
+                teardown();
+                throw;
+            }
+        }
+
+        void SdmaQueue::teardown() noexcept
+        {
+            // Best-effort resource release, shared by the destructor and the
+            // ctor's failure path. Every step is null/zero guarded so it is safe
+            // to call after a partial construction, and never throws.
+            if(impl_ && impl_->queue.QueueId)
+            {
+                (void)hsaKmtDestroyQueue(impl_->queue.QueueId);
+                impl_->queue.QueueId = 0;
+            }
+            if(deviceHandle_)
+            {
+                (void)hipFree(deviceHandle_);
+                deviceHandle_ = nullptr;
+            }
+            if(cachedWptr_)
+            {
+                (void)hipFree(cachedWptr_);
+                cachedWptr_ = nullptr;
+            }
+            if(committedWptr_)
+            {
+                (void)hipFree(committedWptr_);
+                committedWptr_ = nullptr;
+            }
+            if(impl_ && impl_->queueBuffer)
+            {
+                (void)hsaKmtUnmapMemoryToGPU(impl_->queueBuffer);
+                (void)hsaKmtFreeMemory(impl_->queueBuffer, SDMA_QUEUE_SIZE);
+                impl_->queueBuffer = nullptr;
+            }
         }
 
         SdmaQueue::~SdmaQueue()
         {
-            // Best-effort teardown; never throw from a destructor.
-            if(queue_.QueueId)
-                (void)hsaKmtDestroyQueue(queue_.QueueId);
-            if(deviceHandle_)
-                (void)hipFree(deviceHandle_);
-            if(cachedWptr_)
-                (void)hipFree(cachedWptr_);
-            if(committedWptr_)
-                (void)hipFree(committedWptr_);
-            if(queueBuffer_)
-            {
-                (void)hsaKmtUnmapMemoryToGPU(queueBuffer_);
-                (void)hsaKmtFreeMemory(queueBuffer_, SDMA_QUEUE_SIZE);
-            }
+            teardown();
         }
 
         uint64_t SdmaQueue::submitPacketHost(const void* pkt, size_t bytes)
@@ -231,17 +279,17 @@ namespace TensileLite
                                          "(host smoke path does not implement wrap)");
 
             // Ring is uncached -> a plain memcpy is visible to the engine with
-            // no flush. queueBuffer_ is HostAccess so the CPU can write it.
-            std::memcpy(static_cast<uint8_t*>(queueBuffer_) + offset, pkt, bytes);
+            // no flush. queueBuffer is HostAccess so the CPU can write it.
+            std::memcpy(static_cast<uint8_t*>(impl_->queueBuffer) + offset, pkt, bytes);
 
             hostWptr_ += bytes;
 
             // Publish the new write pointer, then ring the doorbell. Both are
             // monotonically increasing byte counts.
-            *(queue_.Queue_write_ptr_aql) = hostWptr_;
+            *(impl_->queue.Queue_write_ptr_aql) = hostWptr_;
             // Ensure the wptr store lands before the doorbell store.
             __atomic_thread_fence(__ATOMIC_SEQ_CST);
-            *(queue_.Queue_DoorBell_aql) = hostWptr_;
+            *(impl_->queue.Queue_DoorBell_aql) = hostWptr_;
 
             return hostWptr_;
         }
@@ -250,7 +298,8 @@ namespace TensileLite
         {
             for(uint64_t i = 0; i < timeoutSpins; ++i)
             {
-                const uint64_t rp = (uint64_t)*(volatile HSAuint64*)(queue_.Queue_read_ptr_aql);
+                const uint64_t rp
+                    = (uint64_t)*(volatile HSAuint64*)(impl_->queue.Queue_read_ptr_aql);
                 if(rp >= hostWptr_)
                     return true;
             }

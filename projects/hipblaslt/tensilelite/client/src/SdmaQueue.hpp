@@ -23,8 +23,10 @@
 #include <memory>
 #include <vector>
 
-#include "hsakmt/hsakmt.h"
-#include "hsakmt/hsakmttypes.h"
+// NOTE: this header deliberately does NOT include any hsakmt/hsa headers. The
+// device-visible handle below is the cross-task contract and must be includable
+// by downstream code that has no hsakmt headers on its include path. All hsakmt
+// state is confined to SdmaQueue.cpp (behind the pimpl Impl declared there).
 
 namespace TensileLite
 {
@@ -60,13 +62,16 @@ namespace TensileLite
         // -------------------------------------------------------------------
         struct SdmaQueueDeviceHandle
         {
-            // Producer-shared resources (pointers into shared memory).
-            uint32_t*  queueBuf;      // ring base (Uncached)
-            HSAuint64* rptr;          // hardware read pointer (byte count)
-            HSAuint64* wptr;          // hardware write pointer (byte count)
-            HSAuint64* doorbell;      // doorbell (byte count)
-            uint64_t*  cachedWptr;    // software producer cursor (shared, uncached)
-            uint64_t*  committedWptr; // software committed cursor (shared, uncached)
+            // Producer-shared resources (pointers into shared memory). These
+            // use plain uint64_t* rather than hsakmt's HSAuint64* so the header
+            // stays hsakmt-free; HSAuint64 is itself a uint64_t typedef, so the
+            // layout (and every static_assert below) is unchanged.
+            uint32_t* queueBuf;      // ring base (Uncached)
+            uint64_t* rptr;          // hardware read pointer (byte count)
+            uint64_t* wptr;          // hardware write pointer (byte count)
+            uint64_t* doorbell;      // doorbell (byte count)
+            uint64_t* cachedWptr;    // software producer cursor (shared, uncached)
+            uint64_t* committedWptr; // software committed cursor (shared, uncached)
 
             // Per-producer PRIVATE cache seed (a value, not shared state).
             uint64_t cachedHwReadIndex;
@@ -126,11 +131,21 @@ namespace TensileLite
             bool waitIdleHost(uint64_t timeoutSpins = (1ull << 34));
 
         private:
-            void*            queueBuffer_   = nullptr; // ring (Uncached)
-            HsaQueueResource queue_{};                 // KFD queue resource
-            uint64_t*        cachedWptr_    = nullptr; // uncached device mem
-            uint64_t*        committedWptr_ = nullptr; // uncached device mem
-            SdmaQueueDeviceHandle* deviceHandle_ = nullptr; // device copy
+            // Best-effort release of every owned resource, shared by the
+            // destructor and the constructor's failure path (a throw mid-ctor
+            // leaves the object partially constructed, so ~SdmaQueue never runs).
+            void teardown() noexcept;
+
+            // Impl holds the KFD queue resource (HsaQueueResource) and the ring
+            // pointer. It is defined only in SdmaQueue.cpp so the hsakmt type
+            // never appears in this header; unique_ptr keeps the class movable-
+            // free and its destruction ordered after the members below.
+            struct Impl;
+            std::unique_ptr<Impl> impl_;
+
+            uint64_t*              cachedWptr_    = nullptr; // uncached device mem
+            uint64_t*              committedWptr_ = nullptr; // uncached device mem
+            SdmaQueueDeviceHandle* deviceHandle_  = nullptr; // device copy
             SdmaQueueDeviceHandle  hostHandle_{};            // host copy
             uint64_t               hostWptr_ = 0; // host-side write cursor
         };

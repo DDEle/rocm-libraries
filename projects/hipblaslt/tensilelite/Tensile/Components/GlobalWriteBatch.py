@@ -2621,9 +2621,18 @@ class GlobalWriteBatchWriter:
 
     The counter grain is (dst_rank, token-tile), a W*tokenTiles u32 array, so election
     fires once per (peer, token-tile) unit of work -- the granularity at which the SDMA
-    copy is issued.  Flag and wbl2 are still per-peer, so they now fire tokenTiles times
-    per peer instead of once; the flag stays idempotent (READY) and the redundant wbl2
-    is a cost that goes away when the SDMA path replaces it.
+    copy is issued.  Flag and wbl2 are still per-peer, so both now fire tokenTiles times
+    per peer instead of once, but for DIFFERENT reasons:
+
+      wbl2 -- purely redundant repeated work, a cost that goes away when the SDMA path
+              replaces it.
+      flag -- NOT benign.  There is still ONE flag slot per peer, so READY is set when
+              the FIRST token-tile of dst_rank completes rather than the last: the
+              release signal fires (tokenTiles-1)/tokenTiles early.  That is a WEAKENED
+              ordering guarantee, not a repeated idempotent write.  It is inert today
+              only because nothing writes recv yet.  Task 7 must replace this CU-side
+              flag store with an SDMA ATOMIC accumulate and change the DRAIN predicate
+              from `== READY` to `== tokenTiles` (see the NOTE at the flag store below).
     """
     kw = self.parentWriter
     module.addComment2("fused-A2A cross-card handshake (design spec 2.3): counter election + wbl2 + system flag")

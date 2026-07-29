@@ -49,6 +49,14 @@
 #include "ClientProblemFactory.hpp"
 #include "SolutionIterator.hpp"
 
+// The GPU-initiated SDMA route needs the host to create one ring per (device,
+// peer) and hand the kernel the device-visible handle array. SdmaQueue.cpp is
+// only compiled (and hsakmt only linked) when the option is on, so the include
+// and every use of it are gated on the same macro.
+#ifdef TENSILELITE_ENABLE_SDMA_A2A
+#include "SdmaQueue.hpp"
+#endif
+
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
@@ -126,11 +134,9 @@ namespace TensileLite
                 // FEATURE) from the swapped client.
                 args.append<uint32_t>("FusedAM", an);
                 // SDMA offload args (Task 3), appended at the very end to match
-                // Signature.py. FusedSdmaQueues is nullptr this round -- T3 is
-                // pure ABI and does not instantiate the SdmaQueueSet (its
-                // SdmaQueue.cpp only compiles under TENSILELITE_ENABLE_SDMA_A2A).
-                // TODO(T7): pass SdmaQueueSet::deviceHandles() (the device
-                // pointer to the W-element SdmaQueueDeviceHandle array).
+                // Signature.py. sdmaQueues is this device's SdmaQueueSet::
+                // deviceHandles() -- the W-element SdmaQueueDeviceHandle array the
+                // epilogue indexes by destination rank.
                 args.append<void*>("FusedSdmaQueues", sdmaQueues);
                 args.append<uint32_t>("FusedTilesPerRank", tilesPerRank);
                 args.append<uint32_t>("FusedTokenTiles", tokenTiles);
@@ -330,7 +336,11 @@ namespace TensileLite
             // constraint (AM/W)%MT0==0), so the contiguous feature extent is n_shard.
             const size_t nTokenPad = ((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE) * FUSED_A2A_N_TILE;
             const size_t recvBytes    = (size_t)W * nTokenPad * nShard * sizeof(uint16_t); // bf16
-            const size_t flagBytes    = (size_t)W * sizeof(uint32_t);
+            // flag slots are u64, NOT u32: the release signal is an SDMA ATOMIC
+            // ADD64 (MORI's SDMA packet set has ADD64 and no ADD32), so each slot
+            // is written 8 bytes wide. With a 4-byte stride the top rank's atomic
+            // would run past the end of this allocation.
+            const size_t flagBytes    = (size_t)W * sizeof(uint64_t);
             // counter is indexed [dst_rank][token-tile] -> W*tokenTiles u32 slots.
             const size_t counterBytes = (size_t)W * tokenTiles * sizeof(uint32_t);
             const size_t aBytes       = problem->a().totalAllocatedBytes();
@@ -473,6 +483,35 @@ namespace TensileLite
                         HIP_CHECK_EXC(pe);
                 }
             }
+
+            // --- Per-device SDMA queue sets: one ring per (device, peer), created
+            //     AFTER P2P is enabled so a peer's recv/flag pages are already
+            //     mapped into this device's VA space when the engine dereferences
+            //     them. The self entry (j == d) is a loopback queue: §1.5 routes the
+            //     p == my_rank packet through SDMA too, which is what gives this
+            //     card's own flag slot a real producer (no DRAIN special case). ---
+#ifdef TENSILELITE_ENABLE_SDMA_A2A
+            std::vector<std::unique_ptr<SdmaQueueSet>> sdmaSets(W);
+            {
+                std::vector<uint32_t> nodes(W);
+                for(int j = 0; j < W; j++)
+                    nodes[j] = sdmaNodeIdForDevice(j);
+                for(int d = 0; d < W; d++)
+                {
+                    HIP_CHECK_EXC(hipSetDevice(d));
+                    sdmaSets[d] = std::make_unique<SdmaQueueSet>(nodes[d], nodes);
+                }
+            }
+            std::cout << "[fused-a2a] created " << W << " SDMA queues per device (one per peer)\n";
+#else
+            std::cerr << "[fused-a2a] ERROR: this client was built without "
+                         "TENSILELITE_ENABLE_SDMA_A2A, so no SDMA rings exist, but the "
+                         "fused epilogue unconditionally submits SDMA packets and would "
+                         "dereference a null queue handle. Reconfigure with "
+                         "-DTENSILELITE_ENABLE_SDMA_A2A=ON."
+                      << std::endl;
+            return 1;
+#endif
 
             // --- Per-device streams + code-object adapters. The main adapter's
             //     modules are bound to device 0; give each device its own adapter
@@ -641,9 +680,9 @@ namespace TensileLite
                                        // kernarg "FusedAM" (Signature.py); pass AM as
                                        // the value to keep the client/kernel ABI matched.
                                        (uint32_t)AM,
-                                       // SDMA offload args (Task 3). nullptr this round;
-                                       // TODO(T7) fill with SdmaQueueSet::deviceHandles().
-                                       nullptr,
+                                       // SDMA offload args: this device's W-element
+                                       // SdmaQueueDeviceHandle array (one queue per peer).
+                                       (void*)sdmaSets[d]->deviceHandles(),
                                        tilesPerRank,
                                        tokenTiles);
                     // Print kernarg size only on iter 0 to avoid log spam; a constant

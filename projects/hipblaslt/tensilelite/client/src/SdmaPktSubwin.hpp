@@ -1,11 +1,15 @@
 // Copyright Advanced Micro Devices, Inc., or its affiliates.
 // SPDX-License-Identifier: MIT
 //
-// SDMA_PKT_COPY_LINEAR_SUBWIN (sub_op 4) packet definition for the fused
-// GEMM+AllToAll SDMA offload route (ROCM-27524).
+// SDMA packet definitions for the fused GEMM+AllToAll SDMA offload route
+// (ROCM-27524). Despite the file name, this is the home for BOTH packets the
+// route emits: the rectangular sub-window copy (SDMA_PKT_COPY_LINEAR_SUBWIN,
+// below) and the 64-bit atomic add (SDMA_PKT_ATOMIC, at the bottom) that raises
+// the destination flag once a copy lands. The name is kept as-is on purpose --
+// renaming would churn the T1 gtest target and CMake for no functional gain.
 //
-// This is the canonical, header-only home for the rectangular-copy SDMA packet
-// that later codegen tasks fill in GPU assembly. The bit-field layout, the
+// This is the canonical, header-only home for the packets that later codegen
+// tasks fill in GPU assembly. The COPY_SUBWIN bit-field layout, the
 // minus-one extent/pitch convention and the ELEMENTSIZE scaling below are the
 // exact form that was validated byte-for-byte on MI355X (3 peers x 8 bands = 24
 // packets, every dword bit-accurate, sentinel margin untouched). MORI only
@@ -215,6 +219,93 @@ namespace TensileLite
         p.DW_11_UNION.rect_x = rectX - 1;
         p.DW_11_UNION.rect_y = rectY - 1;
         p.DW_12_UNION.rect_z = 0;  // one plane
+
+        return p;
+    }
+
+    // -----------------------------------------------------------------------
+    // SDMA ATOMIC packet (op 10) -- 8 dwords, pre-GFX12 layout.
+    //
+    // Unlike the SUBWIN struct above (hand-transcribed because MORI lacks it),
+    // this is copied VERBATIM from MORI's production
+    // mori/include/mori/core/transport/sdma/sdma_pkt_struct.h
+    // (SDMA_PKT_ATOMIC_TAG, 8 unions == 8 dwords). The route uses it in the
+    // ADD64 (fetch-add) form, exactly like MORI's CreateAtomicIncPacket
+    // (anvil_device.hpp:72): op=ATOMIC, operation=ADD64, ADDR=flag slot,
+    // SRC_DATA=1 (the increment); the CMP_DATA / LOOP dwords stay zero for a
+    // plain fetch-add. Because this is a fetch-add the "l" (loop/return-old)
+    // header bit is left 0.
+    //
+    // RISK -- NOT hardware-verified: the COPY_SUBWIN packet was validated
+    // byte-for-byte on MI355X; this ATOMIC packet has NOT been. Its first real
+    // hardware run is Task 7/8. The mitigating factor is provenance: this is the
+    // struct MORI actually ships and uses in production, not a transcription.
+    // -----------------------------------------------------------------------
+    constexpr unsigned int SDMA_OP_ATOMIC     = 10;   // header op field
+    constexpr unsigned int SDMA_ATOMIC_ADD64  = 47;   // header operation field (fetch-add, 64-bit)
+
+    typedef struct SDMA_PKT_ATOMIC_TAG
+    {
+        union
+        {
+            struct
+            {
+                unsigned int op : 8;           // [7:0]
+                unsigned int sub_op : 8;       // [15:8]
+                unsigned int l : 1;            // [16]  loop / return-old (0 for fetch-add)
+                unsigned int reserved_0 : 8;   // [24:17]
+                unsigned int operation : 7;    // [31:25]
+            };
+            unsigned int DW_0_DATA;
+        } HEADER_UNION;
+
+        union { unsigned int addr_31_0;      unsigned int DW_1_DATA; } ADDR_LO_UNION;
+        union { unsigned int addr_63_32;     unsigned int DW_2_DATA; } ADDR_HI_UNION;
+        union { unsigned int src_data_31_0;  unsigned int DW_3_DATA; } SRC_DATA_LO_UNION;
+        union { unsigned int src_data_63_32; unsigned int DW_4_DATA; } SRC_DATA_HI_UNION;
+        union { unsigned int cmp_data_31_0;  unsigned int DW_5_DATA; } CMP_DATA_LO_UNION;
+        union { unsigned int cmp_data_63_32; unsigned int DW_6_DATA; } CMP_DATA_HI_UNION;
+
+        union
+        {
+            struct
+            {
+                unsigned int loop_interval : 13;  // [12:0]
+                unsigned int reserved_0 : 19;
+            };
+            unsigned int DW_7_DATA;
+        } LOOP_UNION;
+    } SDMA_PKT_ATOMIC;
+
+    static_assert(sizeof(SDMA_PKT_ATOMIC) == 8 * sizeof(unsigned int),
+                  "ATOMIC packet must be exactly 8 dwords");
+    static_assert(offsetof(SDMA_PKT_ATOMIC, HEADER_UNION)       == 0 * sizeof(unsigned int), "ATOMIC DW0 offset");
+    static_assert(offsetof(SDMA_PKT_ATOMIC, ADDR_LO_UNION)      == 1 * sizeof(unsigned int), "ATOMIC DW1 offset");
+    static_assert(offsetof(SDMA_PKT_ATOMIC, ADDR_HI_UNION)      == 2 * sizeof(unsigned int), "ATOMIC DW2 offset");
+    static_assert(offsetof(SDMA_PKT_ATOMIC, SRC_DATA_LO_UNION)  == 3 * sizeof(unsigned int), "ATOMIC DW3 offset");
+    static_assert(offsetof(SDMA_PKT_ATOMIC, SRC_DATA_HI_UNION)  == 4 * sizeof(unsigned int), "ATOMIC DW4 offset");
+    static_assert(offsetof(SDMA_PKT_ATOMIC, CMP_DATA_LO_UNION)  == 5 * sizeof(unsigned int), "ATOMIC DW5 offset");
+    static_assert(offsetof(SDMA_PKT_ATOMIC, CMP_DATA_HI_UNION)  == 6 * sizeof(unsigned int), "ATOMIC DW6 offset");
+    static_assert(offsetof(SDMA_PKT_ATOMIC, LOOP_UNION)         == 7 * sizeof(unsigned int), "ATOMIC DW7 offset");
+
+    // -----------------------------------------------------------------------
+    // Fill an ADD64 fetch-add packet targeting `dstAddr` with `addend` (the
+    // route passes addend == 1 to raise a flag). Mirrors MORI CreateAtomicIncPacket
+    // but takes the addend explicitly. Address is the raw 64-bit pointer split
+    // lo/hi; compare + loop dwords stay zero (unused for a plain fetch-add).
+    // -----------------------------------------------------------------------
+    inline SDMA_PKT_ATOMIC makeAtomicAdd64Packet(unsigned long long dstAddr,
+                                                 unsigned long long addend)
+    {
+        SDMA_PKT_ATOMIC p = {};
+
+        p.HEADER_UNION.op        = SDMA_OP_ATOMIC;
+        p.HEADER_UNION.operation = SDMA_ATOMIC_ADD64;
+
+        p.ADDR_LO_UNION.addr_31_0      = (unsigned)(dstAddr & 0xffffffffull);
+        p.ADDR_HI_UNION.addr_63_32     = (unsigned)(dstAddr >> 32);
+        p.SRC_DATA_LO_UNION.src_data_31_0  = (unsigned)(addend & 0xffffffffull);
+        p.SRC_DATA_HI_UNION.src_data_63_32 = (unsigned)(addend >> 32);
 
         return p;
     }

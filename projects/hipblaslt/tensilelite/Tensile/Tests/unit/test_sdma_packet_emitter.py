@@ -110,6 +110,24 @@ _PROD_COPY_GOLDEN = [
     0x023FFFFF, 0x00000000, 0x00000000, 0x00000000, 0x013FE000,
     0x0009FFFF, 0x00FF09FF, 0x00000000]
 
+# EDGE token-tile: N is NOT a multiple of MT1, so the last tile (j = 7) covers
+# only N_EDGE - 7*MT1 = 2000 - 1792 = 208 tokens and rect_y must be CLAMPED to
+# 208. NO hardware backing; hand-derived from the same rules, and every dword
+# that differs from _PROD_COPY_GOLDEN is checkable by inspection:
+#   DW3  src_x|src_y   = 2560 | 1792<<16          == 0x07000A00
+#   DW5  src_slice-1   = 18432*2000 - 1           == 0x02327FFF
+#   DW8  dst_x|dst_y   = 0 | (0*2000 + 1792)<<16  == 0x07000000
+#   DW11 rect_x-1|rect_y-1 = 2559 | (208-1)<<16   == 0x00CF09FF
+# An UNCLAMPED rect_y would put 0x00FF in the high half and make the engine read
+# 48 token rows past the end of D.
+_EDGE_N       = 2000
+_EDGE_J       = 7
+_EDGE_RECT_Y  = _EDGE_N - _EDGE_J * MT1   # 208
+_EDGE_COPY_GOLDEN = [
+    0x20000401, 0x00000000, 0x00000000, 0x07000A00, 0x08FFE000,
+    0x02327FFF, 0x00000000, 0x00000000, 0x07000000, 0x013FE000,
+    0x0009FFFF, 0x00CF09FF, 0x00000000]
+
 # ATOMIC ADD64 to a flag slot with distinct lo/hi bytes (matches the C++ test).
 _ATOMIC_ADDR = 0x0000ABCD12345678
 _ATOMIC_GOLDEN = [
@@ -168,14 +186,15 @@ def test_production_boundary_rect_x_equals_dst_pitch():
 # coordinates for a representative (p, j, myRank), so the whole packet built from
 # scratch equals the production golden.
 
-def _fields_from_geometry(p, j, myRank):
+def _fields_from_geometry(p, j, myRank, n=N):
     """Reproduce emitComputeCopyFields in Python (element units)."""
     return dict(
         srcX=p * NSHARD,
         srcY=j * MT1,
-        srcSlice=M * N,
-        dstY=myRank * N + j * MT1,
-        dstSlice=MT1 * NSHARD)
+        srcSlice=M * n,
+        dstY=myRank * n + j * MT1,
+        dstSlice=MT1 * NSHARD,
+        rectY=min(MT1, n - j * MT1))
 
 
 def test_geometry_p1_j0_myrank0_equals_production_golden():
@@ -183,8 +202,28 @@ def test_geometry_p1_j0_myrank0_equals_production_golden():
     got = encodeCopyDwords(
         srcBase=0, srcX=f["srcX"], srcY=f["srcY"], srcPitch=M, srcSlicePitch=f["srcSlice"],
         dstBase=0, dstX=0, dstY=f["dstY"], dstPitch=NSHARD, dstSlicePitch=f["dstSlice"],
-        rectX=NSHARD, rectY=MT1, elementSizeLog2=1)
+        rectX=NSHARD, rectY=f["rectY"], elementSizeLog2=1)
     assert got == _PROD_COPY_GOLDEN
+
+
+def test_geometry_edge_token_tile_clamps_rect_y():
+    # Tail token-tile with N % MT1 != 0: rect_y must clamp to N - j*MT1 (208),
+    # not stay at MT1 (256). Pinned to the hand-derived edge golden above.
+    f = _fields_from_geometry(p=1, j=_EDGE_J, myRank=0, n=_EDGE_N)
+    assert f["rectY"] == _EDGE_RECT_Y
+    got = encodeCopyDwords(
+        srcBase=0, srcX=f["srcX"], srcY=f["srcY"], srcPitch=M, srcSlicePitch=f["srcSlice"],
+        dstBase=0, dstX=0, dstY=f["dstY"], dstPitch=NSHARD, dstSlicePitch=f["dstSlice"],
+        rectX=NSHARD, rectY=f["rectY"], elementSizeLog2=1)
+    assert got == _EDGE_COPY_GOLDEN, \
+        "\n".join("DW%d got 0x%08X exp 0x%08X" % (i, g, e)
+                  for i, (g, e) in enumerate(zip(got, _EDGE_COPY_GOLDEN)) if g != e)
+    # The unclamped form differs exactly in DW11's high half -- the read-overrun.
+    unclamped = encodeCopyDwords(
+        srcBase=0, srcX=f["srcX"], srcY=f["srcY"], srcPitch=M, srcSlicePitch=f["srcSlice"],
+        dstBase=0, dstX=0, dstY=f["dstY"], dstPitch=NSHARD, dstSlicePitch=f["dstSlice"],
+        rectX=NSHARD, rectY=MT1, elementSizeLog2=1)
+    assert unclamped[11] != got[11] and unclamped[:11] == got[:11]
 
 
 def test_self_rank_packet_well_formed():
@@ -196,7 +235,7 @@ def test_self_rank_packet_well_formed():
         got = encodeCopyDwords(
             srcBase=0, srcX=f["srcX"], srcY=f["srcY"], srcPitch=M, srcSlicePitch=f["srcSlice"],
             dstBase=0, dstX=0, dstY=f["dstY"], dstPitch=NSHARD, dstSlicePitch=f["dstSlice"],
-            rectX=NSHARD, rectY=MT1, elementSizeLog2=1)
+            rectX=NSHARD, rectY=f["rectY"], elementSizeLog2=1)
         # header + rect are rank-independent; only src_x / dst_y move.
         assert got[0] == COPY_HEADER_DW0
         assert (got[3] & 0x3FFF) == (myRank * NSHARD) & 0x3FFF
@@ -250,14 +289,15 @@ def _render_copy_ns():
     s = [w.sgprPool.checkOutAligned(2, 2, "b%d" % i, preventOverflow=False) for i in range(2)]
     srcBase, dstBase = s[0], s[1]
     fld = [w.sgprPool.checkOut(1, "f%d" % i, preventOverflow=False) for i in range(9)]
-    (srcX, srcY, srcPitch, srcSlice, dstY, dstPitch, dstSlice, rectX, tmp) = fld
+    (srcX, srcY, srcPitch, srcSlice, dstY, dstPitch, dstSlice, rectX, rectY) = fld
+    tmp = w.sgprPool.checkOut(2, "tmp", preventOverflow=False)  # rect dword needs 2
     m = Module("copy")
     em.emitBuildCopyPacket(m, w, pkt, srcBase, srcX, srcY, srcPitch, srcSlice,
-                           dstBase, dstY, dstPitch, dstSlice, rectX, tmp)
+                           dstBase, dstY, dstPitch, dstSlice, rectX, rectY, tmp)
     return SimpleNamespace(text=str(m), pkt=pkt, srcBase=srcBase, dstBase=dstBase,
                            srcX=srcX, srcY=srcY, srcPitch=srcPitch, srcSlice=srcSlice,
                            dstY=dstY, dstPitch=dstPitch, dstSlice=dstSlice,
-                           rectX=rectX, tmp=tmp)
+                           rectX=rectX, rectY=rectY, tmp=tmp)
 
 
 def _render_atomic():
@@ -286,14 +326,14 @@ def _render_fields_ns():
     em = SdmaPacketEmitter(macroTile1=MT1)
     ins = [w.sgprPool.checkOut(1, "in%d" % i, preventOverflow=False) for i in range(6)]
     (p, j, myRank, mS, nS, nShardS) = ins
-    outs = [w.sgprPool.checkOut(1, "o%d" % i, preventOverflow=False) for i in range(6)]
-    (srcX, srcY, srcSlice, dstY, dstSlice, tmp) = outs
+    outs = [w.sgprPool.checkOut(1, "o%d" % i, preventOverflow=False) for i in range(7)]
+    (srcX, srcY, srcSlice, dstY, dstSlice, rectY, tmp) = outs
     m = Module("fields")
     em.emitComputeCopyFields(m, w, p, j, myRank, mS, nS, nShardS,
-                             srcX, srcY, srcSlice, dstY, dstSlice, tmp)
+                             srcX, srcY, srcSlice, dstY, dstSlice, rectY, tmp)
     return SimpleNamespace(text=str(m), p=p, j=j, myRank=myRank, mS=mS, nS=nS,
                            nShardS=nShardS, srcX=srcX, srcY=srcY, srcSlice=srcSlice,
-                           dstY=dstY, dstSlice=dstSlice, tmp=tmp)
+                           dstY=dstY, dstSlice=dstSlice, rectY=rectY, tmp=tmp)
 
 
 def _render_flag_addr():
@@ -358,12 +398,21 @@ class TestCopyStructural:
         assert any("s_lshl_b32" in _code(ln) and ", 13" in _code(ln) for ln in lines), \
             "expected a << 13 for the pitch field"
 
-    def test_rect_y_minus_one_folded_as_immediate(self):
-        # rect_y == MT1 is compile-time: (MT1-1) << 16 == 255 << 16 == 0x00FF0000
-        # is folded into an or-immediate, not computed at runtime.
-        text = _render_copy()
-        assert str((MT1 - 1) << 16) in text or hex((MT1 - 1) << 16) in text, \
-            "rect_y-1 (MT1-1) must be folded as a compile-time or-immediate"
+    def test_rect_y_comes_from_a_register_not_an_immediate(self):
+        # rect_y must be RUNTIME (min(MT1, N - j*MT1)): a folded (MT1-1)<<16
+        # immediate would copy a full tile out of a partial tail tile and read
+        # past the end of D. Assert the real operands: (rectY-1) into tmp+1,
+        # shifted left 16, then OR'd with (rectX-1).
+        ns = _render_copy_ns()
+        lines = _lines(ns.text)
+        assert _has_alu(lines, "s_sub_u32", ns.tmp + 1, [ns.rectY, "1"]), \
+            "rect_y-1 must be computed from the rectY SGPR"
+        assert _has_alu(lines, "s_lshl_b32", ns.tmp + 1, [ns.tmp + 1, "16"]), \
+            "(rect_y-1) must be shifted into bits [29:16]"
+        assert _has_alu(lines, "s_or_b32", ns.tmp, [ns.tmp, ns.tmp + 1]), \
+            "DW11 must OR (rect_x-1) with (rect_y-1)<<16"
+        assert str((MT1 - 1) << 16) not in ns.text and hex((MT1 - 1) << 16) not in ns.text, \
+            "rect_y must not be folded as the compile-time (MT1-1)<<16 immediate"
 
     def test_all_13_dwords_written(self):
         # Every packet dword v_mov must be present (DW0..DW12).
@@ -429,6 +478,18 @@ class TestFieldArithmetic:
             "expected s_mul_i32 tmp, myRank, N"
         assert _has_alu(lines, "s_add_u32", ns.dstY, [ns.tmp, ns.srcY]), \
             "expected s_add_u32 dstY, tmp(myRank*N), srcY(j*MT1)"
+
+    def test_rect_y_is_clamped_to_tokens_left(self):
+        # rect_y = min(MT1, N - j*MT1): a subtract of src_y (== j*MT1) from N
+        # followed by an s_min_u32 against the compile-time MT1. Asserted on the
+        # real operands so a missing clamp (or a subtract from the wrong term)
+        # fails -- an unclamped rect_y reads past the end of D on the tail tile.
+        ns = _render_fields_ns()
+        lines = _lines(ns.text)
+        assert _has_alu(lines, "s_sub_u32", ns.rectY, [ns.nS, ns.srcY]), \
+            "expected s_sub_u32 rectY, N, srcY (tokens left in this tile)"
+        assert _has_alu(lines, "s_min_u32", ns.rectY, [ns.rectY, str(MT1)]), \
+            "expected s_min_u32 rectY, rectY, MT1 (clamp the tail tile)"
 
     def test_flag_addr_stride_is_myrank_times_8_64bit(self):
         # flag addr = flag_ptr[p] + myRank*8, a 64-bit add (lo add + hi carry).

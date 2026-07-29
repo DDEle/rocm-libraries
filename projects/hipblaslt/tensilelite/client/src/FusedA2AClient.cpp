@@ -326,6 +326,29 @@ namespace TensileLite
                 return -1;
             }
 
+            // dst_y of the SDMA COPY_SUBWIN packet is a 14-BIT field, and the kernel
+            // packs it with a bare `s_lshl_b32 tmp, dst_y, 16` -- no mask. The pure-
+            // Python reference encoder DOES mask, so past 2^14 the two disagree and
+            // NEITHER complains: the packet would silently address a wrapped-around
+            // token row and scatter data into the wrong recv slot. Reject the shape
+            // here instead. dst_y max = (W-1)*N + (tokenTiles-1)*MT1 (the top rank's
+            // last token-tile); a simpler sufficient bound is W*N <= 16384.
+            const size_t maxDstY
+                = (size_t)(W - 1) * N + (size_t)(tokenTiles - 1) * FUSED_A2A_N_TILE;
+            if(maxDstY >= (1u << 14))
+            {
+                std::cerr << "[fused-a2a] ERROR: dst_y overflows the SDMA packet's "
+                             "14-bit field.\n"
+                          << "  W=" << W << " N(token)=" << N
+                          << " MacroTile1(token)=" << FUSED_A2A_N_TILE
+                          << " tokenTiles=" << tokenTiles << " -> max dst_y=" << maxDstY
+                          << " must be < " << (1u << 14) << ".\n"
+                          << "  Refusing to launch (the copy would silently land in the "
+                             "wrong recv slot). Reduce W or N."
+                          << std::endl;
+                return -1;
+            }
+
             // recv is feature-contiguous [W, token, feature_shard]: token is the outer
             // (strided-by-n_shard) axis, feature-shard is the inner stride-1 axis. The
             // fused PUSH store writes the FULL macro-tile edge (not just the logical
@@ -489,7 +512,15 @@ namespace TensileLite
             //     mapped into this device's VA space when the engine dereferences
             //     them. The self entry (j == d) is a loopback queue: §1.5 routes the
             //     p == my_rank packet through SDMA too, which is what gives this
-            //     card's own flag slot a real producer (no DRAIN special case). ---
+            //     card's own flag slot a real producer (no DRAIN special case).
+            //
+            //     sdmaHandles is declared OUTSIDE the #ifdef on purpose: the kernarg
+            //     append below is ordinary code that the preprocessor still has to
+            //     parse in an SDMA-off build (the `return 1` in the #else is a
+            //     RUNTIME return, it does not remove later statements from the token
+            //     stream). Referring to the SdmaQueueSet vector directly down there
+            //     made the default build fail to compile. ---
+            std::vector<void*> sdmaHandles(W, nullptr);
 #ifdef TENSILELITE_ENABLE_SDMA_A2A
             std::vector<std::unique_ptr<SdmaQueueSet>> sdmaSets(W);
             {
@@ -499,7 +530,8 @@ namespace TensileLite
                 for(int d = 0; d < W; d++)
                 {
                     HIP_CHECK_EXC(hipSetDevice(d));
-                    sdmaSets[d] = std::make_unique<SdmaQueueSet>(nodes[d], nodes);
+                    sdmaSets[d]   = std::make_unique<SdmaQueueSet>(nodes[d], nodes);
+                    sdmaHandles[d] = sdmaSets[d]->deviceHandles();
                 }
             }
             std::cout << "[fused-a2a] created " << W << " SDMA queues per device (one per peer)\n";
@@ -682,7 +714,7 @@ namespace TensileLite
                                        (uint32_t)AM,
                                        // SDMA offload args: this device's W-element
                                        // SdmaQueueDeviceHandle array (one queue per peer).
-                                       (void*)sdmaSets[d]->deviceHandles(),
+                                       sdmaHandles[d],
                                        tilesPerRank,
                                        tokenTiles);
                     // Print kernarg size only on iter 0 to avoid log spam; a constant

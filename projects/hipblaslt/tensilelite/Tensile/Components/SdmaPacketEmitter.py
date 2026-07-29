@@ -276,7 +276,8 @@ class SdmaPacketEmitter:
     def emitBuildAtomicPacket(self, module, w, pktV, dstAddrS, addend=1):
         """Build the 8 ATOMIC ADD64 dwords into pktV[0:8]: raise flag_ptr[p]
         [myRank] by `addend` (== 1). dstAddrS is a 2-SGPR pointer to the flag
-        slot (caller computes flag_ptr[p] + myRank*4). Mirrors encodeAtomicDwords
+        slot (caller computes flag_ptr[p] + myRank*8 -- see emitComputeFlagAddr;
+        the stride is 8 because this ADD64 writes 8 bytes). Mirrors encodeAtomicDwords
         / makeAtomicAdd64Packet. addend is a compile-time immediate (1) so its
         hi dword is 0."""
         self._movImm(module, pktV + 0, ATOMIC_HEADER_DW0,
@@ -361,7 +362,7 @@ class SdmaPacketEmitter:
         one-shot sentinel -- the SDMA ATOMIC adds, it does not store.
         """
         module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(myRankS), shiftHex=3,
-                                  comment="myRank * 8 (u64 flag-slot byte offset; see T7 dependency)"))
+                                  comment="myRank * 8 (u64 flag-slot byte offset: the ATOMIC is an ADD64)"))
         module.add(SAddU32(dst=sgpr(outAddrS + 0), src0=sgpr(flagBaseS + 0), src1=sgpr(tmpS),
                            comment="flag addr lo = flag_ptr[p] + myRank*8"))
         module.add(SAddCU32(dst=sgpr(outAddrS + 1), src0=sgpr(flagBaseS + 1), src1=0,

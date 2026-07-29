@@ -207,7 +207,6 @@ class SdmaRingEmitter:
         """
         loopLabel  = Label(w.labels.getNameInc("sdma_reserve_loop"), "ReserveQueueSpace: CAS retry loop")
         noPadLabel = Label(w.labels.getNameInc("sdma_reserve_nopad"), "ReserveQueueSpace: no wrap padding")
-        haveIdx    = Label(w.labels.getNameInc("sdma_reserve_have"),  "ReserveQueueSpace: new index ready")
         doneLabel  = Label(w.labels.getNameInc("sdma_reserve_done"),  "ReserveQueueSpace: reserved")
 
         cachedWptrPtrS = w.sgprPool.checkOutAligned(2, 2, tag="sdma_rsv_cwPtr", preventOverflow=False)
@@ -254,7 +253,6 @@ class SdmaRingEmitter:
         module.add(SAddU32(dst=sgpr(newIdxS + 0), src0=sgpr(newIdxS + 0), src1=sgpr(outOffsetS),
                            comment="new lo += offset"))
         module.add(SAddCU32(dst=sgpr(newIdxS + 1), src0=sgpr(newIdxS + 1), src1=0, comment="new hi (carry)"))
-        module.add(haveIdx)
 
         # CanWriteUpto(new)? if not, retry (a concurrent consumer may free space).
         self.emitCanWriteUpto(module, w, handleBaseS, cachedHwReadIdxS, newIdxS, canS, tmpPair)

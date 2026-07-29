@@ -94,9 +94,18 @@ def encodeCopyDwords(srcBase, srcX, srcY, srcPitch, srcSlicePitch,
     """Return the 13 dwords of a COPY_LINEAR_SUBWIN packet, encoding the two
     conventions the whole route depends on: every extent/pitch is stored MINUS
     ONE, and all coords/extents/pitches are in ELEMENTS (element size carried in
-    the header). Bit positions mirror SdmaPktSubwin.hpp exactly. This is the
-    reference the rocisa emitter must reproduce and the unit test pins to the T1
-    golden."""
+    the header). This is the reference the rocisa emitter must reproduce, pinned
+    by test_sdma_packet_emitter.py to golden dwords with MI355X backing.
+
+    Bit positions are transcribed from AMD OSS 4.4 sdma.pkt field positions,
+    cross-checked against ROCR's sdma_registers.h and the kernel's
+    vega10_sdma_pkt_open.h -- all three agree. The layout was then validated
+    byte-for-byte on MI355X (24 packets, every dword bit-accurate).
+
+    GFX12+ uses a DIFFERENT layout of the same size: this encoder is gfx9xx /
+    gfx95x ONLY. Do not reorder fields or "clean up" the reserved gaps -- the
+    minus-one convention and the <<13 pitch placement look arbitrary because
+    they are hardware-mandated, not derivable."""
     dw = [0] * COPY_PACKET_DWORDS
     dw[0] = ((SDMA_OP_COPY_SUBWIN & 0xFF)
              | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8)

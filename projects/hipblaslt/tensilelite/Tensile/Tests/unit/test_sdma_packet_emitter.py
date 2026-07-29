@@ -8,10 +8,13 @@
 # geometry into the COPY_SUBWIN + ATOMIC ADD64 packet dword arrays. Two surfaces
 # are tested and cross-checked:
 #   * pure-Python encoders (encodeCopyDwords / encodeAtomicDwords) are pinned to
-#     the T1 C++ golden vectors (client/src/SdmaPktSubwin_test.cpp), in BOTH the
-#     harness form (padded dst pitch 2624) and the production form (unpadded
-#     nShard=2560). This is the plan's named verification: the emitter's
-#     immediates must equal the byte-for-byte-on-MI355X golden.
+#     the golden dword vectors below, in BOTH the harness form (padded dst pitch
+#     2624) and the production form (unpadded nShard=2560). This is the plan's
+#     named verification: the emitter's immediates must equal the
+#     byte-for-byte-on-MI355X golden. See the provenance note above the vectors
+#     -- this file is self-contained on that point and does not depend on the
+#     C++ packet header, which is slated for removal (nothing in the client
+#     runtime ever consumed it).
 #   * the rocisa emitters (emitBuildCopyPacket / emitBuildAtomicPacket /
 #     emitComputeCopyFields / emitComputeFlagAddr) are asserted on their SEMANTIC
 #     field-packing features (header immediates, minus-one encoding, shift
@@ -62,10 +65,36 @@ _GFX    = "gfx950"
 
 
 # ---------------------------------------------------------------------------
-# Part 1: pure-Python encoders vs the T1 C++ golden (the plan's named check)
+# Part 1: pure-Python encoders vs the golden dwords (the plan's named check)
 # ---------------------------------------------------------------------------
-# These expected vectors are copied verbatim from SdmaPktSubwin_test.cpp so a
-# drift on either side reddens here.
+# PROVENANCE OF THESE VECTORS -- they are hand-written constants on purpose. A
+# golden must be an EXTERNAL reference; regenerating it from the code under test
+# would make the check circular. Their authority differs per vector, and the
+# difference matters:
+#
+#   _HARNESS_COPY_GOLDEN -- the only sequence with real hardware backing. These
+#     exact bytes ran on MI355X (3 peers x 8 bands = 24 packets; every dword
+#     bit-accurate, sentinel margin untouched). Independently, the Task 1
+#     reviewer hand-recomputed all 13 dwords from the field spec rather than
+#     accepting program output, which is what rules out "the golden is just
+#     whatever the encoder printed".
+#   _PROD_COPY_GOLDEN -- NO hardware backing. Derived by hand from the same
+#     rules; only DW9/DW10 differ from the harness vector (dst pitch 2560 vs
+#     2624), and both are checkable by inspection: (2560-1)<<13 == 0x013FE000,
+#     256*2560-1 == 0x0009FFFF.
+#   _ATOMIC_GOLDEN -- NO hardware backing and no second source. Derived from
+#     MORI's SDMA_PKT_ATOMIC only: DW0 == 10 | (47<<25) == 0x5E00000A. First
+#     real execution is Task 7/8.
+#
+# The BIT POSITIONS these encode (minus-one extents/pitches, ELEMENTSIZE
+# scaling, the <<13 pitch placement) come from AMD OSS 4.4 sdma.pkt, cross-
+# checked against ROCR sdma_registers.h and the kernel's vega10_sdma_pkt_open.h
+# -- all three agree. GFX12+ uses a DIFFERENT layout of the same size; these
+# vectors are gfx9xx / gfx95x only.
+#
+# DO NOT "update the golden" to make a red test pass. A mismatch means either
+# the packing code drifted (fix the code) or the rule itself changed (then you
+# need a new source, and this note must be updated to cite it).
 
 # HARNESS: dst pitch padded to 2624 (kShard+kDstPad), the only byte sequence
 # with real MI355X backing.

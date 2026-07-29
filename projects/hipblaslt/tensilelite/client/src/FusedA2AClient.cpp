@@ -115,6 +115,8 @@ namespace TensileLite
                 }
                 args.append<void*>("counter_ptr", counterPtr);
                 args.append<uint32_t>("FusedMyRank", myRank);
+                // DEPRECATED (Task 6): the kernel elects on FusedTilesPerRank now.
+                // Kept so the kernarg offsets after it stay put.
                 args.append<uint32_t>("FusedTarget", target);
                 args.append<uint32_t>("FusedW", worldSize);
                 args.append<uint32_t>("FusedNShard", nShard);
@@ -207,17 +209,17 @@ namespace TensileLite
 
             // Tile sizes MUST come from THIS solution's macro-tile, not a hardcoded
             // 256: the kernel epilogue gates PUSH/local and computes dst_rank +
-            // FusedTarget from the compile-time MacroTile0/MacroTile1 (see
-            // GlobalWriteBatch.py _fusedA2ADispatch / _emitFusedA2AHandshake, which
-            // use self.kernel["MacroTile1"]). sizeMapping.macroTile.{x,y} are those
+            // the counter index/target from the compile-time MacroTile0/MacroTile1
+            // (see GlobalWriteBatch.py _emitFusedA2AHandshake, which uses
+            // self.kernel["MacroTile0"]). sizeMapping.macroTile.{x,y} are those
             // same MT0/MT1 (the runtime WG grid is CeilDivide(M,macroTile.x) x
-            // CeilDivide(N,macroTile.y), ContractionProblem.cpp:795-796). `target`
-            // is an EXACT per-dst-rank count of contributing PUSH workgroups
-            // ((n_shard/MT0)*(N/MT1) = feature-tiles-in-shard * token-tiles, since
-            // post-swap feature=WG0 is scattered and token=WG1 is replicated) compared
-            // for equality kernel-side; a hardcoded 256 against a 128 macro-tile makes
-            // the tile factors wrong and over-restricts admissible shapes via the
-            // M%256/AM%256 guards. macroTile.x = MT0 (M dim), macroTile.y = MT1 (N dim).
+            // CeilDivide(N,macroTile.y), ContractionProblem.cpp:795-796).
+            // `tilesPerRank` (= n_shard/MT0) is an EXACT count of the PUSH workgroups
+            // sharing one counter slot (dst_rank, token-tile), compared for equality
+            // kernel-side, and `tokenTiles` (= CeilDivide(N,MT1)) is the counter array's
+            // token dimension; a hardcoded 256 against a 128 macro-tile makes the tile
+            // factors wrong and over-restricts admissible shapes via the M%256/AM%256
+            // guards. macroTile.x = MT0 (M dim), macroTile.y = MT1 (N dim).
             const uint32_t FUSED_A2A_M_TILE = (uint32_t)solution->sizeMapping.macroTile.x;
             const uint32_t FUSED_A2A_N_TILE = (uint32_t)solution->sizeMapping.macroTile.y;
             if(FUSED_A2A_M_TILE == 0 || FUSED_A2A_N_TILE == 0)
@@ -267,12 +269,20 @@ namespace TensileLite
             // tokenTiles: token-tiles across the full token dim N. Post-swap the
             // A2A-scattered dim is FEATURE (WG0), so TOKEN (WG1) is the replicated
             // dim -- every token-tile workgroup in a rank's feature shard contributes
-            // one PUSH to that rank. FusedTarget (the per-dst-rank contributing-WG
-            // count, compared for equality kernel-side) is therefore
-            // tilesPerRank (feature-tiles in the shard) * tokenTiles (all N-tiles).
-            const uint32_t tokenTiles   = (uint32_t)(N / FUSED_A2A_N_TILE);
+            // one PUSH to that rank.
+            //
+            // CEIL, not floor: tokenTiles is a DIMENSION of the counter array (the
+            // kernel indexes counter[dst_rank*tokenTiles + WorkGroup1]) and the grid
+            // has CeilDivide(N, MT1) token-tiles. There is no N % MT1 == 0 guard below
+            // (token = batch*seqlen, the user gives what they give), so a floor here
+            // would let WG1 == tokenTiles index one past the row -> counter overrun or
+            // a slot no WG ever completes -> DRAIN deadlock.
+            const uint32_t tokenTiles   = (uint32_t)((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE);
             // mTiles: feature-tiles across the full feature dim M (diagnostic only).
             const uint32_t mTiles       = (uint32_t)(M / FUSED_A2A_M_TILE);
+            // DEPRECATED: the kernel's election target is now FusedTilesPerRank (the
+            // counter is per (dst_rank, token-tile), so only tilesPerRank WGs share a
+            // slot). Still passed so the kernarg layout / offsets stay untouched.
             const uint32_t target       = tilesPerRank * tokenTiles;
 
             // Fail-fast on shapes that violate the fused-A2A design constraints
@@ -321,7 +331,8 @@ namespace TensileLite
             const size_t nTokenPad = ((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE) * FUSED_A2A_N_TILE;
             const size_t recvBytes    = (size_t)W * nTokenPad * nShard * sizeof(uint16_t); // bf16
             const size_t flagBytes    = (size_t)W * sizeof(uint32_t);
-            const size_t counterBytes = (size_t)W * sizeof(uint32_t);
+            // counter is indexed [dst_rank][token-tile] -> W*tokenTiles u32 slots.
+            const size_t counterBytes = (size_t)W * tokenTiles * sizeof(uint32_t);
             const size_t aBytes       = problem->a().totalAllocatedBytes();
             const size_t bBytes       = problem->b().totalAllocatedBytes();
             const size_t cBytes       = problem->c().totalAllocatedBytes();
@@ -524,13 +535,15 @@ namespace TensileLite
                 float tol  = 1e-2f * std::max(1.0f, std::fabs(want));
                 return diff <= tol;
             };
-            // recv is feature-contiguous [W, token, feature_shard]: the kernel's PUSH
-            // store uses token stride = n_shard (FusedNShard) and slot stride =
-            // N_token * n_shard (N = logical SizeJ = nToken), with feature-shard as the
-            // stride-1 inner axis. This mirrors the _emitFusedA2APushStore offset formula
-            // (slotElem + t*n_shard + f_local). recv is a bf16 buffer. slotStride uses the
-            // UNPADDED N to match the kernel's SizeJ slot multiply. See
-            // task3-index-derivation.md.
+            // recv is feature-contiguous [W, token, feature_shard]: token stride =
+            // n_shard (FusedNShard) and slot stride = N_token * n_shard (N = logical
+            // SizeJ = nToken), with feature-shard as the stride-1 inner axis, i.e.
+            // element offset = slotElem + t*n_shard + f_local.
+            // recv is a bf16 buffer. slotStride uses the UNPADDED N to match the
+            // kernel's SizeJ slot multiply. See task3-index-derivation.md.
+            // NOTE (Task 6): nothing writes recv any more -- the CU-side remote PUSH
+            // store was removed and the SDMA copy that replaces it lands in Task 7, so
+            // this L2 check is EXPECTED to fail until then.
             const size_t slotStride = (size_t)N * (size_t)nShard; // elems per src slot (nToken*nShard)
             const size_t rowStride  = (size_t)nShard;             // per-token stride (feature-shard contiguous)
 

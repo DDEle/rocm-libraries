@@ -2617,6 +2617,11 @@ class GlobalWriteBatchWriter:
     own copy. One queue per peer (fanning a peer over several queues measured
     worse), selected by dst_rank out of the FusedSdmaQueues handle array.
 
+    ASSUMPTION -- the COPY's src_pitch is passed as SizesFree+0 (M), i.e. D's leading
+    dimension is exactly M with no padding. That holds for every fused-A2A shape today
+    (D is the native column-major output, ldd == M); a padded ldd would need the real
+    StrideD sgpr here instead, and would be silently wrong, not merely slow.
+
     Args:
       dstRankSgpr:  1 SGPR, the peer rank p (== this WG's dst_rank).
       myRankSgpr:   1 SGPR, this card's rank.

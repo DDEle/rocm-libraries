@@ -341,11 +341,17 @@ class TestFieldArithmetic:
         text = _render_fields()
         assert "myRank * N" in text and "dst_y = myRank*N + j*MT1" in text
 
-    def test_flag_addr_stride_is_myrank_times_4_64bit(self):
-        # flag addr = flag_ptr[p] + myRank*4, a 64-bit add (lo add + hi carry).
+    def test_flag_addr_stride_is_myrank_times_8_64bit(self):
+        # flag addr = flag_ptr[p] + myRank*8, a 64-bit add (lo add + hi carry).
+        # Stride is 8 (u64 flag slots): the ATOMIC is an ADD64 (8-byte write), so
+        # a *4 u32 stride would heap-overrun myRank=3's write. See the corrected
+        # plan §1.3 and the T7 dependency note on emitComputeFlagAddr.
         lines = _lines(_render_flag_addr())
-        assert any("s_lshl_b32" in _code(ln) and ", 2" in _code(ln) for ln in lines), \
-            "expected myRank*4 (shift left 2)"
+        assert any("s_lshl_b32" in _code(ln) and ", 3" in _code(ln) for ln in lines), \
+            "expected myRank*8 (shift left 3, u64 flag-slot stride)"
+        # A *4 (shift 2) stride must NOT reappear -- that was the overrun defect.
+        assert not any("s_lshl_b32" in _code(ln) and ", 2" in _code(ln) for ln in lines), \
+            "flag stride must be *8, not the defective *4"
         assert any("s_add_u32" in _code(ln) for ln in lines) and \
                any("s_addc_u32" in _code(ln) for ln in lines), \
             "flag addr must be a 64-bit add (add lo + addc hi)"

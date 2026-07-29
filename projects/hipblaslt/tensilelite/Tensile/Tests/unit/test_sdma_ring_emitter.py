@@ -227,6 +227,19 @@ class TestSubmitOrder:
         between = [ln for ln in lines[i_wptr + 1:i_db] if "s_waitcnt vmcnt(0)" in ln]
         assert between, "expected s_waitcnt vmcnt(0) between wptr store and doorbell store"
 
+    def test_vmcnt_barrier_between_doorbell_and_committed(self):
+        # Global Constraint 4 / MORI anvil_device.hpp:226: an s_waitcnt vmcnt(0)
+        # sits between the doorbell store and the committedWptr store, so the
+        # doorbell (engine kick) is ordered before committedWptr unblocks the next
+        # producer. This is on the plan's timing-hang critical path, so it is
+        # pinned here -- a refactor that drops it must redden a test.
+        lines = _lines(_render_submit())
+        i_db = _first_idx(lines, lambda l: "doorbell" in l and "global_store" in l)
+        i_comm = _first_idx(lines, lambda l: "store committedWptr = pending" in l and "global_store" in l)
+        assert -1 not in (i_db, i_comm), f"missing a publish store: db={i_db} comm={i_comm}"
+        between = [ln for ln in lines[i_db + 1:i_comm] if "s_waitcnt vmcnt(0)" in ln]
+        assert between, "expected s_waitcnt vmcnt(0) between doorbell store and committedWptr store"
+
     def test_two_vmcnt_barriers_present(self):
         # One vmcnt(0) orders the packet stores before wptr; one orders wptr
         # before the doorbell. Both must be present.

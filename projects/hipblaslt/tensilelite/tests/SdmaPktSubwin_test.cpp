@@ -134,3 +134,43 @@ TEST(SdmaPktSubwin, PacketSizeAndSubOp)
     EXPECT_EQ(p.HEADER_UNION.op, SDMA_OP_COPY_SUBWIN);
     EXPECT_EQ(p.HEADER_UNION.sub_op, SDMA_SUBOP_COPY_LINEAR_RECT);
 }
+
+// -- ATOMIC ADD64 golden vector. The route raises a destination flag with a
+//    fetch-add-1 packet (MORI CreateAtomicIncPacket form). This freezes the
+//    8-dword encoding. NOTE: unlike the SUBWIN vectors above, this packet has
+//    NO on-hardware backing yet (see the header's RISK note); the expected
+//    dwords are derived by hand from the MORI field rules. --
+TEST(SdmaPktAtomic, Add64GoldenVector)
+{
+    // A flag slot address with distinct lo/hi bytes so a lo/hi swap would show.
+    constexpr unsigned long long kFlagAddr = 0x0000ABCD12345678ull;
+    auto p = makeAtomicAdd64Packet(kFlagAddr, /*addend=*/1);
+
+    // Field-by-field derivation of each expected dword:
+    //   DW0  op=10 | operation=47<<25                           = 0x5E00000A
+    //   DW1  addr_lo                                            = 0x12345678
+    //   DW2  addr_hi                                            = 0x0000ABCD
+    //   DW3  src_data_lo = addend lo = 1                        = 0x00000001
+    //   DW4  src_data_hi = addend hi = 0                        = 0x00000000
+    //   DW5  cmp_data_lo (unused for fetch-add)                 = 0x00000000
+    //   DW6  cmp_data_hi (unused for fetch-add)                 = 0x00000000
+    //   DW7  loop_interval = 0                                  = 0x00000000
+    const unsigned int expected[8] = {
+        0x5E00000Au, 0x12345678u, 0x0000ABCDu, 0x00000001u,
+        0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u};
+
+    const unsigned int* got = reinterpret_cast<const unsigned int*>(&p);
+    for(int i = 0; i < 8; ++i)
+        EXPECT_EQ(got[i], expected[i]) << "atomic DW_" << i << " mismatch";
+}
+
+// Structural sanity for the ATOMIC packet: 8 dwords, op/operation fields, and
+// the fetch-add (l==0) form. Layout offsets are locked by static_assert.
+TEST(SdmaPktAtomic, PacketSizeAndOp)
+{
+    EXPECT_EQ(sizeof(SDMA_PKT_ATOMIC), 8u * sizeof(unsigned int));
+    auto p = makeAtomicAdd64Packet(0, 1);
+    EXPECT_EQ(p.HEADER_UNION.op, SDMA_OP_ATOMIC);
+    EXPECT_EQ(p.HEADER_UNION.operation, SDMA_ATOMIC_ADD64);
+    EXPECT_EQ(p.HEADER_UNION.l, 0u);
+}

@@ -22,7 +22,7 @@
 
 from rocisa.code import Label, Module, RegSet, TextBlock
 from rocisa.container import SMEMModifiers, VOP3PModifiers, MUBUFModifiers, GLOBALModifiers, \
-  SDWAModifiers, DSModifiers, replaceHolder, EXEC, VCC, vgpr, sgpr, ContinuousRegister, mgpr
+  SDWAModifiers, replaceHolder, EXEC, VCC, vgpr, sgpr, ContinuousRegister, mgpr
 from rocisa.enum import CvtType, HighBitSel, RoundType, SaturateCastType, SelectBit, CacheScope
 from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, BufferWbl2, \
   GlobalAtomicAddU32, GlobalLoadB32, GlobalStoreB32, \
@@ -39,7 +39,7 @@ from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, Buffe
   VCvtFP8toF32, VCvtI32toF32, VCvtPkBF8toF32, VCvtPkF32toBF16, VCvtPkF32toFP16, VCvtPkFP8toF32, \
   VFmaF64, VFmaMixF32, VAndB32, VLShiftLeftB32, VPermlane16SwapB32, VPermlane32SwapB32, \
   VLShiftRightB32, VMacF32, VMadMixF32, VMaxF32, VMovB32, VMovB64, VMulF32, VMulF64, \
-  VMulLOU32, VMulPKF16, VMulPKF32, VPackF16toB32, VReadfirstlaneB32, VRndneF32, VCvtBF16toFP32, VSubU32
+  VMulLOU32, VMulPKF16, VMulPKF32, VPackF16toB32, VReadfirstlaneB32, VRndneF32, VCvtBF16toFP32
 from rocisa.functions import vectorStaticMultiply
 
 from ..Common import DataDirection, SemanticVersion, isSubtileMultiDU
@@ -1890,16 +1890,16 @@ class GlobalWriteBatchWriter:
                 storeCodeModule.add(SCBranchSCC0(labelName=fallbackLabel.getLabelName(),
                                                  comment=f"only d0={tt0-1} valid -> scalar fallback"))
                 tmpStoreCode = self._emit16bitSubtilePairedStore(partnerAddrCalc, sumIdx0, sumIdx1, prefixOffset, tt0 - 1, blockIdxM=blockIdxM, blockIdxN=blockIdxN, forceSlc=fusedA2APushPass)
-                self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
+                self._addSubtileStore(storeCodeModule, tmpStoreCode)
                 storeCodeModule.add(SBranch(labelName=afterPairedLabel.getLabelName(),
                                             comment="skip scalar fallback"))
                 storeCodeModule.add(fallbackLabel)
                 tmpFallbackCode = self._emit16bitSubtileScalarStore(partnerAddrCalc, sumIdx0, prefixOffset, tt0 - 1, blockIdxM=blockIdxM, blockIdxN=blockIdxN, forceSlc=fusedA2APushPass)
-                self._addSubtileStore(storeCodeModule, blockIdxN, tmpFallbackCode)
+                self._addSubtileStore(storeCodeModule, tmpFallbackCode)
                 storeCodeModule.add(afterPairedLabel)
               else:
                 tmpStoreCode = self._emit16bitSubtilePairedStore(partnerAddrCalc, sumIdx0, sumIdx1, prefixOffset, tt0 - 1, blockIdxM=blockIdxM, blockIdxN=blockIdxN, forceSlc=fusedA2APushPass)
-                self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
+                self._addSubtileStore(storeCodeModule, tmpStoreCode)
               if skipLabel is not None:
                 storeCodeModule.add(skipLabel)
               self.storesIssued += 1
@@ -1912,7 +1912,7 @@ class GlobalWriteBatchWriter:
               sumIdx0 = self.ss.elementSumIdx[elementIdx]
               prefixOffset = self.parentWriter.states.c.startVgprValu
               tmpStoreCode = self._emit16bitSubtileScalarStore(addrCalc, sumIdx0, prefixOffset, tt0, blockIdxM=blockIdxM, blockIdxN=blockIdxN, forceSlc=fusedA2APushPass)
-              self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
+              self._addSubtileStore(storeCodeModule, tmpStoreCode)
               if orphanSkipLabel is not None:
                 storeCodeModule.add(orphanSkipLabel)
               self.storesIssued += 1
@@ -1934,7 +1934,7 @@ class GlobalWriteBatchWriter:
               sumIdx0 = self.ss.elementSumIdx[elementIdx]
               prefixOffset = self.parentWriter.states.c.startVgprValu
               tmpStoreCode = self._emit16bitSubtileScalarStore(addrCalc, sumIdx0, prefixOffset, tt0, blockIdxM=blockIdxM, blockIdxN=blockIdxN, forceSlc=fusedA2APushPass)
-              self._addSubtileStore(storeCodeModule, blockIdxN, tmpStoreCode)
+              self._addSubtileStore(storeCodeModule, tmpStoreCode)
               if orphanSkipLabel is not None:
                 storeCodeModule.add(orphanSkipLabel)
               self.storesIssued += 1
@@ -1961,12 +1961,12 @@ class GlobalWriteBatchWriter:
           # Under the hoisted two-pass fused-A2A gate this local D store is emitted in
           # BOTH passes (PUSH and LOCAL); the runtime gate runs only one pass per WG, so
           # the copy in the not-taken pass is dead code (a .co-size cost, not a bug).
-          # NOTE: unlike the 16bit-subtile path above, this generic store cannot be given
-          # the fused-A2A sc1 (fusedA2APushPass) modifier without plumbing a flag through
-          # addStore().  Fused A2A only runs the 16bit-subtile path, so this is unreached
-          # there; a future fused config on this path would need the sc1 plumbing.
+          # This is also the path an EDGE batch takes under fused A2A (is16bitSubtile
+          # requires not self.edge), so it needs the same sc1 as the subtile path above:
+          # without it the SDMA engine would read a still-L2-resident edge tile from HBM.
           tmpStoreCode = self.parentWriter.addStore(self.kernel, self.ss, 'D', addrCalc, sumIdx, self.tmpS01, self.edge, elementIdx, self.batchIdx,
-                                                   overrideAfterPrimerRows=_emitOverrideRows, comment="store D")
+                                                   overrideAfterPrimerRows=_emitOverrideRows, comment="store D",
+                                                   forceSlc=fusedA2APushPass)
           storeCodeModule.add(tmpStoreCode)
           if self.parentWriter.states.storeAlign8 and isSubtileNonEdge:
             storeCodeModule.add(self.getEdgeMovInstType()(EXEC(), -1, "restore exec"))
@@ -2114,7 +2114,7 @@ class GlobalWriteBatchWriter:
 
     return module
 
-  def _addSubtileStore(self, targetModule, blockIdxN: int, storeModule: Module):
+  def _addSubtileStore(self, targetModule, storeModule: Module):
     """Add a 16bit subtile store.
 
     Historically this routed FusedGemmA2A stores through a runtime PUSH/local dispatch.
@@ -2426,6 +2426,13 @@ class GlobalWriteBatchWriter:
     module.add(VMovB32(dst=vgpr(vFlagAddr + 0), src=sgpr(flagBaseSgpr + 0), comment="flag addr lo -> vgpr"))
     module.add(VMovB32(dst=vgpr(vFlagAddr + 1), src=sgpr(flagBaseSgpr + 1), comment="flag addr hi -> vgpr"))
     module.add(VMovB32(dst=vgpr(vReady), src=self._FUSED_A2A_FLAG_READY, comment="READY value"))
+    # NOTE (Task 6 -> Task 7): the counter is now (peer, token-tile) grained but the flag
+    # is still ONE slot per peer, so this READY fires when the FIRST token-tile of dst_rank
+    # completes, not the last -- the release signal is (tokenTiles-1)/tokenTiles early.
+    # That is a WEAKENED ordering guarantee, not merely a redundant idempotent write; it is
+    # inert today only because nothing writes recv yet.  Task 7 must replace this CU-side
+    # store with an SDMA ATOMIC accumulate on the flag and change the DRAIN predicate from
+    # `== READY` to `== tokenTiles`.
     module.add(GlobalStoreB32(
       vaddr=vgpr(vFlagAddr, 2), src=vgpr(vReady), saddr=offSaddr,
       modifier=GLOBALModifiers(glc=True, slc=True, scope=CacheScope.SCOPE_NONE, isStore=True),

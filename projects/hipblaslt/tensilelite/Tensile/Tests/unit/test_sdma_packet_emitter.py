@@ -207,6 +207,13 @@ def _mock_writer():
 
 
 def _render_copy():
+    return _render_copy_ns().text
+
+
+def _render_copy_ns():
+    """Render emitBuildCopyPacket AND return the registers it used, so tests can
+    assert on real operands (e.g. DW8 == dst_y<<16 with the actual dstY SGPR)
+    instead of comment text."""
     _init_gfx950()
     w = _mock_writer()
     em = SdmaPacketEmitter(macroTile1=MT1)
@@ -218,7 +225,10 @@ def _render_copy():
     m = Module("copy")
     em.emitBuildCopyPacket(m, w, pkt, srcBase, srcX, srcY, srcPitch, srcSlice,
                            dstBase, dstY, dstPitch, dstSlice, rectX, tmp)
-    return str(m)
+    return SimpleNamespace(text=str(m), pkt=pkt, srcBase=srcBase, dstBase=dstBase,
+                           srcX=srcX, srcY=srcY, srcPitch=srcPitch, srcSlice=srcSlice,
+                           dstY=dstY, dstPitch=dstPitch, dstSlice=dstSlice,
+                           rectX=rectX, tmp=tmp)
 
 
 def _render_atomic():
@@ -233,6 +243,15 @@ def _render_atomic():
 
 
 def _render_fields():
+    return _render_fields_ns().text
+
+
+def _render_fields_ns():
+    """Render emitComputeCopyFields AND return the SGPR indices it was given, so
+    tests can assert on actual operand registers (s_mul_i32 s<out>, s<a>, s<b>)
+    rather than on comment text -- a comment-only assert stays green even if the
+    multiply operands are swapped, which for src/dst coordinates is a silent
+    cross-rank data-placement bug."""
     _init_gfx950()
     w = _mock_writer()
     em = SdmaPacketEmitter(macroTile1=MT1)
@@ -243,7 +262,9 @@ def _render_fields():
     m = Module("fields")
     em.emitComputeCopyFields(m, w, p, j, myRank, mS, nS, nShardS,
                              srcX, srcY, srcSlice, dstY, dstSlice, tmp)
-    return str(m)
+    return SimpleNamespace(text=str(m), p=p, j=j, myRank=myRank, mS=mS, nS=nS,
+                           nShardS=nShardS, srcX=srcX, srcY=srcY, srcSlice=srcSlice,
+                           dstY=dstY, dstSlice=dstSlice, tmp=tmp)
 
 
 def _render_flag_addr():
@@ -265,6 +286,28 @@ def _lines(text):
 
 def _code(ln):
     return ln.split("//")[0]
+
+
+def _has_alu(lines, mnemonic, dst, operands):
+    """True iff some line is `<mnemonic> s<dst>, <ops...>` (code side only, i.e.
+    ignoring the comment) with the given dst SGPR and the exact set of source
+    operands, order-independent. `operands` are the source tokens to match:
+    ints are SGPR indices rendered as `sN`, strings are matched literally (e.g.
+    an immediate "256"). Asserting on the operand registers -- not the comment --
+    is what makes these tests catch a swapped multiply."""
+    want_srcs = sorted("s%d" % o if isinstance(o, int) else str(o) for o in operands)
+    dst_tok = "s%d" % dst
+    for ln in lines:
+        code = _code(ln).strip()
+        if not code.startswith(mnemonic + " "):
+            continue
+        toks = [t.strip() for t in code[len(mnemonic):].split(",")]
+        if not toks or toks[0] != dst_tok:
+            continue
+        got_srcs = sorted(toks[1:])
+        if got_srcs == want_srcs:
+            return True
+    return False
 
 
 class TestCopyStructural:
@@ -300,10 +343,18 @@ class TestCopyStructural:
             assert ("DW%d" % i) in text, f"missing packet dword DW{i}"
 
     def test_dst_x_is_zero(self):
-        # dst_x is always 0 (recv slot base points at the shard start); DW8 is
-        # just dst_y<<16, so no or-with-dst_x appears for DW8.
-        text = _render_copy()
-        assert "dst_x=0" in text, "DW8 should encode dst_x==0 (dst_y<<16 only)"
+        # dst_x is always 0 (recv slot base points at the shard start), so DW8 is
+        # just dst_y<<16. Assert the real shift operand (s_lshl_b32 tmp, dstY, 16)
+        # and that no OR mixes another register into it -- a comment-only check
+        # would stay green if dst_x were accidentally added back in.
+        ns = _render_copy_ns()
+        lines = _lines(ns.text)
+        assert _has_alu(lines, "s_lshl_b32", ns.tmp, [ns.dstY, "16"]), \
+            "DW8 must be s_lshl_b32 tmp, dstY, 16 (dst_x==0, dst_y<<16 only)"
+        # No s_or into tmp that would fold a dst_x register into DW8.
+        assert not any(_code(ln).strip().startswith("s_or_b32 s%d," % ns.tmp)
+                       and "dst" in ln.lower() and "<< 16" not in ln
+                       for ln in lines), "DW8 must not OR a dst_x term"
 
 
 class TestAtomicStructural:
@@ -332,14 +383,23 @@ class TestAtomicStructural:
 class TestFieldArithmetic:
 
     def test_src_x_is_p_times_nshard(self):
-        text = _render_fields()
-        assert "src_x = p * nShard" in text
-        assert any("s_mul_i32" in _code(ln) for ln in _lines(text))
+        # src_x = p * nShard: assert the actual multiply operands (srcX = p, nShard),
+        # not the comment -- a swapped operand here silently misplaces the source
+        # feature offset across ranks.
+        ns = _render_fields_ns()
+        lines = _lines(ns.text)
+        assert _has_alu(lines, "s_mul_i32", ns.srcX, [ns.p, ns.nShardS]), \
+            "src_x must be s_mul_i32 srcX, p, nShard (operands, not comment)"
 
     def test_dst_y_folds_myrank_n_plus_srcy(self):
-        # dst_y = myRank*N + j*MT1: a multiply then an add reusing src_y.
-        text = _render_fields()
-        assert "myRank * N" in text and "dst_y = myRank*N + j*MT1" in text
+        # dst_y = myRank*N + j*MT1: a multiply (myRank*N into tmp) then an add
+        # (tmp + src_y). Assert the real operands so a wrong factor/addend fails.
+        ns = _render_fields_ns()
+        lines = _lines(ns.text)
+        assert _has_alu(lines, "s_mul_i32", ns.tmp, [ns.myRank, ns.nS]), \
+            "expected s_mul_i32 tmp, myRank, N"
+        assert _has_alu(lines, "s_add_u32", ns.dstY, [ns.tmp, ns.srcY]), \
+            "expected s_add_u32 dstY, tmp(myRank*N), srcY(j*MT1)"
 
     def test_flag_addr_stride_is_myrank_times_8_64bit(self):
         # flag addr = flag_ptr[p] + myRank*8, a 64-bit add (lo add + hi carry).

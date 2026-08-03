@@ -2888,8 +2888,10 @@ class GlobalWriteBatchWriter:
     # change.  It is incremented AFTER _emitFusedA2ASdmaIssue returned -- whose last
     # step is emitSubmitPacket (wptr + doorbell) -- so old2+1 == tokenTiles identifies,
     # by construction, the WG that submitted this card's LAST packet to dst_rank.  That
-    # WG is then the only one holding a CU to spin, and by then none of this card's
-    # own packet producers are still waiting to be scheduled behind it.
+    # WG is then one of W spinners (one per peer, not one overall), and by then none of
+    # this card's producers FOR dst_rank are still waiting to be scheduled -- producers
+    # for the other peers may well be.  So this narrows the occupancy hazard from
+    # W*tokenTiles down to W; it does not remove it.
     counter2PtrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsCounter2Ptr", preventOverflow=False)
     fusedWSgpr      = kw.sgprPool.checkOut(1, tag="fusedA2A_hsW", preventOverflow=False)
     # counterPtrSgpr was advanced in place to &counter[dst_rank][j] at (3); reload the
@@ -2927,8 +2929,9 @@ class GlobalWriteBatchWriter:
                             comment="not the last submitter for dst_rank -> skip the DRAIN"))
 
     # --- DRAIN barrier (design spec 2.4): make kernel-exit == this card received ---
-    # all its incoming data.  The WG that elected counter[dst_rank][j] confirms THIS
-    # card's recv[dst_rank] slot arrived by polling THIS card's own flag buffer at
+    # all its incoming data.  The WG that additionally won counter2[dst_rank] at (6) --
+    # i.e. the submitter of this card's last packet to dst_rank -- confirms THIS card's
+    # recv[dst_rank] slot arrived by polling THIS card's own flag buffer at
     # flag_ptr[my_rank] + dst_rank*8 until it reaches FusedTokenTiles.
     #
     # The predicate is an ACCUMULATED COUNT, not a one-shot sentinel: each source

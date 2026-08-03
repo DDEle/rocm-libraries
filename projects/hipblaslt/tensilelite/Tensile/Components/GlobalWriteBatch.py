@@ -2281,10 +2281,12 @@ class GlobalWriteBatchWriter:
     own copy. One queue per peer (fanning a peer over several queues measured
     worse), selected by dst_rank out of the FusedSdmaQueues handle array.
 
-    ASSUMPTION -- the COPY's src_pitch is passed as SizesFree+0 (M), i.e. D's leading
-    dimension is exactly M with no padding. That holds for every fused-A2A shape today
-    (D is the native column-major output, ldd == M); a padded ldd would need the real
-    StrideD sgpr here instead, and would be silently wrong, not merely slow.
+    src_pitch is the real StrideD1J (D's token-axis stride, == ldd), so a padded ldd
+    is handled correctly.  What this packet DOES still assume is that D is column
+    major -- feature contiguous, dMStride == 1: src_x carries the feature coordinate
+    and src_y the token coordinate, so a row-major D would need x/y (and the pitch)
+    swapped, not merely a different pitch.  The shipping config satisfies this
+    (FusedA2AClient.cpp: "Post-swap D' is col-major, so dMStride==1").
 
     ASSUMPTION -- the three runtime-valued 14-bit coordinate fields fit: src_x =
     p*nShard, rect_x = nShard and dst_y = myRank*N + j*MT1 must all be < 2^14.
@@ -2347,7 +2349,16 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(shardBaseSgpr)  # src_x is recomputed below from p*nShard
 
     # --- §1.3 field arithmetic (element units).  j == WorkGroup1 (the token-tile),
-    #     M == SizesFree+0 (feature, D's row pitch), N == SizesFree+1 (token). ---
+    #     M == SizesFree+0 (feature extent; only feeds the don't-care src_slice),
+    #     N == SizesFree+1 (token). ---
+    # src_pitch is D's stride along the TOKEN axis (index 1): src_y = j*MT1 is the
+    # token coordinate, so the engine advances src_pitch elements per token.  That is
+    # StrideD1J (== ldd), NOT the M extent.  strideRef('D', 1) never const-folds
+    # (KernelWriterAssembly.strideRef only const-folds dim 0), and StridesD is a
+    # persistent sgpr (KernelWriter.py defineSgpr("StridesD")) that the post-loop
+    # release tagList never frees -- so no kernarg load is needed here.
+    packedC1     = self.kernel["PackedC1IndicesX"]
+    srcPitchName = "StrideD%s" % kw.states.indexChars[packedC1[0]]
     fldSgpr = kw.sgprPool.checkOut(6, tag="fusedA2A_sdmaFields", preventOverflow=False)
     srcXS, srcYS, srcSliceS, dstYS, dstSliceS, rectYS = (fldSgpr + i for i in range(6))
     pkt.emitComputeCopyFields(module, kw,
@@ -2359,7 +2370,7 @@ class GlobalWriteBatchWriter:
     # --- build the 21 packet dwords: COPY in [0:13], ATOMIC in [13:21]. ---
     pktVgpr = kw.vgprPool.checkOut(totalDwords, tag="fusedA2A_sdmaPacket")
     pkt.emitBuildCopyPacket(module, kw, pktVgpr,
-                            kw.sgprs["AddressD"], srcXS, srcYS, "SizesFree+0", srcSliceS,
+                            kw.sgprs["AddressD"], srcXS, srcYS, srcPitchName, srcSliceS,
                             recvBaseSgpr, dstYS, nShardSgpr, dstSliceS,
                             nShardSgpr, rectYS, tmpSgpr)
     flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaFlagAddr", preventOverflow=False)

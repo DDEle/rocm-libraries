@@ -5,10 +5,12 @@
 # SDMA ring-buffer producer emitter structural tests (Task 4, NOGPU).
 #
 # The emitter (Tensile/Components/SdmaRingEmitter.py) is a packet-independent
-# rocisa translation of MORI's anvil device ring skeleton. This round it is not
-# yet wired into any kernel (Tasks 6/7 do that), so "verify" means: render each
-# method's Module to assembly text and assert on the SEMANTIC features that a
-# wrong emit would corrupt -- instruction mnemonic + scope bits (sc0/sc1) +
+# rocisa translation of MORI's anvil device ring skeleton. It IS wired into a
+# live kernel (Tensile/Components/GlobalWriteBatch.py:2365 calls
+# emitReserveQueueSpace from _emitFusedA2ASdmaIssue), but these tests stay
+# deliberately out-of-kernel: "verify" means render each method's Module to
+# assembly text and assert on the SEMANTIC features that a wrong emit would
+# corrupt -- instruction mnemonic + scope bits (sc0/sc1) +
 # operand offsets -- NOT a whole-text snapshot (which reddens on any benign
 # edit and tells you nothing when it does).
 #
@@ -347,6 +349,35 @@ class TestCachedHwReadIndexNeverStored:
                 m = re.search(r"s_load_dwordx2 .*, s\[\d+:\d+\], (0x[0-9a-fA-F]+)", ln)
                 if m:
                     assert m.group(1) in allowed, f"unexpected handle field offset {m.group(1)}: {ln}"
+
+
+# ---------------------------------------------------------------------------
+# Invariant 6: CanWriteUpto leaves resultS defined on EVERY path
+# ---------------------------------------------------------------------------
+class TestCanWriteUptoResultAlwaysDefined:
+
+    @staticmethod
+    def _result_reg(lines):
+        i = _first_idx(lines, lambda l: "CanWriteUpto = true (room)" in l)
+        assert i != -1, "expected the 'CanWriteUpto = true (room)' write"
+        m = re.match(r"s_mov_b32 (s\d+), 1$", lines[i].split("//")[0].strip())
+        assert m, f"could not identify resultS from: {lines[i]}"
+        return m.group(1)
+
+    def test_result_defaulted_to_zero_before_first_branch(self):
+        # The refresh-retest tail branch ("hi != 0 -> full") jumps straight to
+        # the done label WITHOUT writing resultS. So resultS must be defaulted
+        # to 0 before the first branch, or the caller reads a stale value.
+        lines = _lines(_render_canwrite())
+        reg = self._result_reg(lines)
+        i_branch = _first_idx(lines, lambda l: "s_cbranch" in l.split("//")[0])
+        assert i_branch != -1, "expected a branch in CanWriteUpto"
+        init = [ln for ln in lines[:i_branch]
+                if re.match(r"s_mov_b32 %s, 0$" % reg, ln.split("//")[0].strip())]
+        assert init, (
+            "CanWriteUpto must emit 's_mov_b32 %s, 0' before its first branch; "
+            "the 'hi != 0 -> full' branch skips both resultS writes.\nprologue:\n%s"
+            % (reg, "\n".join(lines[:i_branch + 1])))
 
 
 # ---------------------------------------------------------------------------

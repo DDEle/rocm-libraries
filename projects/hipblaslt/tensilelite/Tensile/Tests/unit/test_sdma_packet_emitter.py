@@ -54,6 +54,7 @@ from Tensile.Components.SdmaPacketEmitter import (                 # noqa: E402
     COPY_HEADER_DW0, ATOMIC_HEADER_DW0,
     COPY_PACKET_DWORDS, ATOMIC_PACKET_DWORDS,
     BF16_ELEMENT_SIZE_LOG2,
+    checkA2AFieldsFit, XY_FIELD_LIMIT,
 )
 
 # ---- shared full-shape constants (§1.2), element units -----------------------
@@ -250,6 +251,39 @@ def test_token_tile_boundaries_fit_fields():
         assert f["dstY"] < (1 << 14), f"dst_y {f['dstY']} (j={j}) overflows 14-bit field"
         # src_y = j*MT1 must also fit its 14-bit field.
         assert f["srcY"] < (1 << 14)
+
+
+def test_field_fit_guard_rejects_each_overflowing_field():
+    # Positive control first: the shipping shape must NOT raise, or the four
+    # negative cases below prove nothing.
+    checkA2AFieldsFit(numRanks=4, nShard=NSHARD, nToken=N, macroTile1=MT1)
+
+    # Each case isolates ONE term: the other three stay in range, so a partial
+    # fix (e.g. today's dst_y-only guard) fails the test.
+    # (a) src_x = (W-1)*nShard = 7*2560 = 17920 >= 16384;
+    #     rect_x = 2560 ok, dst_y = 7*256 = 1792 ok, W = 8 ok.
+    with pytest.raises(ValueError):
+        checkA2AFieldsFit(numRanks=8, nShard=2560, nToken=256, macroTile1=MT1)
+
+    # (b) rect_x = nShard = 16384 on its own, W = 1 so src_x = 0, dst_y = 0.
+    #     (Only reachable at W == 1; kept so the term is not silently droppable.)
+    with pytest.raises(ValueError):
+        checkA2AFieldsFit(numRanks=1, nShard=XY_FIELD_LIMIT, nToken=256, macroTile1=MT1)
+
+    # (c) dst_y = 3*8192 + 31*256 = 32512 >= 16384; src_x = 3*256 = 768 ok.
+    with pytest.raises(ValueError):
+        checkA2AFieldsFit(numRanks=4, nShard=256, nToken=8192, macroTile1=MT1)
+
+    # (d) W > FUSED_A2A_MAX_RANKS(8): all three coordinate terms are in range
+    #     (src_x = 15*256 = 3840, rect_x = 256, dst_y = 15*256 = 3840), so ONLY
+    #     the rank bound can trip -- the kernarg segment has no slot for ranks 8+.
+    with pytest.raises(ValueError, match="FUSED_A2A_MAX_RANKS"):
+        checkA2AFieldsFit(numRanks=16, nShard=256, nToken=256, macroTile1=MT1)
+
+    # Boundary: exactly at the limit rejects; one below passes.
+    with pytest.raises(ValueError):
+        checkA2AFieldsFit(numRanks=2, nShard=XY_FIELD_LIMIT, nToken=256, macroTile1=MT1)
+    checkA2AFieldsFit(numRanks=1, nShard=XY_FIELD_LIMIT - 1, nToken=256, macroTile1=MT1)
 
 
 # ---------------------------------------------------------------------------

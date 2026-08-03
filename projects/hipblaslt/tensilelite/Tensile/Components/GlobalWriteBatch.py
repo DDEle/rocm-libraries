@@ -2398,7 +2398,12 @@ class GlobalWriteBatchWriter:
           with j = WorkGroup1 (this WG's token-tile).
       (4) if old+1 != FusedTilesPerRank -> not the last WG for (dst_rank, j) -> skip.
       (5) elected last WG: submit the SDMA COPY_SUBWIN + ATOMIC ADD64 packet pair for
-          (dst_rank, j) -- see _emitFusedA2ASdmaIssue -- then run the DRAIN barrier.
+          (dst_rank, j) -- see _emitFusedA2ASdmaIssue.
+      (6) old2 = atomic_add(counter2[dst_rank], 1) AFTER that submit; only
+          old2+1 == FusedTokenTiles (this card's last packet to dst_rank) runs the
+          DRAIN barrier.  Without (6) all tokenTiles winners of a peer would spin on
+          the same dst_rank-only flag slot; with it there is exactly one spinner per
+          peer, and it starts spinning only once this card has nothing left to submit.
 
     The counter grain is (dst_rank, token-tile), a W*tokenTiles u32 array, so election
     fires exactly once per (peer, token-tile) unit of work -- which is precisely the
@@ -2534,6 +2539,56 @@ class GlobalWriteBatchWriter:
     # (L2 is XCD-local and a packet's producer WGs span all XCDs).
     self._emitFusedA2ASdmaIssue(module, dstRankSgpr, myRankSgpr, nShardSgpr,
                                 flagBaseSgpr, tmpSgpr2)
+
+    # (6) second-level, per-peer counter: converge the DRAIN spinners from tokenTiles
+    # per peer down to exactly one.  The (4) election fires once per (dst_rank, j)
+    # pair, but the DRAIN poll address below depends only on dst_rank -- so without
+    # this gate all tokenTiles winners of a peer would spin on the same flag slot
+    # (W*tokenTiles = 32 spinners at the champion shape W=4, tokenTiles=8).
+    #
+    # counter2 is a W-entry u32 array appended to the SAME counter allocation at byte
+    # offset W*tokenTiles*4 (host: FusedA2AClient.cpp counterBytes).  Riding the
+    # existing buffer means it inherits the per-iteration memset and needs no kernarg
+    # change.  It is incremented AFTER _emitFusedA2ASdmaIssue returned -- whose last
+    # step is emitSubmitPacket (wptr + doorbell) -- so old2+1 == tokenTiles identifies,
+    # by construction, the WG that submitted this card's LAST packet to dst_rank.  That
+    # WG is then the only one holding a CU to spin, and by then none of this card's
+    # own packet producers are still waiting to be scheduled behind it.
+    counter2PtrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsCounter2Ptr", preventOverflow=False)
+    fusedWSgpr      = kw.sgprPool.checkOut(1, tag="fusedA2A_hsW", preventOverflow=False)
+    # counterPtrSgpr was advanced in place to &counter[dst_rank][j] at (3); reload the
+    # base instead of unwinding that add (cold path, at most one extra s_load per WG).
+    module.add(kw.argLoader.loadKernArg(counter2PtrSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["counter_ptr"]), dword=2))
+    module.add(kw.argLoader.loadKernArg(fusedWSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedW"]), dword=1))
+    module.add(SWaitCnt(kmcnt=0, comment="wait counter_ptr/FusedW"))
+    module.add(SMulI32(dst=sgpr(tmpSgpr2), src0=sgpr(fusedWSgpr), src1=sgpr(tokenTilesSgpr),
+                       comment="W * tokenTiles (counter2 base index, past the (p,j) counter)"))
+    kw.sgprPool.checkIn(fusedWSgpr)
+    module.add(SAddU32(dst=sgpr(tmpSgpr2), src0=sgpr(tmpSgpr2), src1=sgpr(dstRankSgpr),
+                       comment="counter2 index = W*tokenTiles + dst_rank"))
+    module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr2), src=sgpr(tmpSgpr2), shiftHex=2,
+                              comment="* 4 (u32 counter byte offset)"))
+    module.add(SAddU32(dst=sgpr(counter2PtrSgpr), src0=sgpr(counter2PtrSgpr), src1=sgpr(tmpSgpr2),
+                       comment="counter2[dst_rank] lo = counter_ptr + (W*tokenTiles+dst_rank)*4"))
+    module.add(SAddCU32(dst=sgpr(counter2PtrSgpr + 1), src0=sgpr(counter2PtrSgpr + 1), src1=0,
+                        comment="counter2[dst_rank] hi (carry)"))
+    module.add(VMovB32(dst=vgpr(vCntAddr + 0), src=sgpr(counter2PtrSgpr + 0), comment="counter2 addr lo -> vgpr"))
+    module.add(VMovB32(dst=vgpr(vCntAddr + 1), src=sgpr(counter2PtrSgpr + 1), comment="counter2 addr hi -> vgpr"))
+    kw.sgprPool.checkIn(counter2PtrSgpr)
+    module.add(VMovB32(dst=vgpr(vOne), src=1, comment="counter2 increment = 1"))
+    module.add(GlobalAtomicAddU32(
+      dst=vgpr(vOld), vaddr=vgpr(vCntAddr, 2), data=vgpr(vOne), saddr=offSaddr,
+      modifier=GLOBALModifiers(glc=True, slc=False, scope=CacheScope.SCOPE_NONE),
+      comment="old2 = atomic_add(counter2[dst_rank], 1) device scope, return pre-op (sc0)"))
+    module.add(SWaitCnt(vlcnt=0, comment="fused-A2A: wait counter2 atomic return"))
+    module.add(VReadfirstlaneB32(dst=sgpr(tmpSgpr2), src=vgpr(vOld), comment="old2 -> sgpr"))
+    module.add(SAddU32(dst=sgpr(tmpSgpr2), src0=sgpr(tmpSgpr2), src1=1, comment="old2 + 1"))
+    module.add(SCmpEQU32(src0=sgpr(tmpSgpr2), src1=sgpr(tokenTilesSgpr),
+                         comment="old2+1 == FusedTokenTiles? (this card's last packet to dst_rank)"))
+    module.add(SCBranchSCC0(labelName=skipReleaseLabel.getLabelName(),
+                            comment="not the last submitter for dst_rank -> skip the DRAIN"))
 
     # --- DRAIN barrier (design spec 2.4): make kernel-exit == this card received ---
     # all its incoming data.  The WG that elected counter[dst_rank][j] confirms THIS

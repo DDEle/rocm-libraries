@@ -6,8 +6,9 @@
 #
 # The emitter (Tensile/Components/SdmaRingEmitter.py) is a packet-independent
 # rocisa translation of MORI's anvil device ring skeleton. It IS wired into a
-# live kernel (Tensile/Components/GlobalWriteBatch.py:2365 calls
-# emitReserveQueueSpace from _emitFusedA2ASdmaIssue), but these tests stay
+# live kernel (GlobalWriteBatch._emitFusedA2ASdmaIssue calls
+# emitReserveQueueSpace -- grep the function name, not a line number, which
+# rots), but these tests stay
 # deliberately out-of-kernel: "verify" means render each method's Module to
 # assembly text and assert on the SEMANTIC features that a wrong emit would
 # corrupt -- instruction mnemonic + scope bits (sc0/sc1) +

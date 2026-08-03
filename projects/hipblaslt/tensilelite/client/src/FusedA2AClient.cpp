@@ -170,6 +170,30 @@ namespace TensileLite
             // error / no DRAIN hang), i.e. clean-exit, not byte-verified.
             const bool validate = args["fused-a2a-validate"].as<int>() != 0;
 
+            // Bound W FIRST -- before it is printed, compared against deviceCount, or
+            // used as a divisor. The kernarg segment reserves exactly
+            // FUSED_A2A_MAX_RANKS recv_ptr and flag_ptr slots (appendFusedSegment
+            // below, mirroring Signature.py), so a larger world size has no pointer at
+            // all for ranks >= FUSED_A2A_MAX_RANKS: a PUSH workgroup targeting them
+            // consumes whatever the kernel metadata default is -> silent corruption or
+            // a DRAIN hang. The deviceCount check below only bounds W by the machine,
+            // not by the ABI, and it cannot stand in for the lower bound either: for
+            // W <= 0 `deviceCount < W` is false, so it falls through. The lower bound
+            // has to be here rather than beside the coordinate guard further down,
+            // because W is already a divisor by then (`AM % W`, `AM / W`) -- a W of 0
+            // would divide by zero, and a negative W would produce a misleading
+            // divisibility error, both before the range check could ever run.
+            if(W < 1 || W > FUSED_A2A_MAX_RANKS)
+            {
+                std::cerr << "[fused-a2a] ERROR: world size W=" << W
+                          << " is out of range; the kernarg segment reserves exactly "
+                          << FUSED_A2A_MAX_RANKS
+                          << " recv_ptr/flag_ptr slots.\n"
+                          << "  require: 1 <= W <= " << FUSED_A2A_MAX_RANKS
+                          << ". Refusing to launch." << std::endl;
+                return -1;
+            }
+
             std::cout << "[fused-a2a] single-process " << W << "-GPU setup + launch smoke\n";
 
             int deviceCount = 0;
@@ -323,23 +347,6 @@ namespace TensileLite
                     << " (n_shard >= " << FUSED_A2A_M_TILE
                     << "). Refusing to launch (would deadlock in the DRAIN barrier)."
                     << std::endl;
-                return -1;
-            }
-
-            // The kernarg segment reserves exactly FUSED_A2A_MAX_RANKS recv_ptr and
-            // flag_ptr slots (appendFusedSegment above, mirroring Signature.py), so a
-            // larger world size has no pointer at all for ranks >= FUSED_A2A_MAX_RANKS:
-            // a PUSH workgroup targeting them consumes whatever the kernel metadata
-            // default is -> silent corruption or a DRAIN hang. Reject here; the
-            // deviceCount check above only bounds W by the machine, not by the ABI.
-            if(W < 1 || W > FUSED_A2A_MAX_RANKS)
-            {
-                std::cerr << "[fused-a2a] ERROR: world size W=" << W
-                          << " is out of range; the kernarg segment reserves exactly "
-                          << FUSED_A2A_MAX_RANKS
-                          << " recv_ptr/flag_ptr slots.\n"
-                          << "  require: 1 <= W <= " << FUSED_A2A_MAX_RANKS
-                          << ". Refusing to launch." << std::endl;
                 return -1;
             }
 

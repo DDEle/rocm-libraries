@@ -441,6 +441,7 @@ class SdmaRingEmitter:
         spinLabel = Label(w.labels.getNameInc("sdma_submit_spin"), "submitPacket: wait committedWptr == base")
         spinDone  = Label(w.labels.getNameInc("sdma_submit_ready"), "submitPacket: our turn")
         module.add(spinLabel)
+        module.add(SSleep(simm16=1, comment="submitPacket: backoff between polls (must stay INSIDE the spin body)"))
         module.add(GlobalLoadB64(
             dst=vgpr(vVal, 2), vaddr=vgpr(vAddr, 2), saddr=off,
             modifier=GLOBALModifiers(glc=False, slc=True),
@@ -452,7 +453,6 @@ class SdmaRingEmitter:
         module.add(self._vReadfirstlane(tmpS, vVal + 1, "committedWptr hi"))
         module.add(SCmpEQU32(src0=sgpr(tmpS), src1=sgpr(baseS + 1), comment="committedWptr hi == base hi?"))
         module.add(SCBranchSCC0(labelName=spinLabel.getLabelName(), comment="not our turn -> spin"))
-        module.add(SSleep(simm16=1, comment="submitPacket: brief backoff between polls"))
         module.add(spinDone)
         module.add(SWaitCnt(vlcnt=0, vscnt=0, comment="ensure our packet stores are globally visible before wptr"))
 

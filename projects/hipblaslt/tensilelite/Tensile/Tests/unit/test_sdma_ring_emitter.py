@@ -262,6 +262,28 @@ class TestSubmitOrder:
         assert any("s_cbranch_scc0" in ln and "spin" in ln for ln in lines), \
             "expected a back-branch that re-polls committedWptr"
 
+    def test_spin_backoff_is_inside_the_loop_body(self):
+        # Regression guard: the s_sleep backoff must sit INSIDE the spin cycle,
+        # i.e. between the spin label and the FIRST back-branch. If it drifts
+        # after the back-branches it runs exactly once, on loop exit, and the
+        # committedWptr poll becomes a tight zero-backoff spin.
+        lines = _lines(_render_submit())
+        def _code(l): return l.split("//")[0]
+        i_label = _first_idx(lines, lambda l: _code(l).strip().startswith("label_sdma_submit_spin:"))
+        i_sleep = _first_idx(lines, lambda l: _code(l).strip().startswith("s_sleep"))
+        backs = [i for i, l in enumerate(lines)
+                 if "s_cbranch_scc0" in _code(l) and "label_sdma_submit_spin" in _code(l)]
+        n_sleep = sum(1 for l in lines if _code(l).strip().startswith("s_sleep"))
+        assert i_label != -1, "spin label not emitted"
+        assert i_sleep != -1, "no s_sleep backoff emitted in submitPacket"
+        assert len(backs) >= 1, "no back-branch to the spin label"
+        assert n_sleep == 1, (
+            "expected exactly one s_sleep in submitPacket, found %d "
+            "(a duplicate left on the exit path would slip past the positional check)" % n_sleep)
+        assert i_label < i_sleep < min(backs), (
+            "s_sleep must precede EVERY back-branch: label=%d sleep=%d first_back_branch=%d"
+            % (i_label, i_sleep, min(backs)))
+
 
 # ---------------------------------------------------------------------------
 # Invariant 3: reserve uses CAS, not fetch_add

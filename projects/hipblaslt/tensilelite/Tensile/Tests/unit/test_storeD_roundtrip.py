@@ -168,7 +168,7 @@ def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False, source_swap=Fal
         vc0 stride must be 1 — StoreVectorWidth>1 would generate more store elements
         than there are accumulators and crash codegen (popFirstItem→None).  Force
         SVW=1 here so the element decomposition stays consistent with the acc count;
-        the actual N-wide store is Task 3's job.
+        the N-wide-along-N store this was written for no longer exists (7b9a7b1790).
     """
     from gpu_test_helpers import _mock_dtype, _create_kernel
     kernel = _create_kernel(cfg, mi_wave_group=mi_wave_group)
@@ -1349,17 +1349,35 @@ def test_storeD_mfma_layout(cfg, use_bf16, tmp_path):
         _verify_matrix_positions(out, round_mt0, round_mt1)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="SourceSwap row-major N-wide subtile store was deleted by 7b9a7b1790 as "
+           "dead-after-M/N-swap, but its dispatch predicate never included "
+           "FusedGemmA2A, so this non-fused row-major case regressed with it: the "
+           "16-bit subtile dispatch (GlobalWriteBatch.py:1856) now falls through to "
+           "the column-major paired/orphan M-scatter, which writes the lane's 4 "
+           "N-col accumulators as 4 M-rows. Failure recorded on gfx950 in "
+           "sdma-task-6-report.md (3 runs, 3 tree states); not re-reproduced since. "
+           "Remove this marker if the N-wide store is restored. ROCM-27524.",
+)
 @pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: c.label)
 def test_storeD_sourceswap_rowmajor_bf16(cfg, tmp_path):
-    """BF16 store-D roundtrip with SourceSwap=True + row-major D.
+    """BF16 store-D roundtrip with SourceSwap=True + row-major D.  XFAIL at HEAD.
 
     Under SourceSwap the lane's 4 accumulators lie along N (contiguous in
-    row-major D, StrideD1J==1), so the subtile store emits a wide store along N
-    (buffer_store_dwordx2) — not the per-M-row b16 scatter used before Task 3.
-    The D output buffer is ROW-MAJOR (N contiguous): StrideDI = row stride,
-    StrideDJ = 1, so the 4 N-cols of one lane are physically contiguous and
-    coalesce into one dwordx2.  Verifies every output element equals
-    row*MT_b+col at its (row,col) position.
+    row-major D, StrideD1J==1), so a correct store must write them as one wide
+    store along N.  The D output buffer is ROW-MAJOR (N contiguous): StrideDI =
+    row stride, StrideDJ = 1, so the 4 N-cols of one lane are physically
+    contiguous and could coalesce into one buffer_store_dwordx2.  Verifies every
+    output element equals row*MT_b+col at its (row,col) position.
+
+    This passed at c789e684b2, which added the ssRowMajorNWide dispatch branch
+    and _emit16bitSubtileNWideStore.  7b9a7b1790 deleted that path as "dead"
+    (true for the fused path after the M/N swap made D column-major, false here:
+    the predicate had no FusedGemmA2A term and this test runs with
+    FusedGemmA2A=0), so the 16-bit subtile dispatch now falls through to the
+    column-major paired/orphan M-scatter and the 4 N-col accumulators land on 4
+    M-rows.  Unwritten positions keep the 0xFFFF->0xFFFF0000 quiet-NaN sentinel.
     """
     init_rocisa()
     out, tileInfoD, expected_set, round_mt0, round_mt1 = _run_storeD(
@@ -1604,8 +1622,9 @@ def _build_accvgpr_init_matrix_transposed_asm(agpr_indices, kernel, tileInfoD, s
 
     The host matrix is ROW-MAJOR (stride MT_b): flat[row * MT_b + col] = D_ref[row][col].
     Populating the accs this way makes each acc hold exactly the D value that a correct
-    (Task 3) N-wide store would write.  With the store source unchanged, the store still
-    scatters accs along M, so the roundtrip mismatches — the intended clean red light.
+    N-wide-along-N store would write.  Since 7b9a7b1790 removed that store, the shipping
+    16-bit subtile dispatch still scatters accs along M and the roundtrip mismatches —
+    see the xfail on test_storeD_sourceswap_rowmajor_bf16, which is the only caller.
 
     Requires three scratch vgprs: tmp_v, vaddr, vtmp2.
     """

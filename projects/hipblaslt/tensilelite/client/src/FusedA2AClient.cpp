@@ -364,8 +364,12 @@ namespace TensileLite
             // is written 8 bytes wide. With a 4-byte stride the top rank's atomic
             // would run past the end of this allocation.
             const size_t flagBytes    = (size_t)W * sizeof(uint64_t);
-            // counter is indexed [dst_rank][token-tile] -> W*tokenTiles u32 slots.
-            const size_t counterBytes = (size_t)W * tokenTiles * sizeof(uint32_t);
+            // counter is indexed [dst_rank][token-tile] -> W*tokenTiles u32 slots,
+            // followed by a W-entry second-level counter2[dst_rank] (target
+            // tokenTiles) at byte offset W*tokenTiles*4. counter2 converges the DRAIN
+            // spinners to one per peer; it rides this same allocation (and this same
+            // per-iteration memset below) so the kernarg layout stays untouched.
+            const size_t counterBytes = (size_t)(W * tokenTiles + W) * sizeof(uint32_t);
             const size_t aBytes       = problem->a().totalAllocatedBytes();
             const size_t bBytes       = problem->b().totalAllocatedBytes();
             const size_t cBytes       = problem->c().totalAllocatedBytes();

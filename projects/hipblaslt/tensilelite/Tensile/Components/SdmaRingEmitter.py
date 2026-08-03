@@ -10,9 +10,12 @@
 # host-created SDMA ring, place already-built packet dwords, and ring the
 # doorbell -- WITHOUT knowing what the packet is. Task 5 builds the COPY_SUBWIN
 # + ATOMIC packet dwords and calls placePacket; Tasks 6/7 wire the whole thing
-# into the GEMM epilogue store path. This round emits nothing into a live
-# kernel; it is verified by rendering each method's Module to assembly text and
-# asserting on the instruction sequence + scope bits
+# into the GEMM epilogue store path. Those tasks have LANDED: this emitter is
+# live in a real kernel -- Tensile/Components/GlobalWriteBatch.py:2365 calls
+# emitReserveQueueSpace, and 2369/2374/2376 the placePacket/placePacket/
+# submitPacket trio, inside _emitFusedA2ASdmaIssue (the fused-A2A SDMA path).
+# It is additionally verified out-of-kernel by rendering each method's Module
+# to assembly text and asserting on the instruction sequence + scope bits
 # (Tensile/Tests/unit/test_sdma_ring_emitter.py).
 #
 # The device handle it consumes is the W-element SdmaQueueDeviceHandle array
@@ -136,6 +139,12 @@ class SdmaRingEmitter:
         fullLabel = Label(w.labels.getNameInc("sdma_canwrite_full"), "CanWriteUpto: cache says full -> read rptr")
         doneLabel = Label(w.labels.getNameInc("sdma_canwrite_done"), "CanWriteUpto: done")
 
+        # resultS defaults to 0 (full): the refresh-retest tail branch below
+        # ("hi != 0 -> full") jumps straight to doneLabel without writing it,
+        # and the caller's register is live across CAS retries -- so a stale 1
+        # from a previous iteration would claim space on a full ring.
+        module.add(SMovB32(dst=sgpr(resultS), src=0, comment="CanWriteUpto = false (default)"))
+
         # tmp = upto - cachedHwReadIndex (64-bit), then compare tmp < queueSize.
         # queueSize < 2^32 so if the high dword of the difference is nonzero the
         # gap is huge (>= 2^32) => definitely not < queueSize => full.
@@ -173,7 +182,11 @@ class SdmaRingEmitter:
         self._emitU64Sub(module, tmpPairS, uptoIdxS, cachedHwReadIdxS,
                          "CanWriteUpto: upto - refreshed rptr")
         module.add(SCmpEQU32(src0=sgpr(tmpPairS + 1), src1=0, comment="diff hi == 0?"))
-        module.add(SCBranchSCC0(labelName=doneLabel.getLabelName(), comment="hi != 0 -> full (result stays 0)"))
+        # NB: this is the ONLY one of the four branches in this function that exits
+        # without writing resultS (line 145 -> fullLabel continues to a write; both
+        # SCBranchSCC1 -> canLabel write 1). It relies on the entry default above.
+        module.add(SCBranchSCC0(labelName=doneLabel.getLabelName(),
+                                comment="hi != 0 -> full (result already defaulted to 0)"))
         module.add(SCmpLtU32(src0=sgpr(tmpPairS + 0), src1=self.queueSize, comment="diff < queueSize?"))
         module.add(SCBranchSCC1(labelName=canLabel.getLabelName(), comment="room after refresh"))
         # fall through to done with result=0 set below.

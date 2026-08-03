@@ -11,9 +11,13 @@
 # doorbell -- WITHOUT knowing what the packet is. Task 5 builds the COPY_SUBWIN
 # + ATOMIC packet dwords and calls placePacket; Tasks 6/7 wire the whole thing
 # into the GEMM epilogue store path. Those tasks have LANDED: this emitter is
-# live in a real kernel -- Tensile/Components/GlobalWriteBatch.py:2365 calls
-# emitReserveQueueSpace, and 2369/2374/2376 the placePacket/placePacket/
-# submitPacket trio, inside _emitFusedA2ASdmaIssue (the fused-A2A SDMA path).
+# live in a real kernel. The caller is GlobalWriteBatch._emitFusedA2ASdmaIssue
+# (the fused-A2A SDMA path), which invokes emitReserveQueueSpace, then
+# emitPlacePacket twice (COPY then ATOMIC), then emitSubmitPacket. Grep for that
+# function name rather than a line number -- earlier revisions of this comment
+# carried line numbers that rotted, which is worse than useless here: the whole
+# point of this paragraph is to stop a triage engineer concluding the emitter is
+# dead, and a stale number lands them somewhere with no call in sight.
 # It is additionally verified out-of-kernel by rendering each method's Module
 # to assembly text and asserting on the instruction sequence + scope bits
 # (Tensile/Tests/unit/test_sdma_ring_emitter.py).
@@ -134,6 +138,15 @@ class SdmaRingEmitter:
         refreshes the cache, and re-tests. Emits the SYSTEM-scope rptr load
         (glc/slc => sc0 sc1). `resultS` is set to 1 (can write) or 0 (full);
         the caller branches on it. All index math is 64-bit (idx pair = S:S+1).
+
+        CALLER CONTRACT: `resultS` MUST be disjoint from `uptoIdxS`,
+        `cachedHwReadIdxS` and `tmpPairS`. `resultS` is defaulted to 0 as the very
+        first emitted instruction -- before the first READ of those inputs -- so an
+        aliasing caller would have its input clobbered rather than merely its output
+        overwritten late. (Before the default was added, every resultS write followed
+        every input read, so aliasing was harmless; this requirement is new.) Both
+        current call sites satisfy it: emitReserveQueueSpace passes three independent
+        sgprPool checkouts plus the caller-persistent cachedHwReadIdx pair.
         """
         canLabel  = Label(w.labels.getNameInc("sdma_canwrite_ok"),  "CanWriteUpto: room in ring")
         fullLabel = Label(w.labels.getNameInc("sdma_canwrite_full"), "CanWriteUpto: cache says full -> read rptr")
@@ -183,8 +196,10 @@ class SdmaRingEmitter:
                          "CanWriteUpto: upto - refreshed rptr")
         module.add(SCmpEQU32(src0=sgpr(tmpPairS + 1), src1=0, comment="diff hi == 0?"))
         # NB: this is the ONLY one of the four branches in this function that exits
-        # without writing resultS (line 145 -> fullLabel continues to a write; both
-        # SCBranchSCC1 -> canLabel write 1). It relies on the entry default above.
+        # without writing resultS. The other three all reach a write: the earlier
+        # SCBranchSCC0 -> fullLabel falls into this slow path and continues on to one,
+        # and both SCBranchSCC1 -> canLabel write 1. This one jumps straight to
+        # doneLabel, so it relies on the entry default above.
         module.add(SCBranchSCC0(labelName=doneLabel.getLabelName(),
                                 comment="hi != 0 -> full (result already defaulted to 0)"))
         module.add(SCmpLtU32(src0=sgpr(tmpPairS + 0), src1=self.queueSize, comment="diff < queueSize?"))

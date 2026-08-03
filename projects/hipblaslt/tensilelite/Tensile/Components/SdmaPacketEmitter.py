@@ -91,9 +91,21 @@ XY_FIELD_LIMIT = 1 << _XY_BITS   # 16384; src_x/src_y/dst_x/dst_y/rect_x/rect_y
 def checkA2AFieldsFit(numRanks, nShard, nToken, macroTile1):
     """Raise ValueError if a fused-A2A geometry cannot be encoded safely.
 
-    Reference predicate ONLY -- it is NOT called from codegen (W/nShard/N are
-    runtime kernargs, unknown here). Enforcement lives in
-    client/src/FusedA2AClient.cpp, which mirrors this term for term.
+    REFERENCE MIRROR, NOT THE ENFORCEMENT. This function has NO production
+    caller -- its only callers are its own unit tests. It is not called from
+    codegen because W/nShard/N are runtime kernargs, unknown at codegen time.
+
+    The shipped enforcement is the guard in client/src/FusedA2AClient.cpp,
+    inside runFusedA2A(), just above the "geometry overflows the SDMA packet's
+    14-bit coordinate fields" diagnostic. That guard is what actually refuses a
+    launch; this predicate only re-states the same arithmetic in Python so the
+    terms can be unit-tested.
+
+    THE TWO CAN DRIFT SILENTLY. Nothing links them: no test compares them, and
+    editing one will not fail anything that checks the other. If you change a
+    term here, change it there, and vice versa. (Extracting the C++ guard into a
+    header so a gtest can call the real thing is a known deferred follow-up;
+    until then, this pairing is maintained by hand.)
 
     Rank bound: the kernarg segment reserves exactly FUSED_A2A_MAX_RANKS
     recv_ptr/flag_ptr slots (Signature.py), so ranks >= that have no pointer.

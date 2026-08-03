@@ -548,10 +548,13 @@ def _build_prologue(sgprs, num_agprs, mt0, mt1, stride_d=None, use_input_buf=Tru
     source_swap: if True, the D buffer is ROW-MAJOR (N contiguous) to match the
         production UseInitialStridesCD layout: StrideDI (StrideD0, the M-row stride)
         = the kernarg stride value (row_stride = round_mt1), and StrideDJ (StrideD1J,
-        the N stride) = 1.  This makes the SourceSwap N-wide store's 4 N-cols
-        physically contiguous so it can coalesce into a buffer_store_dwordx2.  When
-        False the buffer is column-major (StrideDI=1, StrideDJ=stride_d), the original
-        convention used by the non-SourceSwap tests.
+        the N stride) = 1.  That makes a lane's 4 N-cols physically contiguous, so an
+        N-wide store COULD coalesce them into one buffer_store_dwordx2 -- but no such
+        store exists any more: 7b9a7b1790 deleted it, which is why
+        test_storeD_sourceswap_rowmajor_bf16 is xfail.  The layout is still what the
+        production UseInitialStridesCD path uses, so it stays.  When False the buffer
+        is column-major (StrideDI=1, StrideDJ=stride_d), the original convention used
+        by the non-SourceSwap tests.
 
     Kernarg layout (matches args descriptor in the test):
       offset  0: u64 input buffer ptr   (SrdInput base)

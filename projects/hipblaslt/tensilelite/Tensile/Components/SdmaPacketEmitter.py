@@ -85,6 +85,57 @@ def _mask(bits):
     return (1 << bits) - 1
 
 
+XY_FIELD_LIMIT = 1 << _XY_BITS   # 16384; src_x/src_y/dst_x/dst_y/rect_x/rect_y
+
+
+def checkA2AFieldsFit(numRanks, nShard, nToken, macroTile1):
+    """Raise ValueError if a fused-A2A geometry cannot be encoded safely.
+
+    Reference predicate ONLY -- it is NOT called from codegen (W/nShard/N are
+    runtime kernargs, unknown here). Enforcement lives in
+    client/src/FusedA2AClient.cpp, which mirrors this term for term.
+
+    Rank bound: the kernarg segment reserves exactly FUSED_A2A_MAX_RANKS
+    recv_ptr/flag_ptr slots (Signature.py), so ranks >= that have no pointer.
+
+    The three 14-bit fields, and where each value comes from (see
+    emitComputeCopyFields / GlobalWriteBatch._emitFusedA2ASdmaIssue):
+      src_x  = p * nShard,  p in [0, W)     -> max (numRanks-1)*nShard
+      rect_x = nShard                       -> nShard itself (binding only at W == 1;
+                                               for W >= 2 it is dominated by src_x)
+      dst_y  = myRank*nToken + j*macroTile1 -> max (numRanks-1)*nToken
+                                                  + (tokenTiles-1)*macroTile1
+    src_y = j*macroTile1 needs no term: dst_y = myRank*nToken + j*macroTile1
+    >= j*macroTile1 = src_y unconditionally.
+
+    All three are packed WITHOUT a mask (_packXY, the inline s_lshl at DW8,
+    _packRectMinus1), so an over-range value does not truncate -- it ORs into
+    the neighbouring field and the copy silently moves the wrong band.
+    """
+    from .Signature import FUSED_A2A_MAX_RANKS
+    if numRanks < 1 or numRanks > FUSED_A2A_MAX_RANKS:
+        raise ValueError(
+            "fused-A2A world size W=%d is out of range: the kernarg segment "
+            "reserves exactly FUSED_A2A_MAX_RANKS=%d recv_ptr/flag_ptr slots, so "
+            "ranks >= %d have no pointer and a PUSH to them reads garbage."
+            % (numRanks, FUSED_A2A_MAX_RANKS, FUSED_A2A_MAX_RANKS))
+    tokenTiles = (nToken + macroTile1 - 1) // macroTile1
+    maxSrcX  = (numRanks - 1) * nShard
+    maxRectX = nShard
+    maxDstY  = (numRanks - 1) * nToken + (tokenTiles - 1) * macroTile1
+    # `>=` deliberately: rect_x is minus-one encoded so nShard == 16384 would in
+    # fact encode, but one lost value is worth keeping all three terms uniform
+    # and identical to the C++ guard.
+    if max(maxSrcX, maxRectX, maxDstY) >= XY_FIELD_LIMIT:
+        raise ValueError(
+            "fused-A2A geometry overflows the SDMA packet's %d-bit coordinate "
+            "fields: W=%d nShard=%d N=%d MT1=%d -> max src_x=%d, rect_x=%d, "
+            "dst_y=%d; all must be < %d. The emitter packs these unmasked, so "
+            "the copy would silently move the wrong band."
+            % (_XY_BITS, numRanks, nShard, nToken, macroTile1,
+               maxSrcX, maxRectX, maxDstY, XY_FIELD_LIMIT))
+
+
 # ---------------------------------------------------------------------------
 # Pure-Python encoders (golden-vector source of truth; no rocisa).
 # ---------------------------------------------------------------------------
@@ -178,9 +229,11 @@ class SdmaPacketEmitter:
     def _packXY(self, module, dstV, xS, yS, tmpS, comment):
         """dword = (x & 0x3FFF) | ((y & 0x3FFF) << 16), from two SGPR inputs.
         The x/y here are already in element units and are NOT minus-one encoded
-        (only pitches and rect extents are). x/y come in < 2^14 by construction
-        (§1.2: dst_y max = myRank*N + j*MT1 <= 3*2048+1792 = 7936), so no mask
-        instruction is needed -- the field simply occupies [13:0] and [29:16]."""
+        (only pitches and rect extents are). No mask is emitted -- the field
+        simply occupies [13:0] and [29:16]. The < 2^14 precondition on all three
+        runtime-valued fields (src_x = p*nShard, dst_y = myRank*N + j*MT1, and
+        rect_x = nShard) is enforced at launch by client/src/FusedA2AClient.cpp
+        and mirrored term for term by checkA2AFieldsFit() above."""
         module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(yS), shiftHex=16,
                                   comment=comment + " (y << 16)"))
         module.add(SOrB32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(xS),

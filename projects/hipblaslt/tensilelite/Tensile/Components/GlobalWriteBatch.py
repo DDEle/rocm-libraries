@@ -2622,6 +2622,17 @@ class GlobalWriteBatchWriter:
     (D is the native column-major output, ldd == M); a padded ldd would need the real
     StrideD sgpr here instead, and would be silently wrong, not merely slow.
 
+    ASSUMPTION -- the three runtime-valued 14-bit coordinate fields fit: src_x =
+    p*nShard, rect_x = nShard and dst_y = myRank*N + j*MT1 must all be < 2^14.
+    The emitter packs them unmasked, so an over-range value ORs into the
+    neighbouring field rather than truncating, and the copy silently moves the
+    wrong band. Enforced at launch by client/src/FusedA2AClient.cpp and mirrored
+    by SdmaPacketEmitter.checkA2AFieldsFit(). Separately, src_slice = M*N is
+    packed into a 28-bit field by _packSliceMinus1, likewise unmasked and
+    unguarded; that one is benign because the SUBWIN copy is single-plane, so the
+    slice pitch is a don't-care -- the emitter's own comment at
+    SdmaPacketEmitter.py:327 says "src_slice = M * N (single-plane, don't-care)".
+
     Args:
       dstRankSgpr:  1 SGPR, the peer rank p (== this WG's dst_rank).
       myRankSgpr:   1 SGPR, this card's rank.

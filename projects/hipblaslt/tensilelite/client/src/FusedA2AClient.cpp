@@ -326,25 +326,56 @@ namespace TensileLite
                 return -1;
             }
 
-            // dst_y of the SDMA COPY_SUBWIN packet is a 14-BIT field, and the kernel
-            // packs it with a bare `s_lshl_b32 tmp, dst_y, 16` -- no mask. The pure-
-            // Python reference encoder DOES mask, so past 2^14 the two disagree and
-            // NEITHER complains: the packet would silently address a wrapped-around
-            // token row and scatter data into the wrong recv slot. Reject the shape
-            // here instead. dst_y max = (W-1)*N + (tokenTiles-1)*MT1 (the top rank's
-            // last token-tile); a simpler sufficient bound is W*N <= 16384.
+            // The kernarg segment reserves exactly FUSED_A2A_MAX_RANKS recv_ptr and
+            // flag_ptr slots (appendFusedSegment above, mirroring Signature.py), so a
+            // larger world size has no pointer at all for ranks >= FUSED_A2A_MAX_RANKS:
+            // a PUSH workgroup targeting them consumes whatever the kernel metadata
+            // default is -> silent corruption or a DRAIN hang. Reject here; the
+            // deviceCount check above only bounds W by the machine, not by the ABI.
+            if(W < 1 || W > FUSED_A2A_MAX_RANKS)
+            {
+                std::cerr << "[fused-a2a] ERROR: world size W=" << W
+                          << " is out of range; the kernarg segment reserves exactly "
+                          << FUSED_A2A_MAX_RANKS
+                          << " recv_ptr/flag_ptr slots.\n"
+                          << "  require: 1 <= W <= " << FUSED_A2A_MAX_RANKS
+                          << ". Refusing to launch." << std::endl;
+                return -1;
+            }
+
+            // src_x, rect_x AND dst_y of the SDMA COPY_SUBWIN packet are 14-BIT
+            // fields, and the kernel packs all three with bare s_lshl_b32/s_or_b32
+            // -- no mask (SdmaPacketEmitter._packXY, the DW8 inline shift,
+            // _packRectMinus1). The pure-Python reference encoder DOES mask, so past
+            // 2^14 the two disagree and NEITHER complains: the packet would silently
+            // address a wrapped-around token row / feature column and scatter data
+            // into the wrong recv slot. Reject the shape here instead -- this mirrors
+            // Tensile/Components/SdmaPacketEmitter.py:checkA2AFieldsFit.
+            //   src_x  max = (W-1)*n_shard        (top peer's feature offset into D)
+            //   rect_x     = n_shard              (the X extent itself; binding only
+            //                                      at W == 1, else <= max src_x)
+            //   dst_y  max = (W-1)*N + (tokenTiles-1)*MT1  (top rank's last tile)
+            // src_y = j*MT1 is <= dst_y, so it needs no separate term. The `>=`
+            // comparison is one value tighter than the hardware for rect_x (which is
+            // minus-one encoded); deliberate, so all three terms read the same.
+            const size_t maxSrcX  = (size_t)(W - 1) * (size_t)nShard;
+            const size_t maxRectX = (size_t)nShard;
             const size_t maxDstY
                 = (size_t)(W - 1) * N + (size_t)(tokenTiles - 1) * FUSED_A2A_N_TILE;
-            if(maxDstY >= (1u << 14))
+            if(maxSrcX >= (1u << 14) || maxRectX >= (1u << 14) || maxDstY >= (1u << 14))
             {
-                std::cerr << "[fused-a2a] ERROR: dst_y overflows the SDMA packet's "
-                             "14-bit field.\n"
-                          << "  W=" << W << " N(token)=" << N
+                std::cerr << "[fused-a2a] ERROR: geometry overflows the SDMA packet's "
+                             "14-bit coordinate fields.\n"
+                          << "  W=" << W << " AM=" << AM << " n_shard=AM/W=" << nShard
+                          << " N(token)=" << N
                           << " MacroTile1(token)=" << FUSED_A2A_N_TILE
-                          << " tokenTiles=" << tokenTiles << " -> max dst_y=" << maxDstY
-                          << " must be < " << (1u << 14) << ".\n"
-                          << "  Refusing to launch (the copy would silently land in the "
-                             "wrong recv slot). Reduce W or N."
+                          << " tokenTiles=" << tokenTiles << "\n"
+                          << "  max src_x=(W-1)*n_shard=" << maxSrcX
+                          << " rect_x=n_shard=" << maxRectX
+                          << " max dst_y=" << maxDstY
+                          << "; each must be < " << (1u << 14) << ".\n"
+                          << "  Refusing to launch (the copy would silently move the "
+                             "wrong band into the wrong recv slot). Reduce W, AM or N."
                           << std::endl;
                 return -1;
             }

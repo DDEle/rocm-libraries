@@ -47,6 +47,7 @@
 #include <Tensile/hip/HipUtils.hpp>
 
 #include "ClientProblemFactory.hpp"
+#include "FusedA2ACounterSentinel.hpp"
 #include "FusedA2AKernArg.hpp"
 #include "SolutionIterator.hpp"
 
@@ -328,7 +329,16 @@ namespace TensileLite
             // tokenTiles) at byte offset W*tokenTiles*4. counter2 converges the DRAIN
             // spinners to one per peer; it rides this same allocation (and this same
             // per-iteration memset below) so the kernarg layout stays untouched.
-            const size_t counterBytes = (size_t)(W * tokenTiles + W) * sizeof(uint32_t);
+            //
+            // Past those live slots the allocation carries a guard tail (see
+            // FusedA2ACounterSentinel.hpp). Both counter index expressions are
+            // derived from grid dimensions, so an off-by-one writes past the payload
+            // into whatever hipMalloc handed back next -- and stays silent, because
+            // the counters themselves still reach their expected values and every
+            // numeric check passes. Only counterBytes is memset per launch; the tail
+            // keeps its pattern and is re-checked after each launch.
+            const size_t counterBytes      = fusedA2ACounterPayloadBytes((uint32_t)W, tokenTiles);
+            const size_t counterAllocBytes = fusedA2ACounterAllocBytes((uint32_t)W, tokenTiles);
             const size_t aBytes       = problem->a().totalAllocatedBytes();
             const size_t bBytes       = problem->b().totalAllocatedBytes();
             const size_t cBytes       = problem->c().totalAllocatedBytes();
@@ -426,6 +436,11 @@ namespace TensileLite
             std::vector<void*> recv(W, nullptr), flag(W, nullptr), counter(W, nullptr);
             std::vector<void*> xA(W, nullptr), wB(W, nullptr), cC(W, nullptr), outD(W, nullptr);
 
+            // Reference image of the counter guard tail: written once per device at
+            // allocation, compared against the device copy after every launch.
+            std::vector<uint32_t> hCounterGuard(FUSED_A2A_COUNTER_SENTINEL_WORDS);
+            fusedA2ACounterSentinelFill(hCounterGuard.data());
+
             for(int d = 0; d < W; d++)
             {
                 HIP_CHECK_EXC(hipSetDevice(d));
@@ -433,7 +448,13 @@ namespace TensileLite
                 HIP_CHECK_EXC(hipExtMallocWithFlags(&recv[d], recvBytes, hipDeviceMallocFinegrained));
                 HIP_CHECK_EXC(hipExtMallocWithFlags(&flag[d], flagBytes, hipDeviceMallocFinegrained));
                 // Local (not remotely written): plain device memory.
-                HIP_CHECK_EXC(hipMalloc(&counter[d], counterBytes));
+                HIP_CHECK_EXC(hipMalloc(&counter[d], counterAllocBytes));
+                // Arm the guard tail. Sits past counterBytes, so the per-launch
+                // memset below leaves it untouched.
+                HIP_CHECK_EXC(hipMemcpy((char*)counter[d] + counterBytes,
+                                        hCounterGuard.data(),
+                                        FUSED_A2A_COUNTER_SENTINEL_BYTES,
+                                        hipMemcpyHostToDevice));
                 HIP_CHECK_EXC(hipMalloc(&xA[d], aBytes));
                 HIP_CHECK_EXC(hipMalloc(&wB[d], bBytes));
                 HIP_CHECK_EXC(hipMalloc(&cC[d], cBytes));
@@ -607,6 +628,7 @@ namespace TensileLite
             bool raceFail     = false;
             int  firstFailIt  = -1;
             bool anyHipError  = false;
+            bool guardFail    = false; // counter guard tail corrupted (see below)
 
             for(int it = 0; it < iters; it++)
             {
@@ -719,6 +741,45 @@ namespace TensileLite
                             std::cout << "[fused-a2a] device " << d
                                       << " kernel exited cleanly (" << std::fixed
                                       << std::setprecision(1) << us << " us)\n";
+                    }
+                }
+
+                // -- Counter guard tail (see FusedA2ACounterSentinel.hpp). --
+                // Checked EVERY iteration and independently of `validate`: an
+                // overrun past the counter payload corrupts unrelated device
+                // memory, which no numeric check can see -- the counters
+                // themselves still hold their expected values. Read with a
+                // non-throwing hipMemcpy so that a device already wedged by a
+                // failed launch degrades to a warning instead of masking the
+                // kernel error that was just reported.
+                for(int d = 0; d < W; d++)
+                {
+                    HIP_CHECK_EXC(hipSetDevice(d));
+                    std::vector<uint32_t> devGuard(FUSED_A2A_COUNTER_SENTINEL_WORDS);
+                    hipError_t            ge = hipMemcpy(devGuard.data(),
+                                              (const char*)counter[d] + counterBytes,
+                                              FUSED_A2A_COUNTER_SENTINEL_BYTES,
+                                              hipMemcpyDeviceToHost);
+                    if(ge != hipSuccess)
+                    {
+                        std::cerr << "[fused-a2a] WARNING: could not read counter guard on device "
+                                  << d << " (iter " << it << "): " << hipGetErrorString(ge)
+                                  << std::endl;
+                        continue;
+                    }
+                    int bad = fusedA2ACounterSentinelFirstBad(devGuard.data());
+                    if(bad >= 0)
+                    {
+                        std::cerr << "[fused-a2a] COUNTER OVERRUN iter=" << it << " device=" << d
+                                  << ": guard word " << bad << " (byte "
+                                  << counterBytes + (size_t)bad * sizeof(uint32_t)
+                                  << " of a " << counterAllocBytes << "-byte allocation) holds 0x"
+                                  << std::hex << devGuard[bad] << ", expected 0x"
+                                  << fusedA2ACounterSentinelWord((size_t)bad) << std::dec
+                                  << " -- a counter index ran past the " << counterBytes
+                                  << "-byte payload" << std::endl;
+                        guardFail = true;
+                        ok        = false;
                     }
                 }
 
@@ -959,12 +1020,14 @@ namespace TensileLite
             }
 
             std::cout << "[fused-a2a] overall " << (raceFail ? "FAILED" : "PASSED") << std::endl;
-            // Exit codes: 2 = a kernel returned a HIP error in some iteration;
+            // Exit codes: 2 = a kernel returned a HIP error in some iteration, or a
+            //     counter guard tail came back corrupted -- both are hard runtime
+            //     faults rather than numeric disagreement;
             // 3 = all kernels ran but some iteration failed numeric validation
             //     (only reachable when validate=1);
             // 0 = every iteration passed (validate=1: dual-segment numeric check;
             //     validate=0: clean exit on all iterations).
-            if(anyHipError)
+            if(anyHipError || guardFail)
                 return 2;
             return raceFail ? 3 : 0;
         }

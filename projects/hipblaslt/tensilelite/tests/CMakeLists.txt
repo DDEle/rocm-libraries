@@ -551,3 +551,19 @@ if(NOT WIN32)
     )
     set_tests_properties("CPUGemm.slow_f32_MX32_Rejected" PROPERTIES WILL_FAIL TRUE)
 endif()
+
+#################################################
+#        Tests for CMake logic                  #
+#################################################
+
+# Pure CMake: no compiler, no ROCm install, no GPU. Covers the hsakmt link
+# interface repair in cmake/HsakmtLinkInterface.cmake, whose failure mode --
+# rewriting search dirs that are perfectly alive -- is invisible on the one
+# container the workaround was written against and only surfaces on a host
+# whose ROCm exports a different link interface.
+add_test(
+    NAME "CMake.HsakmtLinkInterface"
+    COMMAND ${CMAKE_COMMAND}
+            -DTEST_TMP_DIR=${CMAKE_CURRENT_BINARY_DIR}/hsakmt_link_interface_test
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/tests/test_hsakmt_link_interface.cmake
+)

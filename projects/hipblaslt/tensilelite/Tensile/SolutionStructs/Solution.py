@@ -1745,7 +1745,8 @@ class Solution(collections.abc.Mapping):
       if state["FusedA2ADrainOwner"] and state["GlobalSplitU"] != 1:
         reject(state, printRejectionReason,
                "FusedA2ADrainOwner=1 requires GlobalSplitU=1 (counter3 target is "
-               "NumWorkGroups0*NumWorkGroups1, which equals the launched grid only at GSU=1)")
+               "NumWorkGroups0*NumWorkGroups1; GSU!=1 multiplies the arriving "
+               "work-group count, so the election fires early)")
         return
       # Rejecting GSU!=1 above only pins the compile-time value; SupportUserGSU
       # would still let a runtime caller raise GSU (ContractionSolution.cpp honours

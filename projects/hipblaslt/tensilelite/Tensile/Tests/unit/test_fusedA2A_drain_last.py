@@ -7,6 +7,7 @@
 # VCCZ (ROCM-27524, deferred item D15 Step 1).
 ################################################################################
 
+import ast
 import os
 import sys
 
@@ -66,6 +67,47 @@ def test_total_wgs_latch_multiplies_the_two_grid_dims():
     assert "sgprFusedTotalWGs" in dst, code[0]
     assert "sgprNumWorkGroups0" in src0, code[0]
     assert "sgprNumWorkGroups1" in src1, code[0]
+
+
+def test_drain_owner_also_locks_out_the_runtime_GSU_override():
+    # Rejecting GlobalSplitU != 1 only pins the compile-time value. SupportUserGSU
+    # defaults to True, and ContractionSolution.cpp honours problem.getParams().gsu()
+    # when it is set -- so a runtime caller could re-inflate the grid under an
+    # election target that was latched as a compile-time constant. Structural pin
+    # (no toolchain needed): the lockout must live in the FusedGemmA2A block, be
+    # guarded on FusedA2ADrainOwner, and sit on the ACCEPTED path -- after the
+    # rejects, never nested inside one, or it never runs for the config it protects.
+    with open(os.path.join(TENSILE_ROOT, "Tensile/SolutionStructs/Solution.py")) as f:
+        tree = ast.parse(f.read())
+
+    blocks = [n for n in ast.walk(tree)
+              if isinstance(n, ast.If) and ast.unparse(n.test) == "state['FusedGemmA2A']"]
+    assert len(blocks) == 1, "expected exactly one `if state['FusedGemmA2A']:` block"
+    body = blocks[0].body
+
+    TARGET = "state['InternalSupportParams']['SupportUserGSU'] = False"
+
+    def index_of(pred):
+        return next((i for i, stmt in enumerate(body) if pred(stmt)), None)
+
+    lockout = index_of(lambda s: isinstance(s, ast.If)
+                       and "FusedA2ADrainOwner" in ast.unparse(s.test)
+                       and any(ast.unparse(b) == TARGET for b in s.body))
+    assert lockout is not None, \
+        "FusedGemmA2A block has no `if ...FusedA2ADrainOwner...:` setting " + TARGET
+
+    gsu_reject = index_of(lambda s: isinstance(s, ast.If)
+                          and "FusedA2ADrainOwner" in ast.unparse(s.test)
+                          and "GlobalSplitU" in ast.unparse(s.test))
+    assert gsu_reject is not None, "the compile-time GlobalSplitU rejection went missing"
+    # Nesting the lockout inside the reject guard collapses the two indices: that
+    # branch returns, so the flag would only ever be set on a dead solution.
+    assert lockout > gsu_reject, \
+        "lockout must be a sibling AFTER the GSU rejection, not inside/before it"
+
+    # A top-level return before it would make it unreachable outright.
+    assert not any(isinstance(s, (ast.Return, ast.Raise)) for s in body[:lockout]), \
+        "a statement before the lockout leaves the block: the lockout is dead code"
 
 
 def test_total_wgs_latch_is_gated_on_the_owner_knob_not_the_vestigial_one():

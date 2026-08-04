@@ -12,9 +12,13 @@
 #     2624) and the production form (unpadded nShard=2560). This is the plan's
 #     named verification: the emitter's immediates must equal the
 #     byte-for-byte-on-MI355X golden. See the provenance note above the vectors
-#     -- this file is self-contained on that point and does not depend on the
-#     C++ packet header, which is slated for removal (nothing in the client
-#     runtime ever consumed it).
+#     -- the vectors here are hand-written constants and do not import the C++
+#     packet header. That header is NOT going away: an earlier version of this
+#     note called it "slated for removal" because no client-runtime translation
+#     unit includes it, and that reading was reversed -- it is the
+#     hardware-anchored provenance these goldens inherit their authority from.
+#     See the KEEP note atop client/src/SdmaPktSubwin.hpp, and
+#     test_sdma_header_mirror.py, which now pins the two against each other.
 #   * the rocisa emitters (emitBuildCopyPacket / emitBuildAtomicPacket /
 #     emitComputeCopyFields / emitComputeFlagAddr) are asserted on their SEMANTIC
 #     field-packing features (header immediates, minus-one encoding, shift

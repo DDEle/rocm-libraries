@@ -104,10 +104,13 @@ def emitFusedA2ATotalWGsLatch(module, sgprName):
   something else. Latching once in the prologue is the same move
   KernelWriterAssembly already makes for its NumGroup SGPR.
 
-  Batch (WorkGroup2) is intentionally NOT folded in -- callers must reject
-  batched problems while FusedA2ADrainOwner=1 (Solution.py), because a WG2
-  extent would make this product an undercount and the last-WG election would
-  fire early."""
+  Two grid extents are intentionally NOT folded in, so this product equals the
+  launched grid only for an unbatched GSU=1 kernel: the batch (WorkGroup2)
+  extent, and GlobalSplitU -- which multiplies grid.y, making the real y-extent
+  NumWorkGroups1*GSU. GSU is the likelier of the two, since every fused kernel
+  has GSU enabled. Callers must therefore reject both batched problems and
+  GlobalSplitU!=1 while FusedA2ADrainOwner=1 (Solution.py); under either, this
+  product is an undercount and the last-WG election would fire early."""
   module.add(SMulI32(dst=sgpr(sgprName), src0=sgpr("NumWorkGroups0"), src1=sgpr("NumWorkGroups1"),
                      comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
 

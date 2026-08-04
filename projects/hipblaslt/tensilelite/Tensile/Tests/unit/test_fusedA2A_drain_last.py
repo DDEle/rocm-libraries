@@ -53,12 +53,19 @@ def test_total_wgs_latch_multiplies_the_two_grid_dims():
     emitFusedA2ATotalWGsLatch(m, "FusedTotalWGs")
     text = str(m)
 
-    assert "s_mul_i32" in text
-    assert "NumWorkGroups0" in text and "NumWorkGroups1" in text
-    assert "FusedTotalWGs" in text
-    # exactly one instruction -- this is a hot-path prologue, not a place to grow
+    # Assert on the comment-stripped instruction, never on `text`: the
+    # instruction's own comment reads "FusedTotalWGs = NumWorkGroups0 *
+    # NumWorkGroups1", so every name below is satisfied by the comment alone and
+    # a `in text` check stays green even with the operands wired wrong.
     code = [ln for ln in (l.split("//")[0].strip() for l in text.splitlines()) if ln]
+    # exactly one instruction -- this is a hot-path prologue, not a place to grow
     assert len(code) == 1, code
+    assert code[0].startswith("s_mul_i32 "), code[0]
+    # by position, so a dst/src swap is caught too
+    dst, src0, src1 = (op.strip() for op in code[0].split(None, 1)[1].split(","))
+    assert "sgprFusedTotalWGs" in dst, code[0]
+    assert "sgprNumWorkGroups0" in src0, code[0]
+    assert "sgprNumWorkGroups1" in src1, code[0]
 
 
 def test_total_wgs_latch_is_gated_on_the_owner_knob_not_the_vestigial_one():
@@ -70,13 +77,18 @@ def test_total_wgs_latch_is_gated_on_the_owner_knob_not_the_vestigial_one():
     sites = (("Tensile/KernelWriter.py", 'defineSgpr("FusedTotalWGs"'),
              ("Tensile/KernelWriterAssembly.py", "emitFusedA2ATotalWGsLatch(module"),
              ("Tensile/SolutionStructs/Solution.py",
-              '"FusedA2ADrainOwner=1 requires no batch dim'))
+              '"FusedA2ADrainOwner=1 requires no batch dim'),
+             ("Tensile/SolutionStructs/Solution.py",
+              '"FusedA2ADrainOwner=1 requires GlobalSplitU=1'))
     for relpath, marker in sites:
         with open(os.path.join(TENSILE_ROOT, relpath)) as f:
             lines = f.read().splitlines()
         hits = [i for i, ln in enumerate(lines) if marker in ln]
         assert hits, f"{relpath}: no call site containing {marker!r}"
         for i in hits:
-            guard = next(ln for ln in reversed(lines[:i]) if ln.lstrip().startswith("if "))
+            guard = next((ln for ln in reversed(lines[:i])
+                          if ln.lstrip().startswith("if ")), None)
+            assert guard is not None, \
+                f"{relpath}:{i + 1}: no preceding `if` for site {marker!r}"
             assert '"FusedA2ADrainOwner"]' in guard, (relpath, i + 1, guard)
             assert '"FusedA2ADrain"]' not in guard, (relpath, i + 1, guard)

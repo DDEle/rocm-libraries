@@ -2800,9 +2800,10 @@ class GlobalWriteBatchWriter:
     reach the tally as well, which is what makes FusedTotalWGs (= every surviving
     work-group, see emitFusedA2ATotalWGsLatch) the right election target.  Steps
     (3)-(6) are unchanged and still PUSH-only; counter2's election is retained but
-    no longer gates the DRAIN.  The DRAIN block itself only MOVES here -- it is
-    still the per-peer poll and is wrong for a grid-wide owner; see the "NOT USABLE
-    UNDER drainOwner=1 YET" note on it.  Do not enable the knob before Task 5.
+    no longer gates the DRAIN.  No DRAIN is emitted under drainOwner=1 at all: the
+    per-peer poll below is wrong for a grid-wide owner (it reads flag[dst_rank] with
+    dst_rank >= W for a local WG), so the counter3 block ends at the election branch
+    and Task 5 attaches a poll over all W slots at the seam marked there.
     """
     kw = self.parentWriter
     module.addComment2("fused-A2A cross-card handshake (design spec 2.3): counter election + SDMA packet submit + DRAIN")
@@ -3046,25 +3047,12 @@ class GlobalWriteBatchWriter:
     # recv[dst_rank] slot arrived by polling THIS card's own flag buffer at
     # flag_ptr[my_rank] + dst_rank*8 until it reaches FusedTokenTiles.
     #
-    # Built into its own Module so drainOwner can EMIT it after the counter3 tally
-    # instead of here, without perturbing the drainOwner=0 rendering (build order,
-    # hence register and label numbering, is identical in both modes).
-    #
-    # !! NOT USABLE UNDER drainOwner=1 YET -- Task 5 replaces this body, and the
-    # knob must not be enabled before it does.  Relocated as is, the poll keeps two
-    # defects, both because it was written for a per-peer owner:
-    #   - it waits on ONE peer's slot, but a grid-wide owner must wait on all W;
-    #   - dst_rank is out of range.  _fusedA2ALoadFlagBaseAndRank derives it from
-    #     WorkGroup0*MT0 by scanning j = 0..FUSED_A2A_MAX_RANKS-1, and the counter3
-    #     winner is frequently a LOCAL WG, whose WorkGroup0*MT0 is >= AM = W*n_shard
-    #     (host: nShard = AM/W in FusedA2AClient.cpp).  The scan then yields
-    #     dst_rank >= W, while the host allocates only W u64 slots
-    #     (flagBytes = W * sizeof(uint64_t)), so flag_ptr[my_rank] + dst_rank*8
-    #     reads past the flag buffer and the spin can never be satisfied.
-    # flagBaseSgpr itself is always a real pointer -- argModule is hoisted above the
-    # gate under drainOwner, so every path into here has loaded it -- so the defect
-    # is the offset, not a wild base.  Task 5 turns the poll into one vector load
-    # over the W slots reduced with VCCZ, which removes both.
+    # This is the PER-PEER poll and is emitted ONLY under drainOwner=0.  It is built
+    # into its own Module purely so the emission can be skipped without disturbing
+    # the drainOwner=0 rendering: build order, hence register and label numbering,
+    # stays identical in both modes.  Under drainOwner=1 the Module is built and
+    # discarded, and Task 5 attaches a correct poll at the seam marked in the
+    # counter3 block below -- see that comment for why this one cannot be reused.
     #
     # The predicate is an ACCUMULATED COUNT, not a one-shot sentinel: each source
     # rank sends tokenTiles packet pairs and each pair's SDMA ATOMIC ADD64 adds 1 to
@@ -3187,8 +3175,18 @@ class GlobalWriteBatchWriter:
       kw.sgprPool.checkIn(c3WSgpr)
       kw.sgprPool.checkIn(c3PtrSgpr)
       module.add(SCBranchSCC0(labelName=afterLabel.getLabelName(),
-                              comment="not the last WG -> skip DRAIN"))
-      module.add(drainModule)
+                              comment="not the last WG -> skip the DRAIN (Task 5 attaches it here)"))
+      # SEAM: Task 5 attaches the DRAIN right here, for the WG that fell through the
+      # branch above.  Nothing is emitted yet -- and deliberately so, rather than
+      # relocating the per-peer poll built above.  That poll waits on
+      # flag[dst_rank], and dst_rank comes from _fusedA2ALoadFlagBaseAndRank's scan
+      # of j = 1 .. FUSED_A2A_MAX_RANKS-1 for the largest j with
+      # j*n_shard <= WorkGroup0*MT0.  The counter3 winner is frequently a LOCAL WG,
+      # whose WorkGroup0*MT0 is >= AM = W*n_shard (host: nShard = AM/W,
+      # FusedA2AClient.cpp), so it necessarily lands on dst_rank >= W -- past the
+      # host's flagBytes = W * sizeof(uint64_t) allocation.  Reusing it here would
+      # be an out-of-bounds read whose spin can never be satisfied.  A grid-wide
+      # owner has to wait on ALL W slots, which is Task 5's vector poll.
 
     kw.vgprPool.checkIn(vOld)
     kw.vgprPool.checkIn(vOne)

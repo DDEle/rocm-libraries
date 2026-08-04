@@ -327,6 +327,38 @@ def test_counter3_election_compares_against_the_latched_total(renderHandshake):
     assert code[cmp_i + 1].startswith("s_cbranch_scc0 "), code[cmp_i:cmp_i + 2]
 
 
+def test_drain_owner_mode_emits_no_drain_yet(renderHandshake):
+    """Task 5 owns attaching the DRAIN; Task 4 must not relocate the per-peer one.
+
+    The per-peer poll waits on flag[dst_rank], and _fusedA2ALoadFlagBaseAndRank
+    derives dst_rank by scanning j in range(1, FUSED_A2A_MAX_RANKS) for the largest
+    j with j*n_shard <= WorkGroup0*MT0. The counter3 winner is frequently a LOCAL
+    WG, whose WorkGroup0*MT0 is >= AM = W*n_shard (host: nShard = AM/W), so it lands
+    on dst_rank >= W necessarily -- past the host's flagBytes = W*sizeof(uint64_t)
+    allocation. Relocating that block under a grid-wide owner is an out-of-bounds
+    read whose spin can never be satisfied. So the counter3 block ends at the
+    election branch, and Task 5 attaches a poll over all W slots after it.
+    """
+    text = renderHandshake(1)
+    assert "fusedA2A_drain" not in text, \
+        "the per-peer DRAIN must not be emitted under DrainOwner=1 (reads flag[dst_rank>=W])"
+
+    code = _codeLines(text)
+    # Positive form: the election branch is the last instruction of the handshake,
+    # i.e. nothing at all sits between it and the exit label. A bare string-absence
+    # check would stay green if a DRAIN were re-added under different label names.
+    cmp_i = next(i for i, ln in enumerate(code)
+                 if ln.startswith("s_cmp_eq_u32") and "sgprFusedTotalWGs" in ln)
+    assert code[cmp_i + 1].startswith("s_cbranch_scc0 "), code[cmp_i:cmp_i + 3]
+    assert code[cmp_i + 2].startswith("label_fusedA2A_handshake_after"), \
+        f"counter3 block must end at the election branch, found: {code[cmp_i + 2:cmp_i + 5]}"
+
+    # ...and the per-peer path keeps its DRAIN: this removal must not leak into the
+    # regression baseline (the golden pins the rest).
+    assert "fusedA2A_drain_poll" in renderHandshake(0), \
+        "DrainOwner=0 must still emit the per-peer DRAIN"
+
+
 def test_every_surviving_wg_runs_the_handshake_once():
     """The counter3 target is FusedTotalWGs, so arrivals must equal survivors.
 

@@ -4,13 +4,11 @@
 ################################################################################
 # D15 Step 1 -- DRAIN ownership moves from W per-peer spinners to the single
 # globally-last workgroup, and the poll becomes one vector load reduced with
-# VCCZ. See notes/ROCM-27524/d15-drain-last-and-wg-remap-design.md.
+# VCCZ (ROCM-27524, deferred item D15 Step 1).
 ################################################################################
 
 import os
 import sys
-
-import pytest
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TENSILE_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))

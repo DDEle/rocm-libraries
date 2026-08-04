@@ -104,13 +104,14 @@ def emitFusedA2ATotalWGsLatch(module, sgprName):
   something else. Latching once in the prologue is the same move
   KernelWriterAssembly already makes for its NumGroup SGPR.
 
-  Two grid extents are intentionally NOT folded in, so this product equals the
-  launched grid only for an unbatched GSU=1 kernel: the batch (WorkGroup2)
-  extent, and GlobalSplitU -- which multiplies grid.y, making the real y-extent
-  NumWorkGroups1*GSU. GSU is the likelier of the two, since every fused kernel
-  has GSU enabled. Callers must therefore reject both batched problems and
-  GlobalSplitU!=1 while FusedA2ADrainOwner=1 (Solution.py); under either, this
-  product is an undercount and the last-WG election would fire early."""
+  The invariant is over SURVIVING work-groups, not the launched grid: ClusterDim
+  != [1,1] rounds the host-side grid up to the cluster
+  (ContractionSolution::generateSingleCall), but the padded work-groups s_endpgm
+  in the prologue (clusterPadEarlyExit, KernelWriterAssembly.py), leaving exactly
+  NumWorkGroups0 * NumWorkGroups1*GSU arrivals at the epilogue counter. The batch
+  (WorkGroup2) extent and GSU are the two factors NOT folded in, so callers must
+  reject batched problems and GlobalSplitU!=1 while FusedA2ADrainOwner=1
+  (Solution.py): under either this undercounts and the election fires early."""
   module.add(SMulI32(dst=sgpr(sgprName), src0=sgpr("NumWorkGroups0"), src1=sgpr("NumWorkGroups1"),
                      comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
 

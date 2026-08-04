@@ -39,12 +39,16 @@ namespace TensileLite
         constexpr size_t FUSED_A2A_COUNTER_SENTINEL_WORDS
             = FUSED_A2A_COUNTER_SENTINEL_BYTES / sizeof(uint32_t);
 
-        // Live counter bytes: W*tokenTiles first-level slots + W second-level.
+        // Live counter bytes. Three levels share one allocation:
+        //   W*tokenTiles  first-level  counter[dst_rank*tokenTiles + j]
+        //   W             second-level counter2[dst_rank]
+        //   1             third-level  counter3, the grid-wide WG tally that
+        //                 elects the single DRAIN owner (FusedA2ADrainOwner=1)
         // Computed in size_t (not uint32) so a large W*tokenTiles cannot wrap
         // and under-allocate.
         constexpr size_t fusedA2ACounterPayloadBytes(uint32_t worldSize, uint32_t tokenTiles)
         {
-            return ((size_t)worldSize * tokenTiles + worldSize) * sizeof(uint32_t);
+            return ((size_t)worldSize * tokenTiles + worldSize + 1) * sizeof(uint32_t);
         }
 
         // What to hipMalloc: payload plus the guard tail. The per-launch memset

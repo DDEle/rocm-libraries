@@ -49,10 +49,29 @@ namespace
 // silently overlap live counter slots.
 TEST(FusedA2ACounterSentinel, PayloadMatchesTheCounterLayout)
 {
-    // W ranks x tokenTiles tiles, plus the W-entry second-level counter2.
-    EXPECT_EQ(fusedA2ACounterPayloadBytes(4, 16), (size_t)(4 * 16 + 4) * sizeof(uint32_t));
-    EXPECT_EQ(fusedA2ACounterPayloadBytes(8, 1), (size_t)(8 * 1 + 8) * sizeof(uint32_t));
-    EXPECT_EQ(fusedA2ACounterPayloadBytes(1, 1), (size_t)(1 * 1 + 1) * sizeof(uint32_t));
+    // Three levels ride one allocation, in this order:
+    //   [0, W*tokenTiles)              counter[dst_rank*tokenTiles + j]
+    //   [W*tokenTiles, W*tokenTiles+W) counter2[dst_rank]
+    //   [W*tokenTiles+W]               counter3, the single grid-wide WG tally
+    // The kernel hardcodes those index expressions, so this is the size contract.
+    EXPECT_EQ(fusedA2ACounterPayloadBytes(4, 16), (size_t)(4 * 16 + 4 + 1) * sizeof(uint32_t));
+    EXPECT_EQ(fusedA2ACounterPayloadBytes(8, 1), (size_t)(8 * 1 + 8 + 1) * sizeof(uint32_t));
+    EXPECT_EQ(fusedA2ACounterPayloadBytes(1, 1), (size_t)(1 * 1 + 1 + 1) * sizeof(uint32_t));
+}
+
+TEST(FusedA2ACounterSentinel, Counter3SitsImmediatelyAfterCounter2)
+{
+    // Pins the index the kernel uses (GlobalWriteBatch.py, counter3 block) against
+    // the host allocation: the last live word must be exactly W*tokenTiles + W.
+    for(uint32_t w : {1u, 2u, 4u, 8u})
+    {
+        for(uint32_t t : {1u, 8u, 16u})
+        {
+            const size_t words = fusedA2ACounterPayloadBytes(w, t) / sizeof(uint32_t);
+            EXPECT_EQ(words, (size_t)w * t + w + 1) << "W=" << w << " tokenTiles=" << t;
+            EXPECT_EQ(words - 1, (size_t)w * t + w) << "counter3 index drifted";
+        }
+    }
 }
 
 TEST(FusedA2ACounterSentinel, AllocIsPayloadPlusGuardTail)

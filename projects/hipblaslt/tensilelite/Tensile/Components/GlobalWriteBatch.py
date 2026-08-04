@@ -2791,82 +2791,125 @@ class GlobalWriteBatchWriter:
     accumulates: source j's tokenTiles ATOMICs raise it to tokenTiles, which is the
     DRAIN predicate.  (Before the SDMA path existed this was a one-shot CU-side READY
     store, which under the finer counter grain released (tokenTiles-1)/tokenTiles early.)
+
+    FusedA2ADrainOwner=1 (D15 Step 1) changes WHO drains, not WHETHER.  The blocks
+    above are emitted in a different ORDER: the preamble -- full EXEC, the store
+    wait, the kernarg reads, the barrier, the wave-0 election and the single-lane
+    EXEC -- is hoisted ABOVE the PUSH gate, and the gate's not-taken edge lands on a
+    new counter3 tally instead of the exit.  Local (non-PUSH) work-groups therefore
+    reach the tally as well, which is what makes FusedTotalWGs (= every surviving
+    work-group, see emitFusedA2ATotalWGsLatch) the right election target.  Steps
+    (3)-(6) are unchanged and still PUSH-only; counter2's election is retained but
+    no longer gates the DRAIN.  The DRAIN block itself only MOVES here -- it is
+    still the per-peer poll and is wrong for a grid-wide owner; see the "NOT USABLE
+    UNDER drainOwner=1 YET" note on it.  Do not enable the knob before Task 5.
     """
     kw = self.parentWriter
     module.addComment2("fused-A2A cross-card handshake (design spec 2.3): counter election + SDMA packet submit + DRAIN")
+
+    # WHO runs the DRAIN: 0 = per-peer owners elected by counter2 (one spinner per
+    # dst_rank), 1 = the single globally-last WG elected by counter3.  Distinct from
+    # the FusedDrain kernarg (WHETHER a DRAIN runs at all) and from the vestigial
+    # FusedA2ADrain solution parameter, which codegen never reads.
+    drainOwner = bool(self.kernel["FusedA2ADrainOwner"])
 
     afterLabel = Label(kw.labels.getNameInc("fusedA2A_handshake_after"),
                        "fused-A2A: after handshake (non-PUSH WGs skip)")
     skipReleaseLabel = Label(kw.labels.getNameInc("fusedA2A_handshake_notlast"),
                              "fused-A2A: not the last WG for (dst_rank, token-tile) -> skip release")
+    counter3Label = Label(kw.labels.getNameInc("fusedA2A_counter3"),
+                          "fused-A2A: grid-wide counter3 tally (every WG, PUSH and local)") \
+                    if drainOwner else None
 
-    # --- runtime PUSH gate (same as the store dispatch): PUSH iff WorkGroup0 < AM_tiles,
-    #     with AM_tiles = FusedAM >> log2(MacroTile0) read on demand from kernarg. ---
+    # --- The gate and the three preamble blocks are BUILT in this order in both
+    #     modes -- so the register pool hands out identical numbers -- but EMITTED
+    #     in an order that depends on drainOwner (see the `module.add` block below).
+    #     Sub-Modules render transparently, so drainOwner=0 is byte-for-byte what
+    #     the straight-line version produced. ---
     from .Signature import fusedA2AKernArgLayout
     layout = fusedA2AKernArgLayout()
     fusedBase = kw.states.fusedA2AKernArgBase
     mt0 = self.kernel["MacroTile0"]
     log2mt0 = int(log2(mt0))
-    gateSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsGate", preventOverflow=False)
-    module.add(kw.argLoader.loadKernArg(gateSgpr, "KernArgAddress",
-      sgprOffset=hex(fusedBase + layout["FusedAM"]), dword=1))
-    module.add(SWaitCnt(kmcnt=0, comment="wait FusedAM"))
-    module.add(SLShiftRightB32(dst=sgpr(gateSgpr), shiftHex=log2mt0, src=sgpr(gateSgpr),
-                               comment=f"AM_tiles = FusedAM >> log2(MT0={mt0})"))
-    module.add(SCmpGtU32(src0=sgpr(gateSgpr), src1=sgpr("WorkGroup0"),
-                         comment="AM_tiles > WorkGroup0? (this WG in PUSH region)"))
-    kw.sgprPool.checkIn(gateSgpr)
-    module.add(SCBranchSCC0(labelName=afterLabel.getLabelName(),
-                            comment="WorkGroup0 >= AM_tiles -> not a PUSH WG, skip handshake"))
 
+    # --- runtime PUSH gate (same as the store dispatch): PUSH iff WorkGroup0 < AM_tiles,
+    #     with AM_tiles = FusedAM >> log2(MacroTile0) read on demand from kernarg. ---
+    gateModule = Module("fusedA2A_hsPushGate")
+    gateSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsGate", preventOverflow=False)
+    gateModule.add(kw.argLoader.loadKernArg(gateSgpr, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedAM"]), dword=1))
+    gateModule.add(SWaitCnt(kmcnt=0, comment="wait FusedAM"))
+    gateModule.add(SLShiftRightB32(dst=sgpr(gateSgpr), shiftHex=log2mt0, src=sgpr(gateSgpr),
+                                   comment=f"AM_tiles = FusedAM >> log2(MT0={mt0})"))
+    gateModule.add(SCmpGtU32(src0=sgpr(gateSgpr), src1=sgpr("WorkGroup0"),
+                             comment="AM_tiles > WorkGroup0? (this WG in PUSH region)"))
+    kw.sgprPool.checkIn(gateSgpr)
+    gateModule.add(SCBranchSCC0(
+      labelName=(counter3Label if drainOwner else afterLabel).getLabelName(),
+      comment=("WorkGroup0 >= AM_tiles -> not a PUSH WG, skip to the counter3 tally"
+               if drainOwner else
+               "WorkGroup0 >= AM_tiles -> not a PUSH WG, skip handshake")))
+
+    preModule = Module("fusedA2A_hsPreamble")
     # Restore full EXEC: the store loop may leave a partial edge mask, but the
     # wave-0 election reads VReadfirstlaneB32(Serial) which needs lane 0 active.
-    module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: full exec before wave-0 election"))
+    preModule.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: full exec before wave-0 election"))
 
     # (1) ensure this WG's A2A stores have landed (sc1 -> HBM) before the counter.
-    module.add(SWaitCnt(vscnt=0, comment="fused-A2A: my A2A stores (sc1) are in HBM before the counter (spec 2.3 step 2)"))
+    #     This MUST stay ahead of the barrier below: each wave retires its own
+    #     stores, then the barrier joins them.  The other order lets the SDMA
+    #     engine read a band that is not yet in HBM.  Hoisting the barrier under
+    #     drainOwner therefore hoists this wait too -- which costs local WGs one
+    #     waitcnt they would have paid at s_endpgm anyway.
+    preModule.add(SWaitCnt(vscnt=0, comment="fused-A2A: my A2A stores (sc1) are in HBM before the counter (spec 2.3 step 2)"))
 
     # --- kernarg reads (on demand, Task 5 contract): my_rank, target, n_shard.
-    #     layout / fusedBase already bound above for the PUSH gate. ---
+    #     layout / fusedBase already bound above for the PUSH gate.
+    #     Under drainOwner these run for LOCAL WGs too.  They are pure kernarg
+    #     reads, so that is only a cold-path cost -- but it also keeps flagBaseSgpr
+    #     a valid pointer on every path into the relocated DRAIN below, instead of
+    #     whatever the store loop happened to leave in it. ---
+    argModule = Module("fusedA2A_hsArgs")
     myRankSgpr     = kw.sgprPool.checkOut(1, tag="fusedA2A_hsMyRank", preventOverflow=False)
     targetSgpr     = kw.sgprPool.checkOut(1, tag="fusedA2A_hsTarget", preventOverflow=False)
     nShardSgpr     = kw.sgprPool.checkOut(1, tag="fusedA2A_hsNShard", preventOverflow=False)
     tokenTilesSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsTokenTiles", preventOverflow=False)
-    module.add(kw.argLoader.loadKernArg(myRankSgpr, "KernArgAddress",
+    argModule.add(kw.argLoader.loadKernArg(myRankSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedMyRank"]), dword=1))
     # Election target is FusedTilesPerRank (feature-tiles in one rank's shard), NOT the
     # legacy FusedTarget (= tilesPerRank*tokenTiles): the counter is now per (dst_rank,
     # token-tile) pair, so only the tilesPerRank feature-tiles of one token-tile row
     # contribute to a given slot.  FusedTarget is deprecated and no longer read.
-    module.add(kw.argLoader.loadKernArg(targetSgpr, "KernArgAddress",
+    argModule.add(kw.argLoader.loadKernArg(targetSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedTilesPerRank"]), dword=1))
-    module.add(kw.argLoader.loadKernArg(nShardSgpr, "KernArgAddress",
+    argModule.add(kw.argLoader.loadKernArg(nShardSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedNShard"]), dword=1))
-    module.add(kw.argLoader.loadKernArg(tokenTilesSgpr, "KernArgAddress",
+    argModule.add(kw.argLoader.loadKernArg(tokenTilesSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedTokenTiles"]), dword=1))
 
     # counter_ptr (dword=2) into an aligned pair.
     counterPtrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsCounterPtr", preventOverflow=False)
-    module.add(kw.argLoader.loadKernArg(counterPtrSgpr, "KernArgAddress",
+    argModule.add(kw.argLoader.loadKernArg(counterPtrSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["counter_ptr"]), dword=2))
-    module.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/TilesPerRank/NShard/TokenTiles/counter_ptr"))
+    argModule.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/TilesPerRank/NShard/TokenTiles/counter_ptr"))
 
     # --- switch-load flag_ptr[dst_rank] + numeric dst_rank. ---
     flagBaseSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsFlagBase", preventOverflow=False)
     dstRankSgpr  = kw.sgprPool.checkOut(1, tag="fusedA2A_hsDstRank", preventOverflow=False)
     tmpSgpr2     = kw.sgprPool.checkOut(2, tag="fusedA2A_hsSwitchTmp", preventOverflow=False)
-    self._fusedA2ALoadFlagBaseAndRank(module, flagBaseSgpr, dstRankSgpr, nShardSgpr, tmpSgpr2)
+    self._fusedA2ALoadFlagBaseAndRank(argModule, flagBaseSgpr, dstRankSgpr, nShardSgpr, tmpSgpr2)
 
     # (2) all waves in this WG finished their PUSH stores + the L2 wait; elect a
     # single writer (wave 0) so the counter atomic fires once per WG, not per lane.
-    module.add(SBarrier(comment="fused-A2A: all waves done before counter election"))
+    syncModule = Module("fusedA2A_hsSync")
+    syncModule.add(SBarrier(comment="fused-A2A: all waves done before counter election"))
     serialSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsSerial", preventOverflow=False)
-    module.add(VReadfirstlaneB32(dst=sgpr(serialSgpr), src=vgpr("Serial"),
-                                 comment="wave 0 elects the WG's single counter writer"))
-    module.add(SCmpEQU32(src0=sgpr(serialSgpr), src1=0, comment="wave 0?"))
+    syncModule.add(VReadfirstlaneB32(dst=sgpr(serialSgpr), src=vgpr("Serial"),
+                                     comment="wave 0 elects the WG's single counter writer"))
+    syncModule.add(SCmpEQU32(src0=sgpr(serialSgpr), src1=0, comment="wave 0?"))
     kw.sgprPool.checkIn(serialSgpr)
-    module.add(SCBranchSCC0(labelName=afterLabel.getLabelName(),
-                            comment="non-wave-0 -> skip (single writer per WG)"))
+    syncModule.add(SCBranchSCC0(labelName=afterLabel.getLabelName(),
+                                comment="non-wave-0 -> skip (single writer per WG)"))
 
     # Wave 0 still has EXEC=-1 (set above so VReadfirstlaneB32(Serial) saw lane 0).
     # The counter increment + flag store below are VECTOR memory ops on a lane-
@@ -2875,7 +2918,22 @@ class GlobalWriteBatchWriter:
     # never fires. Narrow EXEC to a single lane (thread 0, the same lane whose
     # Serial==0 passed the gate) so the atomic + flag store issue exactly once per
     # WG. Mirrors the file's mask-EXEC-before-atomic idiom (see lines 3112, 3160).
-    module.add(self.getEdgeMovInstType()(EXEC(), 1, "fused-A2A: isolate lane 0 for the once-per-WG counter atomic + flag store"))
+    syncModule.add(self.getEdgeMovInstType()(EXEC(), 1, "fused-A2A: isolate lane 0 for the once-per-WG counter atomic + flag store"))
+
+    if drainOwner:
+      # Preamble first: a local WG only reaches the counter3 tally if it walks the
+      # barrier, the wave-0 election and the single-lane EXEC -- the tally is a
+      # once-per-WG atomic and needs all three.  The gate then only decides whether
+      # this WG also does the PUSH-side work below.
+      module.add(preModule)
+      module.add(argModule)
+      module.add(syncModule)
+      module.add(gateModule)
+    else:
+      module.add(gateModule)
+      module.add(preModule)
+      module.add(argModule)
+      module.add(syncModule)
 
     # (3) counter slot = (dst_rank, j) with j = WorkGroup1 (the token-tile index): the
     # counter array is W*tokenTiles u32 entries at index dst_rank*tokenTiles + j.  The
@@ -2911,7 +2969,9 @@ class GlobalWriteBatchWriter:
     module.add(SCmpEQU32(src0=sgpr(tmpSgpr2), src1=sgpr(targetSgpr),
                          comment="old+1 == FusedTilesPerRank? (last WG for (dst_rank, j))"))
     module.add(SCBranchSCC0(labelName=skipReleaseLabel.getLabelName(),
-                            comment="not the last WG -> skip the SDMA submit + DRAIN"))
+                            comment=("not the last WG -> skip the SDMA submit"
+                                     if drainOwner else
+                                     "not the last WG -> skip the SDMA submit + DRAIN")))
 
     # (5) elected last WG for (dst_rank, j): hand the band to the SDMA engine.  No
     # buffer_wbl2 here -- every A2A store already carries sc1 and went to HBM, and
@@ -2936,6 +2996,11 @@ class GlobalWriteBatchWriter:
     # this card's producers FOR dst_rank are still waiting to be scheduled -- producers
     # for the other peers may well be.  So this narrows the occupancy hazard from
     # W*tokenTiles down to W; it does not remove it.
+    #
+    # All of the above describes drainOwner=0.  Under drainOwner=1 counter3 owns the
+    # DRAIN and this election feeds nothing: both of its edges reach the tally.  It
+    # is kept because it is still the "last submitter to dst_rank" predicate, which
+    # the vector DRAIN of Task 5 is expected to want back.
     counter2PtrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsCounter2Ptr", preventOverflow=False)
     fusedWSgpr      = kw.sgprPool.checkOut(1, tag="fusedA2A_hsW", preventOverflow=False)
     # counterPtrSgpr was advanced in place to &counter[dst_rank][j] at (3); reload the
@@ -2970,13 +3035,36 @@ class GlobalWriteBatchWriter:
     module.add(SCmpEQU32(src0=sgpr(tmpSgpr2), src1=sgpr(tokenTilesSgpr),
                          comment="old2+1 == FusedTokenTiles? (this card's last packet to dst_rank)"))
     module.add(SCBranchSCC0(labelName=skipReleaseLabel.getLabelName(),
-                            comment="not the last submitter for dst_rank -> skip the DRAIN"))
+                            comment=("not the last submitter for dst_rank -> skip ahead "
+                                     "(inert: counter3 owns the DRAIN)"
+                                     if drainOwner else
+                                     "not the last submitter for dst_rank -> skip the DRAIN")))
 
     # --- DRAIN barrier (design spec 2.4): make kernel-exit == this card received ---
     # all its incoming data.  The WG that additionally won counter2[dst_rank] at (6) --
     # i.e. the submitter of this card's last packet to dst_rank -- confirms THIS card's
     # recv[dst_rank] slot arrived by polling THIS card's own flag buffer at
     # flag_ptr[my_rank] + dst_rank*8 until it reaches FusedTokenTiles.
+    #
+    # Built into its own Module so drainOwner can EMIT it after the counter3 tally
+    # instead of here, without perturbing the drainOwner=0 rendering (build order,
+    # hence register and label numbering, is identical in both modes).
+    #
+    # !! NOT USABLE UNDER drainOwner=1 YET -- Task 5 replaces this body, and the
+    # knob must not be enabled before it does.  Relocated as is, the poll keeps two
+    # defects, both because it was written for a per-peer owner:
+    #   - it waits on ONE peer's slot, but a grid-wide owner must wait on all W;
+    #   - dst_rank is out of range.  _fusedA2ALoadFlagBaseAndRank derives it from
+    #     WorkGroup0*MT0 by scanning j = 0..FUSED_A2A_MAX_RANKS-1, and the counter3
+    #     winner is frequently a LOCAL WG, whose WorkGroup0*MT0 is >= AM = W*n_shard
+    #     (host: nShard = AM/W in FusedA2AClient.cpp).  The scan then yields
+    #     dst_rank >= W, while the host allocates only W u64 slots
+    #     (flagBytes = W * sizeof(uint64_t)), so flag_ptr[my_rank] + dst_rank*8
+    #     reads past the flag buffer and the spin can never be satisfied.
+    # flagBaseSgpr itself is always a real pointer -- argModule is hoisted above the
+    # gate under drainOwner, so every path into here has loaded it -- so the defect
+    # is the offset, not a wild base.  Task 5 turns the poll into one vector load
+    # over the W slots reduced with VCCZ, which removes both.
     #
     # The predicate is an ACCUMULATED COUNT, not a one-shot sentinel: each source
     # rank sends tokenTiles packet pairs and each pair's SDMA ATOMIC ADD64 adds 1 to
@@ -2991,6 +3079,7 @@ class GlobalWriteBatchWriter:
     #
     # Gated at RUNTIME by the FusedDrain kernarg (a compile-time gate would fork the
     # fused kernel into drain-on/off variants).  Still single-lane EXEC.
+    drainModule = Module("fusedA2A_hsDrain")
     skipDrainLabel = Label(kw.labels.getNameInc("fusedA2A_drain_skip"),
                            "fused-A2A: FusedDrain==0 -> no drain barrier")
     drainPollLabel = Label(kw.labels.getNameInc("fusedA2A_drain_poll"),
@@ -2998,51 +3087,109 @@ class GlobalWriteBatchWriter:
 
     # runtime gate: FusedDrain == 0 -> skip the whole barrier.
     drainSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_drainFlag", preventOverflow=False)
-    module.add(kw.argLoader.loadKernArg(drainSgpr, "KernArgAddress",
+    drainModule.add(kw.argLoader.loadKernArg(drainSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedDrain"]), dword=1))
-    module.add(SWaitCnt(kmcnt=0, comment="wait FusedDrain"))
-    module.add(SCmpEQU32(src0=sgpr(drainSgpr), src1=0, comment="FusedDrain == 0?"))
+    drainModule.add(SWaitCnt(kmcnt=0, comment="wait FusedDrain"))
+    drainModule.add(SCmpEQU32(src0=sgpr(drainSgpr), src1=0, comment="FusedDrain == 0?"))
     kw.sgprPool.checkIn(drainSgpr)
-    module.add(SCBranchSCC1(labelName=skipDrainLabel.getLabelName(),
-                            comment="FusedDrain==0 -> skip drain barrier"))
+    drainModule.add(SCBranchSCC1(labelName=skipDrainLabel.getLabelName(),
+                                 comment="FusedDrain==0 -> skip drain barrier"))
 
     vFlagAddr = kw.vgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsFlagAddr")
     vFlagVal  = kw.vgprPool.checkOut(1, tag="fusedA2A_hsFlagVal")
 
     # self flag base = flag_ptr[my_rank] (THIS card's own flag buffer). Reuses flagBaseSgpr
     # (its previous value flag_ptr[dst_rank] was only needed for the ATOMIC packet above).
-    self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, myRankSgpr, tmpSgpr2)
+    self._fusedA2ALoadFlagBaseByRank(drainModule, flagBaseSgpr, myRankSgpr, tmpSgpr2)
 
     # poll path: flag[j] address = flag_ptr[my_rank] + j*8 (source rank j's u64 slot).
-    module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr2), src=sgpr(dstRankSgpr), shiftHex=3,
-                              comment="j * 8 (self u64 flag slot byte offset)"))
-    module.add(SAddU32(dst=sgpr(flagBaseSgpr), src0=sgpr(flagBaseSgpr), src1=sgpr(tmpSgpr2),
-                       comment="self flag[j] lo = flag_ptr[my_rank] + j*8"))
-    module.add(SAddCU32(dst=sgpr(flagBaseSgpr + 1), src0=sgpr(flagBaseSgpr + 1), src1=0,
-                        comment="self flag[j] hi (carry)"))
-    module.add(VMovB32(dst=vgpr(vFlagAddr + 0), src=sgpr(flagBaseSgpr + 0), comment="self flag addr lo -> vgpr"))
-    module.add(VMovB32(dst=vgpr(vFlagAddr + 1), src=sgpr(flagBaseSgpr + 1), comment="self flag addr hi -> vgpr"))
+    drainModule.add(SLShiftLeftB32(dst=sgpr(tmpSgpr2), src=sgpr(dstRankSgpr), shiftHex=3,
+                                   comment="j * 8 (self u64 flag slot byte offset)"))
+    drainModule.add(SAddU32(dst=sgpr(flagBaseSgpr), src0=sgpr(flagBaseSgpr), src1=sgpr(tmpSgpr2),
+                            comment="self flag[j] lo = flag_ptr[my_rank] + j*8"))
+    drainModule.add(SAddCU32(dst=sgpr(flagBaseSgpr + 1), src0=sgpr(flagBaseSgpr + 1), src1=0,
+                             comment="self flag[j] hi (carry)"))
+    drainModule.add(VMovB32(dst=vgpr(vFlagAddr + 0), src=sgpr(flagBaseSgpr + 0), comment="self flag addr lo -> vgpr"))
+    drainModule.add(VMovB32(dst=vgpr(vFlagAddr + 1), src=sgpr(flagBaseSgpr + 1), comment="self flag addr hi -> vgpr"))
     # spin: system-scope load (sc0 sc1) bypasses this card's stale L2 (0) to read the HBM
     # truth accumulated by the SDMA engines; loop until == tokenTiles.
-    module.add(drainPollLabel)
-    module.add(GlobalLoadB32(
+    drainModule.add(drainPollLabel)
+    drainModule.add(GlobalLoadB32(
       dst=vgpr(vFlagVal), vaddr=vgpr(vFlagAddr, 2), saddr=offSaddr,
       modifier=GLOBALModifiers(glc=True, slc=True, scope=CacheScope.SCOPE_NONE, isStore=False),
       comment="poll self flag[j] low dword (system scope, sc0 sc1)"))
-    module.add(SWaitCnt(vlcnt=0, comment="fused-A2A: wait poll load"))
-    module.add(VReadfirstlaneB32(dst=sgpr(tmpSgpr2), src=vgpr(vFlagVal), comment="flag[j] -> sgpr"))
-    module.add(SCmpEQU32(src0=sgpr(tmpSgpr2), src1=sgpr(tokenTilesSgpr),
-                         comment="flag[j] == FusedTokenTiles? (all of source j's packets landed)"))
-    module.add(SCBranchSCC0(labelName=drainPollLabel.getLabelName(),
-                            comment="not complete yet -> spin (poll again)"))
-    module.add(skipDrainLabel)
+    drainModule.add(SWaitCnt(vlcnt=0, comment="fused-A2A: wait poll load"))
+    drainModule.add(VReadfirstlaneB32(dst=sgpr(tmpSgpr2), src=vgpr(vFlagVal), comment="flag[j] -> sgpr"))
+    drainModule.add(SCmpEQU32(src0=sgpr(tmpSgpr2), src1=sgpr(tokenTilesSgpr),
+                              comment="flag[j] == FusedTokenTiles? (all of source j's packets landed)"))
+    drainModule.add(SCBranchSCC0(labelName=drainPollLabel.getLabelName(),
+                                 comment="not complete yet -> spin (poll again)"))
+    drainModule.add(skipDrainLabel)
     # No buffer_inv here: this kernel does not read recv; acquire is the recv-reader's job.
     # TODO Task 13: multi-card DRAIN validation (poll path across real xGMI producers).
 
     kw.vgprPool.checkIn(vFlagVal)
     kw.vgprPool.checkIn(vFlagAddr)
 
+    if not drainOwner:
+      module.add(drainModule)
+
     module.add(skipReleaseLabel)
+
+    if drainOwner:
+      # counter3: one u32 at word index W*tokenTiles + W (host mirror:
+      # fusedA2ACounterPayloadBytes in client/include/FusedA2ACounterSentinel.hpp),
+      # incremented by EVERY surviving WG -- PUSH WGs fall through the block above,
+      # local WGs jump straight here from the PUSH gate.  The WG that takes it to
+      # FusedTotalWGs is the globally last one; by then nothing else is queued, so
+      # its DRAIN spin cannot starve a compute WG of its CU.
+      #
+      # Loads its own kernarg copies: the last WG is often a LOCAL WG, and while the
+      # hoisted argModule does leave counter_ptr live, re-reading it here keeps the
+      # tally independent of (3), which advanced counterPtrSgpr in place to
+      # &counter[dst_rank][j].  Cold path, once per WG.
+      module.add(counter3Label)
+      c3PtrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_c3Ptr", preventOverflow=False)
+      c3WSgpr   = kw.sgprPool.checkOut(1, tag="fusedA2A_c3W", preventOverflow=False)
+      c3TTSgpr  = kw.sgprPool.checkOut(1, tag="fusedA2A_c3TT", preventOverflow=False)
+      c3Tmp     = kw.sgprPool.checkOut(1, tag="fusedA2A_c3Tmp", preventOverflow=False)
+      module.add(kw.argLoader.loadKernArg(c3PtrSgpr, "KernArgAddress",
+        sgprOffset=hex(fusedBase + layout["counter_ptr"]), dword=2))
+      module.add(kw.argLoader.loadKernArg(c3WSgpr, "KernArgAddress",
+        sgprOffset=hex(fusedBase + layout["FusedW"]), dword=1))
+      module.add(kw.argLoader.loadKernArg(c3TTSgpr, "KernArgAddress",
+        sgprOffset=hex(fusedBase + layout["FusedTokenTiles"]), dword=1))
+      module.add(SWaitCnt(kmcnt=0, comment="wait counter_ptr/FusedW/FusedTokenTiles"))
+      module.add(SMulI32(dst=sgpr(c3Tmp), src0=sgpr(c3WSgpr), src1=sgpr(c3TTSgpr),
+                         comment="W * tokenTiles"))
+      module.add(SAddU32(dst=sgpr(c3Tmp), src0=sgpr(c3Tmp), src1=sgpr(c3WSgpr),
+                         comment="counter3 index = W*tokenTiles + W (past counter2)"))
+      module.add(SLShiftLeftB32(dst=sgpr(c3Tmp), src=sgpr(c3Tmp), shiftHex=2,
+                                comment="* 4 (u32 byte offset)"))
+      module.add(SAddU32(dst=sgpr(c3PtrSgpr), src0=sgpr(c3PtrSgpr), src1=sgpr(c3Tmp),
+                         comment="&counter3 lo"))
+      module.add(SAddCU32(dst=sgpr(c3PtrSgpr + 1), src0=sgpr(c3PtrSgpr + 1), src1=0,
+                          comment="&counter3 hi (carry)"))
+      module.add(VMovB32(dst=vgpr(vCntAddr + 0), src=sgpr(c3PtrSgpr + 0), comment="counter3 addr lo -> vgpr"))
+      module.add(VMovB32(dst=vgpr(vCntAddr + 1), src=sgpr(c3PtrSgpr + 1), comment="counter3 addr hi -> vgpr"))
+      module.add(VMovB32(dst=vgpr(vOne), src=1, comment="counter3 increment = 1"))
+      module.add(GlobalAtomicAddU32(
+        dst=vgpr(vOld), vaddr=vgpr(vCntAddr, 2), data=vgpr(vOne), saddr=offSaddr,
+        modifier=GLOBALModifiers(glc=True, slc=False, scope=CacheScope.SCOPE_NONE),
+        comment="old3 = atomic_add(counter3, 1) device scope, return pre-op (sc0)"))
+      module.add(SWaitCnt(vlcnt=0, comment="fused-A2A: wait counter3 atomic return"))
+      module.add(VReadfirstlaneB32(dst=sgpr(c3Tmp), src=vgpr(vOld), comment="old3 -> sgpr"))
+      module.add(SAddU32(dst=sgpr(c3Tmp), src0=sgpr(c3Tmp), src1=1, comment="old3 + 1"))
+      module.add(SCmpEQU32(src0=sgpr(c3Tmp), src1=sgpr("FusedTotalWGs"),
+                           comment="old3+1 == FusedTotalWGs? (globally last WG)"))
+      kw.sgprPool.checkIn(c3Tmp)
+      kw.sgprPool.checkIn(c3TTSgpr)
+      kw.sgprPool.checkIn(c3WSgpr)
+      kw.sgprPool.checkIn(c3PtrSgpr)
+      module.add(SCBranchSCC0(labelName=afterLabel.getLabelName(),
+                              comment="not the last WG -> skip DRAIN"))
+      module.add(drainModule)
+
     kw.vgprPool.checkIn(vOld)
     kw.vgprPool.checkIn(vOne)
     kw.vgprPool.checkIn(vCntAddr)
@@ -3054,14 +3201,25 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(nShardSgpr)
     kw.sgprPool.checkIn(targetSgpr)
     kw.sgprPool.checkIn(myRankSgpr)
-    # Restore full EXEC before falling through to afterLabel: wave 0 narrowed EXEC
-    # to a single lane for the counter atomic + flag store, but the CLS look-ahead
-    # emitted after the handshake (emit(): emitCoord1Advance) issues a VECTOR
-    # VAddCOU32 on coord1 that needs all lanes active. The two early gate branches
-    # (PUSH gate, wave-0 gate) jump straight to afterLabel and bypass this restore,
-    # which is correct -- neither of those paths narrowed EXEC.
-    module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: restore full exec after single-lane handshake"))
-    module.add(afterLabel)
+    # Restore full EXEC: wave 0 narrowed EXEC to a single lane for the counter
+    # atomic + flag store, but the CLS look-ahead emitted after the handshake
+    # (emit(): emitCoord1Advance) issues a VECTOR VAddCOU32 on coord1 that needs all
+    # lanes active.
+    #
+    # The restore goes BEFORE afterLabel under drainOwner=0 and AFTER it under
+    # drainOwner=1, and the difference is load-bearing.  Under 0 the only branches
+    # to afterLabel are the two early gates (PUSH, wave-0), neither of which had
+    # narrowed EXEC, so skipping the restore is correct.  Under 1 the counter3 tally
+    # branches to afterLabel with EXEC already down to lane 0, so the restore must
+    # be on that edge too; putting it after the label covers every path, and
+    # re-restoring EXEC on the wave-0 edge (which is already all-ones) is a no-op.
+    restore = self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: restore full exec after single-lane handshake")
+    if drainOwner:
+      module.add(afterLabel)
+      module.add(restore)
+    else:
+      module.add(restore)
+      module.add(afterLabel)
 
   def _emitSubtileOobGuard(self, targetModule, blockIdxM: int, blockIdxN: int, labelPrefix: str = "subtile_skip_store"):
     """Emit M/N OOB guard branches for UseSubtileImpl NonEdge stores.

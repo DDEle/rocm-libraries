@@ -1729,17 +1729,16 @@ class Solution(collections.abc.Mapping):
         reject(state, printRejectionReason, "FusedGemmA2A supports MacroTile0/1 in {128, 256}")
         return
       # The last-WG election counts arrivals against NumWorkGroups0*NumWorkGroups1,
-      # latched in the prologue; a batch dim multiplies the surviving-workgroup
-      # population and GSU!=1 may too, so the DRAIN would fire at 1/N arrivals.
-      # Reject rather than miscount; FusedA2ADrainOwner=0 (per-peer) stays available.
-      # Full derivation, incl. why ClusterDim padding does NOT break the latch:
-      # emitFusedA2ATotalWGsLatch in Components/GlobalWriteBatch.py. The batch test
-      # is on a declared index, not extent>1: a batch-1 grid would be exact, but the
-      # extent is runtime-only.
-      if state["FusedA2ADrainOwner"] and state["ProblemType"]["NumIndicesBatch"] > 0:
-        reject(state, printRejectionReason,
-               "FusedA2ADrainOwner=1 requires no batch dim (counter3 target is NumWorkGroups0*NumWorkGroups1)")
-        return
+      # latched in the prologue; GSU!=1 multiplies the surviving-workgroup population,
+      # so the DRAIN would fire at 1/GSU of the arrivals. Full derivation, incl. why
+      # ClusterDim padding does NOT break the latch: emitFusedA2ATotalWGsLatch in
+      # Components/GlobalWriteBatch.py.
+      #
+      # The batch dim multiplies the population the same way, but is NOT rejected
+      # here: compile time can only see that a batch index is DECLARED, and every
+      # fused config declares one (Batched: True -> NumIndicesBatch == 1) while
+      # running extent 1. Rejecting on the declaration produced zero kernels. The
+      # extent is checked host-side instead, in client/src/FusedA2AClient.cpp.
       # GSU=-1 defers the factor to calculateAutoGSU at runtime, so a compile-time
       # latch cannot fold it in at all; only GSU=1 makes the product exact.
       if state["FusedA2ADrainOwner"] and state["GlobalSplitU"] != 1:

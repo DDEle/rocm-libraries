@@ -233,6 +233,34 @@ def test_drain_owner_also_locks_out_the_runtime_GSU_override():
         "a statement before the lockout leaves the block: the lockout is dead code"
 
 
+def test_batch_guard_is_host_side_not_compile_time():
+    """The batch guard must test the EXTENT, which only the host can see.
+
+    Compile time knows only that a batch index is DECLARED. Every fused config sets
+    `Batched: True` -> NumIndicesBatch == 1 while running extent 1, so a
+    compile-time rejection on NumIndicesBatch matched every solution and generated
+    ZERO kernels -- a failure that looks like "no solutions found", not like a bad
+    number. It survived review because it sat behind a default-off flag that nothing
+    ever enabled.
+    """
+    with open(os.path.join(TENSILE_ROOT, "Tensile/SolutionStructs/Solution.py")) as f:
+        tree = ast.parse(f.read())
+    blocks = [n for n in ast.walk(tree)
+              if isinstance(n, ast.If) and ast.unparse(n.test) == "state['FusedGemmA2A']"]
+    assert len(blocks) == 1, "expected exactly one `if state['FusedGemmA2A']:` block"
+    # Scoped to the block: NumIndicesBatch is a legitimate name elsewhere in the file.
+    rejects = [ast.unparse(s) for s in blocks[0].body
+               if isinstance(s, ast.If) and "NumIndicesBatch" in ast.unparse(s.test)]
+    assert not rejects, \
+        f"fused block still rejects on a DECLARED batch index (zero kernels): {rejects}"
+
+    host = os.path.join(TENSILE_ROOT, "client/src/FusedA2AClient.cpp")
+    with open(host) as f:
+        src = f.read()
+    assert "batchIndices()" in src and "batchSize(" in src, \
+        "FusedA2AClient.cpp has no batch-extent check; the guard was deleted, not moved"
+
+
 def test_total_wgs_latch_is_gated_on_the_owner_knob_not_the_vestigial_one():
     # Every site of this feature must branch on FusedA2ADrainOwner (WHO drains).
     # Swapping in the similarly named but vestigial FusedA2ADrain -- which defaults
@@ -241,8 +269,6 @@ def test_total_wgs_latch_is_gated_on_the_owner_knob_not_the_vestigial_one():
     # election Task 4 gates on the same knob.
     sites = (("Tensile/KernelWriter.py", 'defineSgpr("FusedTotalWGs"'),
              ("Tensile/KernelWriterAssembly.py", "emitFusedA2ATotalWGsLatch(module"),
-             ("Tensile/SolutionStructs/Solution.py",
-              '"FusedA2ADrainOwner=1 requires no batch dim'),
              ("Tensile/SolutionStructs/Solution.py",
               '"FusedA2ADrainOwner=1 requires GlobalSplitU=1'))
     for relpath, marker in sites:

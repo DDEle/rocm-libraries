@@ -109,10 +109,19 @@ def emitFusedA2ATotalWGsLatch(module, sgprName):
   (ContractionSolution::generateSingleCall), but those padded work-groups s_endpgm
   in the prologue (clusterPadEarlyExit), leaving exactly NumWorkGroups0 *
   NumWorkGroups1*GSU survivors. The batch (WorkGroup2) extent and GSU are the two
-  factors NOT folded in, so callers must reject batched problems and
-  GlobalSplitU!=1 while FusedA2ADrainOwner=1. That FusedGemmA2A block
-  (Solution.py) also rejects StreamK!=0, load-bearing here: Stream-K's WorkGroup0
-  is a work-item index, not an M-tile, so the product is not the population."""
+  factors NOT folded in, and they are guarded in two different places:
+
+    - GlobalSplitU != 1 is rejected at compile time (Solution.py, the FusedGemmA2A
+      block), together with SupportUserGSU = False so a runtime caller cannot
+      re-inflate the grid under a latch that is a compile-time constant.
+    - The batch EXTENT is checked host-side, in client/src/FusedA2AClient.cpp.
+      Compile time can only see that a batch index is declared, and every fused
+      config declares one while running extent 1, so a compile-time rejection
+      matched every solution and produced no kernels at all.
+
+  That same FusedGemmA2A block also rejects StreamK!=0, which is load-bearing
+  here even though it was added for another reason: Stream-K's WorkGroup0 is a
+  work-item index, not an M-tile, so the product is not the population."""
   module.add(SMulI32(dst=sgpr(sgprName), src0=sgpr("NumWorkGroups0"), src1=sgpr("NumWorkGroups1"),
                      comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
 

@@ -937,18 +937,6 @@ validParameters = { # we need to make sure this matches develop
     # Historically meant to select barrier semantics (kernel exit == data
     # received) for FusedGemmA2A=1; kept only so existing configs still parse.
     "FusedA2ADrain": [0, 1],
-    # FusedA2ADrainOwner: WHO runs the DRAIN barrier (orthogonal to the FusedDrain
-    # kernarg, which decides WHETHER to run it at all).
-    #   0 = per-peer (today): the WG that submitted this card's last packet to a
-    #       given dst_rank spins on that peer's flag slot. That elects W spinners,
-    #       each starting as soon as its peer's last packet goes out -- which can
-    #       be early, while compute WGs are still queued. At LDS=131072 occupancy
-    #       is 1 WG/CU, so every spinner idles a whole CU.
-    #   1 = last-wg: a grid-wide counter3 elects the single globally-last WG,
-    #       which polls all W flag slots at once (one vector load reduced by VCCZ).
-    #       No CU is held by a spinner while compute is pending.
-    # Note: NOT the same knob as FusedA2ADrain above, which is vestigial.
-    "FusedA2ADrainOwner": [0, 1],
     # Persistent-kernel debug: when True, the persistent loop never exits.
     # Used as a co-tenant load kernel for contended-perf benchmarking.
     # Termination is via process death. Requires StreamK = 3.

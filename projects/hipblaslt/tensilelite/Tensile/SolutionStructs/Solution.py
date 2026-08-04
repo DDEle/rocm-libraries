@@ -1726,6 +1726,13 @@ class Solution(collections.abc.Mapping):
       if mt0 not in (128, 256) or mt1 not in (128, 256):
         reject(state, printRejectionReason, "FusedGemmA2A supports MacroTile0/1 in {128, 256}")
         return
+      # The last-WG election counts against NumWorkGroups0*NumWorkGroups1, which
+      # omits the WorkGroup2 (batch) extent. A batched grid would make that target
+      # an undercount and fire the DRAIN early, so reject instead of miscounting.
+      if state["FusedA2ADrainOwner"] and state["ProblemType"]["NumIndicesBatch"] > 0:
+        reject(state, printRejectionReason,
+               "FusedA2ADrainOwner=1 requires no batch dim (counter3 target is NumWorkGroups0*NumWorkGroups1)")
+        return
 
     if state["GlobalSplitU"] == 0 and state["AdaptiveGemmGSUA"] == 1:
       reject(state, printRejectionReason, "AdaptiveGemmGSUA requires GSU enablement")

@@ -21,6 +21,20 @@
 // static_asserts and the golden-vector unit test (SdmaPktSubwin_test.cpp) exist
 // precisely to catch such drift. GFX12+ uses a DIFFERENT layout of the same
 // size; this one is gfx9xx / gfx95x only.
+//
+// NOT DEAD CODE -- do not delete. No client-runtime translation unit includes
+// this header: its only includer is its own gtest, so a reachability scan reads
+// it as a self-justifying orphan, and it has been proposed for deletion on that
+// basis before. Keeping it is a deliberate call. The packets that actually ship
+// are built in GPU assembly by the Python mirror,
+// Tensile/Components/SdmaPacketEmitter.py; what this header contributes is
+// PROVENANCE, because its gtest drives the real encoder with the dword vectors
+// validated byte-for-byte on MI355X -- that is where the Python side's goldens
+// get their authority, and without it they are self-referential. The two files
+// are held together mechanically by
+// Tensile/Tests/unit/test_sdma_header_mirror.py, which compares opcodes, packet
+// lengths, field widths and field offsets across the language boundary and
+// FAILS (does not skip) if this header goes missing.
 
 #pragma once
 

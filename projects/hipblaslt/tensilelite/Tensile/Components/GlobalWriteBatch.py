@@ -105,13 +105,14 @@ def emitFusedA2ATotalWGsLatch(module, sgprName):
   KernelWriterAssembly already makes for its NumGroup SGPR.
 
   The invariant is over SURVIVING work-groups, not the launched grid: ClusterDim
-  != [1,1] rounds the host-side grid up to the cluster
-  (ContractionSolution::generateSingleCall), but the padded work-groups s_endpgm
-  in the prologue (clusterPadEarlyExit, KernelWriterAssembly.py), leaving exactly
-  NumWorkGroups0 * NumWorkGroups1*GSU arrivals at the epilogue counter. The batch
-  (WorkGroup2) extent and GSU are the two factors NOT folded in, so callers must
-  reject batched problems and GlobalSplitU!=1 while FusedA2ADrainOwner=1
-  (Solution.py): under either this undercounts and the election fires early."""
+  != [1,1] rounds the grid up to the cluster host-side
+  (ContractionSolution::generateSingleCall), but those padded work-groups s_endpgm
+  in the prologue (clusterPadEarlyExit), leaving exactly NumWorkGroups0 *
+  NumWorkGroups1*GSU arrivals at the counter. The batch (WorkGroup2) extent and
+  GSU are the two factors NOT folded in, so callers must reject batched problems
+  and GlobalSplitU!=1 while FusedA2ADrainOwner=1. That FusedGemmA2A block
+  (Solution.py) also rejects StreamK!=0, load-bearing here: Stream-K's WorkGroup0
+  is a work-item index, not an M-tile, so the product is not the population."""
   module.add(SMulI32(dst=sgpr(sgprName), src0=sgpr("NumWorkGroups0"), src1=sgpr("NumWorkGroups1"),
                      comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
 

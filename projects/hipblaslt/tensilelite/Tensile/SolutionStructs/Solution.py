@@ -1727,8 +1727,8 @@ class Solution(collections.abc.Mapping):
         reject(state, printRejectionReason, "FusedGemmA2A supports MacroTile0/1 in {128, 256}")
         return
       # The last-WG election counts arrivals against NumWorkGroups0*NumWorkGroups1,
-      # latched in the prologue; a batch dim or GSU!=1 makes the surviving-workgroup
-      # population a multiple of that, so the DRAIN would fire at 1/N arrivals.
+      # latched in the prologue; a batch dim multiplies the surviving-workgroup
+      # population and GSU!=1 may too, so the DRAIN would fire at 1/N arrivals.
       # Reject rather than miscount; FusedA2ADrainOwner=0 (per-peer) stays available.
       # Full derivation, incl. why ClusterDim padding does NOT break the latch:
       # emitFusedA2ATotalWGsLatch in Components/GlobalWriteBatch.py. The batch test

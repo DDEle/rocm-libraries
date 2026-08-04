@@ -1746,6 +1746,12 @@ class Solution(collections.abc.Mapping):
                "FusedA2ADrainOwner=1 requires GlobalSplitU=1 (counter3 target is "
                "NumWorkGroups0*NumWorkGroups1, which equals the launched grid only at GSU=1)")
         return
+      # Rejecting GSU!=1 above only pins the compile-time value; SupportUserGSU
+      # would still let a runtime caller raise GSU (ContractionSolution.cpp honours
+      # problem.getParams().gsu()) and re-inflate the grid under a latch that is a
+      # compile-time constant. Disable UserGSU for the last-WG election.
+      if state["FusedA2ADrainOwner"]:
+        state["InternalSupportParams"]["SupportUserGSU"] = False
 
     if state["GlobalSplitU"] == 0 and state["AdaptiveGemmGSUA"] == 1:
       reject(state, printRejectionReason, "AdaptiveGemmGSUA requires GSU enablement")

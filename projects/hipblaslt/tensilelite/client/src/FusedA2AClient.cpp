@@ -326,17 +326,23 @@ namespace TensileLite
             const size_t flagBytes    = (size_t)W * sizeof(uint64_t);
             // counter is indexed [dst_rank][token-tile] -> W*tokenTiles u32 slots,
             // followed by a W-entry second-level counter2[dst_rank] (target
-            // tokenTiles) at byte offset W*tokenTiles*4. counter2 converges the DRAIN
-            // spinners to one per peer; it rides this same allocation (and this same
-            // per-iteration memset below) so the kernarg layout stays untouched.
+            // tokenTiles) at byte offset W*tokenTiles*4, then a single third-level
+            // u32 counter3 at index W*tokenTiles + W. counter2 converges the DRAIN
+            // spinners to one per peer; counter3 is the grid-wide workgroup tally
+            // that elects the single DRAIN owner. All three ride this same
+            // allocation (and this same per-iteration memset below) so the kernarg
+            // layout stays untouched.
             //
             // Past those live slots the allocation carries a guard tail (see
-            // FusedA2ACounterSentinel.hpp). Both counter index expressions are
-            // derived from grid dimensions, so an off-by-one writes past the payload
-            // into whatever hipMalloc handed back next -- and stays silent, because
-            // the counters themselves still reach their expected values and every
-            // numeric check passes. Only counterBytes is memset per launch; the tail
-            // keeps its pattern and is re-checked after each launch.
+            // FusedA2ACounterSentinel.hpp). The tail catches only an overrun past
+            // the TOP level: that write runs off the payload into whatever
+            // hipMalloc handed back next and is otherwise silent, because the
+            // counters themselves still reach their expected values and every
+            // numeric check passes. An off-by-one in a lower level stays inside the
+            // payload and lands on a live slot instead -- a counter2 off-by-one
+            // overwrites counter3, mis-electing the DRAIN owner rather than raising
+            // anything. Only counterBytes is memset per launch; the tail keeps its
+            // pattern and is re-checked after each launch.
             const size_t counterBytes      = fusedA2ACounterPayloadBytes((uint32_t)W, tokenTiles);
             const size_t counterAllocBytes = fusedA2ACounterAllocBytes((uint32_t)W, tokenTiles);
             const size_t aBytes       = problem->a().totalAllocatedBytes();

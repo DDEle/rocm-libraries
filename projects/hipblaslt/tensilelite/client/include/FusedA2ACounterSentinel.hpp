@@ -5,15 +5,23 @@
 
 // Guard tail for the fused GEMM.A2A counter allocation.
 //
-// The counter allocation is indexed kernel-side as
-// counter[dst_rank*tokenTiles + WorkGroup1] over W*tokenTiles slots, followed
-// by a W-entry counter2[dst_rank] second-level counter (see FusedA2AClient.cpp
-// where counterBytes is computed). Both index expressions are derived from
-// grid dimensions, so an off-by-one in either writes past the allocation into
-// whatever hipMalloc handed back next. That is the worst silent failure mode
-// on this branch: it corrupts unrelated device memory while the A2A's own
-// numeric validation still passes, because the counters themselves end up at
-// their expected values.
+// Three levels share the allocation, indexed kernel-side as
+// counter[dst_rank*tokenTiles + WorkGroup1] over W*tokenTiles slots, then a
+// W-entry counter2[dst_rank], then a single counter3 at W*tokenTiles + W (see
+// FusedA2AClient.cpp where counterBytes is computed). Every index expression
+// is derived from grid dimensions, so an off-by-one is the class of bug this
+// header exists for.
+//
+// The guard tail catches only an overrun past the TOP level. That write runs
+// off the payload into whatever hipMalloc handed back next -- the worst silent
+// failure mode on this branch, since it corrupts unrelated device memory while
+// the A2A's own numeric validation still passes -- and it lands in the tail,
+// which reddens.
+//
+// An off-by-one in a lower level never reaches the tail: it lands on a live
+// slot of the level above. Concretely, a counter2 off-by-one overwrites
+// counter3, and because counter3 is the tally that elects the single DRAIN
+// owner, the failure mode is a mis-elected owner, NOT a loud error.
 //
 // The detector appends FUSED_A2A_COUNTER_SENTINEL_BYTES past the payload,
 // fills it with a known pattern at allocation time, and re-checks it after

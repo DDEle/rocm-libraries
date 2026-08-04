@@ -2,9 +2,10 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
 ################################################################################
-# D15 Step 1 -- DRAIN ownership moves from W per-peer spinners to the single
-# globally-last workgroup, and the poll becomes one vector load reduced with
-# VCCZ (ROCM-27524, deferred item D15 Step 1).
+# Fused-A2A DRAIN ownership: the single globally-last workgroup drains, elected
+# by a grid-wide counter3, and polls all W flag slots with one vector load
+# reduced by VCCZ -- replacing W per-peer spinners, each of which idled a whole
+# CU at the champion kernel's 1-WG/CU occupancy (ROCM-27524, D15 Step 1).
 ################################################################################
 
 import ast
@@ -253,7 +254,7 @@ def _pushGateIndex(text):
 
 
 def test_push_gate_falls_through_to_counter3_not_the_exit(renderHandshake):
-    """FusedA2ADrainOwner=1: local WGs must still reach the counter3 tally.
+    """Local WGs must reach the counter3 tally, not skip the handshake.
 
     The gate's not-taken edge used to jump the whole handshake. It must now land
     on the counter3 block, which is what makes the tally cover local WGs -- i.e.

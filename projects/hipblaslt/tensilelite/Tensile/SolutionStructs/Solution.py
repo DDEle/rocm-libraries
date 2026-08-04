@@ -1731,7 +1731,7 @@ class Solution(collections.abc.Mapping):
       # The last-WG election counts arrivals against NumWorkGroups0*NumWorkGroups1,
       # latched in the prologue; a batch dim or GSU!=1 makes the surviving-workgroup
       # population a multiple of that, so the DRAIN would fire at 1/N arrivals.
-      # Reject rather than miscount -- FusedA2ADrainOwner=0 (per-peer) covers both.
+      # Reject rather than miscount; FusedA2ADrainOwner=0 (per-peer) stays available.
       # Full derivation, incl. why ClusterDim padding does NOT break the latch:
       # emitFusedA2ATotalWGsLatch in Components/GlobalWriteBatch.py. The batch test
       # is on a declared index, not extent>1: a batch-1 grid would be exact, but the
@@ -1745,8 +1745,9 @@ class Solution(collections.abc.Mapping):
       if state["FusedA2ADrainOwner"] and state["GlobalSplitU"] != 1:
         reject(state, printRejectionReason,
                "FusedA2ADrainOwner=1 requires GlobalSplitU=1 (counter3 target is "
-               "NumWorkGroups0*NumWorkGroups1; GSU!=1 multiplies the arriving "
-               "work-group count, so the election fires early)")
+               "NumWorkGroups0*NumWorkGroups1; any other GSU can multiply the "
+               "arriving work-group count -- GSU=-1 resolves at runtime -- so the "
+               "election may fire early)")
         return
       # Rejecting GSU!=1 above only pins the compile-time value; SupportUserGSU
       # would still let a runtime caller raise GSU (ContractionSolution.cpp honours

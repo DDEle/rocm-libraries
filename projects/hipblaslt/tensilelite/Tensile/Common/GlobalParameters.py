@@ -583,6 +583,7 @@ defaultBenchmarkCommonParameters = [
     {"DebugStreamK": [0]},
     {"FusedGemmA2A": [0]},
     {"FusedA2ADrain": [1]},
+    {"FusedA2ADrainOwner": [0]},
     {"DebugPersistentKernelLoopForever": [False]},
     {"ActivationFused": [True]},
     {"ActivationFuncCall": [True]},

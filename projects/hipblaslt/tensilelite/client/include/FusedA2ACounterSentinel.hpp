@@ -12,16 +12,17 @@
 // is derived from grid dimensions, so an off-by-one is the class of bug this
 // header exists for.
 //
-// The guard tail catches only an overrun past the TOP level. That write runs
-// off the payload into whatever hipMalloc handed back next -- the worst silent
-// failure mode on this branch, since it corrupts unrelated device memory while
-// the A2A's own numeric validation still passes -- and it lands in the tail,
-// which reddens.
+// The guard tail catches only an overrun past the TOP level, and it catches it
+// by absorbing the write: the tail is inside the allocation, so the store
+// reddens the pattern rather than reaching memory that is not ours. Absent the
+// tail, that same store lands in whatever hipMalloc handed back next -- the
+// worst silent failure mode on this branch, corrupting unrelated device memory
+// while the A2A's own numeric validation still passes.
 //
 // An off-by-one in a lower level never reaches the tail: it lands on a live
-// slot of the level above. Concretely, a counter2 off-by-one overwrites
-// counter3, and because counter3 is the tally that elects the single DRAIN
-// owner, the failure mode is a mis-elected owner, NOT a loud error.
+// slot of the level above. At the top of counter2's range that slot is
+// counter3, so once Task 4 elects the DRAIN owner from counter3, the failure
+// mode there will be a mis-elected owner, NOT a loud error.
 //
 // The detector appends FUSED_A2A_COUNTER_SENTINEL_BYTES past the payload,
 // fills it with a known pattern at allocation time, and re-checks it after
@@ -50,8 +51,8 @@ namespace TensileLite
         // Live counter bytes. Three levels share one allocation:
         //   W*tokenTiles  first-level  counter[dst_rank*tokenTiles + j]
         //   W             second-level counter2[dst_rank]
-        //   1             third-level  counter3, the grid-wide WG tally that
-        //                 elects the single DRAIN owner (FusedA2ADrainOwner=1)
+        //   1             third-level  counter3, reserved for the grid-wide WG
+        //                 tally that will elect the single DRAIN owner (Task 4)
         // Computed in size_t (not uint32) so a large W*tokenTiles cannot wrap
         // and under-allocate.
         constexpr size_t fusedA2ACounterPayloadBytes(uint32_t worldSize, uint32_t tokenTiles)

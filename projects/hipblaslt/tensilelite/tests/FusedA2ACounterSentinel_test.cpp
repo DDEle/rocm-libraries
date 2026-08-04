@@ -5,12 +5,14 @@
 //
 // The counter allocation carries three levels: counter[dst_rank*tokenTiles +
 // WorkGroup1] over W*tokenTiles slots, then a W-entry counter2[dst_rank], then
-// a single counter3 at W*tokenTiles + W. An index that runs past the TOP level
-// writes into whatever hipMalloc happened to hand back next -- the worst silent
-// failure mode on this branch, because a counter overrun corrupts unrelated
-// device memory while every numeric check still passes. (An off-by-one in a
-// lower level is out of the guard's reach by construction: it stays inside the
-// payload, landing on a live slot of the level above.)
+// a single counter3 at W*tokenTiles + W. With no tail there, an index that runs
+// past the TOP level writes into whatever hipMalloc happened to hand back next
+// -- the worst silent failure mode on this branch, because it corrupts
+// unrelated device memory while every numeric check still passes. The tail
+// absorbs that write inside the allocation instead, which is what makes it
+// detectable. (An off-by-one in a lower level is out of the guard's reach by
+// construction: it stays inside the payload, landing on a live slot of the
+// level above.)
 //
 // The detector appends a 64-byte guard tail past the payload, fills it with a
 // known pattern, and re-checks it after each launch. This test is what proves

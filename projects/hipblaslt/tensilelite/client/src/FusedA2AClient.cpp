@@ -47,6 +47,7 @@
 #include <Tensile/hip/HipUtils.hpp>
 
 #include "ClientProblemFactory.hpp"
+#include "FusedA2AKernArg.hpp"
 #include "SolutionIterator.hpp"
 
 // The GPU-initiated SDMA route needs the host to create one ring per (device,
@@ -71,86 +72,9 @@ namespace TensileLite
 {
     namespace Client
     {
-        // Compile-time fixed slot count for the fused-A2A kernarg segment. MUST
-        // match FUSED_A2A_MAX_RANKS in Tensile/Components/Signature.py: the
-        // kernel metadata always reserves 8 recv_ptr + 8 flag_ptr slots
-        // regardless of the runtime world size, so the host must append exactly
-        // 8 of each (unused slots j>=W filled with nullptr).
-        static constexpr int    FUSED_A2A_MAX_RANKS      = 8;
-        // Expected byte growth of args after appending the fused segment:
-        //   (2*8 recv/flag + 1 counter + 1 FusedSdmaQueues) pointers * 8B
-        //   + (6 legacy + 2 SDMA) scalars * 4B = 176B.
-        static constexpr size_t FUSED_A2A_SEGMENT_BYTES  = (2 * FUSED_A2A_MAX_RANKS + 2) * 8 + 8 * 4;
-
-        namespace
-        {
-            // Append the fixed-size fused-A2A kernarg segment to `args` in the
-            // exact emission order of Signature.py fusedA2AKernArgLayout().
-            //
-            // Alignment: recv_ptr_0 is appendAligned<void*> so it lands on an
-            // 8-byte boundary, mirroring how the kernel metadata 8-aligns the
-            // first SIG_GLOBALBUFFER arg of the segment. The remaining pointers
-            // (8B) and scalars (4B) are appended contiguously with no interior
-            // padding, matching the Python layout (off += 8 / off += 4).
-            void appendFusedSegment(KernelArguments&           args,
-                                    std::vector<void*> const&  recvPtrs,   // size W (device d's view: recv[j])
-                                    std::vector<void*> const&  flagPtrs,   // size W
-                                    void*                      counterPtr,
-                                    uint32_t                   myRank,
-                                    uint32_t                   target,
-                                    uint32_t                   worldSize,
-                                    uint32_t                   nShard,
-                                    uint32_t                   drain,
-                                    uint32_t                   an,
-                                    void*                      sdmaQueues,   // W-element SdmaQueueDeviceHandle array
-                                    uint32_t                   tilesPerRank,
-                                    uint32_t                   tokenTiles)
-            {
-                size_t before = args.size();
-
-                for(int j = 0; j < FUSED_A2A_MAX_RANKS; j++)
-                {
-                    void* p = (j < (int)recvPtrs.size()) ? recvPtrs[j] : nullptr;
-                    if(j == 0)
-                        args.appendAligned<void*>("recv_ptr_0", p);
-                    else
-                        args.append<void*>("recv_ptr_" + std::to_string(j), p);
-                }
-                for(int j = 0; j < FUSED_A2A_MAX_RANKS; j++)
-                {
-                    void* p = (j < (int)flagPtrs.size()) ? flagPtrs[j] : nullptr;
-                    args.append<void*>("flag_ptr_" + std::to_string(j), p);
-                }
-                args.append<void*>("counter_ptr", counterPtr);
-                args.append<uint32_t>("FusedMyRank", myRank);
-                // DEPRECATED (Task 6): the kernel elects on FusedTilesPerRank now.
-                // Kept so the kernarg offsets after it stay put.
-                args.append<uint32_t>("FusedTarget", target);
-                args.append<uint32_t>("FusedW", worldSize);
-                args.append<uint32_t>("FusedNShard", nShard);
-                args.append<uint32_t>("FusedDrain", drain);
-                // Kernarg "FusedAM" (renamed from FusedAN in Task 6 alongside
-                // Signature.py); the value `an` carries AM (A2A width along
-                // FEATURE) from the swapped client.
-                args.append<uint32_t>("FusedAM", an);
-                // SDMA offload args (Task 3), appended at the very end to match
-                // Signature.py. sdmaQueues is this device's SdmaQueueSet::
-                // deviceHandles() -- the W-element SdmaQueueDeviceHandle array the
-                // epilogue indexes by destination rank.
-                args.append<void*>("FusedSdmaQueues", sdmaQueues);
-                args.append<uint32_t>("FusedTilesPerRank", tilesPerRank);
-                args.append<uint32_t>("FusedTokenTiles", tokenTiles);
-
-                size_t grew = args.size() - before;
-                if(grew != FUSED_A2A_SEGMENT_BYTES)
-                {
-                    std::cerr << "[fused-a2a] WARNING: fused segment grew args by " << grew
-                              << " bytes, expected " << FUSED_A2A_SEGMENT_BYTES
-                              << " (alignment/padding mismatch — epilogue will read wrong offsets)"
-                              << std::endl;
-                }
-            }
-        } // namespace
+        // FUSED_A2A_MAX_RANKS, FUSED_A2A_SEGMENT_BYTES, fusedA2AWorldSizeValid
+        // and appendFusedSegment come from FusedA2AKernArg.hpp so that the
+        // gtest can exercise the real definitions rather than a copy.
 
         // Entry point invoked from main() when --fused-a2a is passed. Returns a
         // process exit code (0 == all iterations passed: numeric validation when
@@ -171,19 +95,16 @@ namespace TensileLite
             const bool validate = args["fused-a2a-validate"].as<int>() != 0;
 
             // Bound W FIRST -- before it is printed, compared against deviceCount, or
-            // used as a divisor. The kernarg segment reserves exactly
-            // FUSED_A2A_MAX_RANKS recv_ptr and flag_ptr slots (appendFusedSegment
-            // below, mirroring Signature.py), so a larger world size has no pointer at
-            // all for ranks >= FUSED_A2A_MAX_RANKS: a PUSH workgroup targeting them
-            // consumes whatever the kernel metadata default is -> silent corruption or
-            // a DRAIN hang. The deviceCount check below only bounds W by the machine,
-            // not by the ABI, and it cannot stand in for the lower bound either: for
-            // W <= 0 `deviceCount < W` is false, so it falls through. The lower bound
-            // has to be here rather than beside the coordinate guard further down,
-            // because W is already a divisor by then (`AM % W`, `AM / W`) -- a W of 0
-            // would divide by zero, and a negative W would produce a misleading
-            // divisibility error, both before the range check could ever run.
-            if(W < 1 || W > FUSED_A2A_MAX_RANKS)
+            // used as a divisor. fusedA2AWorldSizeValid carries why the range is what
+            // it is; what matters *here* is the position. The deviceCount check below
+            // only bounds W by the machine, not by the ABI, and it cannot stand in for
+            // the lower bound either: for W <= 0 `deviceCount < W` is false, so it
+            // falls through. The check also has to precede the coordinate guard
+            // further down, because W is already a divisor by then (`AM % W`,
+            // `AM / W`) -- a W of 0 would divide by zero, and a negative W would
+            // produce a misleading divisibility error, both before the range check
+            // could ever run.
+            if(!fusedA2AWorldSizeValid(W))
             {
                 std::cerr << "[fused-a2a] ERROR: world size W=" << W
                           << " is out of range; the kernarg segment reserves exactly "

@@ -9,6 +9,7 @@
 
 import ast
 import os
+import re
 import shutil
 import sys
 from types import SimpleNamespace
@@ -20,7 +21,10 @@ TENSILE_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 sys.path.insert(0, TENSILE_ROOT)
 
 _GFX = "gfx950"
-_GOLDEN = os.path.join(SCRIPT_DIR, "test_data", "fusedA2A_handshake_per_peer.golden.s")
+_GOLDEN = {
+    0: os.path.join(SCRIPT_DIR, "test_data", "fusedA2A_handshake_per_peer.golden.s"),
+    1: os.path.join(SCRIPT_DIR, "test_data", "fusedA2A_handshake_last_wg.golden.s"),
+}
 
 
 def _renderHandshake(drainOwner: int) -> str:
@@ -90,6 +94,48 @@ def _codeLines(text):
     so an `in text` check stays green with the operands wired wrong.
     """
     return [ln for ln in (l.split("//")[0].strip() for l in text.splitlines()) if ln]
+
+
+# The echoing argLoader stub renders every kernarg load as a comment line carrying
+# its destination register, width and offset -- which is what makes the check below
+# possible at all.
+_LOAD_RE = re.compile(r"//\s*loadKernArg (\d+) KernArgAddress .*?dword=(\d+).*?sgprOffset=(\S+)")
+
+
+def _deadKernargLoads(text):
+    """Kernarg loads whose register is overwritten by another load before any read.
+
+    The register pool recycles a slot the moment it is checked in, so two kernarg
+    values can share one physical SGPR. That is fine while their live ranges do not
+    overlap, and silently wrong when they do -- and it is invisible in review,
+    because the *comment* on each later instruction still names the value the author
+    intended ("myRank * N" reading a register that now holds AM_tiles).
+
+    Reports (reg, offset, clobberOffset) when a load is destroyed before its first
+    read. Deliberately conservative: legitimate reuse always happens after the last
+    read of the previous value, so it cannot trip this, and a value clobbered after
+    one read but before a later one is not modelled (no test here needs that).
+    Reads are counted on the comment-stripped instruction only, so a register named
+    solely in a comment does not mask a clobber.
+    """
+    raw = [ln for ln in text.splitlines() if ln.strip()]
+    code = [ln.split("//")[0] for ln in raw]
+    loads = []
+    for i, ln in enumerate(raw):
+        m = _LOAD_RE.search(ln)
+        if m and m.group(2) == "1":          # single-dword loads; pairs render as s[n:n+1]
+            loads.append((i, int(m.group(1)), m.group(3)))
+
+    dead = []
+    for n, (i, reg, off) in enumerate(loads):
+        pat = re.compile(r"\bs%d\b" % reg)
+        firstRead = next((j for j in range(i + 1, len(code)) if pat.search(code[j])), None)
+        if firstRead is None:
+            continue
+        for (j, reg2, off2) in loads[n + 1:]:
+            if reg2 == reg and off2 != off and j < firstRead:
+                dead.append((reg, off, off2))
+    return dead
 
 
 def test_drain_owner_is_a_validated_solution_parameter():
@@ -327,17 +373,39 @@ def test_counter3_election_compares_against_the_latched_total(renderHandshake):
     assert code[cmp_i + 1].startswith("s_cbranch_scc0 "), code[cmp_i:cmp_i + 2]
 
 
+def test_no_kernarg_value_is_clobbered_before_it_is_read(renderHandshake):
+    """Reordering the blocks must not make two kernarg values share a live range.
+
+    `gateSgpr` is checked in before `myRankSgpr` is checked out, so the pool hands
+    back the same physical SGPR and the PUSH gate's FusedAM shares a register with
+    FusedMyRank. Under DrainOwner=0 the gate is emitted first and its value is dead
+    by then, so the reuse is correct. Emitting the gate LAST turns it into a
+    clobber: my_rank is destroyed after argModule set it, and the SDMA block goes on
+    to compute dst_y = AM_tiles*N and flag_ptr[p] + AM_tiles*8 -- wrong band, and an
+    ATOMIC past the W-slot flag allocation.
+
+    Structural because it cannot be seen any other way: the emitted comments still
+    read "myRank * N" and "myRank * 8" over the clobbered register.
+    """
+    for owner in (0, 1):
+        dead = _deadKernargLoads(renderHandshake(owner))
+        assert not dead, (
+            f"DrainOwner={owner}: kernarg value overwritten before first read "
+            f"(reg, loaded, clobbered-by) = {dead}")
+
+
 def test_drain_owner_mode_emits_no_drain_yet(renderHandshake):
     """Task 5 owns attaching the DRAIN; Task 4 must not relocate the per-peer one.
 
     The per-peer poll waits on flag[dst_rank], and _fusedA2ALoadFlagBaseAndRank
     derives dst_rank by scanning j in range(1, FUSED_A2A_MAX_RANKS) for the largest
     j with j*n_shard <= WorkGroup0*MT0. The counter3 winner is frequently a LOCAL
-    WG, whose WorkGroup0*MT0 is >= AM = W*n_shard (host: nShard = AM/W), so it lands
-    on dst_rank >= W necessarily -- past the host's flagBytes = W*sizeof(uint64_t)
-    allocation. Relocating that block under a grid-wide owner is an out-of-bounds
-    read whose spin can never be satisfied. So the counter3 block ends at the
-    election branch, and Task 5 attaches a poll over all W slots after it.
+    WG, whose WorkGroup0*MT0 is >= AM = W*n_shard (host: nShard = AM/W), so the scan
+    runs past this card's peers: for W <= 7 it yields dst_rank >= W, an
+    out-of-bounds read past the host's flagBytes = W*sizeof(uint64_t) allocation;
+    at W = 8 it saturates at 7 and merely polls the wrong peer. Either way it is the
+    wrong predicate, so the counter3 block ends at the election branch and the
+    all-W-slot poll is attached later.
     """
     text = renderHandshake(1)
     assert "fusedA2A_drain" not in text, \
@@ -407,30 +475,35 @@ def test_per_peer_mode_emits_no_counter3_machinery(renderHandshake):
     assert "FusedTotalWGs" not in text
 
 
-def test_per_peer_rendering_is_byte_identical_to_the_golden(renderHandshake):
-    """Characterization pin on the DrainOwner=0 path.
+@pytest.mark.parametrize("owner", [0, 1])
+def test_rendering_is_byte_identical_to_the_golden(renderHandshake, owner):
+    """Characterization pin on both paths.
 
-    test_per_peer_mode_emits_no_counter3_machinery only asserts two strings are
-    absent, which cannot see a reordering -- and this task reorders the very
-    instructions (EXEC / store wait / barrier / wave-0 election) that both paths
-    share. The golden was captured from the pre-refactor emitter; if it goes red,
-    the per-peer path moved.
+    The structural tests each assert one fact, so between them they leave gaps --
+    a register clobber introduced by reordering blocks sat in exactly such a gap and
+    reached review. These compare the whole rendering, so any drift shows up
+    whether or not someone thought to assert on it.
 
-    Intentionally changing the per-peer path? Regenerate deliberately:
+    owner=0 is the regression baseline, captured from the pre-refactor emitter: if
+    it goes red, the per-peer path moved. owner=1 was captured after the clobber fix
+    and pins the new path, which nothing else golds.
+
+    Intentionally changing either path? Regenerate deliberately:
         python Tensile/Tests/unit/test_fusedA2A_drain_last.py --update-golden
     and justify the diff in review -- do not regenerate to silence a red.
     """
-    with open(_GOLDEN) as f:
+    with open(_GOLDEN[owner]) as f:
         golden = f.read()
-    assert renderHandshake(0) == golden, \
-        "DrainOwner=0 rendering drifted from the golden; see the docstring"
+    assert renderHandshake(owner) == golden, \
+        f"DrainOwner={owner} rendering drifted from the golden; see the docstring"
 
 
 if __name__ == "__main__":
     if "--update-golden" in sys.argv:
-        os.makedirs(os.path.dirname(_GOLDEN), exist_ok=True)
-        with open(_GOLDEN, "w") as f:
-            f.write(_renderHandshake(0))
-        print("wrote %s" % _GOLDEN)
+        for _owner, _path in sorted(_GOLDEN.items()):
+            os.makedirs(os.path.dirname(_path), exist_ok=True)
+            with open(_path, "w") as f:
+                f.write(_renderHandshake(_owner))
+            print("wrote %s" % _path)
     else:
-        print(__doc__ or "pass --update-golden to regenerate the per-peer golden")
+        print("pass --update-golden to regenerate the handshake goldens")

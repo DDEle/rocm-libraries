@@ -62,8 +62,11 @@ def test_total_wgs_latch_multiplies_the_two_grid_dims():
     # exactly one instruction -- this is a hot-path prologue, not a place to grow
     assert len(code) == 1, code
     assert code[0].startswith("s_mul_i32 "), code[0]
-    # by position, so a dst/src swap is caught too
-    dst, src0, src1 = (op.strip() for op in code[0].split(None, 1)[1].split(","))
+    # by position, so a dst/src swap is caught too. Count first: a bare 3-tuple
+    # unpack would die with an opaque ValueError if the operand count drifted.
+    ops = [op.strip() for op in code[0].split(None, 1)[1].split(",")]
+    assert len(ops) == 3, f"expected a 3-operand s_mul_i32, got {len(ops)}: {code[0]}"
+    dst, src0, src1 = ops
     assert "sgprFusedTotalWGs" in dst, code[0]
     assert "sgprNumWorkGroups0" in src0, code[0]
     assert "sgprNumWorkGroups1" in src1, code[0]

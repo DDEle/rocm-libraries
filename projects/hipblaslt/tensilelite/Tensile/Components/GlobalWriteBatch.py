@@ -94,6 +94,23 @@ def emitFusedA2AGate(module, argLoader, sgprPool, fusedBase, mt0, localLabelName
                           comment="WorkGroup0 >= AM_tiles -> local store"))
   sgprPool.checkIn(tmpS)
 
+def emitFusedA2ATotalWGsLatch(module, sgprName):
+  """Latch NumWorkGroups0*NumWorkGroups1 into a persistent SGPR in the PROLOGUE.
+
+  The counter3 election in _emitFusedA2AHandshake needs the grid-wide workgroup
+  count, but NumWorkGroups0/1 cannot be read in the epilogue: the grouped-gemm
+  path borrows those named SGPRs as temporaries (see KernelWriterAssembly.py
+  around the graWorkGroup reuse comment), so by store time they may hold
+  something else. Latching once in the prologue is the same move
+  KernelWriterAssembly already makes for its NumGroup SGPR.
+
+  Batch (WorkGroup2) is intentionally NOT folded in -- callers must reject
+  batched problems while FusedA2ADrainOwner=1 (Solution.py), because a WG2
+  extent would make this product an undercount and the last-WG election would
+  fire early."""
+  module.add(SMulI32(dst=sgpr(sgprName), src0=sgpr("NumWorkGroups0"), src1=sgpr("NumWorkGroups1"),
+                     comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
+
 class GlobalWriteBatchComponent(GlobalWriteComponents):
   kernel = {"ProblemType": {"OperationType": "GEMM" }}
   def __call__(self, kernel: Solution, tPA, tPB, activation: ActivationModule, ss: StoreState, \

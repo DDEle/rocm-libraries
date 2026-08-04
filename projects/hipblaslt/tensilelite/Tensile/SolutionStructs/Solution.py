@@ -1728,12 +1728,25 @@ class Solution(collections.abc.Mapping):
       if mt0 not in (128, 256) or mt1 not in (128, 256):
         reject(state, printRejectionReason, "FusedGemmA2A supports MacroTile0/1 in {128, 256}")
         return
-      # The last-WG election counts against NumWorkGroups0*NumWorkGroups1, which
-      # omits the WorkGroup2 (batch) extent. A batched grid would make that target
-      # an undercount and fire the DRAIN early, so reject instead of miscounting.
+      # The last-WG election counts against NumWorkGroups0*NumWorkGroups1, the
+      # product latched in the prologue. Two grid extents are absent from it:
+      # the WorkGroup2 (batch) extent, and GlobalSplitU -- which multiplies
+      # grid.y, so the launched y-extent is really NumWorkGroups1*GSU (see
+      # ContractionSolution::generateSingleCall, and the
+      # GSUSumIdx = WorkGroup1 / NumWorkGroups1 recovery in Components/GSU.py).
+      # Under either, the latch is an undercount and the DRAIN fires once only
+      # 1/N of the workgroups have arrived. Reject instead of miscounting;
+      # FusedA2ADrainOwner=0 (per-peer DRAIN) stays available for both.
       if state["FusedA2ADrainOwner"] and state["ProblemType"]["NumIndicesBatch"] > 0:
         reject(state, printRejectionReason,
                "FusedA2ADrainOwner=1 requires no batch dim (counter3 target is NumWorkGroups0*NumWorkGroups1)")
+        return
+      # GSU=-1 defers the factor to calculateAutoGSU at runtime, so a compile-time
+      # latch cannot fold it in at all; only GSU=1 makes the product exact.
+      if state["FusedA2ADrainOwner"] and state["GlobalSplitU"] != 1:
+        reject(state, printRejectionReason,
+               "FusedA2ADrainOwner=1 requires GlobalSplitU=1 (counter3 target is "
+               "NumWorkGroups0*NumWorkGroups1, which equals the launched grid only at GSU=1)")
         return
 
     if state["GlobalSplitU"] == 0 and state["AdaptiveGemmGSUA"] == 1:

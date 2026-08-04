@@ -1741,19 +1741,18 @@ class Solution(collections.abc.Mapping):
       # extent is checked host-side instead, in client/src/FusedA2AClient.cpp.
       # GSU=-1 defers the factor to calculateAutoGSU at runtime, so a compile-time
       # latch cannot fold it in at all; only GSU=1 makes the product exact.
-      if state["FusedA2ADrainOwner"] and state["GlobalSplitU"] != 1:
+      if state["GlobalSplitU"] != 1:
         reject(state, printRejectionReason,
-               "FusedA2ADrainOwner=1 requires GlobalSplitU=1 (counter3 target is "
-               "NumWorkGroups0*NumWorkGroups1; any other GSU can multiply the "
-               "arriving work-group count -- GSU=-1 resolves at runtime -- so the "
-               "election may fire early)")
+               "FusedGemmA2A requires GlobalSplitU=1 (the DRAIN owner is elected "
+               "against NumWorkGroups0*NumWorkGroups1; any other GSU can multiply "
+               "the arriving work-group count -- GSU=-1 resolves at runtime -- so "
+               "the election may fire early)")
         return
       # Rejecting GSU!=1 above only pins the compile-time value; SupportUserGSU
       # would still let a runtime caller raise GSU (ContractionSolution.cpp honours
       # problem.getParams().gsu()) and re-inflate the grid under a latch that is a
       # compile-time constant. Disable UserGSU for the last-WG election.
-      if state["FusedA2ADrainOwner"]:
-        state["InternalSupportParams"]["SupportUserGSU"] = False
+      state["InternalSupportParams"]["SupportUserGSU"] = False
 
     if state["GlobalSplitU"] == 0 and state["AdaptiveGemmGSUA"] == 1:
       reject(state, printRejectionReason, "AdaptiveGemmGSUA requires GSU enablement")

@@ -2,13 +2,18 @@
 /******************************************/
 /* fused-A2A cross-card handshake (design spec 2.3): counter election + SDMA packet submit + DRAIN */
 /******************************************/
+s_mov_b64 exec, -1                                 // fused-A2A: full exec before wave-0 election
+s_waitcnt vmcnt(0)                                 // fused-A2A: my A2A stores (sc1) are in HBM before the counter (spec 2.3 step 2)
+s_barrier                                          // fused-A2A: all waves done before counter election
+v_readfirstlane_b32 s21, v[vgprSerial]             // wave 0 elects the WG's single counter writer
+s_cmp_eq_u32 s21, 0                                // wave 0?
+s_cbranch_scc0 label_fusedA2A_handshake_after      // non-wave-0 -> skip (single writer per WG)
+s_mov_b64 exec, 1                                  // fused-A2A: isolate lane 0 for the once-per-WG counter atomic + flag store
 // loadKernArg 10 KernArgAddress dword=1 sgprOffset=0x9c
 s_waitcnt lgkmcnt(0)                               // wait FusedAM
 s_lshr_b32 s10, s10, 8                             // AM_tiles = FusedAM >> log2(MT0=256)
 s_cmp_gt_u32 s10, s[sgprWorkGroup0]                // AM_tiles > WorkGroup0? (this WG in PUSH region)
-s_cbranch_scc0 label_fusedA2A_handshake_after      // WorkGroup0 >= AM_tiles -> not a PUSH WG, skip handshake
-s_mov_b64 exec, -1                                 // fused-A2A: full exec before wave-0 election
-s_waitcnt vmcnt(0)                                 // fused-A2A: my A2A stores (sc1) are in HBM before the counter (spec 2.3 step 2)
+s_cbranch_scc0 label_fusedA2A_counter3             // WorkGroup0 >= AM_tiles -> not a PUSH WG, skip to the counter3 tally
 // loadKernArg 10 KernArgAddress dword=1 sgprOffset=0x88
 // loadKernArg 11 KernArgAddress dword=1 sgprOffset=0xa8
 // loadKernArg 12 KernArgAddress dword=1 sgprOffset=0x94
@@ -56,11 +61,6 @@ s_lshl_b32 s20, s18, 3                             // dst_rank * 8 (byte offset 
 s_add_u32 s20, s20, 64                             // kernarg offset = fusedBase + flag_ptr_0 + dst_rank*8
 // loadKernArg 16 KernArgAddress dword=2 sgprOffset=s20
 s_waitcnt lgkmcnt(0)                               // wait flag_ptr[dst_rank] load
-s_barrier                                          // fused-A2A: all waves done before counter election
-v_readfirstlane_b32 s21, v[vgprSerial]             // wave 0 elects the WG's single counter writer
-s_cmp_eq_u32 s21, 0                                // wave 0?
-s_cbranch_scc0 label_fusedA2A_handshake_after      // non-wave-0 -> skip (single writer per WG)
-s_mov_b64 exec, 1                                  // fused-A2A: isolate lane 0 for the once-per-WG counter atomic + flag store
 s_mul_i32 s19, s18, s13                            // dst_rank * tokenTiles
 s_add_u32 s19, s19, s[sgprWorkGroup1]              // counter index = dst_rank*tokenTiles + j (j = WorkGroup1)
 s_lshl_b32 s19, s19, 2                             // * 4 (u32 counter byte offset)
@@ -74,7 +74,7 @@ s_waitcnt vmcnt(0)                                 // fused-A2A: wait counter at
 v_readfirstlane_b32 s19, v4                        // old -> sgpr
 s_add_u32 s19, s19, 1                              // old + 1
 s_cmp_eq_u32 s19, s11                              // old+1 == FusedTilesPerRank? (last WG for (dst_rank, j))
-s_cbranch_scc0 label_fusedA2A_handshake_notlast    // not the last WG -> skip the SDMA submit + DRAIN
+s_cbranch_scc0 label_fusedA2A_handshake_notlast    // not the last WG -> skip the SDMA submit
 
 /* fused-A2A: build + submit the SDMA COPY_SUBWIN + ATOMIC packet pair */
 // loadKernArg 22 KernArgAddress dword=2 sgprOffset=0xa0
@@ -361,27 +361,49 @@ s_waitcnt vmcnt(0)                                 // fused-A2A: wait counter2 a
 v_readfirstlane_b32 s19, v4                        // old2 -> sgpr
 s_add_u32 s19, s19, 1                              // old2 + 1
 s_cmp_eq_u32 s19, s13                              // old2+1 == FusedTokenTiles? (this card's last packet to dst_rank)
-s_cbranch_scc0 label_fusedA2A_handshake_notlast    // not the last submitter for dst_rank -> skip the DRAIN
-// loadKernArg 21 KernArgAddress dword=1 sgprOffset=0x98
-s_waitcnt lgkmcnt(0)                               // wait FusedDrain
-s_cmp_eq_u32 s21, 0                                // FusedDrain == 0?
-s_cbranch_scc1 label_fusedA2A_drain_skip           // FusedDrain==0 -> skip drain barrier
-s_lshl_b32 s19, s10, 3                             // rank * 8 (byte offset into flag_ptr[] array)
-s_add_u32 s19, s19, 64                             // kernarg offset = fusedBase + flag_ptr_0 + rank*8
-// loadKernArg 16 KernArgAddress dword=2 sgprOffset=s19
-s_waitcnt lgkmcnt(0)                               // wait flag_ptr[my_rank] load
-s_lshl_b32 s19, s18, 3                             // j * 8 (self u64 flag slot byte offset)
-s_add_u32 s16, s16, s19                            // self flag[j] lo = flag_ptr[my_rank] + j*8
-s_addc_u32 s17, s17, 0                             // self flag[j] hi (carry)
-v_mov_b32 v6, s16                                  // self flag addr lo -> vgpr
-v_mov_b32 v7, s17                                  // self flag addr hi -> vgpr
-label_fusedA2A_drain_poll:  /// fused-A2A: DRAIN poll self flag[j] until == tokenTiles
-global_load_dword v5, v[6:7], off sc0 sc1          // poll self flag[j] low dword (system scope, sc0 sc1)
-s_waitcnt vmcnt(0)                                 // fused-A2A: wait poll load
-v_readfirstlane_b32 s19, v5                        // flag[j] -> sgpr
-s_cmp_eq_u32 s19, s13                              // flag[j] == FusedTokenTiles? (all of source j's packets landed)
-s_cbranch_scc0 label_fusedA2A_drain_poll           // not complete yet -> spin (poll again)
-label_fusedA2A_drain_skip:  /// fused-A2A: FusedDrain==0 -> no drain barrier
+s_cbranch_scc0 label_fusedA2A_handshake_notlast    // not the last submitter for dst_rank -> skip ahead (inert: counter3 elects the DRAIN owner)
 label_fusedA2A_handshake_notlast:  /// fused-A2A: not the last WG for (dst_rank, token-tile) -> skip release
+label_fusedA2A_counter3:  /// fused-A2A: grid-wide counter3 tally (every WG, PUSH and local)
+// loadKernArg 22 KernArgAddress dword=2 sgprOffset=0x80
+// loadKernArg 21 KernArgAddress dword=1 sgprOffset=0x90
+// loadKernArg 24 KernArgAddress dword=1 sgprOffset=0xac
+s_waitcnt lgkmcnt(0)                               // wait counter_ptr/FusedW/FusedTokenTiles
+s_mul_i32 s25, s21, s24                            // W * tokenTiles
+s_add_u32 s25, s25, s21                            // counter3 index = W*tokenTiles + W (past counter2)
+s_lshl_b32 s25, s25, 2                             // * 4 (u32 byte offset)
+s_add_u32 s22, s22, s25                            // &counter3 lo
+s_addc_u32 s23, s23, 0                             // &counter3 hi (carry)
+v_mov_b32 v2, s22                                  // counter3 addr lo -> vgpr
+v_mov_b32 v3, s23                                  // counter3 addr hi -> vgpr
+v_mov_b32 v1, 1                                    // counter3 increment = 1
+global_atomic_add v4, v[2:3], v1, off sc0          // old3 = atomic_add(counter3, 1) device scope, return pre-op (sc0)
+s_waitcnt vmcnt(0)                                 // fused-A2A: wait counter3 atomic return
+v_readfirstlane_b32 s25, v4                        // old3 -> sgpr
+s_add_u32 s25, s25, 1                              // old3 + 1
+s_cmp_eq_u32 s25, s[sgprFusedTotalWGs]             // old3+1 == FusedTotalWGs? (globally last WG)
+s_cbranch_scc0 label_fusedA2A_handshake_after      // not the last WG -> done (only the globally last WG drains)
+// loadKernArg 22 KernArgAddress dword=1 sgprOffset=0x98
+s_waitcnt lgkmcnt(0)                               // wait FusedDrain
+s_cmp_eq_u32 s22, 0                                // FusedDrain == 0?
+s_cbranch_scc1 label_fusedA2A_drain_skip           // FusedDrain==0 -> skip drain barrier
+// loadKernArg 22 KernArgAddress dword=1 sgprOffset=0x88
+s_waitcnt lgkmcnt(0)                               // wait FusedMyRank
+s_lshl_b32 s28, s22, 3                             // rank * 8 (byte offset into flag_ptr[] array)
+s_add_u32 s28, s28, 64                             // kernarg offset = fusedBase + flag_ptr_0 + rank*8
+// loadKernArg 26 KernArgAddress dword=2 sgprOffset=s28
+s_waitcnt lgkmcnt(0)                               // wait flag_ptr[my_rank] load
+s_mov_b32 s28, 1                                   // fused-A2A: build the W-lane EXEC mask
+s_lshl_b32 s28, s28, s21                           // 1 << W
+s_sub_u32 s28, s28, 1                              // (1 << W) - 1: one lane per peer flag slot
+s_mov_b32 s29, 0                                   // EXEC mask hi = 0 (W <= 8)
+s_mov_b64 exec, s[28:29]                           // fused-A2A: widen EXEC to W lanes for the DRAIN poll
+v_lshlrev_b32 v2, 3, v[vgprSerial]                 // lane j -> self flag slot byte offset j*8
+label_fusedA2A_drain_poll:  /// fused-A2A: DRAIN poll all W self flags until each == tokenTiles
+global_load_dword v4, v2, s[26:27] sc0 sc1         // poll self flag[lane] low dword (system scope, sc0 sc1)
+s_waitcnt vmcnt(0)                                 // fused-A2A: wait poll load
+v_cmp_ne_u32 vcc, v4, s24                          // any lane's flag != FusedTokenTiles? (peer still sending)
+s_cbranch_vccnz label_fusedA2A_drain_poll          // some peer incomplete -> spin (poll again)
+s_mov_b64 exec, 1                                  // fused-A2A: back to lane 0 after the DRAIN poll
+label_fusedA2A_drain_skip:  /// fused-A2A: FusedDrain==0 -> no drain barrier
+label_fusedA2A_handshake_after:  /// fused-A2A: after handshake (non-wave-0 skips)
 s_mov_b64 exec, -1                                 // fused-A2A: restore full exec after single-lane handshake
-label_fusedA2A_handshake_after:  /// fused-A2A: after handshake (non-PUSH WGs skip)

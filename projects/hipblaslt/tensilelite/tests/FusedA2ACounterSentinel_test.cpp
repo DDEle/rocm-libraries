@@ -3,12 +3,14 @@
 //
 // Guard-tail detector for the fused GEMM.A2A counter allocation.
 //
-// The counter allocation is indexed kernel-side as
-// counter[dst_rank*tokenTiles + WorkGroup1] over W*tokenTiles slots, followed
-// by a W-entry counter2[dst_rank]. An index that runs past either region writes
-// into whatever hipMalloc happened to hand back next -- the worst silent
+// The counter allocation carries three levels: counter[dst_rank*tokenTiles +
+// WorkGroup1] over W*tokenTiles slots, then a W-entry counter2[dst_rank], then
+// a single counter3 at W*tokenTiles + W. An index that runs past the TOP level
+// writes into whatever hipMalloc happened to hand back next -- the worst silent
 // failure mode on this branch, because a counter overrun corrupts unrelated
-// device memory while every numeric check still passes.
+// device memory while every numeric check still passes. (An off-by-one in a
+// lower level is out of the guard's reach by construction: it stays inside the
+// payload, landing on a live slot of the level above.)
 //
 // The detector appends a 64-byte guard tail past the payload, fills it with a
 // known pattern, and re-checks it after each launch. This test is what proves
@@ -44,9 +46,9 @@ namespace
 
 // ---- Layout ---------------------------------------------------------------
 
-// Pins the payload formula against FusedA2AClient.cpp:331. If the counter
-// layout ever grows a third region, this reddens rather than letting the guard
-// silently overlap live counter slots.
+// Pins the payload formula against counterBytes in FusedA2AClient.cpp. If the
+// counter layout ever grows a fourth region, this reddens rather than letting
+// the guard silently overlap live counter slots.
 TEST(FusedA2ACounterSentinel, PayloadMatchesTheCounterLayout)
 {
     // Three levels ride one allocation, in this order:
@@ -61,8 +63,9 @@ TEST(FusedA2ACounterSentinel, PayloadMatchesTheCounterLayout)
 
 TEST(FusedA2ACounterSentinel, Counter3SitsImmediatelyAfterCounter2)
 {
-    // Pins the index the kernel uses (GlobalWriteBatch.py, counter3 block) against
-    // the host allocation: the last live word must be exactly W*tokenTiles + W.
+    // Pins the index the kernel will use (Task 4, GlobalWriteBatch.py counter3
+    // block) against the host allocation: the last live word must be exactly
+    // W*tokenTiles + W.
     for(uint32_t w : {1u, 2u, 4u, 8u})
     {
         for(uint32_t t : {1u, 8u, 16u})

@@ -82,38 +82,8 @@ def _renderHandshake(wavefrontSize: int = 64) -> str:
     return str(m)
 
 
-def _requireRocisa():
-    """Import rocisa, skipping ONLY when it is genuinely absent.
-
-    rocisa's staleness gate raises a plain `ImportError` when the C++ sources are
-    newer than the built `_rocisa.so`. `pytest.importorskip` swallowed `ImportError`
-    outright before pytest 8.2, and `pyproject.toml` floors pytest at 5.4.1 -- so on a
-    resolved-old pytest a stale checkout would turn every test here into a SKIP and
-    still report the run green, with this file (the only coverage of the fused-A2A
-    DRAIN barrier) contributing nothing. Presenting as a pass is the whole hazard, so
-    the two cases are separated by hand rather than left to importorskip's default:
-    absent -> skip (rocisa is an optional build artifact), anything else -> fail loud.
-    """
-    try:
-        import rocisa  # noqa: F401
-    except ImportError as exc:
-        if isinstance(exc, ModuleNotFoundError) and exc.name == "rocisa":
-            pytest.skip("rocisa is not installed")
-        # Installed but unimportable -- stale bindings being the expected cause.
-        # `invoke rocisa` is the only rebuild this environment picks up: a bare
-        # `cmake --build` leaves a .so that the loaded package never resolves to.
-        pytest.fail(
-            "rocisa is installed but failed to import, so this file's coverage of the "
-            "fused-A2A DRAIN barrier did NOT run.\n"
-            "  Rebuild with: invoke rocisa\n"
-            f"  {type(exc).__name__}: {exc}",
-            pytrace=False,
-        )
-
-
 @pytest.fixture
 def renderHandshake():
-    _requireRocisa()
     return _renderHandshake
 
 
@@ -236,7 +206,6 @@ def _maskWidthProvenance(text):
 
 
 def test_total_wgs_latch_multiplies_the_two_grid_dims():
-    _requireRocisa()
     from rocisa.code import Module
     from Tensile.Components.GlobalWriteBatch import emitFusedA2ATotalWGsLatch
 

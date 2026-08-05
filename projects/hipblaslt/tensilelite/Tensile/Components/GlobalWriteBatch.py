@@ -3149,6 +3149,16 @@ class GlobalWriteBatchWriter:
     # symmetric, so the EXEC write itself can go through the same getEdgeMovInstType()
     # helper as every other EXEC write in this class; only the mask register's width
     # has to be chosen alongside it.
+    #
+    # W is a runtime kernarg here, so nothing at THIS line can check it against what
+    # the width operand can encode -- a W at the field's modulus (32 on the B32 arm,
+    # 64 on the B64 one) wraps to a width of 0 and leaves EXEC empty, skipping the
+    # barrier silently.  What makes that unreachable is the compile-time bound
+    # FUSED_A2A_MAX_RANKS <= 31, asserted at both ends of the ABI
+    # (Signature.py's module-level guard and the static_assert in
+    # client/include/FusedA2AKernArg.hpp), plus the host check 1 <= W <=
+    # FUSED_A2A_MAX_RANKS in fusedA2AWorldSizeValid.  Change the mask instruction
+    # here and those two bounds are what you must re-derive.
     maskReg  = sgpr(drainTmp) if self.wavelen == 32 else sgpr(drainTmp, 2)
     maskInst = SBfmB32       if self.wavelen == 32 else SBfmB64
     module.add(maskInst(dst=maskReg, src0=sgpr(c3WSgpr), src1=0,

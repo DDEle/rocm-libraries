@@ -64,6 +64,14 @@ FUSED_A2A_MAX_RANKS = 8
 # holds for both arms. Every fused config today is wave64, so 31 costs nothing
 # real; raising past it means first proving no fused config is wave32.
 #
+# 31 is the mask's CEILING, not a recommendation, and the bound is necessary
+# rather than sufficient. The shipped value is 8 because no node is known to
+# carry more than 8 GPUs -- it is the world size this ABI is built for, not a
+# placeholder awaiting a raise. Moving toward 31 would satisfy the guard below
+# while growing FUSED_A2A_SEGMENT_BYTES from 176 to 544, widening the kernarg
+# slot count, and deepening the two unrolled per-rank scans in
+# GlobalWriteBatch.py to ~30 iterations each.
+#
 # `raise`, not `assert`: `python -O` strips asserts, which would collapse "the
 # bound was checked and held" and "the bound was never evaluated" into the same
 # observation. At module level this runs on every import -- every codegen run and

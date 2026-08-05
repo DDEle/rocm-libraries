@@ -356,9 +356,9 @@ namespace TensileLite
             // followed by a W-entry second-level counter2[dst_rank] (target
             // tokenTiles) at word index W*tokenTiles, then a single third-level
             // u32 counter3 at word index W*tokenTiles + W. counter2 converges the
-            // DRAIN spinners to one per peer; counter3 is reserved for the
-            // grid-wide workgroup tally that will elect the single DRAIN owner
-            // (Task 4). All three ride this same allocation (and this same
+            // DRAIN spinners to one per peer; counter3 is the grid-wide workgroup
+            // tally that elects the single DRAIN owner. All three ride this
+            // same allocation (and this same
             // per-iteration memset below) so the kernarg layout stays untouched.
             //
             // Past those live slots the allocation carries a guard tail (see

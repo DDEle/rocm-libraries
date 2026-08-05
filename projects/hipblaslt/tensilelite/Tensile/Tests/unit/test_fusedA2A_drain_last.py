@@ -567,17 +567,39 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wave
         f"the s_bfm width must be a register (the runtime W), not a literal: {maskLine}"
     assert offset == "0", f"the s_bfm offset must be 0, got {offset!r}: {maskLine}"
     # Nothing may write the mask pair between building it and reading it into EXEC.
-    # This is also where any remnant of the arithmetic build would have to live to
-    # still matter -- an `s_sub_u32 base, base, 1` or an `s_mov_b32 base+1, 0` left
-    # AHEAD of the s_bfm is overwritten by it and changes nothing, while one left
-    # behind it corrupts the mask. Scoping the check to that window is deliberate:
-    # `base` is a recycled pool register that legitimately carries unrelated values
-    # earlier in the handshake, so a whole-region search reports those as leftovers.
+    # This is the window where a remnant of the arithmetic build would still be live:
+    # one left AHEAD of the s_bfm is overwritten by it (S_BFM writes its destination
+    # whole) and changes nothing, while one left behind it corrupts the mask.
     hiReg = "s%d" % (int(base[1:]) + 1)
     clobber = [ln for ln in region[masks[0] + 1:]
                if _ops(ln) and _baseReg(_ops(ln)[0]) in (base, hiReg)]
     assert not clobber, \
         f"{clobber} writes the mask register between `{maskLine}` and `{last}`"
+
+    # And the arithmetic build must be GONE, not merely joined by the s_bfm. All four
+    # of its members are fatal on their own if they are ever the operative value: a
+    # seed of 2 gives (2 << W) - 1, i.e. W+1 lanes with the extra one on slot W; a
+    # missing `- 1` gives 1 << W, one lane on that same never-filled slot; a missing
+    # hi-dword zero leaves lanes 32..63 polling whatever the pool left there. All
+    # three are silent hangs. A hybrid keeping any of them is dead code today and one
+    # reordering away from live, so pin the absence rather than trusting the position.
+    #
+    # Matched by exact shape, not by "writes base": `base` is a recycled pool register
+    # carrying fourteen unrelated values earlier in this handshake, among them
+    # `s_lshl_b32 s28, s22, 3` (a flag-pointer scale, not a mask shift) and
+    # `s_mov_b32 s28, s26` -- a looser predicate reports those and is a false alarm.
+    def isOldBuild(ln):
+        ops = _ops(ln)
+        return ((ln.startswith("s_mov_b32 ")  and ops == [base, "1"])          # seed 1
+             or (ln.startswith("s_lshl_b32 ") and ops[:2] == [base, base]      # 1 << W
+                 and len(ops) == 3 and _baseReg(ops[2]))
+             or (ln.startswith("s_sub_u32 ")  and ops == [base, base, "1"])    # - 1
+             or (ln.startswith("s_mov_b32 ")  and ops == [hiReg, "0"]))        # hi = 0
+
+    survivors = [ln for ln in region if isOldBuild(ln)]
+    assert not survivors, \
+        (f"the arithmetic mask build survived alongside `{maskLine}`: {survivors} -- "
+         f"the mask must come from the s_bfm and nothing else")
 
 
 def test_drain_exec_mask_width_is_the_FusedW_kernarg(renderHandshake):

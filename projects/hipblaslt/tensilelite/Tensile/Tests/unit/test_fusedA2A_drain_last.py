@@ -676,6 +676,40 @@ def test_rendering_is_byte_identical_to_the_golden(renderHandshake):
         "handshake rendering drifted from the golden; see the docstring"
 
 
+def test_max_ranks_guard_fires_when_the_constant_outgrows_the_mask():
+    """The import-time bound on FUSED_A2A_MAX_RANKS must have teeth.
+
+    The guard in Signature.py exists for an event that has never happened -- someone
+    raising the constant past what the S_BFM width operand can encode -- so no
+    ordinary run exercises it, and a guard nobody has watched fail is not evidence.
+    This is that mutation, made permanent: the module-level `if` is located, lifted
+    out, and re-executed against a constant of 32 (the wave32 arm's first wrapping
+    width). Locating it also pins that it still EXISTS -- deleting the guard reddens
+    here rather than passing quietly, which a test that merely re-checked
+    `FUSED_A2A_MAX_RANKS <= 31` would not do.
+    """
+    path = os.path.join(TENSILE_ROOT, "Tensile/Components/Signature.py")
+    with open(path) as f:
+        mod = ast.parse(f.read(), filename=path)
+
+    guards = [n for n in mod.body if isinstance(n, ast.If)
+              and "FUSED_A2A_MAX_RANKS" in ast.unparse(n.test)
+              and any(isinstance(s, ast.Raise) for s in ast.walk(n))]
+    assert len(guards) == 1, \
+        (f"expected exactly one module-level FUSED_A2A_MAX_RANKS bound guard in "
+         f"{path}, found {len(guards)} -- the DRAIN EXEC mask bound is unenforced")
+
+    # 8 must pass and 32 must not; a guard that raises unconditionally, or one whose
+    # comparison drifted the wrong way, fails one of these two.
+    def run(value):
+        ns = {"FUSED_A2A_MAX_RANKS": value}
+        exec(compile(ast.Module(body=[guards[0]], type_ignores=[]), path, "exec"), ns)
+
+    run(8)  # the shipped value: must not raise
+    with pytest.raises(ValueError, match="EXEC becomes empty"):
+        run(32)
+
+
 if __name__ == "__main__":
     if "--update-golden" in sys.argv:
         os.makedirs(os.path.dirname(_GOLDEN), exist_ok=True)

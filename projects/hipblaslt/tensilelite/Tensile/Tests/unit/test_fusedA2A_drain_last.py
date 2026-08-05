@@ -162,6 +162,15 @@ def _deadKernargLoads(text):
         if m and m.group(2) == "1":          # single-dword loads; pairs render as s[n:n+1]
             loads.append((i, int(m.group(1)), m.group(3)))
 
+    # _LOAD_RE parses a COMMENT, and nothing enforces that comment's format. If it
+    # ever drifts, every loop below iterates zero times and this returns [] -- which
+    # the caller's `assert not dead` reads as "no clobbers", indistinguishable from
+    # a clean render. Fail loudly instead. (_maskWidthProvenance guards its own use
+    # of the same regex the same way.)
+    assert loads, \
+        "_LOAD_RE matched no kernarg loads; the emitted comment format has likely " \
+        "drifted, so this check is inspecting nothing: %s" % _LOAD_RE.pattern
+
     dead = []
     for n, (i, reg, off) in enumerate(loads):
         pat = re.compile(r"\bs%d\b" % reg)

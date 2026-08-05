@@ -46,7 +46,7 @@ TENSILE_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 sys.path.insert(0, TENSILE_ROOT)
 
 # rocisa is imported transitively; skip cleanly if the C++ module is not built.
-rocisa = pytest.importorskip("rocisa")
+import rocisa                                                   # noqa: E402
 
 from rocisa import rocIsa                                        # noqa: E402
 from rocisa.register import RegisterPool                         # noqa: E402

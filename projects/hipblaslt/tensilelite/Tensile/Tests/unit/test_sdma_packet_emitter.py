@@ -44,8 +44,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TENSILE_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 sys.path.insert(0, TENSILE_ROOT)
 
-# rocisa is imported transitively; skip cleanly if the C++ module is not built.
-rocisa = pytest.importorskip("rocisa")
+# rocisa is a declared dev dependency, not an optional artifact: import it
+# directly like the ~28 other unit tests that use it. importorskip would turn a
+# stale or broken build into a SKIP and report the run green.
+import rocisa                                                     # noqa: E402
 
 from rocisa import rocIsa                                          # noqa: E402
 from rocisa.register import RegisterPool                           # noqa: E402

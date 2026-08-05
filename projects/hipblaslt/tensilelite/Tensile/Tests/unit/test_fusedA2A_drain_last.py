@@ -25,12 +25,17 @@ _GFX = "gfx950"
 _GOLDEN = os.path.join(SCRIPT_DIR, "test_data", "fusedA2A_handshake.golden.s")
 
 
-def _renderHandshake() -> str:
+def _renderHandshake(wavefrontSize: int = 64) -> str:
     """Render _emitFusedA2AHandshake standalone.
 
     Same shape as test_fusedA2A_sdma_issue.py's _render, but driving the whole
     handshake, which reads more off kernel/parentWriter (WavefrontSize via the
     `wavelen` property, FusedGemmA2A).
+
+    `wavefrontSize` picks the wave width. It defaults to 64 -- what every fused
+    config runs and what the golden below captures -- but the handshake has a wave32
+    arm (EXEC is one dword, `exec_lo`, and the mask instruction is the B32 one), and
+    a fixture that could only render wave64 left that arm covered by nothing at all.
 
     The argLoader stub echoes its arguments instead of a fixed comment. The real
     loadKernArg is unavailable here, and a constant stub would render all eleven
@@ -53,7 +58,7 @@ def _renderHandshake() -> str:
     ri = rocIsa.getInstance()
     isa = gfxToIsa(_GFX)
     ri.init(isa, shutil.which("amdclang++") or "/usr/bin/amdclang++")
-    ri.setKernel(isa, 64)
+    ri.setKernel(isa, wavefrontSize)
 
     w = SimpleNamespace()
     w.vgprPool = RegisterPool(0, RegisterType.Vgpr, defaultPreventOverflow=False, printRP=False)
@@ -69,7 +74,7 @@ def _renderHandshake() -> str:
 
     gwb = object.__new__(GlobalWriteBatchWriter)
     gwb.kernel = {"MacroTile0": 256, "MacroTile1": 256, "PackedC1IndicesX": [1],
-                  "WavefrontSize": 64, "FusedGemmA2A": 1}
+                  "WavefrontSize": wavefrontSize, "FusedGemmA2A": 1}
     gwb.parentWriter = w
 
     m = Module("handshake")
@@ -168,6 +173,37 @@ def _deadKernargLoads(text):
             if reg2 == reg and off2 != off and j < firstRead:
                 dead.append((reg, off, off2))
     return dead
+
+
+def _maskWidthProvenance(text):
+    """Where the s_bfm width operand's value came from.
+
+    Every other assertion about the mask can only see the operand's SHAPE -- that it
+    is a register. Nothing in the emitted text distinguishes an s_bfm reading W from
+    the identical line reading a register the pool has since handed to something
+    else; the comment says "(1 << W) - 1" either way. That is the exact failure mode
+    _deadKernargLoads exists for, one step further along.
+
+    The echoing argLoader stub is the only place a register is tied to the kernarg it
+    was loaded from, so resolve the width register back through it. Returns
+    (sgprOffset of the last single-dword kernarg load into that register before the
+    s_bfm, list of instructions writing it in between) -- the second must be empty or
+    the offset says nothing about the value at the s_bfm.
+    """
+    raw = [ln for ln in text.splitlines() if ln.strip()]
+    code = [ln.split("//")[0].strip() for ln in raw]
+    masks = [i for i, ln in enumerate(code) if ln.startswith("s_bfm_b")]
+    assert len(masks) == 1, f"expected exactly one s_bfm, got {[code[i] for i in masks]}"
+    i = masks[0]
+    width = _ops(code[i])[1]
+
+    fed = [(j, m.group(3)) for j in range(i)
+           for m in [_LOAD_RE.search(raw[j])] if m and m.group(2) == "1"
+           and "s" + m.group(1) == width]
+    assert fed, f"the s_bfm width operand {width} is never loaded from a kernarg: {code[i]}"
+    j, offset = fed[-1]
+    writes = re.compile(r"^\S+\s+%s\b" % re.escape(width))
+    return offset, [code[k] for k in range(j + 1, i) if writes.match(code[k])]
 
 
 def test_total_wgs_latch_multiplies_the_two_grid_dims():
@@ -458,7 +494,8 @@ def test_every_surviving_wg_runs_the_handshake_once():
         f"expected a PUSH pass and a LOCAL pass, got {len(passes)} batch-loop emissions"
 
 
-def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake):
+@pytest.mark.parametrize("wavefrontSize", [64, 32])
+def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wavefrontSize):
     """The DRAIN load must not be issued at EXEC=1.
 
     Everything before the poll runs single-lane, so the counter atomics fire once
@@ -474,7 +511,7 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake):
     and the poll itself, EXEC must have been set from a computed mask rather than
     to the literal 1.
     """
-    code = _codeLines(renderHandshake())
+    code = _codeLines(renderHandshake(wavefrontSize))
     poll = next(i for i, ln in enumerate(code) if ln.startswith("label_fusedA2A_drain_poll"))
     load = next(i for i, ln in enumerate(code[poll:], poll) if ln.startswith("global_load"))
 
@@ -492,27 +529,80 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake):
     assert src.startswith("s"), \
         f"EXEC for the poll must be a computed W-lane mask, not a literal: {last}"
 
-    # The mask itself: (1 << W) - 1, built from the FusedW kernarg -- anchored to the
-    # register the EXEC write actually READS. "some s_lshl_b32 with a register shift
-    # amount exists upstream" would not do: it is a property of the whole handshake,
-    # not of the mask, and it says nothing about the `- 1`. Dropping the subtraction
-    # leaves EXEC = 1 << W, i.e. exactly ONE lane set, at slot index W -- one past the
-    # last real peer. That slot is never written, so the poll spins forever: a silent
-    # hang, and one the structural tests would otherwise leave to the golden alone.
+    # The mask itself: one S_BFM, which computes ((1 << src0[5:0]) - 1) << src1[5:0]
+    # -- i.e. width W at offset 0 -- anchored to the register the EXEC write actually
+    # READS. It replaced a four-instruction arithmetic build (mov 1; shl W; sub 1;
+    # zero the hi dword) whose middle two were each a silent hang if dropped: without
+    # the `- 1` EXEC is 1 << W, a single lane at slot index W, one past the last real
+    # peer and on a slot nobody ever writes; without the hi-dword zeroing lanes 32..63
+    # poll whatever the pool left in the odd register. S_BFM has no separable halves,
+    # so what remains to pin is that it is the mask instruction, that it is the right
+    # WIDTH for the wave (a B32 feeding an EXEC pair leaves the hi dword untouched --
+    # exactly the second hang above), that its width operand is a register rather than
+    # a literal, and that its offset is 0.
     base = _baseReg(src)
     assert base, f"cannot resolve the EXEC mask's base SGPR from {src!r}: {last}"
     region = code[:execWrites[-1]]
-    shifts = [i for i, ln in enumerate(region)
-              if ln.startswith("s_lshl_b32 ") and len(_ops(ln)) == 3
-              and _ops(ln)[0] == base and _ops(ln)[2].startswith("s")]
-    assert len(shifts) == 1, \
-        (f"expected exactly one register-amount s_lshl_b32 writing {base} (1 << W), got: "
-         f"{[region[i] for i in shifts]}")
-    subs = [region[i] for i in range(shifts[0] + 1, len(region))
-            if region[i].startswith("s_sub_u32 ") and _ops(region[i]) == [base, base, "1"]]
-    assert subs, \
-        (f"no `s_sub_u32 {base}, {base}, 1` between `{region[shifts[0]]}` and `{last}`: "
-         f"EXEC would be 1 << W -- a single lane at slot W, which no peer ever fills (hang)")
+    masks = [i for i, ln in enumerate(region)
+             if ln.startswith("s_bfm_b") and len(_ops(ln)) == 3
+             and _baseReg(_ops(ln)[0]) == base]
+    assert len(masks) == 1, \
+        f"expected exactly one s_bfm writing {base} ((1 << W) - 1), got: {[region[i] for i in masks]}"
+    maskLine = region[masks[0]]
+    # Widths are pinned against the kernel's declared wave size, not against each
+    # other: deriving the expected mnemonic from the emitted EXEC write would stay
+    # green if BOTH narrowed to b32 under wave64.
+    wantExec = "s_mov_b32" if wavefrontSize == 32 else "s_mov_b64"
+    wantMask = "s_bfm_b32" if wavefrontSize == 32 else "s_bfm_b64"
+    assert last.startswith(wantExec + " "), f"wave{wavefrontSize} EXEC write must be {wantExec}: {last}"
+    assert maskLine.startswith(wantMask + " "), \
+        f"wave{wavefrontSize} mask must be {wantMask}: {maskLine}"
+    dst, width, offset = _ops(maskLine)
+    assert dst == src, \
+        f"the s_bfm destination is not the operand EXEC reads ({src}): {maskLine}"
+    # src0 is the WIDTH and src1 the offset. Swapped, this is ((1 << 0) - 1) << W == 0:
+    # EXEC = 0, every lane masked off, the poll load never issues and the flags are
+    # never read -- and the comment still says "(1 << W) - 1".
+    assert _baseReg(width), \
+        f"the s_bfm width must be a register (the runtime W), not a literal: {maskLine}"
+    assert offset == "0", f"the s_bfm offset must be 0, got {offset!r}: {maskLine}"
+    # Nothing may write the mask pair between building it and reading it into EXEC.
+    # This is also where any remnant of the arithmetic build would have to live to
+    # still matter -- an `s_sub_u32 base, base, 1` or an `s_mov_b32 base+1, 0` left
+    # AHEAD of the s_bfm is overwritten by it and changes nothing, while one left
+    # behind it corrupts the mask. Scoping the check to that window is deliberate:
+    # `base` is a recycled pool register that legitimately carries unrelated values
+    # earlier in the handshake, so a whole-region search reports those as leftovers.
+    hiReg = "s%d" % (int(base[1:]) + 1)
+    clobber = [ln for ln in region[masks[0] + 1:]
+               if _ops(ln) and _baseReg(_ops(ln)[0]) in (base, hiReg)]
+    assert not clobber, \
+        f"{clobber} writes the mask register between `{maskLine}` and `{last}`"
+
+
+def test_drain_exec_mask_width_is_the_FusedW_kernarg(renderHandshake):
+    """The mask width must be W, not merely *a* register.
+
+    "the width operand is a register" is a shape check, and shape checks are how a
+    register-content bug hid on this branch before: the assembly read
+    `s_mul_i32 s19, s10, ...  // myRank * N` while s10 held AM_tiles, because the
+    comment is frozen at construction time and the register is decided at emission
+    time by the pool. A width operand pointing at the wrong SGPR gives EXEC an
+    arbitrary lane count -- too few and the barrier releases early, too many and the
+    extra lanes poll slots past the W-slot flag allocation -- and reads correctly.
+    """
+    text = renderHandshake()
+    # after renderHandshake(), which imports Tensile.Component first (circular-import guard)
+    from Tensile.Components.Signature import fusedA2AKernArgLayout
+
+    offset, clobbers = _maskWidthProvenance(text)
+    # The fixture puts the fused segment at base 0, so the segment-relative offset
+    # the layout reports is the absolute one the emitter passes.
+    want = hex(fusedA2AKernArgLayout()["FusedW"])
+    assert offset == want, \
+        f"the s_bfm width register was last loaded from {offset}, not FusedW ({want})"
+    assert not clobbers, \
+        f"the width register is overwritten between its FusedW load and the s_bfm: {clobbers}"
 
 
 def test_rendering_is_byte_identical_to_the_golden(renderHandshake):

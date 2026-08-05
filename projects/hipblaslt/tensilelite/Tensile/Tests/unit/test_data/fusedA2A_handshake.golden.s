@@ -392,10 +392,7 @@ s_lshl_b32 s28, s22, 3                             // rank * 8 (byte offset into
 s_add_u32 s28, s28, 64                             // kernarg offset = fusedBase + flag_ptr_0 + rank*8
 // loadKernArg 26 KernArgAddress dword=2 sgprOffset=s28
 s_waitcnt lgkmcnt(0)                               // wait flag_ptr[my_rank] load
-s_mov_b32 s28, 1                                   // fused-A2A: build the W-lane EXEC mask
-s_lshl_b32 s28, s28, s21                           // 1 << W
-s_sub_u32 s28, s28, 1                              // (1 << W) - 1: one lane per peer flag slot
-s_mov_b32 s29, 0                                   // EXEC mask hi = 0 (W <= 8)
+s_bfm_b64 s[28:29], s21, 0                         // fused-A2A: (1 << W) - 1, one lane per peer flag slot
 s_mov_b64 exec, s[28:29]                           // fused-A2A: widen EXEC to W lanes for the DRAIN poll
 v_lshlrev_b32 v2, 3, v[vgprSerial]                 // lane j -> self flag slot byte offset j*8
 label_fusedA2A_drain_poll:  /// fused-A2A: DRAIN poll all W self flags until each == tokenTiles

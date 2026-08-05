@@ -29,7 +29,7 @@ from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, \
   BufferAtomicCmpswapB64, BufferStoreB16, BufferStoreB32, BufferStoreB64, BufferStoreB128, \
   DSBPermuteB32, FlatAtomicCmpswapB32, \
   SAddCU32, SAddU32, SAndB32, \
-  SAndB64, SAtomicDec, SBarrier, SBranch, SCBranchExecNZ, SCBranchExecZ, \
+  SAndB64, SAtomicDec, SBarrier, SBfmB32, SBfmB64, SBranch, SCBranchExecNZ, SCBranchExecZ, \
   SCBranchSCC0, SCBranchSCC1, SCBranchVCCNZ, SCmpGtU32, SCmpKGtU32, SCSelectB32, SCmpEQI32, SCmpEQU32, SCmpGtI32, SCmpLeI32, SMinU32, SEndpgm, \
   SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SLShiftRightB64, SMovB32, SMovB64, SMulI32, \
   SNop, SOrB32, SOrB64, SOrSaveExecB32, SOrSaveExecB64, SSleep, SSubI32, SSubU32, \
@@ -3137,20 +3137,23 @@ class GlobalWriteBatchWriter:
     # become a one-slot predicate wearing the shape of a W-slot one -- releasing the
     # DRAIN as soon as the FIRST peer's slot filled.  That looks like a working
     # barrier under light load and corrupts data under real traffic, so the mask is
-    # built from the runtime W rather than assumed.  W <= FUSED_A2A_MAX_RANKS = 8, so
-    # (1 << W) - 1 always fits in the low dword and the high dword is 0.
-    module.add(SMovB32(dst=sgpr(drainTmp), src=1, comment="fused-A2A: build the W-lane EXEC mask"))
-    module.add(SLShiftLeftB32(dst=sgpr(drainTmp), src=sgpr(drainTmp), shiftHex=sgpr(c3WSgpr),
-                              comment="1 << W"))
-    module.add(SSubU32(dst=sgpr(drainTmp), src0=sgpr(drainTmp), src1=1,
-                       comment="(1 << W) - 1: one lane per peer flag slot"))
-    if self.wavelen == 32:
-      module.add(SMovB32(dst=EXEC(), src=sgpr(drainTmp),
-                         comment="fused-A2A: widen EXEC to W lanes for the DRAIN poll"))
-    else:
-      module.add(SMovB32(dst=sgpr(drainTmp + 1), src=0, comment="EXEC mask hi = 0 (W <= 8)"))
-      module.add(SMovB64(dst=EXEC(), src=sgpr(drainTmp, 2),
-                         comment="fused-A2A: widen EXEC to W lanes for the DRAIN poll"))
+    # built from the runtime W rather than assumed.
+    #
+    # One instruction builds it: S_BFM_B{32,64} computes
+    # ((1 << src0[5:0]) - 1) << src1[5:0], i.e. width W at offset 0 -- exactly the
+    # mask, hi dword included.  The arithmetic alternative (mov 1; shl W; sub 1; zero
+    # the hi dword) spends four instructions on the same value, two of which are a
+    # silent hang if they go missing, and caps the usable W at 31 because s_lshl_b32
+    # takes its amount from S1[4:0].  The B32/B64 pair makes the two wave widths
+    # symmetric, so the EXEC write itself can go through the same getEdgeMovInstType()
+    # helper as every other EXEC write in this class; only the mask register's width
+    # has to be chosen alongside it.
+    maskReg  = sgpr(drainTmp) if self.wavelen == 32 else sgpr(drainTmp, 2)
+    maskInst = SBfmB32       if self.wavelen == 32 else SBfmB64
+    module.add(maskInst(dst=maskReg, src0=sgpr(c3WSgpr), src1=0,
+                        comment="fused-A2A: (1 << W) - 1, one lane per peer flag slot"))
+    module.add(self.getEdgeMovInstType()(dst=EXEC(), src=maskReg,
+                        comment="fused-A2A: widen EXEC to W lanes for the DRAIN poll"))
     kw.sgprPool.checkIn(c3WSgpr)
 
     # lane j polls slot j: voffset = j*8, saddr = flag_ptr[my_rank].  Serial is the

@@ -65,16 +65,27 @@ TEST(FusedA2ACounterSentinel, PayloadMatchesTheCounterLayout)
 
 TEST(FusedA2ACounterSentinel, Counter3SitsImmediatelyAfterCounter2)
 {
-    // Pins the index the kernel will use (Task 4, GlobalWriteBatch.py counter3
-    // block) against the host allocation: the last live word must be exactly
-    // W*tokenTiles + W.
+    // Pins the HOST payload formula against a transcribed literal, so a one-sided
+    // edit of fusedA2ACounterPayloadBytes reddens here: the allocation must hold
+    // W*tokenTiles first-level words, W second-level, and exactly one more for
+    // counter3.
+    //
+    // What this does NOT do, despite the name: it does not read the kernel side.
+    // The index the kernel actually uses is built from runtime SGPR arithmetic in
+    // GlobalWriteBatch.py (counter3 index = W*tokenTiles + W), and nothing here or
+    // anywhere else compares the two. A C++ gtest cannot reach the Python emitter;
+    // closing that gap needs a Python-side test that renders the handshake and
+    // scrapes this formula out of the header, the way test_fusedA2A_drain_last.py
+    // already scrapes FusedA2AClient.cpp. Until then this is a one-sided golden,
+    // not the cross-boundary pin the test name suggests.
     for(uint32_t w : {1u, 2u, 4u, 8u})
     {
         for(uint32_t t : {1u, 8u, 16u})
         {
             const size_t words = fusedA2ACounterPayloadBytes(w, t) / sizeof(uint32_t);
+            // One assertion only: `words - 1 == w*t + w` is algebraically implied
+            // by this and cannot fail independently of it.
             EXPECT_EQ(words, (size_t)w * t + w + 1) << "W=" << w << " tokenTiles=" << t;
-            EXPECT_EQ(words - 1, (size_t)w * t + w) << "counter3 index drifted";
         }
     }
 }

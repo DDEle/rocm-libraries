@@ -675,8 +675,47 @@ def test_max_ranks_guard_fires_when_the_constant_outgrows_the_mask():
         exec(compile(ast.Module(body=[guards[0]], type_ignores=[]), path, "exec"), ns)
 
     run(8)  # the shipped value: must not raise
+    # 31 is the boundary itself -- the widest value S_BFM_B32 can encode. Without it,
+    # 8-passes/32-raises only pins the bound to somewhere in [8, 31], and a guard
+    # written `> 30` would satisfy both. This is the pair that fixes the exact number.
+    run(31)  # the largest legal world size: must not raise
     with pytest.raises(ValueError, match="EXEC becomes empty"):
         run(32)
+
+
+def test_max_ranks_twins_hold_the_same_value():
+    """The Python and C++ declarations of FUSED_A2A_MAX_RANKS must agree.
+
+    The constant is declared twice -- once for codegen (Signature.py, which sizes the
+    kernarg segment the kernel reads) and once for the host (FusedA2AKernArg.hpp,
+    which sizes what the host appends). Each site now asserts its own upper bound, so
+    neither can be raised past what the mask can encode, but nothing makes them hold
+    the SAME value: 8 on one side and 16 on the other satisfies both assertions and
+    silently breaks the ABI -- the host writes a segment the kernel does not read the
+    same way. The C++ comment says "MUST match", which is exactly the kind of claim
+    this file exists to turn into a check.
+    """
+    py_path = os.path.join(TENSILE_ROOT, "Tensile/Components/Signature.py")
+    with open(py_path) as f:
+        py_tree = ast.parse(f.read(), filename=py_path)
+    py_vals = [n.value.value for n in py_tree.body
+               if isinstance(n, ast.Assign)
+               and any(getattr(t, "id", None) == "FUSED_A2A_MAX_RANKS" for t in n.targets)
+               and isinstance(n.value, ast.Constant)]
+    assert len(py_vals) == 1, \
+        f"expected exactly one module-level FUSED_A2A_MAX_RANKS in {py_path}, got {py_vals}"
+
+    hpp_path = os.path.join(TENSILE_ROOT, "client/include/FusedA2AKernArg.hpp")
+    with open(hpp_path) as f:
+        cpp_vals = re.findall(
+            r"constexpr\s+int\s+FUSED_A2A_MAX_RANKS\s*=\s*(\d+)\s*;", f.read())
+    assert len(cpp_vals) == 1, \
+        f"expected exactly one constexpr FUSED_A2A_MAX_RANKS in {hpp_path}, got {cpp_vals}"
+
+    assert py_vals[0] == int(cpp_vals[0]), (
+        f"FUSED_A2A_MAX_RANKS disagrees across the ABI: Signature.py={py_vals[0]} "
+        f"vs FusedA2AKernArg.hpp={cpp_vals[0]}. The host would append a differently "
+        f"sized fused segment than the kernel metadata reserves.")
 
 
 if __name__ == "__main__":

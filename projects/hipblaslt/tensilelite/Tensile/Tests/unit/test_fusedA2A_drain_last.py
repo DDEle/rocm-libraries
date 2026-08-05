@@ -93,6 +93,41 @@ def _codeLines(text):
     return [ln for ln in (l.split("//")[0].strip() for l in text.splitlines()) if ln]
 
 
+def _ops(line):
+    """Operands of a comment-stripped instruction, in source order.
+
+    Operands must be compared BY POSITION -- `"s28" in line` cannot tell a dst from a
+    src, and would keep an assertion green through an operand swap.
+    """
+    parts = line.split(None, 1)
+    return [] if len(parts) < 2 else [op.strip() for op in parts[1].split(",")]
+
+
+def _baseReg(operand):
+    """Base SGPR of an operand written either as `s28` or as the pair `s[28:29]`.
+
+    The wave64 lowering writes EXEC from an aligned pair, so the register the EXEC
+    write names is not spelled the same as the one the mask arithmetic writes; both
+    have to reduce to the same name before they can be tied together.
+    """
+    m = re.fullmatch(r"s\[(\d+):\d+\]", operand) or re.fullmatch(r"s(\d+)", operand)
+    return "s" + m.group(1) if m else None
+
+
+def _braceBlock(src, start):
+    """Text of the brace-balanced { ... } block opening at or after offset `start`."""
+    openIdx = src.index("{", start)
+    depth = 0
+    for i in range(openIdx, len(src)):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[openIdx:i + 1]
+    raise AssertionError("unbalanced braces after offset %d" % start)
+
+
 # The echoing argLoader stub renders every kernarg load as a comment line carrying
 # its destination register, width and offset -- which is what makes the check below
 # possible at all.
@@ -222,11 +257,24 @@ def test_batch_guard_is_host_side_not_compile_time():
     assert not rejects, \
         f"fused block still rejects on a DECLARED batch index (zero kernels): {rejects}"
 
+    # Host side. Grepping for `batchIndices()` / `batchSize(` proves only that the
+    # API is CALLED -- it stays green with the predicate inverted (`!= 2` accepts the
+    # extent 2 that breaks the election, and rejects the extent 1 every fused config
+    # runs) or with the bail-out deleted, i.e. with a guard that guards nothing. So
+    # pin the predicate and the early return, scoped to the loop's own block.
     host = os.path.join(TENSILE_ROOT, "client/src/FusedA2AClient.cpp")
     with open(host) as f:
         src = f.read()
-    assert "batchIndices()" in src and "batchSize(" in src, \
-        "FusedA2AClient.cpp has no batch-extent check; the guard was deleted, not moved"
+    loop = re.search(r"for\s*\(.*?problem->batchIndices\(\)\.size\(\).*?\)\s*\{", src, re.S)
+    assert loop, \
+        "FusedA2AClient.cpp does not loop over batchIndices(); the guard was deleted, not moved"
+    body = _braceBlock(src, loop.end() - 1)
+    preds = re.findall(
+        r"if\s*\(\s*problem->batchSize\(\s*\w+\s*\)\s*(!=|==|<|>|<=|>=)\s*(\d+)\s*\)", body)
+    assert preds == [("!=", "1")], \
+        f"the batch guard must reject every extent other than 1; found {preds} in:\n{body}"
+    assert re.search(r"\breturn\s+1\s*;", body), \
+        f"the batch guard detects a bad extent but never bails out (no `return 1;`):\n{body}"
 
 
 ################################################################################
@@ -288,10 +336,12 @@ def test_preamble_is_hoisted_above_the_push_gate(renderHandshake):
     assert len(election) == 1, f"expected one Serial readfirstlane, got {election}"
     assert election[0] < gateIdx, "the wave-0 election must precede the PUSH gate"
 
-    # single-lane EXEC (exec, 1) is what makes the tally fire once per WG. The DRAIN
-    # poll restores this width after widening, so take the first one.
+    # single-lane EXEC (exec, 1) is what makes the tally fire once per WG. There are
+    # exactly two: this one, and the DRAIN restoring the width after its wide poll.
+    # Pinned exactly -- a third would mean some region silently lost its width.
     lane0 = [i for i, ln in enumerate(code) if ln.replace(" ", "").endswith("exec,1")]
-    assert lane0, "EXEC is never narrowed to a single lane"
+    assert len(lane0) == 2, \
+        f"expected two single-lane EXEC writes (tally + post-DRAIN restore), got {lane0}"
     assert lane0[0] < gateIdx, "EXEC must be narrowed to lane 0 before the PUSH gate"
 
 
@@ -442,11 +492,27 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake):
     assert src.startswith("s"), \
         f"EXEC for the poll must be a computed W-lane mask, not a literal: {last}"
 
-    # The mask itself: (1 << W) - 1, built from the FusedW kernarg.
-    shifts = [ln for ln in code[:execWrites[-1]] if ln.startswith("s_lshl_b32")]
-    assert any(len(ln.split(",")) == 3 and ln.split(",")[2].strip().startswith("s")
-               for ln in shifts), \
-        f"expected a register-amount s_lshl_b32 building 1 << W, got: {shifts}"
+    # The mask itself: (1 << W) - 1, built from the FusedW kernarg -- anchored to the
+    # register the EXEC write actually READS. "some s_lshl_b32 with a register shift
+    # amount exists upstream" would not do: it is a property of the whole handshake,
+    # not of the mask, and it says nothing about the `- 1`. Dropping the subtraction
+    # leaves EXEC = 1 << W, i.e. exactly ONE lane set, at slot index W -- one past the
+    # last real peer. That slot is never written, so the poll spins forever: a silent
+    # hang, and one the structural tests would otherwise leave to the golden alone.
+    base = _baseReg(src)
+    assert base, f"cannot resolve the EXEC mask's base SGPR from {src!r}: {last}"
+    region = code[:execWrites[-1]]
+    shifts = [i for i, ln in enumerate(region)
+              if ln.startswith("s_lshl_b32 ") and len(_ops(ln)) == 3
+              and _ops(ln)[0] == base and _ops(ln)[2].startswith("s")]
+    assert len(shifts) == 1, \
+        (f"expected exactly one register-amount s_lshl_b32 writing {base} (1 << W), got: "
+         f"{[region[i] for i in shifts]}")
+    subs = [region[i] for i in range(shifts[0] + 1, len(region))
+            if region[i].startswith("s_sub_u32 ") and _ops(region[i]) == [base, base, "1"]]
+    assert subs, \
+        (f"no `s_sub_u32 {base}, {base}, 1` between `{region[shifts[0]]}` and `{last}`: "
+         f"EXEC would be 1 << W -- a single lane at slot W, which no peer ever fills (hang)")
 
 
 def test_rendering_is_byte_identical_to_the_golden(renderHandshake):

@@ -3139,9 +3139,10 @@ class GlobalWriteBatchWriter:
     # barrier under light load and corrupts data under real traffic, so the mask is
     # built from the runtime W rather than assumed.
     #
-    # One instruction builds it: S_BFM_B{32,64} computes
-    # ((1 << src0[5:0]) - 1) << src1[5:0], i.e. width W at offset 0 -- exactly the
-    # mask, hi dword included.  The arithmetic alternative (mov 1; shl W; sub 1; zero
+    # One instruction builds it: S_BFM_B64 computes
+    # ((1 << src0[5:0]) - 1) << src1[5:0] -- width W at offset 0, i.e. exactly the
+    # mask, hi dword included (the B32 form is the same with [4:0] operand fields).
+    # The arithmetic alternative (mov 1; shl W; sub 1; zero
     # the hi dword) spends four instructions on the same value, two of which are a
     # silent hang if they go missing, and caps the usable W at 31 because s_lshl_b32
     # takes its amount from S1[4:0].  The B32/B64 pair makes the two wave widths

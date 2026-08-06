@@ -90,7 +90,7 @@ from Tensile.Components.NonTemporal import decodeNonTemporal, forceCoherentNonTe
 from Tensile.Common.DataType import DataType
 from Tensile.Common.RegisterPool import RegisterPool, allocTmpGpr, allocTmpGprList
 from .Components.WorkGroupMappingAlgos import DefaultWGM, wgmXCC, SpaceFillingCurveWalk, \
-  FusedA2AWgRemap
+  FusedA2AWgRemap, MTileBlockRemap
 
 from Tensile.KernelWriter import KernelWriter, ABMatrixInfo
 from Tensile.SolutionStructs.Naming import getKernelFileBase
@@ -3442,6 +3442,12 @@ class KernelWriterAssembly(KernelWriter):
       module.add(FusedA2AWgRemap(self, kernel))
       emitFusedA2ATotalWGsLatch(module, "FusedTotalWGs")
       emitFusedA2ACounter3PtrLatch(module, self, "FusedCounter3Ptr")
+
+    # The same permutation with A pinned at compile time, for kernels that have no
+    # A2A to derive it from. Sits after DefaultWGM for the same reason the fused one
+    # does, and is a no-op unless MTileBlockWidth is set; MTileBlockRemap itself
+    # declines when FusedGemmA2A is on, so the two can never both rewrite the pair.
+    module.add(MTileBlockRemap(self, kernel))
 
     return module
 

@@ -524,6 +524,10 @@ defaultBenchmarkCommonParameters = [
     {"NumLoadsCoalescedB": [1]},
     {"WorkGroup": [[16, 16, 1]]},
     {"WorkGroupMapping": [8]},
+    # Without an entry here the value a yaml sets is dropped in silence: Solution
+    # fills its state by walking defaultSolution's keys, not the config's, so the
+    # parameter never reaches self._state and codegen raises KeyError instead.
+    {"MTileBlockWidth": [0]},
     {"WorkGroupMappingXCC": [1]},
     {"WorkGroupMappingXCCGroup": [-1]},
     {"ThreadTile": [[4, 4]]},

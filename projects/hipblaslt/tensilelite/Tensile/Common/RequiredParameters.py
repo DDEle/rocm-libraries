@@ -160,6 +160,11 @@ def getRequiredParametersMin() -> set:
         'WavefrontSize',
         'WorkGroup',
         'WorkGroupMappingXCC',
+        # Must be named: it changes the emitted assembly, so two solutions differing
+        # only in it are distinct kernels. Left out, they collapse to one Min name
+        # and one .s filename -- a sweep over it would report several timings that
+        # are all the same kernel, with nothing anywhere saying so.
+        'MTileBlockWidth',
         'DtlPlusLdsBuf',
         'MinGRIncPerMfma',
         'UsePLRPack',

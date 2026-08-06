@@ -712,6 +712,13 @@ validParameters = { # we need to make sure this matches develop
     "WorkGroupMapping": list(
         range(-1024, 1024 + 1)
     ),  # change a workgroup's id so that the all the workgroups on the gpu at a time are hitting L2 cache the best
+    # Split the M-tile axis at a fixed boundary R and traverse each side m-inner,
+    # shortening the m-run from N0 to R and N0-R. This is the OTHER axis from
+    # WorkGroupMapping, which blocks J: on a grid with few J-tiles WGM saturates
+    # once WGM >= NumWorkGroups1 (DefaultWGM clamps the block height to the
+    # remainder), so it cannot express a short m-run at all.
+    # 0: off (identity). R >= NumWorkGroups0 is clamped to the identity at runtime.
+    "MTileBlockWidth": list(range(0, 1024 + 1)),
     # 0: WorkGroupMapping is predicted at runtime.
     # 1: No mapping
     "WorkGroupMappingXCC": [

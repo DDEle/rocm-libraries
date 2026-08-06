@@ -1063,25 +1063,81 @@ def fusedA2AWgRemapIndex(wg0, wg1, n0, n1, amTiles):
     L = n0 - amTiles
     return amTiles + u % L, u // L                # local segment
 
-def FusedA2AWgRemap(writer, kernel):
-    """Emit the segment-first workgroup remap (design D15 Step 2).
+def _segmentFirstRemapBody(module, writer, kernel, sA, tag):
+    """Lower fusedA2AWgRemapIndex given A already in sgpr `sA`.
 
     Straight-line lowering of fusedA2AWgRemapIndex above; see that docstring for
-    the mapping, its bijectivity and its precondition.  Placed in graWorkGroup
-    after DefaultWGM, ahead of every consumer of WorkGroup0/1.
+    the mapping, its bijectivity and its precondition.  Kept as ONE copy because
+    both hazards below are order-sensitive and fail silently -- two divergent
+    transcriptions of this block would be indistinguishable from correct output
+    until someone profiled the dispatch order.
 
     Two hazards worth stating, because both fail silently:
 
-      SCC.  s_sub_u32 / s_add_u32 / s_lshr_b32 all write SCC and s_cselect_b32
-      reads it, so u and L are computed BEFORE the compare and the three selects
-      follow it back to back.  A stray SCC write in between selects from a dead
-      condition -- which is still a bijection, so the numerics stay correct and
-      only the dispatch order (i.e. the entire point) is wrong.
+      SCC.  s_sub_u32 / s_add_u32 / s_lshr_b32 / s_min_u32 all write SCC and
+      s_cselect_b32 reads it, so u and L are computed BEFORE the compare and the
+      three selects follow it back to back.  A stray SCC write in between selects
+      from a dead condition -- which is still a bijection, so the numerics stay
+      correct and only the dispatch order (i.e. the entire point) is wrong.
 
       EXEC.  scalarUInt24DivideAndRemainder corrects its quotient by writing EXEC
       with v_cmp_x_ge_u32 and then resets EXEC to -1 unconditionally.  That is fine
       here (EXEC is full in the prologue and DefaultWGM already calls the same
       routine at this point) but this block cannot move anywhere EXEC is narrowed.
+
+    Callers own sA (allocation, the value, and check-in); everything else is
+    allocated and released here.
+    """
+    sT = writer.sgprPool.checkOut(1, tag="%s_t" % tag, preventOverflow=False)
+    sS = writer.sgprPool.checkOut(1, tag="%s_S" % tag, preventOverflow=False)
+    sL = writer.sgprPool.checkOut(1, tag="%s_L" % tag, preventOverflow=False)
+    sU = writer.sgprPool.checkOut(1, tag="%s_u" % tag, preventOverflow=False)
+
+    # t = wg0 + wg1*N0, S = A*N1, L = N0-A, u = t-S. All SCC writers, all ahead of
+    # the compare.
+    module.add(SMulI32(dst=sgpr(sT), src0=sgpr("NumWorkGroups0"), src1=sgpr("WorkGroup1"),
+                       comment="t = wg1*N0 ..."))
+    module.add(SAddU32(dst=sgpr(sT), src0=sgpr(sT), src1=sgpr("WorkGroup0"),
+                       comment="... + wg0 (linear dispatch index)"))
+    module.add(SMulI32(dst=sgpr(sS), src0=sgpr(sA), src1=sgpr("NumWorkGroups1"),
+                       comment="S = A*N1 (size of the first segment)"))
+    module.add(SSubU32(dst=sgpr(sL), src0=sgpr("NumWorkGroups0"), src1=sgpr(sA),
+                       comment="L = N0-A (M-tiles in the second segment)"))
+    module.add(SSubU32(dst=sgpr(sU), src0=sgpr(sT), src1=sgpr(sS),
+                       comment="u = t-S (wraps when t<S; that value is discarded)"))
+
+    # The one SCC write the selects consume. Nothing may come between.
+    module.add(SCmpLtU32(src0=sgpr(sT), src1=sgpr(sS), comment="t < S? (first segment)"))
+    module.add(SCSelectB32(dst=sgpr(sT), src0=sgpr(sT), src1=sgpr(sU),
+                           comment="dividend = t if first else u"))
+    module.add(SCSelectB32(dst=sgpr(sL), src0=sgpr(sA), src1=sgpr(sL),
+                           comment="divisor = A if first else L"))
+    module.add(SCSelectB32(dst=sgpr(sS), src0=0, src1=sgpr(sA),
+                           comment="base = 0 if first else A"))
+
+    # j = dividend / divisor, m = dividend % divisor. One instance, shared.
+    tmpVgpr = writer.vgprPool.checkOutAligned(4, 2, "%s_div" % tag)
+    module.add(scalarUInt24DivideAndRemainder(
+        qReg="WorkGroup1", dReg=sT, divReg=sL, rReg="WorkGroup0",
+        tmpVgprRes=ContinuousRegister(idx=tmpVgpr, size=4),
+        wavewidth=kernel["WavefrontSize"], doRemainder=True))
+    writer.vgprPool.checkIn(tmpVgpr)
+
+    module.add(SAddU32(dst=sgpr("WorkGroup0"), src0=sgpr("WorkGroup0"), src1=sgpr(sS),
+                       comment="m += base (second segment starts at A)"))
+
+    writer.sgprPool.checkIn(sU)
+    writer.sgprPool.checkIn(sL)
+    writer.sgprPool.checkIn(sS)
+    writer.sgprPool.checkIn(sT)
+    return module
+
+
+def FusedA2AWgRemap(writer, kernel):
+    """Emit the segment-first workgroup remap (design D15 Step 2).
+
+    Placed in graWorkGroup after DefaultWGM, ahead of every consumer of
+    WorkGroup0/1.  A comes from a kernarg, so one library serves every AM.
     """
     module = Module("FusedA2AWgRemap")
     if not kernel.get("FusedGemmA2A"):
@@ -1095,10 +1151,6 @@ def FusedA2AWgRemap(writer, kernel):
     module.addComment1("fused-A2A: lift the PUSH segment to the front of the dispatch order")
 
     sA = writer.sgprPool.checkOut(1, tag="fusedA2AWgRemap_A", preventOverflow=False)
-    sT = writer.sgprPool.checkOut(1, tag="fusedA2AWgRemap_t", preventOverflow=False)
-    sS = writer.sgprPool.checkOut(1, tag="fusedA2AWgRemap_S", preventOverflow=False)
-    sL = writer.sgprPool.checkOut(1, tag="fusedA2AWgRemap_L", preventOverflow=False)
-    sU = writer.sgprPool.checkOut(1, tag="fusedA2AWgRemap_u", preventOverflow=False)
 
     # A = FusedAM >> log2(MT0) -- the same expression as the epilogue's PUSH gate
     # (GlobalWriteBatch.py:89). Deriving it differently would split the grid at one
@@ -1109,42 +1161,45 @@ def FusedA2AWgRemap(writer, kernel):
     module.add(SLShiftRightB32(dst=sgpr(sA), shiftHex=log2mt0, src=sgpr(sA),
                                comment="A = AM_tiles = FusedAM >> log2(MT0=%u)" % kernel["MacroTile0"]))
 
-    # t = wg0 + wg1*N0, S = A*N1, L = N0-A, u = t-S. All SCC writers, all ahead of
-    # the compare.
-    module.add(SMulI32(dst=sgpr(sT), src0=sgpr("NumWorkGroups0"), src1=sgpr("WorkGroup1"),
-                       comment="t = wg1*N0 ..."))
-    module.add(SAddU32(dst=sgpr(sT), src0=sgpr(sT), src1=sgpr("WorkGroup0"),
-                       comment="... + wg0 (linear dispatch index)"))
-    module.add(SMulI32(dst=sgpr(sS), src0=sgpr(sA), src1=sgpr("NumWorkGroups1"),
-                       comment="S = A*N1 (size of the PUSH segment)"))
-    module.add(SSubU32(dst=sgpr(sL), src0=sgpr("NumWorkGroups0"), src1=sgpr(sA),
-                       comment="L = N0-A (M-tiles in the local segment)"))
-    module.add(SSubU32(dst=sgpr(sU), src0=sgpr(sT), src1=sgpr(sS),
-                       comment="u = t-S (wraps when t<S; that value is discarded)"))
+    _segmentFirstRemapBody(module, writer, kernel, sA, "fusedA2AWgRemap")
 
-    # The one SCC write the selects consume. Nothing may come between.
-    module.add(SCmpLtU32(src0=sgpr(sT), src1=sgpr(sS), comment="t < S? (PUSH segment)"))
-    module.add(SCSelectB32(dst=sgpr(sT), src0=sgpr(sT), src1=sgpr(sU),
-                           comment="dividend = t if PUSH else u"))
-    module.add(SCSelectB32(dst=sgpr(sL), src0=sgpr(sA), src1=sgpr(sL),
-                           comment="divisor = A if PUSH else L"))
-    module.add(SCSelectB32(dst=sgpr(sS), src0=0, src1=sgpr(sA),
-                           comment="base = 0 if PUSH else A"))
+    writer.sgprPool.checkIn(sA)
+    return module
 
-    # j = dividend / divisor, m = dividend % divisor. One instance, shared.
-    tmpVgpr = writer.vgprPool.checkOutAligned(4, 2, "fusedA2AWgRemap_div")
-    module.add(scalarUInt24DivideAndRemainder(
-        qReg="WorkGroup1", dReg=sT, divReg=sL, rReg="WorkGroup0",
-        tmpVgprRes=ContinuousRegister(idx=tmpVgpr, size=4),
-        wavewidth=kernel["WavefrontSize"], doRemainder=True))
-    writer.vgprPool.checkIn(tmpVgpr)
 
-    module.add(SAddU32(dst=sgpr("WorkGroup0"), src0=sgpr("WorkGroup0"), src1=sgpr(sS),
-                       comment="m += base (local segment starts at A)"))
+def MTileBlockRemap(writer, kernel):
+    """Emit the segment-first remap for a NON-fused kernel, with A = MTileBlockWidth.
 
-    writer.sgprPool.checkIn(sU)
-    writer.sgprPool.checkIn(sL)
-    writer.sgprPool.checkIn(sS)
-    writer.sgprPool.checkIn(sT)
+    Same permutation as FusedA2AWgRemap, same lowering, only A is a compile-time
+    constant instead of a kernarg: it splits the M-tile axis at a fixed boundary
+    R and traverses each side m-inner, shortening the m-run from N0 to R and N0-R.
+    Tensile's WorkGroupMapping cannot express this -- WGM blocks the J axis and, on
+    a grid whose N1 is small, saturates once WGM >= N1 (DefaultWGM clamps the block
+    height to the remainder), so the two knobs are not substitutes.
+
+    The s_min_u32 buys the one guard the fused path gets from the host: there
+    AM <= M is checked in FusedA2AClient.cpp before launch, here R comes straight
+    from the yaml and nothing has compared it against a grid whose N0 is only known
+    at runtime.  Unclamped, R > N0 underflows L = N0-A and the remap stops being a
+    bijection -- work-groups collide and tiles go uncomputed, silently.  Clamping to
+    N0 degenerates to the identity, which is the A == N0 case the reference model
+    is already property-tested on.
+    """
+    module = Module("MTileBlockRemap")
+    R = kernel.get("MTileBlockWidth", 0)
+    # The fused path owns the remap when both are set; A must stay tied to FusedAM
+    # so the grid splits where the epilogue's PUSH gate classifies.
+    if not R or kernel.get("FusedGemmA2A"):
+        return module
+
+    module.addComment1("MTileBlockWidth=%u: split the M-tile axis and traverse each side m-inner" % R)
+
+    sA = writer.sgprPool.checkOut(1, tag="mTileBlockRemap_A", preventOverflow=False)
+    module.add(SMovB32(dst=sgpr(sA), src=hex(R), comment="A = MTileBlockWidth"))
+    module.add(SMinU32(dst=sgpr(sA), src0=sgpr(sA), src1=sgpr("NumWorkGroups0"),
+                       comment="A = min(A, N0) -- A==N0 is the identity, A>N0 underflows L"))
+
+    _segmentFirstRemapBody(module, writer, kernel, sA, "mTileBlockRemap")
+
     writer.sgprPool.checkIn(sA)
     return module

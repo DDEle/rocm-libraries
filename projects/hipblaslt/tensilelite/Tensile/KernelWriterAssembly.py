@@ -3425,10 +3425,14 @@ class KernelWriterAssembly(KernelWriter):
     else:
       module.add(DefaultWGM(self, kernel, sgprWGM))
 
-    # Latch the grid-wide WG count before anything can borrow NumWorkGroups0/1.
+    # Latch the grid-wide WG count before anything can borrow NumWorkGroups0/1, and
+    # resolve &counter3 here so the per-work-group tally in the epilogue is a bare
+    # atomic on a register pair rather than a kernarg load it has to wait on.
     if kernel["FusedGemmA2A"]:
-      from .Components.GlobalWriteBatch import emitFusedA2ATotalWGsLatch
+      from .Components.GlobalWriteBatch import emitFusedA2ATotalWGsLatch, \
+        emitFusedA2ACounter3PtrLatch
       emitFusedA2ATotalWGsLatch(module, "FusedTotalWGs")
+      emitFusedA2ACounter3PtrLatch(module, self, "FusedCounter3Ptr")
 
     return module
 

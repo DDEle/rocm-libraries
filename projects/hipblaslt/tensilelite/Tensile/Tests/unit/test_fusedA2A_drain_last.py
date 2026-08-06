@@ -344,48 +344,78 @@ def _pushGateIndex(text):
     return code.index(gate), gate
 
 
-def test_push_gate_falls_through_to_counter3_not_the_exit(renderHandshake):
-    """Local WGs must reach the counter3 tally, not skip the handshake.
+def test_push_gate_falls_through_to_the_local_tally_then_counter3(renderHandshake):
+    """Local WGs must still reach the counter3 tally -- now via one more hop.
 
-    The gate's not-taken edge used to jump the whole handshake. It must now land
-    on the counter3 block, which is what makes the tally cover local WGs -- i.e.
-    what makes FusedTotalWGs (= every surviving WG) the right election target.
+    The gate's not-taken edge lands on the local-tally block (wave-0 election and
+    the single-lane EXEC, without the store wait and the barrier the PUSH path
+    needs), which then FALLS THROUGH into counter3.  What makes FusedTotalWGs the
+    right election target is that every surviving work-group reaches the tally;
+    the extra hop is an implementation detail, the reachability is the invariant.
     """
     text = renderHandshake()
-    assert "fusedA2A_counter3" in text, "no counter3 label emitted"
+    code = _codeLines(text)
     _, gate = _pushGateIndex(text)
-    assert gate.startswith("s_cbranch_scc0 "), gate
-    assert "fusedA2A_counter3" in gate, \
-        f"PUSH gate must branch to the counter3 tally, not the exit: {gate}"
+    assert gate == "s_cbranch_scc0 label_fusedA2A_local_tally", gate
+
+    localIdx = next(i for i, ln in enumerate(code)
+                    if ln.startswith("label_fusedA2A_local_tally"))
+    c3Idx = next(i for i, ln in enumerate(code)
+                 if ln.startswith("label_fusedA2A_counter3"))
+    assert localIdx < c3Idx, "the local tally must fall through into counter3"
+    # Fall-through means no UNCONDITIONAL branch between them. The one branch that
+    # is allowed there is the non-wave-0 skip, which is conditional by construction.
+    between = [ln for ln in code[localIdx + 1:c3Idx] if ln.startswith("s_branch ")]
+    assert not between, f"the local tally does not fall through: {between}"
 
 
-def test_preamble_is_hoisted_above_the_push_gate(renderHandshake):
-    """The barrier and the wave-0 election must precede the PUSH gate.
+def test_local_path_skips_the_barrier_but_keeps_the_election(renderHandshake):
+    """The store wait and the barrier are PUSH-only; the election is not.
 
-    This is the reordering itself: local WGs only reach counter3 if they walk the
-    preamble, and the single-lane EXEC the tally needs is set before the gate.
+    This reverses the earlier layout, where both sat above the gate and all 512
+    local work-groups at the champion shape paid a whole-work-group barrier at the
+    very end of their life for nothing.  The gate had to move ABOVE the barrier
+    rather than the barrier below the gate: s_barrier must be reached by every wave
+    of a work-group, and the wave-0 election sits between the two, so a barrier
+    placed below the election would run on wave 0 alone and hang.  That edge is
+    only safe while the gate's predicate is work-group-uniform -- asserted first.
     """
     text = renderHandshake()
     code = _codeLines(text)
     gateIdx, _ = _pushGateIndex(text)
 
+    # (a) THE deadlock guard: the gate's predicate must be work-group-uniform, or
+    #     the waves of one work-group disagree on the edge and the ones that fall
+    #     through wait at a barrier the others never reach.
+    assert code[gateIdx - 1].startswith("s_cmp_"), code[gateIdx - 1]
+    assert "sgprWorkGroup0" in code[gateIdx - 1], code[gateIdx - 1]
+
+    # (b) exactly one barrier, and it is BELOW the gate (PUSH-only).
     barrier = [i for i, ln in enumerate(code) if ln.startswith("s_barrier")]
     assert len(barrier) == 1, f"expected one s_barrier, got {barrier}"
-    assert barrier[0] < gateIdx, "s_barrier must be hoisted above the PUSH gate"
+    assert barrier[0] > gateIdx, "s_barrier must be PUSH-only, i.e. below the gate"
 
-    # wave-0 election: readfirstlane of Serial, then the non-wave-0 branch out.
+    # (c) the store wait stays immediately ahead of it: each wave retires its own
+    #     stores, THEN the barrier joins them. The other order lets the SDMA engine
+    #     read a band that is not yet in HBM.
+    assert code[barrier[0] - 1].startswith("s_waitcnt"), code[barrier[0] - 1]
+
+    # (d) two Serial elections: PUSH (below the gate) and local (after its label).
     election = [i for i, ln in enumerate(code)
                 if ln.startswith("v_readfirstlane_b32") and "vgprSerial" in ln]
-    assert len(election) == 1, f"expected one Serial readfirstlane, got {election}"
-    assert election[0] < gateIdx, "the wave-0 election must precede the PUSH gate"
+    assert len(election) == 2, f"expected two Serial readfirstlanes, got {election}"
+    localIdx = next(i for i, ln in enumerate(code)
+                    if ln.startswith("label_fusedA2A_local_tally"))
+    assert gateIdx < election[0] < localIdx < election[1], \
+        f"gate={gateIdx} elections={election} localTally={localIdx}"
 
-    # single-lane EXEC (exec, 1) is what makes the tally fire once per WG. There are
-    # exactly two: this one, and the DRAIN restoring the width after its wide poll.
-    # Pinned exactly -- a third would mean some region silently lost its width.
+    # (e) three single-lane EXEC writes, pinned EXACTLY: the PUSH election, the
+    #     local election, and the DRAIN restoring lane 0 after its wide poll. A
+    #     fourth would mean some region silently lost its width. Do not relax to >=.
     lane0 = [i for i, ln in enumerate(code) if ln.replace(" ", "").endswith("exec,1")]
-    assert len(lane0) == 2, \
-        f"expected two single-lane EXEC writes (tally + post-DRAIN restore), got {lane0}"
-    assert lane0[0] < gateIdx, "EXEC must be narrowed to lane 0 before the PUSH gate"
+    assert len(lane0) == 3, (
+        f"expected three single-lane EXEC writes (PUSH election, local tally, "
+        f"post-DRAIN restore), got {lane0}")
 
 
 def test_store_wait_precedes_the_barrier(renderHandshake):
@@ -406,32 +436,62 @@ def test_store_wait_precedes_the_barrier(renderHandshake):
         f"a store wait must precede s_barrier (wait {waits[0]}, barrier {barrier[0]})"
 
 
-def test_counter3_is_incremented_exactly_once(renderHandshake):
-    text = renderHandshake()
-    code = _codeLines(text)
+def test_counter3_is_incremented_exactly_once_by_a_scalar_atomic(renderHandshake):
+    """The tally is the one block every surviving work-group runs.
+
+    It must fire exactly once per work-group, and it must be the SMEM atomic:
+    S_ATOMIC_INC keeps address, data and result in SGPRs, where the vector form it
+    replaced needed three v_mov to stage a scalar address and a scalar 1 into
+    VGPRs, a v_readfirstlane to read the answer back, and -- because a VMEM op
+    issues per active lane -- the single-lane EXEC narrowing.
+    """
+    code = _codeLines(renderHandshake())
     label = [i for i, ln in enumerate(code) if ln.startswith("label_fusedA2A_counter3")]
     assert len(label) == 1, f"expected one counter3 label definition, got {label}"
     tail = code[label[0]:]
-    atomics = [ln for ln in tail if ln.startswith("global_atomic")]
-    assert len(atomics) == 1, f"counter3 must add exactly once, got: {atomics}"
-    assert atomics[0].startswith("global_atomic_add "), atomics[0]
+    assert not [ln for ln in tail if ln.startswith("global_atomic")], \
+        "the tally must not use a vector atomic"
+    atomics = [ln for ln in tail if ln.startswith("s_atomic")]
+    assert len(atomics) == 1, f"counter3 must increment exactly once, got: {atomics}"
+    assert atomics[0].startswith("s_atomic_inc "), atomics[0]
+    # GLC on SMEM is not decoration and not a scope bit: it is what makes an atomic
+    # return its pre-op value at all (CDNA4 ISA Table 75). Without it this becomes a
+    # fire-and-forget increment whose "pre-op value" is whatever the register held.
+    assert atomics[0].rstrip().endswith("glc"), atomics[0]
 
 
 def test_counter3_election_compares_against_the_latched_total(renderHandshake):
     """The tally must be compared against FusedTotalWGs (Task 3's prologue latch).
 
-    Comparing against anything else -- tokenTiles, TilesPerRank -- would elect a
-    per-peer owner again, which is the occupancy problem this replaced.
+    S_ATOMIC_INC's SDATA carries both operands: the wrap limit goes in and the
+    pre-op value comes back out of the SAME register.  Setting the limit to
+    FusedTotalWGs-1 makes the globally last work-group read back FusedTotalWGs-1,
+    which is the election the old `old3+1 == FusedTotalWGs` made, and leaves the
+    counter at 0 behind it.  Comparing against anything else -- tokenTiles,
+    TilesPerRank -- would elect a per-peer owner again, which is the occupancy
+    problem this whole line replaced.
     """
     code = _codeLines(renderHandshake())
     label = next(i for i, ln in enumerate(code) if ln.startswith("label_fusedA2A_counter3"))
+
+    # the limit register is derived from the latch, and from nothing else
+    subs = [(i, ln) for i, ln in enumerate(code[label:], label)
+            if ln.startswith("s_sub_u32") and "sgprFusedTotalWGs" in ln]
+    assert len(subs) == 1, f"expected one FusedTotalWGs-derived limit, got {subs}"
+    subOps = _ops(subs[0][1])
+    limitReg = subOps[0]
+    assert subOps[1] == "s[sgprFusedTotalWGs]" and subOps[2] == "1", subs[0][1]
+
     # Anchor on the tally itself: the atomic, then the first compare after it. The
     # DRAIN also sits after the label and carries compares of its own.
     atomic = next(i for i, ln in enumerate(code[label:], label)
-                  if ln.startswith("global_atomic_add "))
+                  if ln.startswith("s_atomic_inc "))
+    sdataReg = _ops(code[atomic])[0]
     cmp_i = next(i for i, ln in enumerate(code[atomic:], atomic)
                  if ln.startswith("s_cmp_eq_u32"))
-    assert "sgprFusedTotalWGs" in code[cmp_i], code[cmp_i]
+    assert _ops(code[cmp_i]) == [sdataReg, limitReg], (
+        f"the election must compare the atomic's returned SDATA ({sdataReg}) "
+        f"against FusedTotalWGs-1 ({limitReg}), got {code[cmp_i]}")
     # and it must be what decides the DRAIN, i.e. immediately consumed by the branch.
     assert code[cmp_i + 1].startswith("s_cbranch_scc0 "), code[cmp_i:cmp_i + 2]
 

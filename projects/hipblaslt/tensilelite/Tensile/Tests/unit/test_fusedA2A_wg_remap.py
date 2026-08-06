@@ -113,3 +113,115 @@ def test_the_last_push_workgroup_moves_to_the_front():
     after = max(t for t in range(_N0 * _N1) if f(t % _N0, t // _N0, _N0, _N1, _A)[0] < _A)
     assert before == 1119
     assert after == 639
+
+
+def _renderRemap(wavefrontSize: int = 64, fused: int = 1) -> str:
+    """Render FusedA2AWgRemap standalone.
+
+    Modelled on test_fusedA2A_drain_last.py's _renderHandshake: the same rocisa
+    init, the same pool and argLoader stubs. The argLoader echoes its arguments
+    rather than returning a fixed comment, so an assertion about WHICH kernarg is
+    read cannot stay green on a wrong offset.
+    """
+    import shutil
+    from types import SimpleNamespace
+    from rocisa import rocIsa
+    from rocisa.register import RegisterPool
+    from rocisa.enum import RegisterType
+    from rocisa.code import TextBlock
+    from Tensile.Common.Architectures import gfxToIsa
+    import Tensile.Component  # noqa: F401  MUST precede the next import
+    from Tensile.Components.WorkGroupMappingAlgos import FusedA2AWgRemap
+
+    def loadKernArgEcho(*a, **k):
+        fields = [str(x) for x in a] + ["%s=%s" % (n, k[n]) for n in sorted(k)]
+        return TextBlock("// loadKernArg %s\n" % " ".join(fields))
+
+    ri = rocIsa.getInstance()
+    isa = gfxToIsa("gfx950")
+    ri.init(isa, shutil.which("amdclang++") or "/usr/bin/amdclang++")
+    ri.setKernel(isa, wavefrontSize)
+
+    w = SimpleNamespace()
+    w.vgprPool = RegisterPool(0, RegisterType.Vgpr, defaultPreventOverflow=False, printRP=False)
+    w.sgprPool = RegisterPool(0, RegisterType.Sgpr, defaultPreventOverflow=False, printRP=False)
+    w.vgprPool.checkOut(1)
+    w.sgprPool.checkOut(8)
+    w.states = SimpleNamespace(fusedA2AKernArgBase=0)
+    w.argLoader = SimpleNamespace(loadKernArg=loadKernArgEcho)
+
+    kernel = {"MacroTile0": 256, "WavefrontSize": wavefrontSize, "FusedGemmA2A": fused}
+    return str(FusedA2AWgRemap(w, kernel))
+
+
+def _remapCode(text):
+    return [ln for ln in (l.split("//")[0].strip() for l in text.splitlines()) if ln]
+
+
+def test_emits_nothing_when_the_kernel_is_not_fused():
+    """Zero regression surface: a non-fused kernel must be byte-identical."""
+    assert _remapCode(_renderRemap(fused=0)) == []
+
+
+def test_emitted_block_has_no_branch():
+    """Straight-line code, all the way down.
+
+    The two cases are selected with s_cselect_b32 (a conditional move), not a
+    branch; the divide routine corrects its f64-reciprocal quotient by writing EXEC
+    with v_cmp_x_ge_u32, also not a branch; and no guard is emitted for A >= N0
+    because the client already rejects AM > M.  A branch appearing here means one
+    of those three decisions was quietly reversed.
+    """
+    code = _remapCode(_renderRemap())
+    assert not [ln for ln in code if ln.startswith("s_cbranch")], code
+
+
+def test_divides_exactly_once():
+    """One divide, shared by both cases via the cselects.
+
+    The obvious two-branch shape needs two instances of a ~14-instruction routine
+    in the prologue of every work-group. v_rcp_f64 is the marker: the divide is the
+    only thing here that uses it.
+    """
+    code = _remapCode(_renderRemap())
+    assert len([ln for ln in code if ln.startswith("v_rcp_f64")]) == 1, code
+
+
+def test_scc_is_not_clobbered_between_the_compare_and_the_selects():
+    """s_sub_u32 and s_add_u32 write SCC; s_cselect_b32 reads it.
+
+    So u = t - S and L = N0 - A have to be computed BEFORE the compare, and the
+    three selects have to follow it back-to-back.  Getting this wrong selects from
+    a dead condition and silently produces a different permutation -- still a
+    bijection, so the numerical validation would pass and only the performance
+    would be inexplicable.
+    """
+    code = _remapCode(_renderRemap())
+    cmp_i = next(i for i, ln in enumerate(code) if ln.startswith("s_cmp_lt_u32"))
+    sel = [i for i, ln in enumerate(code) if ln.startswith("s_cselect_b32")]
+    assert len(sel) == 3, f"expected three selects (dividend, divisor, base), got {sel}"
+    assert sel == [cmp_i + 1, cmp_i + 2, cmp_i + 3], \
+        f"selects must immediately follow the compare: cmp={cmp_i} sel={sel}"
+
+
+def test_reads_fused_am_and_shifts_by_log2_macrotile0():
+    """A = FusedAM >> log2(MT0), the same expression the epilogue's PUSH gate uses.
+
+    Deriving A differently here than at GlobalWriteBatch.py:89 would split the grid
+    at one boundary and classify PUSH/local at another.
+    """
+    from Tensile.Components.Signature import fusedA2AKernArgLayout
+    text = _renderRemap()
+    want = hex(fusedA2AKernArgLayout()["FusedAM"])
+    assert want in text, f"FusedAM ({want}) is not the kernarg this reads:\n{text}"
+    code = _remapCode(text)
+    shifts = [ln for ln in code if ln.startswith("s_lshr_b32")]
+    assert len(shifts) == 1, shifts
+    assert shifts[0].rstrip().endswith("8"), f"MT0=256 => shift by 8, got {shifts[0]}"
+
+
+def test_writes_both_workgroup_registers():
+    """m -> WorkGroup0 and j -> WorkGroup1; writing only one leaves a half-remap."""
+    code = _remapCode(_renderRemap())
+    assert any("sgprWorkGroup0" in ln for ln in code), code
+    assert any("sgprWorkGroup1" in ln for ln in code), code

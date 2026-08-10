@@ -12,10 +12,9 @@
 # here (Python) and in tests/FusedA2AKernArg_test.cpp (C++): a one-sided change
 # to either side reddens its own golden test.
 #
-# This test also guards the append-only invariant (Global Constraint 2 of the
-# SDMA codegen plan): the three SDMA args (FusedSdmaQueues / FusedTilesPerRank /
-# FusedTokenTiles) are appended at the very END, so every preceding offset is
-# unchanged from earlier tasks.
+# This test also guards the pointer-packing invariant: every pointer arg
+# (peer_ptr_0..7, counter_ptr, FusedSdmaQueues) sits contiguously at an
+# 8-aligned offset ahead of every scalar arg.
 ################################################################################
 
 import os
@@ -35,31 +34,27 @@ sig = pytest.importorskip("Tensile.Components.Signature")
 # The single source of truth for this test. Any offset/size change on either the
 # Python or the C++ side must be reflected here, which is exactly what makes a
 # one-sided drift fail. Byte offsets are relative to the segment base
-# (recv_ptr_0 == 0).
+# (peer_ptr_0 == 0).
 GOLDEN_LAYOUT = {
-    # 8 recv pointers (8B each): 0..56
-    **{"recv_ptr_%u" % j: 8 * j for j in range(8)},
-    # 8 flag pointers (8B each): 64..120
-    **{"flag_ptr_%u" % j: 64 + 8 * j for j in range(8)},
-    "counter_ptr":       128,   # 8B
-    "FusedMyRank":       136,   # 4B
-    "FusedTarget":       140,   # 4B (deprecated slot, retained)
-    "FusedW":            144,   # 4B
-    "FusedNShard":       148,   # 4B
-    "FusedDrain":        152,   # 4B
-    "FusedAM":           156,   # 4B
-    # SDMA offload args (Task 3), appended at the end.
-    "FusedSdmaQueues":   160,   # 8B pointer (segment base 8-aligned => no padding)
-    "FusedTilesPerRank": 168,   # 4B
-    "FusedTokenTiles":   172,   # 4B
+    # 8 peer block pointers (8B each): 0..56. Slot j is peer j's block base;
+    # flag sits at offset 0 of that block, recv at FUSED_A2A_PEER_RECV_OFFSET.
+    **{"peer_ptr_%u" % j: 8 * j for j in range(8)},
+    "counter_ptr":       64,    # 8B
+    "FusedSdmaQueues":   72,    # 8B pointer, kept adjacent so all pointers stay 8-aligned
+    "FusedMyRank":       80,    # 4B
+    "FusedW":            84,    # 4B
+    "FusedNShard":       88,    # 4B
+    "FusedDrain":        92,    # 4B
+    "FusedAM":           96,    # 4B
+    "FusedTilesPerRank": 100,   # 4B
+    "FusedTokenTiles":   104,   # 4B
 }
-GOLDEN_SEGMENT_BYTES = 176
+GOLDEN_SEGMENT_BYTES = 108
 
 # Per-arg byte sizes, needed to check the tight-packing invariant
 # (max(offset)+size == SEGMENT_BYTES). Pointers 8B, u32 scalars 4B.
 _POINTER_ARGS = (
-    ["recv_ptr_%u" % j for j in range(8)]
-    + ["flag_ptr_%u" % j for j in range(8)]
+    ["peer_ptr_%u" % j for j in range(8)]
     + ["counter_ptr", "FusedSdmaQueues"]
 )
 
@@ -74,7 +69,7 @@ def test_layout_matches_golden():
     assert layout == GOLDEN_LAYOUT
 
 
-def test_segment_bytes_is_176():
+def test_segment_bytes_is_108():
     assert sig.FUSED_A2A_SEGMENT_BYTES == GOLDEN_SEGMENT_BYTES
 
 
@@ -85,12 +80,14 @@ def test_segment_is_tightly_packed():
     assert end == sig.FUSED_A2A_SEGMENT_BYTES
 
 
-def test_sdma_args_appended_last():
-    """The three SDMA args sit strictly after every legacy arg (append-only)."""
+def test_pointers_are_contiguous_and_8_aligned():
+    """Every pointer arg sits at an 8-aligned offset, before every scalar."""
     layout = sig.fusedA2AKernArgLayout()
-    sdma = ("FusedSdmaQueues", "FusedTilesPerRank", "FusedTokenTiles")
-    legacy_max = max(off for name, off in layout.items() if name not in sdma)
-    assert all(layout[name] > legacy_max for name in sdma)
+    ptrOffs = sorted(layout[n] for n in _POINTER_ARGS)
+    assert all(o % 8 == 0 for o in ptrOffs), ptrOffs
+    assert ptrOffs == list(range(0, 8 * len(_POINTER_ARGS), 8))
+    firstScalar = min(o for n, o in layout.items() if n not in _POINTER_ARGS)
+    assert max(ptrOffs) + 8 == firstScalar
 
 
 if __name__ == "__main__":

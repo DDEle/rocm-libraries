@@ -40,7 +40,7 @@ GOLDEN_LAYOUT = {
     # flag sits at offset 0 of that block, recv at FUSED_A2A_PEER_RECV_OFFSET.
     **{"peer_ptr_%u" % j: 8 * j for j in range(8)},
     "counter_ptr":       64,    # 8B
-    "FusedSdmaQueues":   72,    # 8B pointer, kept adjacent so all pointers stay 8-aligned
+    "FusedSdmaQueues":   72,    # 8B pointer
     "FusedMyRank":       80,    # 4B
     "FusedW":            84,    # 4B
     "FusedNShard":       88,    # 4B

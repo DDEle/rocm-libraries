@@ -40,8 +40,8 @@ from dataclasses import dataclass, field
 # (Task 6-9), so the epilogue reads each arg on demand via
 # loadKernArg(..., sgprOffset=hex(fused_base + intra-offset), dword=...) into a
 # scratch SGPR that is freed immediately after use. A WG maps to a single
-# dst_rank, so it reads exactly one recv_ptr + one flag_ptr (via a switch on
-# dst_rank), never the whole array.
+# dst_rank, so it reads exactly one peer_ptr (via a switch on dst_rank); flag
+# and recv live at two offsets inside that one block, never the whole array.
 #
 # The array slot count is a COMPILE-TIME constant (8), independent of the runtime
 # world size W; unused slots cost nothing here because nothing enters SGPR.
@@ -50,7 +50,11 @@ FUSED_A2A_MAX_RANKS = 8
 # Byte offset of recv inside a peer block; flag occupies [0, MAX_RANKS*4).
 # Mirrored in client/include/FusedA2AKernArg.hpp.
 FUSED_A2A_PEER_RECV_OFFSET = 4096
-assert FUSED_A2A_MAX_RANKS * 4 <= FUSED_A2A_PEER_RECV_OFFSET
+if FUSED_A2A_MAX_RANKS * 4 > FUSED_A2A_PEER_RECV_OFFSET:
+    raise ValueError(
+        "the flag array (FUSED_A2A_MAX_RANKS*4 = %d bytes) overlaps recv at "
+        "FUSED_A2A_PEER_RECV_OFFSET=%d; raise the offset before raising the rank bound."
+        % (FUSED_A2A_MAX_RANKS * 4, FUSED_A2A_PEER_RECV_OFFSET))
 
 # ...but it is not a free constant: the DRAIN barrier's EXEC mask
 # (GlobalWriteBatch.py _emitFusedA2AHandshake) is one S_BFM whose width operand
@@ -73,7 +77,7 @@ assert FUSED_A2A_MAX_RANKS * 4 <= FUSED_A2A_PEER_RECV_OFFSET
 # rather than sufficient. The shipped value is 8 because no node is known to
 # carry more than 8 GPUs -- it is the world size this ABI is built for, not a
 # placeholder awaiting a raise. Moving toward 31 would satisfy the guard below
-# while growing FUSED_A2A_SEGMENT_BYTES from 176 to 544, widening the kernarg
+# while growing FUSED_A2A_SEGMENT_BYTES from 108 to 292, widening the kernarg
 # slot count, and deepening the two unrolled per-rank scans in
 # GlobalWriteBatch.py to ~30 iterations each.
 #
@@ -117,7 +121,7 @@ def fusedA2AKernArgLayout():
       FusedTokenTiles  : 4B (u32)  token-tiles across N (N/MT1), == the SDMA flag target
 
     FusedSdmaQueues sits right after counter_ptr, ahead of the scalars, so all
-    three pointer groups stay 8-aligned; the six scalars trail contiguously.
+    three pointer groups stay 8-aligned; the seven scalars trail contiguously.
     """
     layout = {}
     off = 0

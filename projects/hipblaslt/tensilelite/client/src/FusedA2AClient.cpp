@@ -347,11 +347,10 @@ namespace TensileLite
             // constraint (AM/W)%MT0==0), so the contiguous feature extent is n_shard.
             const size_t nTokenPad = ((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE) * FUSED_A2A_N_TILE;
             const size_t recvBytes    = (size_t)W * nTokenPad * nShard * sizeof(uint16_t); // bf16
-            // flag slots are u64, NOT u32: the release signal is an SDMA ATOMIC
-            // ADD64 (MORI's SDMA packet set has ADD64 and no ADD32), so each slot
-            // is written 8 bytes wide. With a 4-byte stride the top rank's atomic
-            // would run past the end of this allocation.
-            const size_t flagBytes    = (size_t)W * sizeof(uint64_t);
+            // One u32 flag slot per source rank, raised by an SDMA ATOMIC
+            // ADD_RTN_32. Must stay in step with emitComputeFlagAddr's *4 stride
+            // and the DRAIN poll's j*4.
+            const size_t flagBytes    = (size_t)W * sizeof(uint32_t);
             // counter is indexed [dst_rank][token-tile] -> W*tokenTiles u32 slots,
             // followed by a W-entry second-level counter2[dst_rank] (target
             // tokenTiles) at word index W*tokenTiles, then a single third-level

@@ -5,7 +5,7 @@
 # SDMA packet-construction emitter tests (Task 5, NOGPU).
 #
 # The emitter (Tensile/Components/SdmaPacketEmitter.py) turns the §1.3 all-to-all
-# geometry into the COPY_SUBWIN + ATOMIC ADD64 packet dword arrays. Two surfaces
+# geometry into the COPY_SUBWIN + ATOMIC ADD_RTN_32 packet dword arrays. Two surfaces
 # are tested and cross-checked:
 #   * pure-Python encoders (encodeCopyDwords / encodeAtomicDwords) are pinned to
 #     the golden dword vectors below, in BOTH the harness form (padded dst pitch
@@ -89,9 +89,9 @@ _GFX    = "gfx950"
 #     rules; only DW9/DW10 differ from the harness vector (dst pitch 2560 vs
 #     2624), and both are checkable by inspection: (2560-1)<<13 == 0x013FE000,
 #     256*2560-1 == 0x0009FFFF.
-#   _ATOMIC_GOLDEN -- NO hardware backing and no second source. Derived from
-#     MORI's SDMA_PKT_ATOMIC only: DW0 == 10 | (47<<25) == 0x5E00000A. First
-#     real execution is Task 7/8.
+#   _ATOMIC_GOLDEN -- no second source. Derived from MORI's SDMA_PKT_ATOMIC
+#     layout with the TC atomic op table's ADD_RTN_32 selector:
+#     DW0 == 10 | (15<<25) == 0x1E00000A.
 #
 # The BIT POSITIONS these encode (minus-one extents/pitches, ELEMENTSIZE
 # scaling, the <<13 pitch placement) come from AMD OSS 4.4 sdma.pkt, cross-
@@ -135,10 +135,10 @@ _EDGE_COPY_GOLDEN = [
     0x02327FFF, 0x00000000, 0x00000000, 0x07000000, 0x013FE000,
     0x0009FFFF, 0x00CF09FF, 0x00000000]
 
-# ATOMIC ADD64 to a flag slot with distinct lo/hi bytes (matches the C++ test).
+# ATOMIC ADD_RTN_32 to a flag slot with distinct lo/hi bytes (matches the C++ test).
 _ATOMIC_ADDR = 0x0000ABCD12345678
 _ATOMIC_GOLDEN = [
-    0x5E00000A, 0x12345678, 0x0000ABCD, 0x00000001,
+    0x1E00000A, 0x12345678, 0x0000ABCD, 0x00000001,
     0x00000000, 0x00000000, 0x00000000, 0x00000000]
 
 
@@ -477,8 +477,8 @@ class TestCopyStructural:
 
 class TestAtomicStructural:
 
-    def test_header_immediate_is_atomic_add64(self):
-        assert ATOMIC_HEADER_DW0 == 0x5E00000A
+    def test_header_immediate_is_atomic_add_rtn_32(self):
+        assert ATOMIC_HEADER_DW0 == 0x1E00000A
         lines = _lines(_render_atomic())
         hdr = [ln for ln in lines if "DW0" in ln and "v_mov_b32" in ln]
         assert hdr and hex(ATOMIC_HEADER_DW0) in _code(hdr[0]), \
@@ -548,17 +548,17 @@ class TestFieldArithmetic:
         assert _has_alu(lines, "s_min_u32", ns.rectY, [ns.rectY, str(MT1)]), \
             "expected s_min_u32 rectY, rectY, MT1 (clamp the tail tile)"
 
-    def test_flag_addr_stride_is_myrank_times_8_64bit(self):
-        # flag addr = flag_ptr[p] + myRank*8, a 64-bit add (lo add + hi carry).
-        # Stride is 8 (u64 flag slots): the ATOMIC is an ADD64 (8-byte write), so
-        # a *4 u32 stride would heap-overrun myRank=3's write. See the corrected
-        # plan §1.3 and the T7 dependency note on emitComputeFlagAddr.
+    def test_flag_addr_stride_is_myrank_times_4_64bit(self):
+        # flag addr = flag_ptr[p] + myRank*4, a 64-bit add (lo add + hi carry).
+        # Stride is 4 (u32 flag slots): the ATOMIC is an ADD_RTN_32, a 4-byte
+        # write. Must agree with the host's flagBytes and the poll's j*4.
         lines = _lines(_render_flag_addr())
-        assert any("s_lshl_b32" in _code(ln) and ", 3" in _code(ln) for ln in lines), \
-            "expected myRank*8 (shift left 3, u64 flag-slot stride)"
-        # A *4 (shift 2) stride must NOT reappear -- that was the overrun defect.
-        assert not any("s_lshl_b32" in _code(ln) and ", 2" in _code(ln) for ln in lines), \
-            "flag stride must be *8, not the defective *4"
+        assert any("s_lshl_b32" in _code(ln) and ", 2" in _code(ln) for ln in lines), \
+            "expected myRank*4 (shift left 2, u32 flag-slot stride)"
+        # An *8 (shift 3) stride must NOT reappear: with a W*4-byte allocation it
+        # would put the top rank's atomic past the end of the flag buffer.
+        assert not any("s_lshl_b32" in _code(ln) and ", 3" in _code(ln) for ln in lines), \
+            "flag stride must be *4 (u32 slots), not the old *8"
         assert any("s_add_u32" in _code(ln) for ln in lines) and \
                any("s_addc_u32" in _code(ln) for ln in lines), \
             "flag addr must be a 64-bit add (add lo + addc hi)"

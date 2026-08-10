@@ -2692,7 +2692,7 @@ class GlobalWriteBatchWriter:
 
     Two packets, ONE reservation:
       COPY_LINEAR_SUBWIN  D[j*MT1 .. , dst_rank*nShard ..]  ->  peer's recv slot
-      ATOMIC ADD64        flag_ptr[dst_rank][my_rank] += 1
+      ATOMIC ADD_RTN_32   flag_ptr[dst_rank][my_rank] += 1
     They must share a reservation so the engine executes them back to back: the
     flag increment is what releases the peer's DRAIN, and it may not overtake its
     own copy. One queue per peer (fanning a peer over several queues measured
@@ -2836,7 +2836,7 @@ class GlobalWriteBatchWriter:
       (3) old = atomic_add(counter[dst_rank][j], 1) device scope, RETURN pre-op (sc0),
           with j = WorkGroup1 (this WG's token-tile).
       (4) if old+1 != FusedTilesPerRank -> not the last WG for (dst_rank, j) -> skip.
-      (5) elected last WG: submit the SDMA COPY_SUBWIN + ATOMIC ADD64 packet pair for
+      (5) elected last WG: submit the SDMA COPY_SUBWIN + ATOMIC ADD_RTN_32 packet pair for
           (dst_rank, j) -- see _emitFusedA2ASdmaIssue.
       (6) old2 = atomic_add(counter2[dst_rank], 1) AFTER that submit; only
           old2+1 == FusedTokenTiles (this card's last packet to dst_rank) runs the
@@ -2846,7 +2846,7 @@ class GlobalWriteBatchWriter:
 
     The counter grain is (dst_rank, token-tile), a W*tokenTiles u32 array, so election
     fires exactly once per (peer, token-tile) unit of work -- which is precisely the
-    granularity of one SDMA packet pair.  The flag is one u64 slot per SOURCE rank and
+    granularity of one SDMA packet pair.  The flag is one u32 slot per SOURCE rank and
     accumulates: source j's tokenTiles ATOMICs raise it to tokenTiles, which is the
     DRAIN predicate.  (Before the SDMA path existed this was a one-shot CU-side READY
     store, which under the finer counter grain released (tokenTiles-1)/tokenTiles early.)
@@ -3178,11 +3178,10 @@ class GlobalWriteBatchWriter:
     # peer, so a per-peer predicate would release it as soon as one peer finished.
     #
     # The predicate is an ACCUMULATED COUNT, not a one-shot sentinel: each source
-    # rank sends tokenTiles packet pairs and each pair's SDMA ATOMIC ADD64 adds 1 to
-    # the same slot, so "all of source j's data has landed" is flag[j] == tokenTiles.
-    # Slots are 8 bytes wide because MORI ships ADD64 and no ADD32 (see the host's
-    # flagBytes and emitComputeFlagAddr); the poll reads only the low dword, which is
-    # sufficient -- the count never exceeds tokenTiles.
+    # rank sends tokenTiles packet pairs and each pair's SDMA ATOMIC ADD_RTN_32 adds 1
+    # to the same slot, so "all of source j's data has landed" is flag[j] == tokenTiles.
+    # Slots are 4 bytes wide, matching that op (see the host's flagBytes and
+    # emitComputeFlagAddr); the count never exceeds tokenTiles, so 32 bits is ample.
     #
     # There is no self-set path any more: §1.5 routes the p == my_rank packet through
     # SDMA too (loopback queue, local recv slot), so this card's own flag slot has a
@@ -3263,12 +3262,12 @@ class GlobalWriteBatchWriter:
                         comment="fused-A2A: widen EXEC to W lanes for the DRAIN poll"))
     kw.sgprPool.checkIn(c3WSgpr)
 
-    # lane j polls slot j: voffset = j*8, saddr = flag_ptr[my_rank].  Serial is the
+    # lane j polls slot j: voffset = j*4, saddr = flag_ptr[my_rank].  Serial is the
     # thread id within the WG, so for wave 0 lane j it is exactly j.  The saddr form
     # keeps the per-lane part a single 32-bit offset -- no 64-bit vector add, and VCC
     # stays free for the reduction below.
-    module.add(VLShiftLeftB32(dst=vgpr(vCntAddr), shiftHex=3, src=vgpr("Serial"),
-                              comment="lane j -> self flag slot byte offset j*8"))
+    module.add(VLShiftLeftB32(dst=vgpr(vCntAddr), shiftHex=2, src=vgpr("Serial"),
+                              comment="lane j -> self flag slot byte offset j*4"))
     # spin: system-scope load (sc0 sc1) bypasses this card's stale L2 to read the HBM
     # truth accumulated by the SDMA engines.  v_cmp_ne sets one VCC bit per lane that
     # is NOT yet complete -- inactive lanes contribute 0, so lanes past W-1 cannot

@@ -161,14 +161,14 @@ s_lshl_b32 s20, s20, 16                            // SUBWIN DW11: rect_x-1|rect
 s_or_b32 s19, s19, s20                             // SUBWIN DW11: rect_x-1|rect_y-1 | (rectY-1) << 16
 v_mov_b32 v16, s19                                 // SUBWIN DW11: rect_x-1|rect_y-1
 v_mov_b32 v17, 0x0                                 // SUBWIN DW12: rect_z=0, default cache/swizzle
-s_lshl_b32 s19, s10, 3                             // myRank * 8 (u64 flag-slot byte offset: the ATOMIC is an ADD64)
-s_add_u32 s34, s16, s19                            // flag addr lo = flag_ptr[p] + myRank*8
+s_lshl_b32 s19, s10, 2                             // myRank * 4 (u32 flag-slot byte offset: the ATOMIC is an ADD_RTN_32)
+s_add_u32 s34, s16, s19                            // flag addr lo = flag_ptr[p] + myRank*4
 s_addc_u32 s35, s17, 0                             // flag addr hi (carry)
-v_mov_b32 v18, 0x5e00000a                          // ATOMIC DW0: op=ATOMIC operation=ADD64
+v_mov_b32 v18, 0x1e00000a                          // ATOMIC DW0: op=ATOMIC operation=ADD_RTN_32
 v_mov_b32 v19, s34                                 // ATOMIC DW1: addr lo
 v_mov_b32 v20, s35                                 // ATOMIC DW2: addr hi
 v_mov_b32 v21, 0x1                                 // ATOMIC DW3: src_data lo (addend)
-v_mov_b32 v22, 0x0                                 // ATOMIC DW4: src_data hi
+v_mov_b32 v22, 0x0                                 // ATOMIC DW4: src_data hi (unused by ADD_RTN_32)
 v_mov_b32 v23, 0x0                                 // ATOMIC DW5: cmp_data lo (unused)
 v_mov_b32 v24, 0x0                                 // ATOMIC DW6: cmp_data hi (unused)
 v_mov_b32 v25, 0x0                                 // ATOMIC DW7: loop_interval=0
@@ -390,7 +390,7 @@ s_add_u32 s24, s24, 64                             // kernarg offset = fusedBase
 s_waitcnt lgkmcnt(0)                               // wait flag_ptr[my_rank] load
 s_bfm_b64 s[24:25], s26, 0                         // fused-A2A: (1 << W) - 1, one lane per peer flag slot
 s_mov_b64 exec, s[24:25]                           // fused-A2A: widen EXEC to W lanes for the DRAIN poll
-v_lshlrev_b32 v2, 3, v[vgprSerial]                 // lane j -> self flag slot byte offset j*8
+v_lshlrev_b32 v2, 2, v[vgprSerial]                 // lane j -> self flag slot byte offset j*4
 label_fusedA2A_drain_poll:  /// fused-A2A: DRAIN poll all W self flags until each == tokenTiles
 global_load_dword v4, v2, s[22:23] sc0 sc1         // poll self flag[lane] low dword (system scope, sc0 sc1)
 s_waitcnt vmcnt(0)                                 // fused-A2A: wait poll load

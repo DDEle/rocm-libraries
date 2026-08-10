@@ -244,19 +244,17 @@ namespace TensileLite
     // this is copied VERBATIM from MORI's production
     // mori/include/mori/core/transport/sdma/sdma_pkt_struct.h
     // (SDMA_PKT_ATOMIC_TAG, 8 unions == 8 dwords). The route uses it in the
-    // ADD64 (fetch-add) form, exactly like MORI's CreateAtomicIncPacket
-    // (anvil_device.hpp:72): op=ATOMIC, operation=ADD64, ADDR=flag slot,
-    // SRC_DATA=1 (the increment); the CMP_DATA / LOOP dwords stay zero for a
-    // plain fetch-add. Because this is a fetch-add the "l" (loop/return-old)
-    // header bit is left 0.
+    // fetch-add form of MORI's CreateAtomicIncPacket (anvil_device.hpp:72):
+    // op=ATOMIC, ADDR=flag slot, SRC_DATA=1 (the increment); the CMP_DATA / LOOP
+    // dwords stay zero for a plain fetch-add. Because this is a fetch-add the
+    // "l" (loop/return-old) header bit is left 0.
     //
-    // RISK -- NOT hardware-verified: the COPY_SUBWIN packet was validated
-    // byte-for-byte on MI355X; this ATOMIC packet has NOT been. Its first real
-    // hardware run is Task 7/8. The mitigating factor is provenance: this is the
-    // struct MORI actually ships and uses in production, not a transcription.
+    // `operation` is a 7-bit index into the TC atomic op table (ADD_RTN_32 = 15,
+    // ADD_RTN_64 = 47). RTN means the op returns the pre-op value; this packet
+    // has no field to receive one, so SDMA drops it.
     // -----------------------------------------------------------------------
-    constexpr unsigned int SDMA_OP_ATOMIC     = 10;   // header op field
-    constexpr unsigned int SDMA_ATOMIC_ADD64  = 47;   // header operation field (fetch-add, 64-bit)
+    constexpr unsigned int SDMA_OP_ATOMIC         = 10;   // header op field
+    constexpr unsigned int SDMA_ATOMIC_ADD_RTN_32 = 15;   // header operation field (fetch-add, 32-bit)
 
     typedef struct SDMA_PKT_ATOMIC_TAG
     {
@@ -303,23 +301,23 @@ namespace TensileLite
     static_assert(offsetof(SDMA_PKT_ATOMIC, LOOP_UNION)         == 7 * sizeof(unsigned int), "ATOMIC DW7 offset");
 
     // -----------------------------------------------------------------------
-    // Fill an ADD64 fetch-add packet targeting `dstAddr` with `addend` (the
+    // Fill an ADD_RTN_32 fetch-add packet targeting `dstAddr` with `addend` (the
     // route passes addend == 1 to raise a flag). Mirrors MORI CreateAtomicIncPacket
     // but takes the addend explicitly. Address is the raw 64-bit pointer split
     // lo/hi; compare + loop dwords stay zero (unused for a plain fetch-add).
+    // SRC_DATA_HI is read by the 64-bit ops only and stays zero.
     // -----------------------------------------------------------------------
-    inline SDMA_PKT_ATOMIC makeAtomicAdd64Packet(unsigned long long dstAddr,
-                                                 unsigned long long addend)
+    inline SDMA_PKT_ATOMIC makeAtomicAdd32Packet(unsigned long long dstAddr,
+                                                 unsigned int      addend)
     {
         SDMA_PKT_ATOMIC p = {};
 
         p.HEADER_UNION.op        = SDMA_OP_ATOMIC;
-        p.HEADER_UNION.operation = SDMA_ATOMIC_ADD64;
+        p.HEADER_UNION.operation = SDMA_ATOMIC_ADD_RTN_32;
 
         p.ADDR_LO_UNION.addr_31_0      = (unsigned)(dstAddr & 0xffffffffull);
         p.ADDR_HI_UNION.addr_63_32     = (unsigned)(dstAddr >> 32);
-        p.SRC_DATA_LO_UNION.src_data_31_0  = (unsigned)(addend & 0xffffffffull);
-        p.SRC_DATA_HI_UNION.src_data_63_32 = (unsigned)(addend >> 32);
+        p.SRC_DATA_LO_UNION.src_data_31_0  = addend;
 
         return p;
     }

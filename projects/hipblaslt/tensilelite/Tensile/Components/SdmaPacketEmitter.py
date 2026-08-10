@@ -37,11 +37,11 @@
 # §1.3 packet geometry, per (peer p, token-tile j), with this card == myRank:
 #   COPY_SUBWIN (bf16 elements, elementsize header = log2(2) = 1):
 #     src  = D + (j*MT1)*M + p*nShard      -> base=D, src_x=p*nShard, src_y=j*MT1
-#     dst  = recv_ptr[p] + myRank*N*nShard + (j*MT1)*nShard
-#            -> base=recv_ptr[p], dst_x=0, dst_y=myRank*N + j*MT1
+#     dst  = peer_ptr[p] + recvOffset + myRank*N*nShard + (j*MT1)*nShard
+#            -> base=peer_ptr[p]+recvOffset, dst_x=0, dst_y=myRank*N + j*MT1
 #     src pitch = M (18432)  ;  dst pitch = nShard (2560, unpadded production)
 #     rect X = nShard (feature, contiguous) ; rect Y = min(MT1, N - j*MT1) (token)
-#   ATOMIC ADD_RTN_32 -> flag_ptr[p] + myRank*4, addend 1 (raise the dest flag).
+#   ATOMIC ADD_RTN_32 -> peer_ptr[p] + myRank*4, addend 1 (raise the dest flag).
 #
 # Coordinate form (base + src_x/src_y) is used rather than folding the whole
 # offset into the base address: it is exactly the form the MI355X golden
@@ -110,7 +110,7 @@ def checkA2AFieldsFit(numRanks, nShard, nToken, macroTile1):
     until then, this pairing is maintained by hand.)
 
     Rank bound: the kernarg segment reserves exactly FUSED_A2A_MAX_RANKS
-    recv_ptr/flag_ptr slots (Signature.py), so ranks >= that have no pointer.
+    peer_ptr slots (Signature.py), so ranks >= that have no pointer.
 
     The three 14-bit fields, and where each value comes from (see
     emitComputeCopyFields / GlobalWriteBatch._emitFusedA2ASdmaIssue):
@@ -130,7 +130,7 @@ def checkA2AFieldsFit(numRanks, nShard, nToken, macroTile1):
     if numRanks < 1 or numRanks > FUSED_A2A_MAX_RANKS:
         raise ValueError(
             "fused-A2A world size W=%d is out of range: the kernarg segment "
-            "reserves exactly FUSED_A2A_MAX_RANKS=%d recv_ptr/flag_ptr slots, so "
+            "reserves exactly FUSED_A2A_MAX_RANKS=%d peer_ptr slots, so "
             "ranks >= %d have no pointer and a PUSH to them reads garbage."
             % (numRanks, FUSED_A2A_MAX_RANKS, FUSED_A2A_MAX_RANKS))
     tokenTiles = (nToken + macroTile1 - 1) // macroTile1

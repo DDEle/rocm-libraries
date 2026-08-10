@@ -2603,7 +2603,7 @@ class GlobalWriteBatchWriter:
                        comment="kernarg offset = fusedBase + peer_ptr_0 + dst_rank*8"))
     module.add(self.parentWriter.argLoader.loadKernArg(recvBaseSgpr, "KernArgAddress",
       sgprOffset=sgpr(tmpSgpr + 1), dword=2))
-    module.add(SWaitCnt(kmcnt=0, comment="wait recv_ptr[dst_rank] load"))
+    module.add(SWaitCnt(kmcnt=0, comment="wait peer_ptr[dst_rank] load"))
     # recv sits at FUSED_A2A_PEER_RECV_OFFSET inside the peer block.
     module.add(SAddU32(dst=sgpr(recvBaseSgpr), src0=sgpr(recvBaseSgpr),
                        src1=hex(FUSED_A2A_PEER_RECV_OFFSET),
@@ -2656,7 +2656,7 @@ class GlobalWriteBatchWriter:
                        comment="kernarg offset = fusedBase + peer_ptr_0 + dst_rank*8"))
     module.add(self.parentWriter.argLoader.loadKernArg(flagBaseSgpr, "KernArgAddress",
       sgprOffset=sgpr(tmpSgpr + 1), dword=2))
-    module.add(SWaitCnt(kmcnt=0, comment="wait flag_ptr[dst_rank] load"))
+    module.add(SWaitCnt(kmcnt=0, comment="wait peer_ptr[dst_rank] load"))
 
   def _fusedA2ALoadFlagBaseByRank(self, module, flagBaseSgpr, rankSgpr, tmpSgpr):
     """Load peer_ptr[rankSgpr] into flagBaseSgpr using a computed kernarg offset.
@@ -2684,7 +2684,7 @@ class GlobalWriteBatchWriter:
                        comment="kernarg offset = fusedBase + peer_ptr_0 + rank*8"))
     module.add(self.parentWriter.argLoader.loadKernArg(flagBaseSgpr, "KernArgAddress",
       sgprOffset=sgpr(tmpSgpr), dword=2))
-    module.add(SWaitCnt(kmcnt=0, comment="wait flag_ptr[my_rank] load"))
+    module.add(SWaitCnt(kmcnt=0, comment="wait peer_ptr[my_rank] load"))
 
   def _emitFusedA2ASdmaIssue(self, module, dstRankSgpr, myRankSgpr, nShardSgpr,
                              flagBaseSgpr, tmpSgpr):
@@ -2924,7 +2924,7 @@ class GlobalWriteBatchWriter:
     # Election target is FusedTilesPerRank (feature-tiles in one rank's shard), NOT the
     # legacy FusedTarget (= tilesPerRank*tokenTiles): the counter is now per (dst_rank,
     # token-tile) pair, so only the tilesPerRank feature-tiles of one token-tile row
-    # contribute to a given slot.  FusedTarget is deprecated and no longer read.
+    # contribute to a given slot.  FusedTarget was deleted, not merely deprecated.
     argModule.add(kw.argLoader.loadKernArg(targetSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedTilesPerRank"]), dword=1))
     argModule.add(kw.argLoader.loadKernArg(nShardSgpr, "KernArgAddress",

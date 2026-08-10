@@ -47,8 +47,7 @@ from dataclasses import dataclass, field
 # world size W; unused slots cost nothing here because nothing enters SGPR.
 FUSED_A2A_MAX_RANKS = 8
 
-# Byte offset of recv inside a peer block; flag occupies [0, MAX_RANKS*4).
-# Mirrored in client/include/FusedA2AKernArg.hpp.
+# Byte offset of recv inside a peer block. Mirrored in client/include/FusedA2AKernArg.hpp.
 FUSED_A2A_PEER_RECV_OFFSET = 4096
 if FUSED_A2A_MAX_RANKS * 4 > FUSED_A2A_PEER_RECV_OFFSET:
     raise ValueError(
@@ -120,8 +119,8 @@ def fusedA2AKernArgLayout():
                                    SDMA counter target (Task 6)
       FusedTokenTiles  : 4B (u32)  token-tiles across N (N/MT1), == the SDMA flag target
 
-    FusedSdmaQueues sits right after counter_ptr, ahead of the scalars, so all
-    three pointer groups stay 8-aligned; the seven scalars trail contiguously.
+    FusedSdmaQueues sits right after counter_ptr, ahead of the scalars. All
+    three pointer groups are 8-aligned; the seven scalars trail contiguously.
     """
     layout = {}
     off = 0

@@ -342,9 +342,9 @@ class SdmaPacketEmitter:
     # ---- ATOMIC ADD_RTN_32 builder ------------------------------------------
 
     def emitBuildAtomicPacket(self, module, w, pktV, dstAddrS, addend=1):
-        """Build the 8 ATOMIC ADD_RTN_32 dwords into pktV[0:8]: raise flag_ptr[p]
+        """Build the 8 ATOMIC ADD_RTN_32 dwords into pktV[0:8]: raise peer_ptr[p]
         [myRank] by `addend` (== 1). dstAddrS is a 2-SGPR pointer to the flag
-        slot (caller computes flag_ptr[p] + myRank*4 -- see emitComputeFlagAddr;
+        slot (caller computes peer_ptr[p] + myRank*4 -- see emitComputeFlagAddr;
         the stride is 4 because this ADD_RTN_32 writes 4 bytes). Mirrors
         encodeAtomicDwords / makeAtomicAdd32Packet. addend is a compile-time
         immediate (1)."""
@@ -409,8 +409,8 @@ class SdmaPacketEmitter:
         return module
 
     def emitComputeFlagAddr(self, module, w, flagBaseS, myRankS, outAddrS, tmpS):
-        """Compute the ATOMIC target flag_ptr[p] + myRank*4 into outAddrS (2
-        SGPRs), a 64-bit add. flagBaseS is flag_ptr[p] (already selected by the
+        """Compute the ATOMIC target peer_ptr[p] + myRank*4 into outAddrS (2
+        SGPRs), a 64-bit add. flagBaseS is peer_ptr[p] (already selected by the
         caller via _fusedA2ALoadFlagBaseByRank). tmpS is one scratch SGPR.
 
         Stride is 4: the ATOMIC is an ADD_RTN_32, a 4-byte write.
@@ -428,7 +428,7 @@ class SdmaPacketEmitter:
         module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(myRankS), shiftHex=2,
                                   comment="myRank * 4 (u32 flag-slot byte offset: the ATOMIC is an ADD_RTN_32)"))
         module.add(SAddU32(dst=sgpr(outAddrS + 0), src0=sgpr(flagBaseS + 0), src1=sgpr(tmpS),
-                           comment="flag addr lo = flag_ptr[p] + myRank*4"))
+                           comment="flag addr lo = peer_ptr[p] + myRank*4"))
         module.add(SAddCU32(dst=sgpr(outAddrS + 1), src0=sgpr(flagBaseS + 1), src1=0,
                             comment="flag addr hi (carry)"))
         return module

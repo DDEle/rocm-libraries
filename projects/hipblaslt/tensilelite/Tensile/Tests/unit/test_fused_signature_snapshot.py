@@ -47,10 +47,12 @@ FUSED_A2A_SEGMENT_BYTES = sigmod.FUSED_A2A_SEGMENT_BYTES
 fusedA2AKernArgLayout = sigmod.fusedA2AKernArgLayout
 
 # The last argument of the fused block. Used to derive the segment's real extent
-# from emitted metadata instead of restating 176 as a literal.
+# from emitted metadata instead of restating 108 as a literal.
 LAST_ARG = "FusedTokenTiles"
 
-SDMA_TAIL = ["FusedSdmaQueues", "FusedTilesPerRank", "FusedTokenTiles"]
+# All pointer args, in emitted order: they sit contiguously at the front.
+POINTER_ARGS = ["peer_ptr_%u" % j for j in range(FUSED_A2A_MAX_RANKS)] + \
+    ["counter_ptr", "FusedSdmaQueues"]
 
 
 def build_fused_signature():
@@ -69,19 +71,16 @@ def build_fused_signature():
         flatWorkGroupSize=256,
     )
     for j in range(FUSED_A2A_MAX_RANKS):
-        sig.addArg("recv_ptr_%u" % j, SVK.SIG_GLOBALBUFFER, "void", "generic")
-    for j in range(FUSED_A2A_MAX_RANKS):
-        sig.addArg("flag_ptr_%u" % j, SVK.SIG_GLOBALBUFFER, "void", "generic")
-    sig.addArg("counter_ptr", SVK.SIG_GLOBALBUFFER, "void", "generic")
-    sig.addArg("FusedMyRank", SVK.SIG_VALUE, "u32")
-    sig.addArg("FusedTarget", SVK.SIG_VALUE, "u32")
-    sig.addArg("FusedW", SVK.SIG_VALUE, "u32")
-    sig.addArg("FusedNShard", SVK.SIG_VALUE, "u32")
-    sig.addArg("FusedDrain", SVK.SIG_VALUE, "u32")
-    sig.addArg("FusedAM", SVK.SIG_VALUE, "u32")
+        sig.addArg("peer_ptr_%u" % j, SVK.SIG_GLOBALBUFFER, "void", "generic")
+    sig.addArg("counter_ptr",     SVK.SIG_GLOBALBUFFER, "void", "generic")
     sig.addArg("FusedSdmaQueues", SVK.SIG_GLOBALBUFFER, "void", "generic")
+    sig.addArg("FusedMyRank",       SVK.SIG_VALUE, "u32")
+    sig.addArg("FusedW",            SVK.SIG_VALUE, "u32")
+    sig.addArg("FusedNShard",       SVK.SIG_VALUE, "u32")
+    sig.addArg("FusedDrain",        SVK.SIG_VALUE, "u32")
+    sig.addArg("FusedAM",           SVK.SIG_VALUE, "u32")
     sig.addArg("FusedTilesPerRank", SVK.SIG_VALUE, "u32")
-    sig.addArg("FusedTokenTiles", SVK.SIG_VALUE, "u32")
+    sig.addArg("FusedTokenTiles",   SVK.SIG_VALUE, "u32")
     return sig
 
 
@@ -134,22 +133,18 @@ def test_emitted_offsets_match_the_layout_table():
         % mismatched
 
 
-def test_sdma_args_are_appended_last():
-    """The three SDMA args sit at the end, so no earlier offset can move.
-
-    Append-only is what lets a host built against an older layout keep working
-    for every argument it already knew about.
-    """
+def test_pointers_are_appended_first():
+    """Every pointer arg sits contiguously at the front, ahead of any scalar."""
     args, _ = _emitted()
     byOffset = sorted(args, key=lambda n: args[n][0])
-    assert byOffset[-3:] == SDMA_TAIL, \
-        "SDMA args are not the last three; emitted order is %r" % byOffset
+    assert byOffset[:len(POINTER_ARGS)] == POINTER_ARGS, \
+        "pointer args are not the leading block; emitted order is %r" % byOffset
 
 
 def test_segment_bytes_matches_the_emitted_extent():
     """FUSED_A2A_SEGMENT_BYTES equals where the emitted segment actually ends.
 
-    Derived from metadata rather than compared against a transcribed 176, so it
+    Derived from metadata rather than compared against a transcribed 108, so it
     fails if either the constant or the argument list moves without the other.
     """
     args, _ = _emitted()

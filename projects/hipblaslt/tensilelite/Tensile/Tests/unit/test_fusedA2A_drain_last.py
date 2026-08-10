@@ -504,7 +504,7 @@ def test_no_kernarg_value_is_clobbered_before_it_is_read(renderHandshake):
     FusedMyRank. That reuse is only correct while the gate is emitted AHEAD of the
     arg reads, where its value is already dead. Emitting the gate after them turns
     it into a clobber: my_rank is destroyed after argModule set it, and the SDMA
-    block goes on to compute dst_y = AM_tiles*N and flag_ptr[p] + AM_tiles*8 --
+    block goes on to compute dst_y = AM_tiles*N and peer_ptr[p] + AM_tiles*8 --
     wrong band, and an ATOMIC past the W-slot flag allocation.
 
     Structural because it cannot be seen any other way: the emitted comments still
@@ -788,6 +788,42 @@ def test_max_ranks_twins_hold_the_same_value():
         f"FUSED_A2A_MAX_RANKS disagrees across the ABI: Signature.py={py_vals[0]} "
         f"vs FusedA2AKernArg.hpp={cpp_vals[0]}. The host would append a differently "
         f"sized fused segment than the kernel metadata reserves.")
+
+
+def test_peer_recv_offset_twins_hold_the_same_value():
+    """The Python and C++ declarations of FUSED_A2A_PEER_RECV_OFFSET must agree.
+
+    Same ABI hazard as test_max_ranks_twins_hold_the_same_value, one level down:
+    the constant is declared twice -- Signature.py (which the kernel's addArg
+    sequence and offset arithmetic are built from) and FusedA2AKernArg.hpp
+    (which sizes what the host writes into the peer block) -- and nothing but
+    this test ties them to the SAME value. A C++-only edit to the 4096 is
+    invisible to the whole non-GPU suite: Signature.py's golden .s only encodes
+    the Python constant, and the C++ gtest only checks internal self-consistency
+    against its own copy. It would surface only on real multi-GPU hardware, as
+    recv writes landing outside the region the kernel addresses.
+    """
+    py_path = os.path.join(TENSILE_ROOT, "Tensile/Components/Signature.py")
+    with open(py_path) as f:
+        py_tree = ast.parse(f.read(), filename=py_path)
+    py_vals = [n.value.value for n in py_tree.body
+               if isinstance(n, ast.Assign)
+               and any(getattr(t, "id", None) == "FUSED_A2A_PEER_RECV_OFFSET" for t in n.targets)
+               and isinstance(n.value, ast.Constant)]
+    assert len(py_vals) == 1, \
+        f"expected exactly one module-level FUSED_A2A_PEER_RECV_OFFSET in {py_path}, got {py_vals}"
+
+    hpp_path = os.path.join(TENSILE_ROOT, "client/include/FusedA2AKernArg.hpp")
+    with open(hpp_path) as f:
+        cpp_vals = re.findall(
+            r"constexpr\s+size_t\s+FUSED_A2A_PEER_RECV_OFFSET\s*=\s*(\d+)\s*;", f.read())
+    assert len(cpp_vals) == 1, \
+        f"expected exactly one constexpr FUSED_A2A_PEER_RECV_OFFSET in {hpp_path}, got {cpp_vals}"
+
+    assert py_vals[0] == int(cpp_vals[0]), (
+        f"FUSED_A2A_PEER_RECV_OFFSET disagrees across the ABI: Signature.py={py_vals[0]} "
+        f"vs FusedA2AKernArg.hpp={cpp_vals[0]}. The host would write recv into a "
+        f"different offset than the one the kernel epilogue reads from.")
 
 
 if __name__ == "__main__":

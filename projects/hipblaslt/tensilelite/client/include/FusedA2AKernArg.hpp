@@ -30,8 +30,7 @@ namespace TensileLite
         // j>=W filled with nullptr).
         constexpr int FUSED_A2A_MAX_RANKS = 8;
 
-        // Byte offset of recv inside a peer block; flag occupies [0, MAX_RANKS*4).
-        // Mirrored in Tensile/Components/Signature.py.
+        // Byte offset of recv inside a peer block. Mirrored in Tensile/Components/Signature.py.
         constexpr size_t FUSED_A2A_PEER_RECV_OFFSET = 4096;
         static_assert(FUSED_A2A_MAX_RANKS * sizeof(uint32_t) <= FUSED_A2A_PEER_RECV_OFFSET,
                       "flag array must fit below the recv offset inside a peer block");

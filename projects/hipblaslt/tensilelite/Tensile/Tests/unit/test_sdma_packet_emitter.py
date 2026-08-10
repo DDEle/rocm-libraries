@@ -549,7 +549,7 @@ class TestFieldArithmetic:
             "expected s_min_u32 rectY, rectY, MT1 (clamp the tail tile)"
 
     def test_flag_addr_stride_is_myrank_times_4_64bit(self):
-        # flag addr = flag_ptr[p] + myRank*4, a 64-bit add (lo add + hi carry).
+        # flag addr = peer_ptr[p] + myRank*4, a 64-bit add (lo add + hi carry).
         # Stride is 4 (u32 flag slots): the ATOMIC is an ADD_RTN_32, a 4-byte
         # write. Must agree with the host's flagBytes and the poll's j*4.
         lines = _lines(_render_flag_addr())

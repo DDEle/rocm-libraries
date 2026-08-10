@@ -60,7 +60,7 @@ label_fusedA2A_flag_skip7:  /// n_col_base_wg below rank 7
 s_lshl_b32 s20, s18, 3                             // dst_rank * 8 (byte offset into peer_ptr[] array)
 s_add_u32 s20, s20, 0                              // kernarg offset = fusedBase + peer_ptr_0 + dst_rank*8
 // loadKernArg 16 KernArgAddress dword=2 sgprOffset=s20
-s_waitcnt lgkmcnt(0)                               // wait flag_ptr[dst_rank] load
+s_waitcnt lgkmcnt(0)                               // wait peer_ptr[dst_rank] load
 s_mul_i32 s19, s18, s13                            // dst_rank * tokenTiles
 s_add_u32 s19, s19, s[sgprWorkGroup1]              // counter index = dst_rank*tokenTiles + j (j = WorkGroup1)
 s_lshl_b32 s19, s19, 2                             // * 4 (u32 counter byte offset)
@@ -126,7 +126,7 @@ s_mul_i32 s21, s20, s12                            // shard_base = dst_rank * n_
 s_lshl_b32 s20, s20, 3                             // dst_rank * 8 (byte offset into peer_ptr[] array)
 s_add_u32 s20, s20, 0                              // kernarg offset = fusedBase + peer_ptr_0 + dst_rank*8
 // loadKernArg 26 KernArgAddress dword=2 sgprOffset=s20
-s_waitcnt lgkmcnt(0)                               // wait recv_ptr[dst_rank] load
+s_waitcnt lgkmcnt(0)                               // wait peer_ptr[dst_rank] load
 s_add_u32 s26, s26, 0x1000                         // recv base = peer_ptr[dst_rank] + recv offset
 s_addc_u32 s27, s27, 0                             // recv base hi carry
 s_mul_i32 s28, s18, s12                            // src_x = p * nShard
@@ -164,7 +164,7 @@ s_or_b32 s19, s19, s20                             // SUBWIN DW11: rect_x-1|rect
 v_mov_b32 v16, s19                                 // SUBWIN DW11: rect_x-1|rect_y-1
 v_mov_b32 v17, 0x0                                 // SUBWIN DW12: rect_z=0, default cache/swizzle
 s_lshl_b32 s19, s10, 2                             // myRank * 4 (u32 flag-slot byte offset: the ATOMIC is an ADD_RTN_32)
-s_add_u32 s34, s16, s19                            // flag addr lo = flag_ptr[p] + myRank*4
+s_add_u32 s34, s16, s19                            // flag addr lo = peer_ptr[p] + myRank*4
 s_addc_u32 s35, s17, 0                             // flag addr hi (carry)
 v_mov_b32 v18, 0x1e00000a                          // ATOMIC DW0: op=ATOMIC operation=ADD_RTN_32
 v_mov_b32 v19, s34                                 // ATOMIC DW1: addr lo
@@ -389,7 +389,7 @@ s_waitcnt lgkmcnt(0)                               // wait FusedMyRank/FusedW/Fu
 s_lshl_b32 s24, s21, 3                             // rank * 8 (byte offset into peer_ptr[] array)
 s_add_u32 s24, s24, 0                              // kernarg offset = fusedBase + peer_ptr_0 + rank*8
 // loadKernArg 22 KernArgAddress dword=2 sgprOffset=s24
-s_waitcnt lgkmcnt(0)                               // wait flag_ptr[my_rank] load
+s_waitcnt lgkmcnt(0)                               // wait peer_ptr[my_rank] load
 s_bfm_b64 s[24:25], s26, 0                         // fused-A2A: (1 << W) - 1, one lane per peer flag slot
 s_mov_b64 exec, s[24:25]                           // fused-A2A: widen EXEC to W lanes for the DRAIN poll
 v_lshlrev_b32 v2, 2, v[vgprSerial]                 // lane j -> self flag slot byte offset j*4

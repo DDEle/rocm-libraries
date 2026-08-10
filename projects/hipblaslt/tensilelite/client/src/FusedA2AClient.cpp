@@ -9,9 +9,9 @@
 //
 // What this does (spec §3.1 / §3.2):
 //   1. For each of W devices: allocate fresh per-device GEMM operands
-//      (x=A, w=B, c=C, out=D) plus the fused-A2A buffers recv[] and flag[]
-//      (fine-grained, since they are written by remote peers) and a device-scope
-//      counter[].
+//      (x=A, w=B, c=C, out=D) plus one fine-grained peer block per device
+//      (flag and recv are offset views into it, written by remote peers) and
+//      a device-scope counter[].
 //   2. Enable pairwise P2P access between all device pairs.
 //   3. Per launch: zero counter[]/flag[] on every device, then for each device
 //      build the host GEMM kernarg via solution->solve(), APPEND the fixed

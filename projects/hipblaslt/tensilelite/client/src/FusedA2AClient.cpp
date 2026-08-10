@@ -15,8 +15,8 @@
 //   2. Enable pairwise P2P access between all device pairs.
 //   3. Per launch: zero counter[]/flag[] on every device, then for each device
 //      build the host GEMM kernarg via solution->solve(), APPEND the fixed
-//      156-byte fused-A2A segment (8 recv_ptr + 8 flag_ptr + counter_ptr +
-//      5 u32 scalars) to that same KernelArguments object, and launch on the
+//      108-byte fused-A2A segment (8 peer_ptr + counter_ptr + FusedSdmaQueues +
+//      7 u32 scalars) to that same KernelArguments object, and launch on the
 //      device's stream. Because the launch reads kernel.args.size(), appending
 //      to the host-generated args auto-sizes the launch to include the fused
 //      tail — which is what fills the previously-garbage fused kernarg and makes
@@ -110,7 +110,7 @@ namespace TensileLite
                 std::cerr << "[fused-a2a] ERROR: world size W=" << W
                           << " is out of range; the kernarg segment reserves exactly "
                           << FUSED_A2A_MAX_RANKS
-                          << " recv_ptr/flag_ptr slots.\n"
+                          << " peer_ptr slots.\n"
                           << "  require: 1 <= W <= " << FUSED_A2A_MAX_RANKS
                           << ". Refusing to launch." << std::endl;
                 return -1;
@@ -260,10 +260,6 @@ namespace TensileLite
             const uint32_t tokenTiles   = (uint32_t)((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE);
             // mTiles: feature-tiles across the full feature dim M (diagnostic only).
             const uint32_t mTiles       = (uint32_t)(M / FUSED_A2A_M_TILE);
-            // DEPRECATED: the kernel's election target is now FusedTilesPerRank (the
-            // counter is per (dst_rank, token-tile), so only tilesPerRank WGs share a
-            // slot). Still passed so the kernarg layout / offsets stay untouched.
-            const uint32_t target       = tilesPerRank * tokenTiles;
 
             // Fail-fast on shapes that violate the fused-A2A design constraints
             // (spec section 0). The kernel maps a whole PUSH workgroup to a
@@ -383,7 +379,7 @@ namespace TensileLite
                       << " K=" << K << " AM=" << AM << " nShard=" << nShard
                       << " tilesPerRank=" << tilesPerRank << " tokenTiles=" << tokenTiles
                       << " mTiles=" << mTiles
-                      << " target=" << target << " drain=" << drain << "\n";
+                      << " drain=" << drain << "\n";
 
             // --- Host golden setup (Task 11 numeric validation) ---------------
             // The GEMM is a TN GEMM (op(A)=A^T, op(B)=B), bf16 in, fp32 accumulate,
@@ -468,7 +464,9 @@ namespace TensileLite
             }
 
             // --- Phase 1: per-device fresh allocation (spec §3.1). ---
-            std::vector<void*> recv(W, nullptr), flag(W, nullptr), counter(W, nullptr);
+            std::vector<void*> peer(W, nullptr), counter(W, nullptr);
+            // Views into peer[d]: flag at offset 0, recv at FUSED_A2A_PEER_RECV_OFFSET.
+            std::vector<void*> recv(W, nullptr), flag(W, nullptr);
             std::vector<void*> xA(W, nullptr), wB(W, nullptr), cC(W, nullptr), outD(W, nullptr);
 
             // Reference image of the counter guard tail: written once per device at
@@ -480,8 +478,12 @@ namespace TensileLite
             {
                 HIP_CHECK_EXC(hipSetDevice(d));
                 // Fine-grained: written by remote peers, must bypass stale L2.
-                HIP_CHECK_EXC(hipExtMallocWithFlags(&recv[d], recvBytes, hipDeviceMallocFinegrained));
-                HIP_CHECK_EXC(hipExtMallocWithFlags(&flag[d], flagBytes, hipDeviceMallocFinegrained));
+                HIP_CHECK_EXC(hipExtMallocWithFlags(
+                    &peer[d], FUSED_A2A_PEER_RECV_OFFSET + recvBytes, hipDeviceMallocFinegrained));
+                flag[d] = peer[d];
+                recv[d] = (char*)peer[d] + FUSED_A2A_PEER_RECV_OFFSET;
+                // Zero the unused flag-array padding once, up to the recv offset.
+                HIP_CHECK_EXC(hipMemset(peer[d], 0, FUSED_A2A_PEER_RECV_OFFSET));
                 // Local (not remotely written): plain device memory.
                 HIP_CHECK_EXC(hipMalloc(&counter[d], counterAllocBytes));
                 // Arm the guard tail. Sits past counterBytes, so the per-launch
@@ -710,31 +712,26 @@ namespace TensileLite
                         return 1;
                     }
 
-                    // recv/flag pointer views for device d: slot j = peer j's buffer.
-                    std::vector<void*> recvView(W), flagView(W);
+                    // peer pointer view for device d: slot j = peer j's block base.
+                    std::vector<void*> peerView(W);
                     for(int j = 0; j < W; j++)
-                    {
-                        recvView[j] = recv[j];
-                        flagView[j] = flag[j];
-                    }
+                        peerView[j] = peer[j];
 
                     KernelInvocation& last       = kernels.back();
                     size_t            beforeSize = last.args.size();
                     appendFusedSegment(last.args,
-                                       recvView,
-                                       flagView,
+                                       peerView,
                                        counter[d],
+                                       // SDMA offload args: this device's W-element
+                                       // SdmaQueueDeviceHandle array (one queue per peer).
+                                       sdmaHandles[d],
                                        (uint32_t)d, // my_rank
-                                       target,
                                        (uint32_t)W,
                                        nShard,
                                        (uint32_t)drain,
                                        // kernarg "FusedAM" (Signature.py); pass AM as
                                        // the value to keep the client/kernel ABI matched.
                                        (uint32_t)AM,
-                                       // SDMA offload args: this device's W-element
-                                       // SdmaQueueDeviceHandle array (one queue per peer).
-                                       sdmaHandles[d],
                                        tilesPerRank,
                                        tokenTiles);
                     // Print kernarg size only on iter 0 to avoid log spam; a constant
@@ -1036,10 +1033,8 @@ namespace TensileLite
             for(int d = 0; d < W; d++)
             {
                 HIP_CHECK_EXC(hipSetDevice(d));
-                if(recv[d])
-                    (void)hipFree(recv[d]);
-                if(flag[d])
-                    (void)hipFree(flag[d]);
+                if(peer[d])
+                    (void)hipFree(peer[d]);
                 if(counter[d])
                     (void)hipFree(counter[d]);
                 if(xA[d])

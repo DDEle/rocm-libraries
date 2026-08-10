@@ -229,7 +229,7 @@ def py():
     "SDMA_OP_COPY_SUBWIN",
     "SDMA_SUBOP_COPY_LINEAR_RECT",
     "SDMA_OP_ATOMIC",
-    "SDMA_ATOMIC_ADD64",
+    "SDMA_ATOMIC_ADD_RTN_32",
 ])
 def test_opcode_constants_match(cpp, py, name):
     assert name in cpp["consts"], "%s not declared in %s" % (name, CPP_HEADER)
@@ -336,7 +336,7 @@ def test_atomic_header_operation_offset_is_25(cpp, py):
     # nothing else on either side would catch.
     assert _offset(cpp["atomic"], "HEADER_UNION", "operation") == 25
     _assert_shifted_by(_py_dword_exprs(py["text"], "encodeAtomicDwords"),
-                       0, 25, "ADD64 operation code")
+                       0, 25, "ADD_RTN_32 operation code")
 
 
 # ---------------------------------------------------------------------------

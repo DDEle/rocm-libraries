@@ -6,7 +6,7 @@
 # Packet-DEPENDENT counterpart to Task 4's SdmaRingEmitter (which is packet-
 # INDEPENDENT ring plumbing). This module turns the §1.3 all-to-all geometry
 # (kernarg values + WG ids) into the 13-dword COPY_SUBWIN and 8-dword ATOMIC
-# ADD64 packet dword arrays, laid out in VGPRs; Task 4's emitPlacePacket then
+# ADD_RTN_32 packet dword arrays, laid out in VGPRs; Task 4's emitPlacePacket then
 # writes those dwords into the ring. It is deliberately split from the ring
 # emitter: ring reserve/place/submit is packet-agnostic, packet field encoding
 # is packet-specific -- two responsibilities, two files (SdmaRingEmitter.py was
@@ -16,8 +16,8 @@
 # The C++ structs / byte layout / minus-one + element-scaling conventions are
 # the SAME ones frozen in client/src/SdmaPktSubwin.hpp and its golden-vector
 # gtest (SdmaPktSubwin_test.cpp). The COPY_SUBWIN encoding was validated
-# byte-for-byte on MI355X; the ATOMIC encoding is MORI's production struct but
-# is NOT yet hardware-verified (its first real run is Task 7/8).
+# byte-for-byte on MI355X; the ATOMIC struct is MORI's production struct, run on
+# hardware since Task 7/8 and, with the ADD_RTN_32 selector, by the 4-card run.
 #
 # TWO surfaces, cross-checked against each other and against the T1 golden:
 #   * encodeCopyDwords / encodeAtomicDwords -- pure-Python integer encoders that
@@ -41,7 +41,7 @@
 #            -> base=recv_ptr[p], dst_x=0, dst_y=myRank*N + j*MT1
 #     src pitch = M (18432)  ;  dst pitch = nShard (2560, unpadded production)
 #     rect X = nShard (feature, contiguous) ; rect Y = min(MT1, N - j*MT1) (token)
-#   ATOMIC ADD64 -> flag_ptr[p] + myRank*8, addend 1 (raise the dest flag).
+#   ATOMIC ADD_RTN_32 -> flag_ptr[p] + myRank*4, addend 1 (raise the dest flag).
 #
 # Coordinate form (base + src_x/src_y) is used rather than folding the whole
 # offset into the base address: it is exactly the form the MI355X golden
@@ -65,9 +65,11 @@ SDMA_SUBOP_COPY_LINEAR_RECT = 4
 COPY_PACKET_DWORDS          = 13
 
 # ---- ATOMIC header op/operation (mirror SdmaPktSubwin.hpp) ------------------
-SDMA_OP_ATOMIC     = 10
-SDMA_ATOMIC_ADD64  = 47
-ATOMIC_PACKET_DWORDS = 8
+# operation is a 7-bit index into the TC atomic op table (ADD_RTN_32 = 15,
+# ADD_RTN_64 = 47); RTN means the op returns the pre-op value, which SDMA drops.
+SDMA_OP_ATOMIC         = 10
+SDMA_ATOMIC_ADD_RTN_32 = 15
+ATOMIC_PACKET_DWORDS   = 8
 
 # bf16 destination: 2-byte elements -> elementsize header field = log2(2) = 1.
 BF16_ELEMENT_SIZE_LOG2 = 1
@@ -190,17 +192,17 @@ def encodeCopyDwords(srcBase, srcX, srcY, srcPitch, srcSlicePitch,
 
 
 def encodeAtomicDwords(dstAddr, addend=1):
-    """Return the 8 dwords of an ADD64 fetch-add ATOMIC packet (MORI
-    CreateAtomicIncPacket form): op=ATOMIC, operation=ADD64, ADDR=dstAddr,
+    """Return the 8 dwords of an ADD_RTN_32 fetch-add ATOMIC packet (MORI
+    CreateAtomicIncPacket form): op=ATOMIC, operation=ADD_RTN_32, ADDR=dstAddr,
     SRC_DATA=addend; compare + loop dwords stay zero. Mirrors
-    makeAtomicAdd64Packet in SdmaPktSubwin.hpp."""
+    makeAtomicAdd32Packet in SdmaPktSubwin.hpp."""
     dw = [0] * ATOMIC_PACKET_DWORDS
     dw[0] = ((SDMA_OP_ATOMIC & 0xFF)
-             | ((SDMA_ATOMIC_ADD64 & 0x7F) << 25))  # l bit (16) stays 0 (fetch-add)
+             | ((SDMA_ATOMIC_ADD_RTN_32 & 0x7F) << 25))  # l bit (16) stays 0 (fetch-add)
     dw[1] = dstAddr & 0xFFFFFFFF
     dw[2] = (dstAddr >> 32) & 0xFFFFFFFF
     dw[3] = addend & 0xFFFFFFFF
-    dw[4] = (addend >> 32) & 0xFFFFFFFF
+    # dw[4] = 0 (src_data hi, 64-bit ops only).
     # dw[5..7] = 0 (cmp_data lo/hi, loop_interval): unused for a plain fetch-add.
     return dw
 
@@ -210,7 +212,7 @@ def encodeAtomicDwords(dstAddr, addend=1):
 COPY_HEADER_DW0 = ((SDMA_OP_COPY_SUBWIN & 0xFF)
                    | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8)
                    | ((BF16_ELEMENT_SIZE_LOG2 & 0x7) << 29))
-ATOMIC_HEADER_DW0 = ((SDMA_OP_ATOMIC & 0xFF) | ((SDMA_ATOMIC_ADD64 & 0x7F) << 25))
+ATOMIC_HEADER_DW0 = ((SDMA_OP_ATOMIC & 0xFF) | ((SDMA_ATOMIC_ADD_RTN_32 & 0x7F) << 25))
 
 
 class SdmaPacketEmitter:
@@ -337,21 +339,21 @@ class SdmaPacketEmitter:
         self._movImm(module, pktV + 12, 0, "SUBWIN DW12: rect_z=0, default cache/swizzle")
         return module
 
-    # ---- ATOMIC ADD64 builder ----------------------------------------------
+    # ---- ATOMIC ADD_RTN_32 builder ------------------------------------------
 
     def emitBuildAtomicPacket(self, module, w, pktV, dstAddrS, addend=1):
-        """Build the 8 ATOMIC ADD64 dwords into pktV[0:8]: raise flag_ptr[p]
+        """Build the 8 ATOMIC ADD_RTN_32 dwords into pktV[0:8]: raise flag_ptr[p]
         [myRank] by `addend` (== 1). dstAddrS is a 2-SGPR pointer to the flag
-        slot (caller computes flag_ptr[p] + myRank*8 -- see emitComputeFlagAddr;
-        the stride is 8 because this ADD64 writes 8 bytes). Mirrors encodeAtomicDwords
-        / makeAtomicAdd64Packet. addend is a compile-time immediate (1) so its
-        hi dword is 0."""
+        slot (caller computes flag_ptr[p] + myRank*4 -- see emitComputeFlagAddr;
+        the stride is 4 because this ADD_RTN_32 writes 4 bytes). Mirrors
+        encodeAtomicDwords / makeAtomicAdd32Packet. addend is a compile-time
+        immediate (1)."""
         self._movImm(module, pktV + 0, ATOMIC_HEADER_DW0,
-                     "ATOMIC DW0: op=ATOMIC operation=ADD64")
+                     "ATOMIC DW0: op=ATOMIC operation=ADD_RTN_32")
         self._movSgpr(module, pktV + 1, dstAddrS + 0, "ATOMIC DW1: addr lo")
         self._movSgpr(module, pktV + 2, dstAddrS + 1, "ATOMIC DW2: addr hi")
         self._movImm(module, pktV + 3, addend & 0xFFFFFFFF, "ATOMIC DW3: src_data lo (addend)")
-        self._movImm(module, pktV + 4, (addend >> 32) & 0xFFFFFFFF, "ATOMIC DW4: src_data hi")
+        self._movImm(module, pktV + 4, 0, "ATOMIC DW4: src_data hi (unused by ADD_RTN_32)")
         self._movImm(module, pktV + 5, 0, "ATOMIC DW5: cmp_data lo (unused)")
         self._movImm(module, pktV + 6, 0, "ATOMIC DW6: cmp_data hi (unused)")
         self._movImm(module, pktV + 7, 0, "ATOMIC DW7: loop_interval=0")
@@ -407,30 +409,26 @@ class SdmaPacketEmitter:
         return module
 
     def emitComputeFlagAddr(self, module, w, flagBaseS, myRankS, outAddrS, tmpS):
-        """Compute the ATOMIC target flag_ptr[p] + myRank*8 into outAddrS (2
+        """Compute the ATOMIC target flag_ptr[p] + myRank*4 into outAddrS (2
         SGPRs), a 64-bit add. flagBaseS is flag_ptr[p] (already selected by the
         caller via _fusedA2ALoadFlagBaseByRank). tmpS is one scratch SGPR.
 
-        Stride is 8, NOT 4: the route raises a flag with an ADD64 (MORI ships
-        ADD64 but no ADD32, so the atomic write is 8 bytes wide), so the flag
-        buffer must be a u64 array with 8-byte slots. A u32 array + *4 stride
-        would let myRank=3's 8-byte write run 4 bytes past the W*4-byte
-        allocation -- a heap overrun, not merely a neighbor-slot clobber. This
-        is the plan §1.3 corrected form (myRank*8; the earlier *4 was a plan
-        defect, and §1.1's flag[myRank][j] was a typo -- the flag is indexed by
-        SOURCE rank only, tokenTiles packets accumulating into one slot, per the
-        §1.1 "== tokenTiles" drain predicate).
+        Stride is 4: the ATOMIC is an ADD_RTN_32, a 4-byte write.
 
-        The three things this stride depends on all landed together with the
-        packet wiring: the host allocates flag as W u64 slots (FusedA2AClient.cpp
-        flagBytes), the DRAIN poll strides its self-flag address by 8, and that
-        poll compares against tokenTiles (an accumulated count) rather than a
-        one-shot sentinel -- the SDMA ATOMIC adds, it does not store.
+        The flag is indexed by SOURCE rank only -- source j's tokenTiles ATOMICs
+        accumulate into one slot, per the §1.1 "== tokenTiles" drain predicate
+        (§1.1's flag[myRank][j] was a typo).
+
+        Three things must move with this stride: the host allocates flag as W u32
+        slots (FusedA2AClient.cpp flagBytes), the DRAIN poll strides its self-flag
+        address by 4, and that poll compares against tokenTiles (an accumulated
+        count) rather than a one-shot sentinel -- the SDMA ATOMIC adds, it does
+        not store.
         """
-        module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(myRankS), shiftHex=3,
-                                  comment="myRank * 8 (u64 flag-slot byte offset: the ATOMIC is an ADD64)"))
+        module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(myRankS), shiftHex=2,
+                                  comment="myRank * 4 (u32 flag-slot byte offset: the ATOMIC is an ADD_RTN_32)"))
         module.add(SAddU32(dst=sgpr(outAddrS + 0), src0=sgpr(flagBaseS + 0), src1=sgpr(tmpS),
-                           comment="flag addr lo = flag_ptr[p] + myRank*8"))
+                           comment="flag addr lo = flag_ptr[p] + myRank*4"))
         module.add(SAddCU32(dst=sgpr(outAddrS + 1), src0=sgpr(flagBaseS + 1), src1=0,
                             comment="flag addr hi (carry)"))
         return module

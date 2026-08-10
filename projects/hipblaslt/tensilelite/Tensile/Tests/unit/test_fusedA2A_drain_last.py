@@ -720,22 +720,25 @@ def test_max_ranks_guard_fires_when_the_constant_outgrows_the_mask():
     The guard in Signature.py exists for an event that has never happened -- someone
     raising the constant past what the S_BFM width operand can encode -- so no
     ordinary run exercises it, and a guard nobody has watched fail is not evidence.
-    This is that mutation, made permanent: the module-level `if` is located, lifted
-    out, and re-executed against a constant of 32 (the wave32 arm's first wrapping
-    width). Locating it also pins that it still EXISTS -- deleting the guard reddens
-    here rather than passing quietly, which a test that merely re-checked
+    This is that mutation, made permanent: the EXEC-mask guard's `if` is located,
+    lifted out, and re-executed against a constant of 32 (the wave32 arm's first
+    wrapping width). Locating it also pins that it still EXISTS -- deleting the guard
+    reddens here rather than passing quietly, which a test that merely re-checked
     `FUSED_A2A_MAX_RANKS <= 31` would not do.
     """
     path = os.path.join(TENSILE_ROOT, "Tensile/Components/Signature.py")
     with open(path) as f:
         mod = ast.parse(f.read(), filename=path)
 
+    # "EXEC becomes empty" also names the string this test's own pytest.raises matches below.
     guards = [n for n in mod.body if isinstance(n, ast.If)
               and "FUSED_A2A_MAX_RANKS" in ast.unparse(n.test)
-              and any(isinstance(s, ast.Raise) for s in ast.walk(n))]
+              and any(isinstance(s, ast.Raise) for s in ast.walk(n))
+              and "EXEC becomes empty" in ast.unparse(n)]
     assert len(guards) == 1, \
-        (f"expected exactly one module-level FUSED_A2A_MAX_RANKS bound guard in "
-         f"{path}, found {len(guards)} -- the DRAIN EXEC mask bound is unenforced")
+        (f"expected exactly one module-level FUSED_A2A_MAX_RANKS guard raising on "
+         f"'EXEC becomes empty' in {path}, found {len(guards)} -- the DRAIN EXEC mask "
+         f"bound is unenforced")
 
     # 8 must pass and 32 must not; a guard that raises unconditionally, or one whose
     # comparison drifted the wrong way, fails one of these two.

@@ -3,7 +3,7 @@
 /* fused-A2A cross-card handshake (design spec 2.3): counter election + SDMA packet submit + DRAIN */
 /******************************************/
 s_mov_b64 exec, -1                                 // fused-A2A: full exec before wave-0 election
-// loadKernArg 10 KernArgAddress dword=1 sgprOffset=0x9c
+// loadKernArg 10 KernArgAddress dword=1 sgprOffset=0x60
 s_waitcnt lgkmcnt(0)                               // wait FusedAM
 s_lshr_b32 s10, s10, 8                             // AM_tiles = FusedAM >> log2(MT0=256)
 s_cmp_gt_u32 s10, s[sgprWorkGroup0]                // AM_tiles > WorkGroup0? (this WG in PUSH region)
@@ -14,11 +14,11 @@ v_readfirstlane_b32 s21, v[vgprSerial]             // wave 0 elects the WG's sin
 s_cmp_eq_u32 s21, 0                                // wave 0?
 s_cbranch_scc0 label_fusedA2A_handshake_after      // non-wave-0 -> skip (single writer per WG)
 s_mov_b64 exec, 1                                  // fused-A2A: isolate lane 0 for the once-per-WG counter atomic + flag store
-// loadKernArg 10 KernArgAddress dword=1 sgprOffset=0x88
-// loadKernArg 11 KernArgAddress dword=1 sgprOffset=0xa8
-// loadKernArg 12 KernArgAddress dword=1 sgprOffset=0x94
-// loadKernArg 13 KernArgAddress dword=1 sgprOffset=0xac
-// loadKernArg 14 KernArgAddress dword=2 sgprOffset=0x80
+// loadKernArg 10 KernArgAddress dword=1 sgprOffset=0x50
+// loadKernArg 11 KernArgAddress dword=1 sgprOffset=0x64
+// loadKernArg 12 KernArgAddress dword=1 sgprOffset=0x58
+// loadKernArg 13 KernArgAddress dword=1 sgprOffset=0x68
+// loadKernArg 14 KernArgAddress dword=2 sgprOffset=0x40
 s_waitcnt lgkmcnt(0)                               // wait FusedMyRank/TilesPerRank/NShard/TokenTiles/counter_ptr
 s_mul_i32 s19, s[sgprWorkGroup0], 256              // n_col_base_wg = WorkGroup0 * MT0
 s_mov_b32 s18, 0                                   // dst_rank = 0 (default)
@@ -57,8 +57,8 @@ s_cmp_gt_u32 s20, s19                              // shard_lo > n_col_base_wg? 
 s_cbranch_scc1 label_fusedA2A_flag_skip7           // below rank 7: keep current winner
 s_mov_b32 s18, 7                                   // dst_rank = 7
 label_fusedA2A_flag_skip7:  /// n_col_base_wg below rank 7
-s_lshl_b32 s20, s18, 3                             // dst_rank * 8 (byte offset into flag_ptr[] array)
-s_add_u32 s20, s20, 64                             // kernarg offset = fusedBase + flag_ptr_0 + dst_rank*8
+s_lshl_b32 s20, s18, 3                             // dst_rank * 8 (byte offset into peer_ptr[] array)
+s_add_u32 s20, s20, 0                              // kernarg offset = fusedBase + peer_ptr_0 + dst_rank*8
 // loadKernArg 16 KernArgAddress dword=2 sgprOffset=s20
 s_waitcnt lgkmcnt(0)                               // wait flag_ptr[dst_rank] load
 s_mul_i32 s19, s18, s13                            // dst_rank * tokenTiles
@@ -77,7 +77,7 @@ s_cmp_eq_u32 s19, s11                              // old+1 == FusedTilesPerRank
 s_cbranch_scc0 label_fusedA2A_handshake_notlast    // not the last WG -> skip the SDMA submit
 
 /* fused-A2A: build + submit the SDMA COPY_SUBWIN + ATOMIC packet pair */
-// loadKernArg 22 KernArgAddress dword=2 sgprOffset=0xa0
+// loadKernArg 22 KernArgAddress dword=2 sgprOffset=0x48
 s_waitcnt lgkmcnt(0)                               // wait FusedSdmaQueues
 s_mul_i32 s19, s18, 56                             // dst_rank * sizeof(SdmaQueueDeviceHandle)
 s_add_u32 s22, s22, s19                            // handle lo = FusedSdmaQueues + dst_rank*56
@@ -123,10 +123,12 @@ s_cbranch_scc1 label_fusedA2A_recv_skip7           // below rank 7: keep current
 s_mov_b32 s20, 7                                   // dst_rank = 7
 label_fusedA2A_recv_skip7:  /// n_col_base_wg below rank 7
 s_mul_i32 s21, s20, s12                            // shard_base = dst_rank * n_shard
-s_lshl_b32 s20, s20, 3                             // dst_rank * 8 (byte offset into recv_ptr[] array)
-s_add_u32 s20, s20, 0                              // kernarg offset = fusedBase + recv_ptr_0 + dst_rank*8
+s_lshl_b32 s20, s20, 3                             // dst_rank * 8 (byte offset into peer_ptr[] array)
+s_add_u32 s20, s20, 0                              // kernarg offset = fusedBase + peer_ptr_0 + dst_rank*8
 // loadKernArg 26 KernArgAddress dword=2 sgprOffset=s20
 s_waitcnt lgkmcnt(0)                               // wait recv_ptr[dst_rank] load
+s_add_u32 s26, s26, 0x1000                         // recv base = peer_ptr[dst_rank] + recv offset
+s_addc_u32 s27, s27, 0                             // recv base hi carry
 s_mul_i32 s28, s18, s12                            // src_x = p * nShard
 s_mul_i32 s29, s[sgprWorkGroup1], 256              // src_y = j * MT1
 s_mul_i32 s30, s[sgprSizesFree+0], s[sgprSizesFree+1] // src_slice = M * N (single-plane, don't-care)
@@ -345,8 +347,8 @@ v_mov_b32 v26, s30                                 // committedWptr addr lo
 v_mov_b32 v27, s31                                 // committedWptr addr hi
 global_store_dwordx2 v[26:27], v[28:29], off sc1   // store committedWptr = pending (AGENT scope, sc1)
 s_waitcnt vmcnt(0)                                 // wait committedWptr store issued
-// loadKernArg 22 KernArgAddress dword=2 sgprOffset=0x80
-// loadKernArg 21 KernArgAddress dword=1 sgprOffset=0x90
+// loadKernArg 22 KernArgAddress dword=2 sgprOffset=0x40
+// loadKernArg 21 KernArgAddress dword=1 sgprOffset=0x54
 s_waitcnt lgkmcnt(0)                               // wait counter_ptr/FusedW
 s_mul_i32 s19, s21, s13                            // W * tokenTiles (counter2 base index, past the (p,j) counter)
 s_add_u32 s19, s19, s18                            // counter2 index = W*tokenTiles + dst_rank
@@ -376,16 +378,16 @@ s_atomic_inc s21, s[sgprFusedCounter3Ptr:sgprFusedCounter3Ptr+1], 0 glc // old3 
 s_waitcnt lgkmcnt(0)                               // fused-A2A: wait counter3 atomic return (SMEM -> lgkmcnt)
 s_cmp_eq_u32 s21, s22                              // pre-op == FusedTotalWGs-1? (globally last WG)
 s_cbranch_scc0 label_fusedA2A_handshake_after      // not the last WG -> done (only the globally last WG drains)
-// loadKernArg 21 KernArgAddress dword=1 sgprOffset=0x98
+// loadKernArg 21 KernArgAddress dword=1 sgprOffset=0x5c
 s_waitcnt lgkmcnt(0)                               // wait FusedDrain
 s_cmp_eq_u32 s21, 0                                // FusedDrain == 0?
 s_cbranch_scc1 label_fusedA2A_drain_skip           // FusedDrain==0 -> skip drain barrier
-// loadKernArg 21 KernArgAddress dword=1 sgprOffset=0x88
-// loadKernArg 26 KernArgAddress dword=1 sgprOffset=0x90
-// loadKernArg 27 KernArgAddress dword=1 sgprOffset=0xac
+// loadKernArg 21 KernArgAddress dword=1 sgprOffset=0x50
+// loadKernArg 26 KernArgAddress dword=1 sgprOffset=0x54
+// loadKernArg 27 KernArgAddress dword=1 sgprOffset=0x68
 s_waitcnt lgkmcnt(0)                               // wait FusedMyRank/FusedW/FusedTokenTiles
-s_lshl_b32 s24, s21, 3                             // rank * 8 (byte offset into flag_ptr[] array)
-s_add_u32 s24, s24, 64                             // kernarg offset = fusedBase + flag_ptr_0 + rank*8
+s_lshl_b32 s24, s21, 3                             // rank * 8 (byte offset into peer_ptr[] array)
+s_add_u32 s24, s24, 0                              // kernarg offset = fusedBase + peer_ptr_0 + rank*8
 // loadKernArg 22 KernArgAddress dword=2 sgprOffset=s24
 s_waitcnt lgkmcnt(0)                               // wait flag_ptr[my_rank] load
 s_bfm_b64 s[24:25], s26, 0                         // fused-A2A: (1 << W) - 1, one lane per peer flag slot

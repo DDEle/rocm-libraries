@@ -25,10 +25,16 @@ namespace TensileLite
     {
         // Compile-time fixed slot count for the fused-A2A kernarg segment. MUST
         // match FUSED_A2A_MAX_RANKS in Tensile/Components/Signature.py: the
-        // kernel metadata always reserves 8 recv_ptr + 8 flag_ptr slots
-        // regardless of the runtime world size, so the host must append exactly
-        // 8 of each (unused slots j>=W filled with nullptr).
+        // kernel metadata always reserves 8 peer_ptr slots regardless of the
+        // runtime world size, so the host must append exactly 8 (unused slots
+        // j>=W filled with nullptr).
         constexpr int FUSED_A2A_MAX_RANKS = 8;
+
+        // Byte offset of recv inside a peer block; flag occupies [0, MAX_RANKS*4).
+        // Mirrored in Tensile/Components/Signature.py.
+        constexpr size_t FUSED_A2A_PEER_RECV_OFFSET = 4096;
+        static_assert(FUSED_A2A_MAX_RANKS * sizeof(uint32_t) <= FUSED_A2A_PEER_RECV_OFFSET,
+                      "flag array must fit below the recv offset inside a peer block");
 
         // ...but it is not a free constant. The DRAIN barrier's EXEC mask
         // (Tensile/Components/GlobalWriteBatch.py _emitFusedA2AHandshake) is one
@@ -50,8 +56,8 @@ namespace TensileLite
         // necessary rather than sufficient. The shipped value is 8 because no node
         // is known to carry more than 8 GPUs -- it is the world size this ABI is
         // built for, not a placeholder awaiting a raise. Moving toward 31 would
-        // satisfy the assertion below while growing this segment from 176 B to
-        // 544 B, widening the kernarg slot count, and deepening the two unrolled
+        // satisfy the assertion below while growing this segment from 108 B to
+        // 292 B, widening the kernarg slot count, and deepening the two unrolled
         // per-rank scans in GlobalWriteBatch.py to ~30 iterations each.
         static_assert(FUSED_A2A_MAX_RANKS <= 31,
                       "FUSED_A2A_MAX_RANKS exceeds the 31 the DRAIN EXEC mask can encode: "
@@ -63,14 +69,14 @@ namespace TensileLite
                       "before raising this.");
 
         // Expected byte growth of args after appending the fused segment:
-        //   (2*8 recv/flag + 1 counter + 1 FusedSdmaQueues) pointers * 8B
-        //   + (6 legacy + 2 SDMA) scalars * 4B = 176B.
-        constexpr size_t FUSED_A2A_SEGMENT_BYTES = (2 * FUSED_A2A_MAX_RANKS + 2) * 8 + 8 * 4;
+        //   (MAX_RANKS peer + 1 counter + 1 FusedSdmaQueues) pointers * 8B
+        //   + 7 scalars * 4B = 108B.
+        constexpr size_t FUSED_A2A_SEGMENT_BYTES = (FUSED_A2A_MAX_RANKS + 2) * 8 + 7 * 4;
 
         // Whether a requested world size can be expressed in the segment above.
         //
         // The bound is an ABI property, not a machine property: ranks past
-        // FUSED_A2A_MAX_RANKS have no recv_ptr/flag_ptr slot at all, so a PUSH
+        // FUSED_A2A_MAX_RANKS have no peer_ptr slot at all, so a PUSH
         // workgroup targeting them consumes whatever the kernel metadata default
         // is -- silent corruption or a DRAIN hang. A device-count check cannot
         // stand in for it, and cannot stand in for the lower bound either: for
@@ -84,25 +90,23 @@ namespace TensileLite
         // Append the fixed-size fused-A2A kernarg segment to `args` in the exact
         // emission order of Signature.py fusedA2AKernArgLayout().
         //
-        // Alignment: recv_ptr_0 is appendAligned<void*> so it lands on an 8-byte
+        // Alignment: peer_ptr_0 is appendAligned<void*> so it lands on an 8-byte
         // boundary, mirroring how the kernel metadata 8-aligns the first
         // SIG_GLOBALBUFFER arg of the segment. The remaining pointers (8B) and
         // scalars (4B) are appended contiguously with no interior padding,
         // matching the Python layout (off += 8 / off += 4).
         //
-        // recvPtrs/flagPtrs hold this device's view and may be shorter than
+        // peerPtrs holds this device's view and may be shorter than
         // FUSED_A2A_MAX_RANKS; the remaining slots are filled with nullptr.
         inline void appendFusedSegment(KernelArguments&          args,
-                                       std::vector<void*> const& recvPtrs, // size W (device d's view: recv[j])
-                                       std::vector<void*> const& flagPtrs, // size W
+                                       std::vector<void*> const& peerPtrs, // size W (device d's per-peer block bases)
                                        void*                     counterPtr,
+                                       void*                     sdmaQueues, // W-element SdmaQueueDeviceHandle array
                                        uint32_t                  myRank,
-                                       uint32_t                  target,
                                        uint32_t                  worldSize,
                                        uint32_t                  nShard,
                                        uint32_t                  drain,
                                        uint32_t                  an,
-                                       void*                     sdmaQueues, // W-element SdmaQueueDeviceHandle array
                                        uint32_t                  tilesPerRank,
                                        uint32_t                  tokenTiles)
         {
@@ -110,22 +114,15 @@ namespace TensileLite
 
             for(int j = 0; j < FUSED_A2A_MAX_RANKS; j++)
             {
-                void* p = (j < (int)recvPtrs.size()) ? recvPtrs[j] : nullptr;
+                void* p = (j < (int)peerPtrs.size()) ? peerPtrs[j] : nullptr;
                 if(j == 0)
-                    args.appendAligned<void*>("recv_ptr_0", p);
+                    args.appendAligned<void*>("peer_ptr_0", p);
                 else
-                    args.append<void*>("recv_ptr_" + std::to_string(j), p);
-            }
-            for(int j = 0; j < FUSED_A2A_MAX_RANKS; j++)
-            {
-                void* p = (j < (int)flagPtrs.size()) ? flagPtrs[j] : nullptr;
-                args.append<void*>("flag_ptr_" + std::to_string(j), p);
+                    args.append<void*>("peer_ptr_" + std::to_string(j), p);
             }
             args.append<void*>("counter_ptr", counterPtr);
+            args.append<void*>("FusedSdmaQueues", sdmaQueues);
             args.append<uint32_t>("FusedMyRank", myRank);
-            // DEPRECATED (Task 6): the kernel elects on FusedTilesPerRank now.
-            // Kept so the kernarg offsets after it stay put.
-            args.append<uint32_t>("FusedTarget", target);
             args.append<uint32_t>("FusedW", worldSize);
             args.append<uint32_t>("FusedNShard", nShard);
             args.append<uint32_t>("FusedDrain", drain);
@@ -133,11 +130,6 @@ namespace TensileLite
             // Signature.py); the value `an` carries AM (A2A width along FEATURE)
             // from the swapped client.
             args.append<uint32_t>("FusedAM", an);
-            // SDMA offload args (Task 3), appended at the very end to match
-            // Signature.py. sdmaQueues is this device's SdmaQueueSet::
-            // deviceHandles() -- the W-element SdmaQueueDeviceHandle array the
-            // epilogue indexes by destination rank.
-            args.append<void*>("FusedSdmaQueues", sdmaQueues);
             args.append<uint32_t>("FusedTilesPerRank", tilesPerRank);
             args.append<uint32_t>("FusedTokenTiles", tokenTiles);
 

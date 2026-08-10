@@ -290,7 +290,8 @@ class SdmaPacketEmitter:
         return module
 
     def _movImm(self, module, dstV, imm, comment):
-        module.add(VMovB32(dst=vgpr(dstV), src=imm, comment=comment))
+        # Hex string, not int: rocisa renders an int above INT32_MAX as a float.
+        module.add(VMovB32(dst=vgpr(dstV), src=hex(imm), comment=comment))
         return module
 
     def _movSgpr(self, module, dstV, srcS, comment):

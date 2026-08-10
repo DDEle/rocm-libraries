@@ -427,8 +427,8 @@ class TestCopyStructural:
         assert COPY_HEADER_DW0 == 0x20000401
         lines = _lines(_render_copy())
         hdr = [ln for ln in lines if "DW0" in ln and "v_mov_b32" in ln]
-        assert hdr and str(COPY_HEADER_DW0) in _code(hdr[0]), \
-            f"DW0 must move the COPY_HEADER immediate {COPY_HEADER_DW0}: {hdr}"
+        assert hdr and hex(COPY_HEADER_DW0) in _code(hdr[0]), \
+            f"DW0 must move the COPY_HEADER immediate {hex(COPY_HEADER_DW0)}: {hdr}"
 
     def test_pitch_minus_one_then_shift13(self):
         # Pitch fields are (pitch-1) << 13. Assert both a minus-one and a <<13.
@@ -481,16 +481,33 @@ class TestAtomicStructural:
         assert ATOMIC_HEADER_DW0 == 0x5E00000A
         lines = _lines(_render_atomic())
         hdr = [ln for ln in lines if "DW0" in ln and "v_mov_b32" in ln]
-        assert hdr and str(ATOMIC_HEADER_DW0) in _code(hdr[0]), \
-            f"ATOMIC DW0 must move {ATOMIC_HEADER_DW0}: {hdr}"
+        assert hdr and hex(ATOMIC_HEADER_DW0) in _code(hdr[0]), \
+            f"ATOMIC DW0 must move {hex(ATOMIC_HEADER_DW0)}: {hdr}"
 
     def test_addend_is_one(self):
         text = _render_atomic()
         assert "src_data lo (addend)" in text
         lines = _lines(text)
         addlo = [ln for ln in lines if "src_data lo" in ln]
-        assert addlo and re.search(r"v_mov_b32 v\d+, 1\b", _code(addlo[0])), \
+        assert addlo and re.search(r"v_mov_b32 v\d+, 0x1\b", _code(addlo[0])), \
             f"ATOMIC addend lo must be immediate 1: {addlo}"
+
+    def test_bitfield_immediates_never_render_as_float(self):
+        # 0x9E00000A is the value that actually breaks (rocisa renders an int
+        # above INT32_MAX as a float); every immediate the emitter currently
+        # emits is below the boundary and would pass without the hex form.
+        _init_gfx950()
+        w = _mock_writer()
+        em = SdmaPacketEmitter(macroTile1=MT1)
+        pkt = w.vgprPool.checkOut(1, "pkt")
+        m = Module("hi")
+        em._movImm(m, pkt, 10 | (0x4F << 25), "bit-31 immediate")  # 0x9E00000A
+        code = _code(_lines(str(m))[0])
+        assert "0x9e00000a" in code.lower(), \
+            f"bit-31 immediate must render as hex, got: {code}"
+        assert ".0" not in code, \
+            f"immediate rendered as a FLOAT -- the assembler will encode its " \
+            f"IEEE-754 bits, not the value: {code}"
 
     def test_all_8_dwords_written(self):
         text = _render_atomic()

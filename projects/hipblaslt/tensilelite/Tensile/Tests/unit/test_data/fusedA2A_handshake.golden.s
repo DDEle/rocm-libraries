@@ -135,7 +135,7 @@ s_add_u32 s31, s19, s29                            // dst_y = myRank*N + j*MT1
 s_mul_i32 s32, s12, 256                            // dst_slice = MT1 * nShard (one band's plane)
 s_sub_u32 s33, s[sgprSizesFree+1], s29             // N - j*MT1 (tokens left in this tile)
 s_min_u32 s33, s33, 256                            // rect_y = min(MT1, N - j*MT1) (clamp tail tile)
-v_mov_b32 v5, 536871937                            // SUBWIN DW0: op=COPY sub_op=RECT elementsize=bf16
+v_mov_b32 v5, 0x20000401                           // SUBWIN DW0: op=COPY sub_op=RECT elementsize=bf16
 v_mov_b32 v6, s8                                   // SUBWIN DW1: srcBase lo
 v_mov_b32 v7, s9                                   // SUBWIN DW2: srcBase hi
 s_lshl_b32 s19, s29, 16                            // SUBWIN DW3: src_x|src_y (y << 16)
@@ -160,18 +160,18 @@ s_sub_u32 s20, s33, 1                              // SUBWIN DW11: rect_x-1|rect
 s_lshl_b32 s20, s20, 16                            // SUBWIN DW11: rect_x-1|rect_y-1 ((rectY-1) << 16)
 s_or_b32 s19, s19, s20                             // SUBWIN DW11: rect_x-1|rect_y-1 | (rectY-1) << 16
 v_mov_b32 v16, s19                                 // SUBWIN DW11: rect_x-1|rect_y-1
-v_mov_b32 v17, 0                                   // SUBWIN DW12: rect_z=0, default cache/swizzle
+v_mov_b32 v17, 0x0                                 // SUBWIN DW12: rect_z=0, default cache/swizzle
 s_lshl_b32 s19, s10, 3                             // myRank * 8 (u64 flag-slot byte offset: the ATOMIC is an ADD64)
 s_add_u32 s34, s16, s19                            // flag addr lo = flag_ptr[p] + myRank*8
 s_addc_u32 s35, s17, 0                             // flag addr hi (carry)
-v_mov_b32 v18, 1577058314                          // ATOMIC DW0: op=ATOMIC operation=ADD64
+v_mov_b32 v18, 0x5e00000a                          // ATOMIC DW0: op=ATOMIC operation=ADD64
 v_mov_b32 v19, s34                                 // ATOMIC DW1: addr lo
 v_mov_b32 v20, s35                                 // ATOMIC DW2: addr hi
-v_mov_b32 v21, 1                                   // ATOMIC DW3: src_data lo (addend)
-v_mov_b32 v22, 0                                   // ATOMIC DW4: src_data hi
-v_mov_b32 v23, 0                                   // ATOMIC DW5: cmp_data lo (unused)
-v_mov_b32 v24, 0                                   // ATOMIC DW6: cmp_data hi (unused)
-v_mov_b32 v25, 0                                   // ATOMIC DW7: loop_interval=0
+v_mov_b32 v21, 0x1                                 // ATOMIC DW3: src_data lo (addend)
+v_mov_b32 v22, 0x0                                 // ATOMIC DW4: src_data hi
+v_mov_b32 v23, 0x0                                 // ATOMIC DW5: cmp_data lo (unused)
+v_mov_b32 v24, 0x0                                 // ATOMIC DW6: cmp_data hi (unused)
+v_mov_b32 v25, 0x0                                 // ATOMIC DW7: loop_interval=0
   s_load_dwordx2 s[30:31], s[22:23], 0x20
 s_waitcnt lgkmcnt(0)                               // wait cachedWptr pointer load
 label_sdma_reserve_loop:  /// ReserveQueueSpace: CAS retry loop

@@ -40,6 +40,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <random>
 #include <vector>
 
 namespace TensileLite
@@ -347,8 +348,9 @@ namespace TensileLite
             // straight from the tensor descriptors (no hardcoded assumption): A element
             // (m,k) sits at m*aFreeStride + k*aBoundStride, similarly for B(k,n) and
             // D(m,n); the descriptor-derived strides carry the swapped shapes through
-            // automatically. Every card runs the SAME A,B, so there is ONE golden
-            // Dgold, stored row-major [M,N] (m=feature slow, n=token fast) as before.
+            // automatically. A is shared by every card but B is drawn per rank, so
+            // there is one golden per rank; each is stored row-major [M,N] (m=feature
+            // slow, n=token fast) and the W of them sit back to back, rank-major.
             const auto&  aDesc = problem->a();
             const auto&  bDesc = problem->b();
             const auto&  dDesc = problem->d();
@@ -410,44 +412,76 @@ namespace TensileLite
                 return -1;
             }
 
-            // Deterministic small-magnitude bf16 inputs (indexed by logical coords,
-            // written into the physical slot via the descriptor strides). Small
-            // integers scaled by 0.5/0.25 keep the fp32 partial sums representable
-            // and the final bf16 round predictable.
+            // Small-magnitude bf16 inputs drawn from the same (x%7)-3 alphabet
+            // DataInitialization's InitMode::Random uses, written by logical coords
+            // into the physical slot via the descriptor strides so any padding stays
+            // zero. A is scaled by 0.5 and B by 0.25, which keeps every product a
+            // multiple of 0.125 with |acc| <= 2304 for K=2048 -- exactly representable
+            // in fp32 whatever the summation order, so the GPU's out-of-order MFMA
+            // accumulation and the sequential golden below agree.
+            //
+            // B is drawn PER RANK. Every card shares one A (weights are replicated in
+            // the modelled workload) but holds its own tokens, so the W per-rank GEMM
+            // results differ. That is what makes the L2 check sensitive to WHICH
+            // source filled a recv slot: were the inputs identical on every card, any
+            // bijective relabelling of the source slots would compare equal and pass.
+            // The seed is a fixed constant so a failing run reproduces byte for byte.
+            constexpr uint32_t kInitSeed = 42;
+            auto               draw      = [](std::mt19937& g, float scale) {
+                return BFloat16((float)((int)(g() % 7) - 3) * scale);
+            };
             const size_t aElems = aDesc.totalAllocatedElements();
             const size_t bElems = bDesc.totalAllocatedElements();
             std::vector<BFloat16> hA(aElems, BFloat16(0.0f));
-            std::vector<BFloat16> hB(bElems, BFloat16(0.0f));
-            auto aVal = [](size_t m, size_t k) {
-                return BFloat16((float)(((int)((m * 3 + k) % 7)) - 3) * 0.5f);
-            };
-            auto bVal = [](size_t k, size_t n) {
-                return BFloat16((float)(((int)((k + n * 2) % 5)) - 2) * 0.25f);
-            };
-            for(size_t m = 0; m < M; m++)
-                for(size_t k = 0; k < K; k++)
-                    hA[m * aFreeStride + k * aBoundStride] = aVal(m, k);
-            for(size_t k = 0; k < K; k++)
-                for(size_t n = 0; n < N; n++)
-                    hB[k * bBoundStride + n * bFreeStride] = bVal(k, n);
+            std::vector<std::vector<BFloat16>> hB(W,
+                                                  std::vector<BFloat16>(bElems, BFloat16(0.0f)));
+            {
+                // Distinct seed_seq per stream: mt19937 seeded from adjacent raw
+                // integers can start out correlated, and seed_seq mixes that away.
+                std::seed_seq aSeq{kInitSeed, 0u};
+                std::mt19937  aRng(aSeq);
+                for(size_t m = 0; m < M; m++)
+                    for(size_t k = 0; k < K; k++)
+                        hA[m * aFreeStride + k * aBoundStride] = draw(aRng, 0.5f);
+                for(int s = 0; s < W; s++)
+                {
+                    std::seed_seq bSeq{kInitSeed, 1u + (uint32_t)s};
+                    std::mt19937  bRng(bSeq);
+                    for(size_t k = 0; k < K; k++)
+                        for(size_t n = 0; n < N; n++)
+                            hB[s][k * bBoundStride + n * bFreeStride] = draw(bRng, 0.25f);
+                }
+            }
 
-            // Host golden GEMM: Dgold[m,n] = bf16( sum_k f32(A[m,k]) * f32(B[k,n]) ).
-            // Only computed when validate=1; the triple loop is O(M*N*K) MACs and is
-            // the expensive part we SKIP on the full shape (~309 GMAC). When
-            // validate=0 Dgold stays empty and the numeric compares below are
-            // bypassed entirely (not computed-then-ignored).
+            // Host golden GEMM, one per rank:
+            //   Dgold[s][m,n] = bf16( sum_k f32(A[m,k]) * f32(B_s[k,n]) ).
+            // Read back out of the arrays that were actually uploaded rather than
+            // recomputed from a closure, so the reference is tied to the bytes the
+            // GPU saw instead of to a parallel derivation of them. Only computed when
+            // validate=1; the loop is O(W*M*N*K) MACs and is the expensive part we
+            // SKIP on the full shape (~309 GMAC per rank). When validate=0 Dgold stays
+            // empty and the numeric compares below are bypassed entirely (not
+            // computed-then-ignored).
+            const size_t          goldStride = M * N; // elements per rank within Dgold
             std::vector<BFloat16> Dgold;
             if(validate)
             {
-                Dgold.assign((size_t)M * N, BFloat16(0.0f));
-                for(size_t m = 0; m < M; m++)
+                Dgold.assign((size_t)W * goldStride, BFloat16(0.0f));
+                for(int s = 0; s < W; s++)
                 {
-                    for(size_t n = 0; n < N; n++)
+                    const BFloat16* bSrc = hB[s].data();
+                    BFloat16*       dOut = Dgold.data() + (size_t)s * goldStride;
+#pragma omp parallel for collapse(2) schedule(static)
+                    for(size_t m = 0; m < M; m++)
                     {
-                        float acc = 0.0f;
-                        for(size_t k = 0; k < K; k++)
-                            acc += (float)aVal(m, k) * (float)bVal(k, n);
-                        Dgold[m * N + n] = BFloat16(acc); // row-major [M,N] golden store
+                        for(size_t n = 0; n < N; n++)
+                        {
+                            float acc = 0.0f;
+                            for(size_t k = 0; k < K; k++)
+                                acc += (float)hA[m * aFreeStride + k * aBoundStride]
+                                       * (float)bSrc[k * bBoundStride + n * bFreeStride];
+                            dOut[m * N + n] = BFloat16(acc); // row-major [M,N] per rank
+                        }
                     }
                 }
             }
@@ -490,11 +524,12 @@ namespace TensileLite
                 HIP_CHECK_EXC(hipMalloc(&wB[d], bBytes));
                 HIP_CHECK_EXC(hipMalloc(&cC[d], cBytes));
                 HIP_CHECK_EXC(hipMalloc(&outD[d], dBytes));
-                // Give GEMM operands deterministic real contents (same on every
-                // card); zero C, out, recv. A/B are host-filled bf16 patterns so
-                // the kernel computes a non-trivial GEMM we can check numerically.
+                // Give GEMM operands deterministic real contents -- A shared by every
+                // card, B this card's own draw; zero C, out, recv. A/B are host-filled
+                // bf16 so the kernel computes a non-trivial GEMM we can check
+                // numerically.
                 HIP_CHECK_EXC(hipMemcpy(xA[d], hA.data(), aBytes, hipMemcpyHostToDevice));
-                HIP_CHECK_EXC(hipMemcpy(wB[d], hB.data(), bBytes, hipMemcpyHostToDevice));
+                HIP_CHECK_EXC(hipMemcpy(wB[d], hB[d].data(), bBytes, hipMemcpyHostToDevice));
                 HIP_CHECK_EXC(hipMemset(cC[d], 0, cBytes));
                 HIP_CHECK_EXC(hipMemset(outD[d], 0, dBytes));
                 HIP_CHECK_EXC(hipMemset(recv[d], 0, recvBytes));
@@ -823,9 +858,11 @@ namespace TensileLite
                 {
                     // ---- L2: recv (PUSH segment), per its layout established above. For
                     // destination card dst, slot src must hold the feature sub-segment
-                    // [dst*nShard, dst*nShard+nShard) of Dgold across all N tokens. Token
-                    // is NOT sharded -- every rank holds all N tokens, so all W src slots
-                    // carry the identical shard in single-card emulation.
+                    // [dst*nShard, dst*nShard+nShard) of card SRC's golden, across all N
+                    // tokens (token is not sharded -- every rank holds all N of them).
+                    // The expected value depends on src as well as dst precisely so that
+                    // a source slot filled by the wrong sender is visible; a slot no one
+                    // fills is already caught by the per-iteration re-zero of recv.
                     for(int dst = 0; dst < W && l2Pass; dst++)
                     {
                         HIP_CHECK_EXC(hipSetDevice(dst));
@@ -842,9 +879,12 @@ namespace TensileLite
                                     BFloat16 g;
                                     g.data     = hRecv[off];
                                     float got  = (float)g;
-                                    // global feature = dst*nShard + f, token = t;
-                                    // Dgold row-major [M,N] -> Dgold[feature*N + token].
-                                    float want = (float)Dgold[((size_t)dst * nShard + f) * N + t];
+                                    // global feature = dst*nShard + f, token = t; rank
+                                    // src's golden is row-major [M,N] at offset
+                                    // src*goldStride -> [.. + feature*N + token].
+                                    float want
+                                        = (float)Dgold[(size_t)src * goldStride
+                                                       + ((size_t)dst * nShard + f) * N + t];
                                     if(!closeBf16(got, want))
                                     {
                                         if(mism < 5)
@@ -867,8 +907,9 @@ namespace TensileLite
 
                     // ---- L1: out (local segment). Under the col-major swap, the first
                     // AM FEATURE columns PUSH to recv; the remaining [AM, M) stay local
-                    // in out, so this checks out[m in [AM,M), n in [0,N)] against
-                    // Dgold[m,n].
+                    // in out, so this checks card d's out[m in [AM,M), n in [0,N)]
+                    // against card d's OWN golden -- the local segment never crosses
+                    // cards, so unlike L2 the rank index here is just d.
                     //
                     // TWO checks per card, both must pass (l1Pass &= both):
                     //   (a) descriptor-driven: off = m*dMStride + n*dNStride, via the
@@ -899,7 +940,7 @@ namespace TensileLite
                         {
                             for(size_t n = 0; n < N; n++) // all tokens
                             {
-                                float want = (float)Dgold[m * N + n];
+                                float want = (float)Dgold[(size_t)d * goldStride + m * N + n];
 
                                 // (a) descriptor-driven read.
                                 {

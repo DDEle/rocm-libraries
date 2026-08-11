@@ -26,9 +26,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TENSILE_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 sys.path.insert(0, TENSILE_ROOT)
 
-# Signature.py imports rocisa at module load; skip cleanly if the C++ module is
-# not built in this environment rather than erroring at collection time.
-sig = pytest.importorskip("Tensile.Components.Signature")
+import Tensile.Components.Signature as sig  # noqa: E402
 
 
 # The single source of truth for this test. Any offset/size change on either the

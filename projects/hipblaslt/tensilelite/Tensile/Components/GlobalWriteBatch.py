@@ -2610,9 +2610,8 @@ class GlobalWriteBatchWriter:
   def _fusedA2ALoadFlagBaseAndRank(self, module, flagBaseSgpr, dstRankSgpr, nShardSgpr, tmpSgpr):
     """Load peer_ptr[dst_rank] into flagBaseSgpr and the integer dst_rank into dstRankSgpr.
 
-    Two-phase approach (same as _fusedA2ALoadRecvBase) to avoid SMEM WAW hazard:
-      Phase 1 (pure SALU): scan candidate ranks to determine dst_rank.
-      Phase 2: single s_load_dwordx2 at peer_ptr_0 + dst_rank*8.
+    Same two-phase rank scan as _fusedA2ALoadRecvBase -- see there for why it is
+    split into a pure-SALU scan followed by a single s_load.
 
     Args:
       module:       Module to append instructions to.
@@ -2715,17 +2714,13 @@ class GlobalWriteBatchWriter:
     world size and overflowed their 14-bit fields at W=8 -- from the constraint
     set entirely, and leaves N unconstrained.
 
-    ASSUMPTION -- what still has to fit: rect_x = nShard and rect_y <= MT1 in
-    14-bit fields, and src_pitch = ldd in a 19-bit field.  rect_x is the copy's X
-    EXTENT, so no encoding trick can fold it away.  The emitter packs all of these
-    unmasked, so an over-range value ORs into the neighbouring field rather than
-    truncating, and the copy silently moves the wrong band.  Enforced at launch by
-    client/src/FusedA2AClient.cpp and mirrored by
-    SdmaPacketEmitter.checkA2AFieldsFit().  Separately, src_slice = M*N is packed
-    into a 28-bit field by _packSliceMinus1, likewise unmasked and unguarded; that
-    one is benign because the SUBWIN copy is single-plane, so the slice pitch is a
-    don't-care -- the emitter's own comment says "src_slice = M * N (single-plane,
-    don't-care)".
+    ASSUMPTION -- what still has to fit: rect_x = nShard, rect_y <= MT1, and
+    src_pitch = ldd must fit their packet fields, packed unmasked so an
+    over-range value corrupts a neighbouring field rather than truncating.  See
+    SdmaPacketEmitter.checkA2AFieldsFit for the exact bit-width arithmetic and
+    what client/src/FusedA2AClient.cpp enforces at launch.  src_slice = M*N is
+    packed unguarded too, but is benign: the SUBWIN copy is single-plane, so the
+    slice pitch is a don't-care.
 
     Args:
       dstRankSgpr:  1 SGPR, the peer rank p (== this WG's dst_rank).
@@ -2845,44 +2840,11 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(handleBaseSgpr)
 
   def _emitFusedA2AHandshake(self, module: Module):
-    """Emit the cross-card handshake for PUSH workgroups.
-
-    Runs ONCE per WG (last batch of the store path), gated at RUNTIME to PUSH WGs
-    (WorkGroup0 < AM_tiles, same gate as the PUSH store dispatch).  Sequence
-    (rank_0 supplying rank_1 example):
-      (1) s_waitcnt vscnt(0)         -- this WG's stores (all sc1, so already past L2
-                                        and in HBM) completed before it touches the
-                                        counter; the SDMA engine reads HBM, so this is
-                                        what makes the band it copies complete.
-      (2) s_barrier + wave-0 gate    -- the counter atomic + election fire ONCE per WG,
-                                        not per lane (StreamK single-writer blueprint).
-      (3) old = atomic_add(counter[dst_rank][j], 1) device scope, RETURN pre-op (sc0),
-          with j = WorkGroup1 (this WG's token-tile).
-      (4) if old+1 != FusedTilesPerRank -> not the last WG for (dst_rank, j) -> skip.
-      (5) elected last WG: submit the SDMA COPY_SUBWIN + ATOMIC ADD_RTN_32 packet pair for
-          (dst_rank, j) -- see _emitFusedA2ASdmaIssue.
-      (6) old2 = atomic_add(counter2[dst_rank], 1) AFTER that submit; only
-          old2+1 == FusedTokenTiles (this card's last packet to dst_rank) runs the
-          DRAIN barrier.  Without (6) all tokenTiles winners of a peer would spin on
-          the same dst_rank-only flag slot; with it there is exactly one spinner per
-          peer, and it starts spinning only once this card has nothing left to submit.
-
-    The counter grain is (dst_rank, token-tile), a W*tokenTiles u32 array, so election
-    fires exactly once per (peer, token-tile) unit of work -- which is precisely the
-    granularity of one SDMA packet pair.  The flag is one u32 slot per SOURCE rank and
-    accumulates: source j's tokenTiles ATOMICs raise it to tokenTiles, which is the
-    DRAIN predicate.
-
-    (7) counter3: a single grid-wide u32 that EVERY surviving work-group increments,
-        PUSH and local alike.  The one that takes it to FusedTotalWGs is the globally
-        last work-group, and it alone runs the DRAIN.  This is why the preamble (full
-        EXEC, the store wait, the barrier, the wave-0 election and the single-lane
-        EXEC) sits ABOVE the PUSH gate: a local work-group has to walk all of it to
-        reach the tally.  Electing the last work-group rather than one spinner per
-        peer matters at the champion kernel's 1-WG/CU occupancy, where each per-peer
-        spinner idles a whole CU while compute work-groups are still queued; by the
-        time the last work-group arrives there is nothing left to starve.
-    """
+    """Emit the once-per-WG cross-card handshake for PUSH work-groups: wait for
+    this WG's stores, elect one lane, bump the per-(dst_rank, token-tile) counter,
+    submit the SDMA packet pair on election, then the grid-wide counter3 tally
+    elects the DRAIN owner.  See the inline comments at each step below for the
+    per-step invariants."""
     kw = self.parentWriter
     module.addComment2("fused-A2A cross-card handshake (design spec 2.3): counter election + SDMA packet submit + DRAIN")
 
@@ -2959,16 +2921,12 @@ class GlobalWriteBatchWriter:
     tmpSgpr2     = kw.sgprPool.checkOut(2, tag="fusedA2A_hsSwitchTmp", preventOverflow=False)
     self._fusedA2ALoadFlagBaseAndRank(argModule, flagBaseSgpr, dstRankSgpr, nShardSgpr, tmpSgpr2)
 
-    # (1)+(2) are PUSH-ONLY: a local work-group skips the store wait and the
-    # barrier entirely.  Neither is a precondition of the counter3 tally: the tally
-    # needs "once per work-group", which is the wave-0 election below, not "every
-    # wave's stores are in HBM", which is what gates the SDMA submit in step (5).
-    #
-    # The gate had to move ABOVE the barrier rather than the barrier below the gate:
-    # s_barrier must be reached by every wave of a work-group or the work-group
-    # hangs, and the wave-0 election sits between them, so a barrier placed after it
-    # would be executed by wave 0 alone.  WorkGroup0 is work-group-uniform, so every
-    # wave of a local WG takes the same edge and skips the barrier together.
+    # (1)+(2) are PUSH-ONLY: local work-groups skip the store wait and the barrier,
+    # since the tally only needs a once-per-WG election, not proof the stores are
+    # in HBM (that gates the SDMA submit in step (5)).  The gate sits above the
+    # barrier because s_barrier must be reached by every wave or the work-group
+    # hangs; WorkGroup0 is work-group-uniform, so every wave of a local WG skips
+    # it together.
     syncModule = Module("fusedA2A_hsSync")
     # Each wave retires its own stores, THEN the barrier joins them. The other order
     # lets the SDMA engine read a band that is not yet in HBM.
@@ -2986,9 +2944,8 @@ class GlobalWriteBatchWriter:
     # The counter increment + flag store below are VECTOR memory ops on a lane-
     # uniform address; under all-ones EXEC every active lane would issue them, so
     # the counter would jump by wavefrontSize per WG and the old+1==target election
-    # never fires. Narrow EXEC to a single lane (thread 0, the same lane whose
-    # Serial==0 passed the gate) so the atomic + flag store issue exactly once per
-    # WG. Mirrors the file's mask-EXEC-before-atomic idiom (see lines 3112, 3160).
+    # never fires.  Narrow EXEC to a single lane (thread 0, the same lane whose
+    # Serial==0 passed the gate) so the atomic + flag store issue exactly once per WG.
     syncModule.add(self.getEdgeMovInstType()(EXEC(), 1, "fused-A2A: isolate lane 0 for the once-per-WG counter atomic + flag store"))
 
     # The local path needs the same once-per-WG narrowing the PUSH path gets, minus
@@ -3065,26 +3022,14 @@ class GlobalWriteBatchWriter:
                                 flagBaseSgpr, tmpSgpr2)
 
     # (6) second-level, per-peer counter: converge the DRAIN spinners from tokenTiles
-    # per peer down to exactly one.  The (4) election fires once per (dst_rank, j)
-    # pair, but the DRAIN poll address below depends only on dst_rank -- so without
-    # this gate all tokenTiles winners of a peer would spin on the same flag slot
-    # (W*tokenTiles = 32 spinners at the champion shape W=4, tokenTiles=8).
+    # per peer down to exactly one, since the DRAIN poll address below depends only
+    # on dst_rank.  counter2 is a W-entry u32 array appended after the (p,j) counter
+    # array, at byte offset W*tokenTiles*4 (host: FusedA2AClient.cpp counterBytes).
+    # It is incremented AFTER _emitFusedA2ASdmaIssue returns, so old2+1 == tokenTiles
+    # identifies the WG that submitted this card's LAST packet to dst_rank.
     #
-    # counter2 is a W-entry u32 array appended to the SAME counter allocation at byte
-    # offset W*tokenTiles*4 (host: FusedA2AClient.cpp counterBytes).  Riding the
-    # existing buffer means it inherits the per-iteration memset and needs no kernarg
-    # change.  It is incremented AFTER _emitFusedA2ASdmaIssue returned -- whose last
-    # step is emitSubmitPacket (wptr + doorbell) -- so old2+1 == tokenTiles identifies,
-    # by construction, the WG that submitted this card's LAST packet to dst_rank.  That
-    # WG is then one of W spinners (one per peer, not one overall), and by then none of
-    # this card's producers FOR dst_rank are still waiting to be scheduled -- producers
-    # for the other peers may well be.  So this narrows the occupancy hazard from
-    # W*tokenTiles down to W; it does not remove it.
-    #
-    # counter3 owns the DRAIN; this (6) election feeds nothing into it -- both of
-    # its edges reach the tally.  It is kept because it is still the only "last
-    # submitter to dst_rank" predicate in the kernel, and because the SDMA submit
-    # above depends on the (4) election that shares its machinery.
+    # counter3 (below) owns the DRAIN election; this one only gates the SDMA-submit
+    # machinery it shares with step (4).
     counter2PtrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsCounter2Ptr", preventOverflow=False)
     fusedWSgpr      = kw.sgprPool.checkOut(1, tag="fusedA2A_hsW", preventOverflow=False)
     # counterPtrSgpr was advanced in place to &counter[dst_rank][j] at (3); reload the
@@ -3236,34 +3181,12 @@ class GlobalWriteBatchWriter:
     self._fusedA2ALoadFlagBaseByRank(module, drainFlagBase, drainRankSgpr, drainTmp)
     kw.sgprPool.checkIn(drainRankSgpr)
 
-    # EXEC must cover W lanes for the poll.  Everything above ran at EXEC=1 so the
-    # counter atomics fired once per WG; a vector load issued at that width would
-    # load in lane 0 ONLY, the v_cmp would set VCC from lane 0 alone, and VCCZ would
-    # become a one-slot predicate wearing the shape of a W-slot one -- releasing the
-    # DRAIN as soon as the FIRST peer's slot filled.  That looks like a working
-    # barrier under light load and corrupts data under real traffic, so the mask is
-    # built from the runtime W rather than assumed.
-    #
-    # One instruction builds it: S_BFM_B64 computes
-    # ((1 << src0[5:0]) - 1) << src1[5:0] -- width W at offset 0, i.e. exactly the
-    # mask, hi dword included (the B32 form is the same with [4:0] operand fields).
-    # The arithmetic alternative (mov 1; shl W; sub 1; zero
-    # the hi dword) spends four instructions on the same value, two of which are a
-    # silent hang if they go missing, and caps the usable W at 31 because s_lshl_b32
-    # takes its amount from S1[4:0].  The B32/B64 pair makes the two wave widths
-    # symmetric, so the EXEC write itself can go through the same getEdgeMovInstType()
-    # helper as every other EXEC write in this class; only the mask register's width
-    # has to be chosen alongside it.
-    #
-    # W is a runtime kernarg here, so nothing at THIS line can check it against what
-    # the width operand can encode -- a W at the field's modulus (32 on the B32 arm,
-    # 64 on the B64 one) wraps to a width of 0 and leaves EXEC empty, skipping the
-    # barrier silently.  What makes that unreachable is the compile-time bound
-    # FUSED_A2A_MAX_RANKS <= 31, asserted at both ends of the ABI
-    # (Signature.py's module-level guard and the static_assert in
-    # client/include/FusedA2AKernArg.hpp), plus the host check 1 <= W <=
-    # FUSED_A2A_MAX_RANKS in fusedA2AWorldSizeValid.  Change the mask instruction
-    # here and those two bounds are what you must re-derive.
+    # EXEC must cover W lanes for the poll: everything above ran at EXEC=1, but a
+    # vector load issued at that width would see lane 0 only, and VCCZ would look
+    # like a working barrier while releasing the DRAIN as soon as the FIRST peer's
+    # slot filled.  One S_BFM_B32/B64 builds the W-lane mask ((1 << W) - 1) at
+    # offset 0.  See Signature.py's FUSED_A2A_MAX_RANKS comment for why the S_BFM
+    # width field bounds W to 31 and why that bound must not silently drift.
     maskReg  = sgpr(drainTmp) if self.wavelen == 32 else sgpr(drainTmp, 2)
     maskInst = SBfmB32       if self.wavelen == 32 else SBfmB64
     module.add(maskInst(dst=maskReg, src0=sgpr(c3WSgpr), src1=0,

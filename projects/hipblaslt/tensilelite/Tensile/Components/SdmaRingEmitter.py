@@ -4,18 +4,14 @@
 # SDMA ring-buffer producer emitter.
 #
 # Packet-INDEPENDENT rocisa translation of MORI's anvil device ring skeleton
-# (mori/include/mori/core/transport/sdma/anvil_device.hpp:121-234, the
-# WrapIntoRing / CanWriteUpto / ReserveQueueSpace / placePacket / submitPacket
-# five). It generates the assembly a GPU producer runs to reserve space in a
-# host-created SDMA ring, place already-built packet dwords, and ring the
-# doorbell -- WITHOUT knowing what the packet is. SdmaPacketEmitter builds the
-# COPY_SUBWIN + ATOMIC packet dwords and calls placePacket; the whole thing is
-# wired into the GEMM epilogue store path and this emitter is live in a real
-# kernel. The caller is GlobalWriteBatch._emitFusedA2ASdmaIssue (the fused-A2A
-# SDMA path), which invokes emitReserveQueueSpace, then emitPlacePacket twice
-# (COPY then ATOMIC), then emitSubmitPacket.
-# It is additionally verified out-of-kernel by rendering each method's Module
-# to assembly text and asserting on the instruction sequence + scope bits
+# (mori/include/mori/core/transport/sdma/anvil_device.hpp:121-234): the assembly
+# a GPU producer runs to reserve space in a host-created SDMA ring, place
+# already-built packet dwords, and ring the doorbell -- WITHOUT knowing what the
+# packet is. SdmaPacketEmitter builds the packet dwords and calls placePacket.
+# The caller is GlobalWriteBatch._emitFusedA2ASdmaIssue, which invokes
+# emitReserveQueueSpace, then emitPlacePacket twice (COPY then ATOMIC), then
+# emitSubmitPacket. Verified out-of-kernel by rendering each method's Module to
+# assembly text and asserting on the instruction sequence + scope bits
 # (Tensile/Tests/unit/test_sdma_ring_emitter.py).
 #
 # The device handle it consumes is the W-element SdmaQueueDeviceHandle array

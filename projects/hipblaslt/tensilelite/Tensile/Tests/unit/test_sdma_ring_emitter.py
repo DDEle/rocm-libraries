@@ -5,19 +5,13 @@
 # SDMA ring-buffer producer emitter structural tests (NOGPU).
 #
 # The emitter (Tensile/Components/SdmaRingEmitter.py) is a packet-independent
-# rocisa translation of MORI's anvil device ring skeleton. It IS wired into a
-# live kernel (GlobalWriteBatch._emitFusedA2ASdmaIssue calls
-# emitReserveQueueSpace -- grep the function name, not a line number, which
-# rots), but these tests stay
-# deliberately out-of-kernel: "verify" means render each method's Module to
-# assembly text and assert on the SEMANTIC features that a wrong emit would
-# corrupt -- instruction mnemonic + scope bits (sc0/sc1) +
-# operand offsets -- NOT a whole-text snapshot (which reddens on any benign
-# edit and tells you nothing when it does).
+# rocisa translation of MORI's anvil device ring skeleton, wired into
+# GlobalWriteBatch._emitFusedA2ASdmaIssue. These tests render each method's
+# Module to assembly text and assert on semantic features -- mnemonic, scope
+# bits (sc0/sc1), operand offsets -- rather than a whole-text snapshot.
 #
-# The five load-bearing invariants (a wrong one is a timing-dependent hang that
-# is nearly impossible to debug on hardware, so they are pinned here where a
-# regression is a one-line diff):
+# The five load-bearing invariants (a wrong one is a timing-dependent hang
+# that's nearly impossible to debug on hardware):
 #   1. scope bits per field: rptr read = SYSTEM (sc0 sc1); queueBuf / wptr /
 #      cachedWptr / committedWptr access = AGENT (sc1); doorbell write = SYSTEM.
 #   2. submit publish order: wptr store -> s_waitcnt vmcnt(0) -> doorbell store
@@ -45,7 +39,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TENSILE_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 sys.path.insert(0, TENSILE_ROOT)
 
-# rocisa is imported transitively; skip cleanly if the C++ module is not built.
 import rocisa                                                   # noqa: E402
 
 from rocisa import rocIsa                                        # noqa: E402

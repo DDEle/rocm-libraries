@@ -7,15 +7,8 @@
 # no compiler and no configured build tree, so it is cheap enough to run in CI
 # on every platform.
 #
-# The cases below pin the one property that is easy to get wrong here: the
-# "is this search dir dead?" guard must test the directory of the entry being
-# examined. Writing the guard as
-#
-#     elseif(_lib MATCHES "^-L(.+)$" AND NOT IS_DIRECTORY "${CMAKE_MATCH_1}")
-#
-# does NOT do that -- if() expands its arguments before evaluating them, so
-# ${CMAKE_MATCH_1} carries the value left by the *previous* MATCHES and every
-# -L entry gets repointed, live ones included.
+# The cases below regression-test the CMAKE_MATCH_1 aliasing bug described in
+# HsakmtLinkInterface.cmake.
 
 cmake_minimum_required(VERSION 3.16)
 

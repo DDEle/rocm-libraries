@@ -4,64 +4,39 @@
 # SDMA packet-construction emitter.
 #
 # Packet-DEPENDENT counterpart to SdmaRingEmitter (which is packet-INDEPENDENT
-# ring plumbing). This module turns the all-to-all geometry (kernarg values +
+# ring plumbing): this module turns the all-to-all geometry (kernarg values +
 # WG ids) into the 13-dword COPY_SUBWIN and 8-dword ATOMIC ADD_RTN_32 packet
 # dword arrays, laid out in VGPRs; SdmaRingEmitter.emitPlacePacket then writes
-# those dwords into the ring. It is deliberately split from the ring emitter:
-# ring reserve/place/submit is packet-agnostic, packet field encoding is
-# packet-specific -- two responsibilities, two files.
+# those dwords into the ring.
 #
 # The C++ structs / byte layout / minus-one + element-scaling conventions are
 # the SAME ones frozen in client/src/SdmaPktSubwin.hpp and its golden-vector
-# gtest (SdmaPktSubwin_test.cpp). The COPY_SUBWIN encoding was validated
-# byte-for-byte on MI355X; the ATOMIC struct is MORI's production struct, run on
-# hardware, and, with the ADD_RTN_32 selector, by the 4-card run.
+# gtest (SdmaPktSubwin_test.cpp), validated byte-for-byte on MI355X.
 #
-# TWO surfaces, cross-checked against each other and against the T1 golden:
+# TWO surfaces, cross-checked against each other and against the golden vectors:
 #   * encodeCopyDwords / encodeAtomicDwords -- pure-Python integer encoders that
-#     reproduce the exact 13/8 dword vectors. Used by the unit test to prove the
-#     field math matches the C++ golden bit-for-bit, and (conceptually) the ONE
-#     source of truth for what the assembly must build.
+#     reproduce the exact 13/8 dword vectors; the source of truth for what the
+#     assembly must build.
 #   * emitBuildCopyPacket / emitBuildAtomicPacket -- rocisa emitters that build
 #     the same dwords at runtime in VGPRs from the runtime inputs (p, j, myRank,
-#     M, N, nShard). They mirror the pure-Python encoders field for field.
+#     M, N, nShard), mirroring the pure-Python encoders field for field.
 #
-# The live caller is GlobalWriteBatch._emitFusedA2ASdmaIssue (the elected WG of
-# each (peer, token-tile) pair). Unit verification is (a) immediate cross-check
-# vs the T1 golden, (b) rendering each emitter's Module and running it through
-# the gfx950 assembler, and (c) structural asserts on the field-packing
-# instruction sequence.
+# The live caller is GlobalWriteBatch._emitFusedA2ASdmaIssue.
 #
 # Packet geometry, per (peer p, token-tile j), with this card == myRank:
 #   COPY_SUBWIN (bf16 elements, elementsize header = log2(2) = 1):
 #     src  = D + (j*MT1)*ldd + p*nShard
 #     dst  = peer_ptr[p] + recvOffset + (myRank*N + j*MT1)*nShard
-#     src pitch = ldd (18432)  ;  dst pitch = nShard (2560, unpadded production)
+#     src pitch = ldd  ;  dst pitch = nShard
 #     rect X = nShard (feature, contiguous) ; rect Y = min(MT1, N - j*MT1) (token)
 #   ATOMIC ADD_RTN_32 -> peer_ptr[p] + myRank*4, addend 1 (raise the dest flag).
 #
 # COORDINATES ARE FOLDED INTO THE BASE ADDRESSES: src_x/src_y/dst_x/dst_y are all
 # emitted as a literal 0 and the whole offset is added into the 64-bit base
-# instead. The hardware addresses a sub-window as
-#     addr(x, y) = base + y*pitch*elem + x*elem
-# so this is the same byte address written two ways -- not an approximation.
-#
-# Why fold:
-#   * src_x = p*nShard and dst_y = myRank*N + j*MT1 are 14-BIT fields, and both
-#     grow with the world size W. At W=8 with N=4096, dst_y=32512, which exceeds
-#     the 16384 field limit. Folding removes the coordinate fields from the
-#     constraint set entirely; what remains is rect_x = nShard (14 bit, an
-#     extent -- it IS the copy, so no encoding trick can move it) and the
-#     19-bit pitches.
-#   * It shrinks the Python-predicate/C++-guard drift surface (see
-#     checkA2AFieldsFit) from three runtime terms to two.
-# Cost: one 32x32->64 multiply plus a 64-bit shift-add per side, on the cold
-# packet-issue path, in exchange for deleting the DW3/DW8 field packing.
-#
-# The MI355X-validated coordinate form is NOT lost: encodeCopyDwords below still
-# takes x/y and still encodes them, as does the C++ makeCopyRectPacket -- both
-# remain pinned to the original hardware-backed golden vectors. Only the fused-
-# A2A CALL SITE folds; the wire-format encoders stay general.
+# instead (addr(x, y) = base + y*pitch*elem + x*elem, so this is the same byte
+# address written two ways). This keeps the 14-bit coordinate fields from
+# overflowing at large world size x N; see checkA2AFieldsFit for what remains
+# field-encoded and its bit-width bounds.
 ################################################################################
 
 from rocisa.container import vgpr, sgpr
@@ -135,53 +110,19 @@ PITCH_FIELD_LIMIT = 1 << _PITCH_BITS   # 524288; src_pitch/dst_pitch
 def checkA2AFieldsFit(numRanks, nShard, macroTile1, srcPitch):
     """Raise ValueError if a fused-A2A geometry cannot be encoded safely.
 
-    REFERENCE MIRROR, NOT THE ENFORCEMENT. This function has NO production
-    caller -- its only callers are its own unit tests. It is not called from
-    codegen because W/nShard/ldd are runtime kernargs, unknown at codegen time.
-
-    The shipped enforcement is the pair of guards in
-    client/src/FusedA2AClient.cpp, inside runFusedA2A(): the rect/rank guard
-    above the "geometry overflows the SDMA packet's 14-bit rect_x field"
-    diagnostic, and the pitch guard next to dNStride. Those refuse the launch;
-    this predicate only re-states the same arithmetic in Python so the terms can
-    be unit-tested.
-
-    THE TWO CAN DRIFT SILENTLY. Nothing links them: no test compares them, and
-    editing one will not fail anything that checks the other. If you change a
-    term here, change it there, and vice versa. (Extracting the C++ guard into a
-    header so a gtest can call the real thing is a known deferred follow-up;
-    until then, this pairing is maintained by hand.) The fold shrank this
-    surface from three runtime terms to two, which is part of why it was done.
+    Python mirror of the field-fit guards in
+    client/src/FusedA2AClient.cpp::runFusedA2A. Not called from codegen (W,
+    nShard and ldd are runtime kernargs, unknown at codegen time); used only by
+    this module's unit tests. THE TWO CAN DRIFT SILENTLY -- nothing links them,
+    so keep them in sync by hand.
 
     Rank bound: the kernarg segment reserves exactly FUSED_A2A_MAX_RANKS
     peer_ptr slots (Signature.py), so ranks >= that have no pointer.
 
-    WHAT IS NOT CHECKED here, and why: src_x, src_y and dst_y are folded into
-    the 64-bit base addresses and emitted as a literal 0 (see
-    emitComputeCopyFields), so no world size and no token count can overflow
-    them. N in particular is completely unconstrained.
-
-    What remains, and where each value comes from. Note every X-direction term is
-    checked AFTER the >> ELEMENT_SHIFT scaling into packet elements, because that
-    is the value the field actually holds:
-      rect_x = nShard/8    -- the copy's X EXTENT. An extent is the copy itself;
-                              no encoding trick can fold it away. 14-bit, so the
-                              real bound is nShard < 131072 (AM < 131072*W).
-      rect_y <= MT1        -- clamped to min(MT1, N - j*MT1). NOT scaled: it
-                              counts rows, and ELEMENTSIZE scales only X.
-      src_pitch = ldd/8    -- D's token-axis stride (StrideD1J). 19-bit, so
-                              ldd < 4194304.
-      dst_pitch = nShard/8 -- 19-bit, subsumed by the tighter rect_x check.
-    rect_x and rect_y are packed WITHOUT a mask (_packRectMinus1), so an
-    over-range value does not truncate -- it ORs into the neighbouring field and
-    the copy silently moves the wrong band. The pitches are packed unmasked too
-    (_packPitchMinus1 shifts left by 13, straight into the neighbouring field).
-
-    DIVISIBILITY is a hardware precondition of the wider element: the chosen
-    element must exactly divide the pitches, the slice pitches, the rect width
-    and the X offsets. The X offsets are 0 since the fold, so what is left is
-    nShard and ldd. A non-multiple would be TRUNCATED by the shift, silently
-    shortening the copy -- so it is rejected, not rounded.
+    src_x, src_y and dst_y are folded into the 64-bit base addresses (see
+    emitComputeCopyFields) and are not checked here; N is unconstrained. What
+    remains -- rect_x, rect_y, src_pitch, dst_pitch and the ELEMENT_SHIFT
+    divisibility precondition -- is derived in the raise() messages below.
     """
     from .Signature import FUSED_A2A_MAX_RANKS
     if numRanks < 1 or numRanks > FUSED_A2A_MAX_RANKS:

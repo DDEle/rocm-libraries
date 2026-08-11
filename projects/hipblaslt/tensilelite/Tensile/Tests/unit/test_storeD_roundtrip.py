@@ -239,9 +239,7 @@ def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False, source_swap=Fal
     #   bf16 dest (2 B/elem): SVW = min(16/2, 4) = 4 → buffer_store_dwordx2  (8 bytes) ✓
     bpe = int(dest_dtype.numBytes())
     mi_output_vw = kernel["MIOutputVectorWidth"]
-    # SourceSwap moves MIOutputVectorWidth onto the vc1 (N) axis, leaving the vc0 (M)
-    # axis width = VectorWidthA = 1.  SVW steps vc0, so SVW must be 1 under SourceSwap;
-    # a larger SVW over-generates store elements vs. accumulators and crashes codegen.
+    # SourceSwap forces SVW=1 (see the source_swap docstring above).
     kernel["StoreVectorWidth"] = 1 if source_swap else min(16 // bpe, mi_output_vw)
     kernel["_VectorStore"] = True
 

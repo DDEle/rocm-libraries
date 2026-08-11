@@ -75,10 +75,12 @@ def test_src_pitch_is_the_D_token_stride_not_the_M_extent():
     assert not any("SUBWIN DW4" in ln and "s[sgprSizesFree+0]" in _code(ln)
                    for ln in lines), \
         "src_pitch must not be the M extent (SizesFree+0); it must be D's token-axis stride"
-    # POSITIVE -- DW4 is sourced from the stride sgpr.
-    assert any("s_sub_u32" in _code(ln) and "s[sgprStrideD1J]" in _code(ln)
+    # POSITIVE -- DW4 is sourced from the stride sgpr. It reaches the field via the
+    # element-scaling right shift (the packet addresses in 16-byte elements), so the
+    # stride register appears on the s_lshr rather than on the s_sub.
+    assert any("s_lshr_b32" in _code(ln) and "s[sgprStrideD1J]" in _code(ln)
                and "SUBWIN DW4" in ln for ln in lines), \
-        "expected DW4 src_pitch-1 to subtract from s[sgprStrideD1J]"
+        "expected DW4 src_pitch to be scaled from s[sgprStrideD1J]"
 
 
 def test_src_slice_still_uses_M_times_N():

@@ -36,26 +36,42 @@
 #
 # §1.3 packet geometry, per (peer p, token-tile j), with this card == myRank:
 #   COPY_SUBWIN (bf16 elements, elementsize header = log2(2) = 1):
-#     src  = D + (j*MT1)*M + p*nShard      -> base=D, src_x=p*nShard, src_y=j*MT1
-#     dst  = peer_ptr[p] + recvOffset + myRank*N*nShard + (j*MT1)*nShard
-#            -> base=peer_ptr[p]+recvOffset, dst_x=0, dst_y=myRank*N + j*MT1
-#     src pitch = M (18432)  ;  dst pitch = nShard (2560, unpadded production)
+#     src  = D + (j*MT1)*ldd + p*nShard
+#     dst  = peer_ptr[p] + recvOffset + (myRank*N + j*MT1)*nShard
+#     src pitch = ldd (18432)  ;  dst pitch = nShard (2560, unpadded production)
 #     rect X = nShard (feature, contiguous) ; rect Y = min(MT1, N - j*MT1) (token)
 #   ATOMIC ADD_RTN_32 -> peer_ptr[p] + myRank*4, addend 1 (raise the dest flag).
 #
-# Coordinate form (base + src_x/src_y) is used rather than folding the whole
-# offset into the base address: it is exactly the form the MI355X golden
-# validated, keeps every field in the same units the hardware documents, and
-# lets the same encoder cover the harness (padded dst pitch) and production
-# (unpadded) shapes by changing only the pitch argument.
+# COORDINATES ARE FOLDED INTO THE BASE ADDRESSES: src_x/src_y/dst_x/dst_y are all
+# emitted as a literal 0 and the whole offset is added into the 64-bit base
+# instead. The hardware addresses a sub-window as
+#     addr(x, y) = base + y*pitch*elem + x*elem
+# so this is the same byte address written two ways -- not an approximation.
+#
+# Why fold (this REVERSES the original choice; the coordinate form shipped first):
+#   * src_x = p*nShard and dst_y = myRank*N + j*MT1 are 14-BIT fields, and both
+#     grow with the world size W. At W=8 with N=4096 the shape that the client
+#     actually wants to run overflows dst_y (32512 >= 16384) and was refused at
+#     launch. Folding removes the coordinate fields from the constraint set
+#     entirely; what remains is rect_x = nShard (14 bit, an extent -- it IS the
+#     copy, so no encoding trick can move it) and the 19-bit pitches.
+#   * It shrinks the Python-predicate/C++-guard drift surface (see
+#     checkA2AFieldsFit) from three runtime terms to two.
+# Cost: one 32x32->64 multiply plus a 64-bit shift-add per side, on the cold
+# packet-issue path, in exchange for deleting the DW3/DW8 field packing.
+#
+# The MI355X-validated coordinate form is NOT lost: encodeCopyDwords below still
+# takes x/y and still encodes them, as does the C++ makeCopyRectPacket -- both
+# remain pinned to the original hardware-backed golden vectors. Only the fused-
+# A2A CALL SITE folds; the wire-format encoders stay general.
 ################################################################################
 
 from rocisa.container import vgpr, sgpr
 from rocisa.code import Module
 from rocisa.instruction import (
     VMovB32,
-    SMulI32, SAddU32, SAddCU32, SSubU32, SMinU32,
-    SLShiftLeftB32, SOrB32,
+    SMulI32, SMulHIU32, SAddU32, SAddCU32, SAddU64, SSubU32, SMinU32,
+    SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SOrB32,
 )
 
 
@@ -71,8 +87,36 @@ SDMA_OP_ATOMIC         = 10
 SDMA_ATOMIC_ADD_RTN_32 = 15
 ATOMIC_PACKET_DWORDS   = 8
 
-# bf16 destination: 2-byte elements -> elementsize header field = log2(2) = 1.
-BF16_ELEMENT_SIZE_LOG2 = 1
+# TWO DIFFERENT "ELEMENT SIZES". They were equal until the packet element was
+# widened to 16 bytes, and conflating them is a silent 8x address error, so they
+# are separate constants with separate jobs:
+#
+#   D_DATA_ELEMENT_LOG2 = log2(sizeof(bf16)). The width of one D element in
+#     BYTES. It converts the §1.3 element-unit geometry into the byte offset
+#     folded into the base address. A byte offset is a byte offset at any
+#     packet elementsize, so this NEVER changes with the one below.
+#
+#   PACKET_ELEMENT_SIZE_LOG2 = the packet's ADDRESSING GRANULARITY, the unit that
+#     x, the pitches, the slice pitches and rect_x are counted in (header field
+#     [31:29]). Widening it from 1 to 4 divides all of those field values by 8,
+#     which is what buys the headroom: rect_x = nShard/8 lifts the AM ceiling
+#     from 16384*W to 131072*W, and src_pitch = ldd/8 lifts the ldd ceiling from
+#     524288 to 4194304. It does NOT touch y (a row index) or rect_y.
+#
+# 16-byte elements are supported by the engine: measured on MI355X (MED, W=4,
+# recv byte-exact) before this was adopted -- the field is 3 bits wide, but
+# "3 bits wide" is not evidence that the hardware accepts every encoding.
+D_DATA_ELEMENT_LOG2      = 1
+PACKET_ELEMENT_SIZE_LOG2 = 4
+
+# How far to shift a bf16-element count down into packet-element units. Derived,
+# never hardcoded: if either constant moves, every scaled field follows.
+ELEMENT_SHIFT      = PACKET_ELEMENT_SIZE_LOG2 - D_DATA_ELEMENT_LOG2   # 3
+ELEMENT_MULTIPLE   = 1 << ELEMENT_SHIFT                               # 8
+
+# Back-compat alias: the pure-Python encoder's default and the hardware-backed
+# golden vectors are bf16-granular, and stay that way (see encodeCopyDwords).
+BF16_ELEMENT_SIZE_LOG2 = D_DATA_ELEMENT_LOG2
 
 # Field widths (bits) shared by src/dst coordinate + rect dwords. These match
 # the bit-fields declared in client/src/SdmaPktSubwin.hpp; kept here so the
@@ -87,44 +131,62 @@ def _mask(bits):
     return (1 << bits) - 1
 
 
-XY_FIELD_LIMIT = 1 << _XY_BITS   # 16384; src_x/src_y/dst_x/dst_y/rect_x/rect_y
+XY_FIELD_LIMIT    = 1 << _XY_BITS      # 16384; rect_x/rect_y (x/y are folded to 0)
+PITCH_FIELD_LIMIT = 1 << _PITCH_BITS   # 524288; src_pitch/dst_pitch
 
 
-def checkA2AFieldsFit(numRanks, nShard, nToken, macroTile1):
+def checkA2AFieldsFit(numRanks, nShard, macroTile1, srcPitch):
     """Raise ValueError if a fused-A2A geometry cannot be encoded safely.
 
     REFERENCE MIRROR, NOT THE ENFORCEMENT. This function has NO production
     caller -- its only callers are its own unit tests. It is not called from
-    codegen because W/nShard/N are runtime kernargs, unknown at codegen time.
+    codegen because W/nShard/ldd are runtime kernargs, unknown at codegen time.
 
-    The shipped enforcement is the guard in client/src/FusedA2AClient.cpp,
-    inside runFusedA2A(), just above the "geometry overflows the SDMA packet's
-    14-bit coordinate fields" diagnostic. That guard is what actually refuses a
-    launch; this predicate only re-states the same arithmetic in Python so the
-    terms can be unit-tested.
+    The shipped enforcement is the pair of guards in
+    client/src/FusedA2AClient.cpp, inside runFusedA2A(): the rect/rank guard
+    above the "geometry overflows the SDMA packet's 14-bit rect_x field"
+    diagnostic, and the pitch guard next to dNStride. Those refuse the launch;
+    this predicate only re-states the same arithmetic in Python so the terms can
+    be unit-tested.
 
     THE TWO CAN DRIFT SILENTLY. Nothing links them: no test compares them, and
     editing one will not fail anything that checks the other. If you change a
     term here, change it there, and vice versa. (Extracting the C++ guard into a
     header so a gtest can call the real thing is a known deferred follow-up;
-    until then, this pairing is maintained by hand.)
+    until then, this pairing is maintained by hand.) The fold shrank this
+    surface from three runtime terms to two, which is part of why it was done.
 
     Rank bound: the kernarg segment reserves exactly FUSED_A2A_MAX_RANKS
     peer_ptr slots (Signature.py), so ranks >= that have no pointer.
 
-    The three 14-bit fields, and where each value comes from (see
-    emitComputeCopyFields / GlobalWriteBatch._emitFusedA2ASdmaIssue):
-      src_x  = p * nShard,  p in [0, W)     -> max (numRanks-1)*nShard
-      rect_x = nShard                       -> nShard itself (binding only at W == 1;
-                                               for W >= 2 it is dominated by src_x)
-      dst_y  = myRank*nToken + j*macroTile1 -> max (numRanks-1)*nToken
-                                                  + (tokenTiles-1)*macroTile1
-    src_y = j*macroTile1 needs no term: dst_y = myRank*nToken + j*macroTile1
-    >= j*macroTile1 = src_y unconditionally.
+    WHAT IS NO LONGER CHECKED, and why: src_x, src_y and dst_y used to appear
+    here. They are now folded into the 64-bit base addresses and emitted as a
+    literal 0 (see emitComputeCopyFields), so no world size and no token count
+    can overflow them. In particular N is now completely unconstrained -- it was
+    previously the binding limit via dst_y = myRank*N + j*MT1.
 
-    All three are packed WITHOUT a mask (_packXY, the inline s_lshl at DW8,
-    _packRectMinus1), so an over-range value does not truncate -- it ORs into
-    the neighbouring field and the copy silently moves the wrong band.
+    What remains, and where each value comes from. Note every X-direction term is
+    checked AFTER the >> ELEMENT_SHIFT scaling into packet elements, because that
+    is the value the field actually holds:
+      rect_x = nShard/8    -- the copy's X EXTENT. An extent is the copy itself;
+                              no encoding trick can fold it away. 14-bit, so the
+                              real bound is nShard < 131072 (AM < 131072*W).
+      rect_y <= MT1        -- clamped to min(MT1, N - j*MT1). NOT scaled: it
+                              counts rows, and ELEMENTSIZE scales only X.
+      src_pitch = ldd/8    -- D's token-axis stride (StrideD1J). 19-bit, so
+                              ldd < 4194304.
+      dst_pitch = nShard/8 -- 19-bit, subsumed by the tighter rect_x check.
+    rect_x and rect_y are packed WITHOUT a mask (_packRectMinus1), so an
+    over-range value does not truncate -- it ORs into the neighbouring field and
+    the copy silently moves the wrong band. The pitches are packed unmasked too
+    (_packPitchMinus1 shifts left by 13, straight into the neighbouring field).
+
+    DIVISIBILITY is a hardware precondition of the wider element (rocm-ref
+    sdma-engines.md: the chosen element must exactly divide the pitches, the
+    slice pitches, the rect width and the X offsets). The X offsets are 0 since
+    the fold, so what is left is nShard and ldd. A non-multiple would be
+    TRUNCATED by the shift, silently shortening the copy -- so it is rejected,
+    not rounded.
     """
     from .Signature import FUSED_A2A_MAX_RANKS
     if numRanks < 1 or numRanks > FUSED_A2A_MAX_RANKS:
@@ -133,21 +195,38 @@ def checkA2AFieldsFit(numRanks, nShard, nToken, macroTile1):
             "reserves exactly FUSED_A2A_MAX_RANKS=%d peer_ptr slots, so "
             "ranks >= %d have no pointer and a PUSH to them reads garbage."
             % (numRanks, FUSED_A2A_MAX_RANKS, FUSED_A2A_MAX_RANKS))
-    tokenTiles = (nToken + macroTile1 - 1) // macroTile1
-    maxSrcX  = (numRanks - 1) * nShard
-    maxRectX = nShard
-    maxDstY  = (numRanks - 1) * nToken + (tokenTiles - 1) * macroTile1
-    # `>=` deliberately: rect_x is minus-one encoded so nShard == 16384 would in
-    # fact encode, but one lost value is worth keeping all three terms uniform
-    # and identical to the C++ guard.
-    if max(maxSrcX, maxRectX, maxDstY) >= XY_FIELD_LIMIT:
+    if ELEMENT_SHIFT and (nShard % ELEMENT_MULTIPLE or srcPitch % ELEMENT_MULTIPLE):
         raise ValueError(
-            "fused-A2A geometry overflows the SDMA packet's %d-bit coordinate "
-            "fields: W=%d nShard=%d N=%d MT1=%d -> max src_x=%d, rect_x=%d, "
-            "dst_y=%d; all must be < %d. The emitter packs these unmasked, so "
-            "the copy would silently move the wrong band."
-            % (_XY_BITS, numRanks, nShard, nToken, macroTile1,
-               maxSrcX, maxRectX, maxDstY, XY_FIELD_LIMIT))
+            "fused-A2A geometry is not addressable at the packet's %d-byte "
+            "element: nShard=%d and ldd=%d must both be multiples of %d. The "
+            "emitter scales them by >>%d, which would TRUNCATE a non-multiple "
+            "and silently copy a short band."
+            % (1 << PACKET_ELEMENT_SIZE_LOG2, nShard, srcPitch,
+               ELEMENT_MULTIPLE, ELEMENT_SHIFT))
+    # `>=` deliberately: the rect extents are minus-one encoded so a field value
+    # of exactly 16384 would in fact encode, but one lost value is worth keeping
+    # the terms uniform and identical to the C++ guard.
+    rectXField = nShard >> ELEMENT_SHIFT
+    if max(rectXField, macroTile1) >= XY_FIELD_LIMIT:
+        raise ValueError(
+            "fused-A2A geometry overflows the SDMA packet's %d-bit rect fields: "
+            "W=%d nShard=%d MT1=%d -> rect_x=nShard>>%d=%d, max rect_y=%d; both "
+            "must be < %d. The emitter packs these unmasked, so the copy would "
+            "silently move the wrong band. rect_x is the X extent (AM/W) -- it "
+            "cannot be folded into the base address the way the coordinates "
+            "were; reduce AM or raise W (the bound is AM < %d*W)."
+            % (_XY_BITS, numRanks, nShard, macroTile1, ELEMENT_SHIFT,
+               rectXField, macroTile1, XY_FIELD_LIMIT,
+               XY_FIELD_LIMIT << ELEMENT_SHIFT))
+    pitchField = srcPitch >> ELEMENT_SHIFT
+    if pitchField >= PITCH_FIELD_LIMIT:
+        raise ValueError(
+            "fused-A2A src_pitch overflows the SDMA packet's %d-bit pitch "
+            "field: ldd=%d -> ldd>>%d=%d must be < %d (i.e. ldd < %d). "
+            "_packPitchMinus1 shifts it left by 13 unmasked, so an over-range "
+            "pitch ORs into the neighbouring field."
+            % (_PITCH_BITS, srcPitch, ELEMENT_SHIFT, pitchField,
+               PITCH_FIELD_LIMIT, PITCH_FIELD_LIMIT << ELEMENT_SHIFT))
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +290,7 @@ def encodeAtomicDwords(dstAddr, addend=1):
 # by the pure-Python encoder and the rocisa emitter so the two cannot drift.
 COPY_HEADER_DW0 = ((SDMA_OP_COPY_SUBWIN & 0xFF)
                    | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8)
-                   | ((BF16_ELEMENT_SIZE_LOG2 & 0x7) << 29))
+                   | ((PACKET_ELEMENT_SIZE_LOG2 & 0x7) << 29))
 ATOMIC_HEADER_DW0 = ((SDMA_OP_ATOMIC & 0xFF) | ((SDMA_ATOMIC_ADD_RTN_32 & 0x7F) << 25))
 
 
@@ -231,7 +310,7 @@ class SdmaPacketEmitter:
     for its CAS primitive.
     """
 
-    def __init__(self, macroTile1: int, elementSizeLog2: int = BF16_ELEMENT_SIZE_LOG2):
+    def __init__(self, macroTile1: int, elementSizeLog2: int = PACKET_ELEMENT_SIZE_LOG2):
         # MT1 (token extent / rect_y) and the element-size header are compile-time
         # solution constants; the geometric fields (p, j, myRank, M, N, nShard)
         # are runtime SGPRs.
@@ -240,25 +319,36 @@ class SdmaPacketEmitter:
 
     # ---- field-packing helpers (isolate the encoding conventions) -----------
 
-    def _packXY(self, module, dstV, xS, yS, tmpS, comment):
-        """dword = (x & 0x3FFF) | ((y & 0x3FFF) << 16), from two SGPR inputs.
-        The x/y here are already in element units and are NOT minus-one encoded
-        (only pitches and rect extents are). No mask is emitted -- the field
-        simply occupies [13:0] and [29:16]. The < 2^14 precondition on all three
-        runtime-valued fields (src_x = p*nShard, dst_y = myRank*N + j*MT1, and
-        rect_x = nShard) is enforced at launch by client/src/FusedA2AClient.cpp
-        and mirrored term for term by checkA2AFieldsFit() above."""
-        module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(yS), shiftHex=16,
-                                  comment=comment + " (y << 16)"))
-        module.add(SOrB32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(xS),
-                          comment=comment + " | x"))
-        module.add(VMovB32(dst=vgpr(dstV), src=sgpr(tmpS), comment=comment))
+    def _toPacketElements(self, module, dstS, srcS, comment):
+        """Convert a bf16-element count into packet-element units (>> 3).
+
+        Applies to X-DIRECTION quantities ONLY: the pitches, the slice pitches
+        and rect_x. It must NOT be applied to y or rect_y, which are row indices
+        the hardware does not scale by ELEMENTSIZE (rocm-ref sdma-engines.md), nor
+        to the folded base addresses, which are byte offsets.
+
+        Emitted even when the shift is 0 would be wasteful, so the callers skip
+        the whole helper in that case -- keeping the bf16-granular encoding
+        byte-identical to what it was if PACKET_ELEMENT_SIZE_LOG2 is ever wound
+        back. Divisibility (every scaled quantity a multiple of ELEMENT_MULTIPLE)
+        is a launch-time precondition, enforced in FusedA2AClient.cpp and mirrored
+        by checkA2AFieldsFit; a non-multiple would truncate here and shrink the
+        copy."""
+        module.add(SLShiftRightB32(dst=sgpr(dstS), src=sgpr(srcS),
+                                   shiftHex=ELEMENT_SHIFT,
+                                   comment=comment + " (bf16 elems -> packet elems)"))
         return module
 
     def _packPitchMinus1(self, module, dstV, pitchS, tmpS, comment):
         """dword = ((pitch - 1) & 0x7FFFF) << 13, z field ([10:0]) left 0.
-        Minus-one is the hardware pitch convention (it adds one back)."""
-        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(pitchS), src1=1,
+        Minus-one is the hardware pitch convention (it adds one back). The pitch
+        arrives in bf16 elements and is scaled to packet elements first."""
+        if ELEMENT_SHIFT:
+            self._toPacketElements(module, tmpS, pitchS, comment)
+            src = tmpS
+        else:
+            src = pitchS
+        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(src), src1=1,
                            comment=comment + " (pitch - 1)"))
         module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(tmpS), shiftHex=13,
                                   comment=comment + " (<< 13)"))
@@ -266,8 +356,14 @@ class SdmaPacketEmitter:
         return module
 
     def _packSliceMinus1(self, module, dstV, sliceS, tmpS, comment):
-        """dword = (slice_pitch - 1) & 0x0FFFFFFF, at bit 0 (28-bit field)."""
-        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(sliceS), src1=1,
+        """dword = (slice_pitch - 1) & 0x0FFFFFFF, at bit 0 (28-bit field).
+        Scaled to packet elements like the pitches."""
+        if ELEMENT_SHIFT:
+            self._toPacketElements(module, tmpS, sliceS, comment)
+            src = tmpS
+        else:
+            src = sliceS
+        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(src), src1=1,
                            comment=comment + " (slice - 1)"))
         module.add(VMovB32(dst=vgpr(dstV), src=sgpr(tmpS), comment=comment))
         return module
@@ -279,11 +375,20 @@ class SdmaPacketEmitter:
         unclamped MT1 would make the engine read past the end of D (the recv side
         has room -- it is allocated to ceil(N/MT1)*MT1 -- but the source does not).
         emitComputeCopyFields clamps it to min(MT1, N - j*MT1). tmpS is TWO
-        consecutive scratch SGPRs (tmpS, tmpS+1)."""
-        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(rectXS), src1=1,
+        consecutive scratch SGPRs (tmpS, tmpS+1).
+
+        rect_x IS scaled to packet elements; rect_y is NOT. rect_y counts ROWS,
+        and ELEMENTSIZE scales only the X direction -- scaling it would shorten
+        the copy to an eighth of the band."""
+        if ELEMENT_SHIFT:
+            self._toPacketElements(module, tmpS, rectXS, comment + " (rectX)")
+            rectXsrc = tmpS
+        else:
+            rectXsrc = rectXS
+        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(rectXsrc), src1=1,
                            comment=comment + " (rectX - 1)"))
         module.add(SSubU32(dst=sgpr(tmpS + 1), src0=sgpr(rectYS), src1=1,
-                           comment=comment + " (rectY - 1)"))
+                           comment=comment + " (rectY - 1, rows: NOT scaled)"))
         module.add(SLShiftLeftB32(dst=sgpr(tmpS + 1), src=sgpr(tmpS + 1), shiftHex=16,
                                   comment=comment + " ((rectY-1) << 16)"))
         module.add(SOrB32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(tmpS + 1),
@@ -303,35 +408,35 @@ class SdmaPacketEmitter:
     # ---- COPY_SUBWIN builder -----------------------------------------------
 
     def emitBuildCopyPacket(self, module, w, pktV,
-                            srcBaseS, srcXS, srcYS, srcPitchS, srcSliceS,
-                            dstBaseS, dstYS, dstPitchS, dstSliceS,
+                            srcBaseS, srcPitchS, srcSliceS,
+                            dstBaseS, dstPitchS, dstSliceS,
                             rectXS, rectYS, tmpS):
         """Build the 13 COPY_SUBWIN dwords into pktV[0:13] from runtime SGPR
-        inputs (all in element units; caller does the §1.3 arithmetic that
-        produces them -- see emitComputeCopyFields). dst_x is always 0 (the recv
-        slot base already points at the shard's first feature), so it is not an
-        argument. tmpS is TWO consecutive scratch SGPRs (the rect dword packs two
-        runtime extents).
+        inputs (pitches and extents in element units; caller does the §1.3
+        arithmetic that produces them -- see emitComputeCopyFields). tmpS is TWO
+        consecutive scratch SGPRs (the rect dword packs two runtime extents).
+
+        All four coordinates are ZERO: emitComputeCopyFields folded them into
+        srcBaseS / dstBaseS, so DW3 and DW8 are literal-0 moves rather than
+        field packing. They are still written (the ring copies a fixed 13-dword
+        block, and a stale VGPR would be read as a coordinate).
 
         Field -> dword map (mirrors encodeCopyDwords / SdmaPktSubwin.hpp):
-          DW0 header (immediate), DW1/2 srcBase, DW3 (srcX|srcY), DW4 srcPitch-1,
-          DW5 srcSlice-1, DW6/7 dstBase, DW8 (0|dstY), DW9 dstPitch-1,
+          DW0 header (immediate), DW1/2 srcBase, DW3 0, DW4 srcPitch-1,
+          DW5 srcSlice-1, DW6/7 dstBase, DW8 0, DW9 dstPitch-1,
           DW10 dstSlice-1, DW11 (rectX-1|rectY-1), DW12 0.
         """
         self._movImm(module, pktV + 0, COPY_HEADER_DW0,
-                     "SUBWIN DW0: op=COPY sub_op=RECT elementsize=bf16")
+                     "SUBWIN DW0: op=COPY sub_op=RECT elementsize=log2(%dB)"
+                     % (1 << PACKET_ELEMENT_SIZE_LOG2))
         self._movSgpr(module, pktV + 1, srcBaseS + 0, "SUBWIN DW1: srcBase lo")
         self._movSgpr(module, pktV + 2, srcBaseS + 1, "SUBWIN DW2: srcBase hi")
-        self._packXY(module, pktV + 3, srcXS, srcYS, tmpS, "SUBWIN DW3: src_x|src_y")
+        self._movImm(module, pktV + 3, 0, "SUBWIN DW3: src_x=0|src_y=0 (folded into srcBase)")
         self._packPitchMinus1(module, pktV + 4, srcPitchS, tmpS, "SUBWIN DW4: src_pitch-1")
         self._packSliceMinus1(module, pktV + 5, srcSliceS, tmpS, "SUBWIN DW5: src_slice-1")
         self._movSgpr(module, pktV + 6, dstBaseS + 0, "SUBWIN DW6: dstBase lo")
         self._movSgpr(module, pktV + 7, dstBaseS + 1, "SUBWIN DW7: dstBase hi")
-        # DW8: dst_x==0, so the dword is just (dst_y << 16). Reuse _packXY with a
-        # zero x would need a zero SGPR; instead shift dst_y directly.
-        module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(dstYS), shiftHex=16,
-                                  comment="SUBWIN DW8: dst_y << 16 (dst_x=0)"))
-        self._movSgpr(module, pktV + 8, tmpS, "SUBWIN DW8: dst_x=0|dst_y")
+        self._movImm(module, pktV + 8, 0, "SUBWIN DW8: dst_x=0|dst_y=0 (folded into dstBase)")
         self._packPitchMinus1(module, pktV + 9, dstPitchS, tmpS, "SUBWIN DW9: dst_pitch-1")
         self._packSliceMinus1(module, pktV + 10, dstSliceS, tmpS, "SUBWIN DW10: dst_slice-1")
         self._packRectMinus1(module, pktV + 11, rectXS, rectYS, tmpS,
@@ -359,45 +464,114 @@ class SdmaPacketEmitter:
         self._movImm(module, pktV + 7, 0, "ATOMIC DW7: loop_interval=0")
         return module
 
+    def _mulU32toU64(self, module, dstS, aS, bS, comment):
+        """dstS[0:1] (64-bit) = aS * bS, both operands unsigned 32-bit.
+
+        Emitted as the bare s_mul_hi_u32 / s_mul_i32 pair rather than through
+        KernelWriterAssembly.s_mul_u64_u32 on purpose. That wrapper picks between
+        s_mul_hi_u32 and a VALU fallback using asmCaps["HasSMulHi"], which is a
+        LIVE ASSEMBLER PROBE (rocisa hardware_caps.hpp) -- so the instruction
+        sequence, and therefore the handshake golden, would depend on the machine
+        that regenerated it. The COPY_SUBWIN encoder in this file is gfx9xx/gfx95x
+        only (see encodeCopyDwords), and s_mul_hi_u32 is unconditional across that
+        range, so there is nothing to select between here.
+
+        UNSIGNED on purpose: the operands are extents and strides. s_mul_hi_i32
+        would read a stride with bit 31 set as negative and corrupt the high word.
+        """
+        module.add(SMulHIU32(dst=sgpr(dstS + 1), src0=sgpr(aS), src1=sgpr(bS),
+                             comment=comment + " (hi)"))
+        module.add(SMulI32(dst=sgpr(dstS + 0), src0=sgpr(aS), src1=sgpr(bS),
+                           comment=comment + " (lo)"))
+        return module
+
     # ---- §1.3 field arithmetic (runtime geometry -> the SGPR inputs above) --
 
     def emitComputeCopyFields(self, module, w,
                               pS, jS, myRankS, mS, nS, nShardS,
-                              outSrcXS, outSrcYS, outSrcSliceS,
-                              outDstYS, outDstSliceS, outRectYS, tmpS):
-        """Compute the runtime COPY fields from (p, j, myRank, M, N, nShard) per
-        §1.3, all in element units:
-          src_x        = p * nShard
-          src_y        = j * MT1
-          src_slice    = M * N                 (single-plane slice pitch, don't-care)
-          dst_y        = myRank * N + j * MT1
-          dst_slice    = MT1 * nShard          (one band's plane)
-          rect_y       = min(MT1, N - j*MT1)   (clamped: last token-tile is partial)
-        src_pitch = M and dst_pitch = nShard are passed straight through by the
-        caller (they ARE mS / nShardS), as is rect_x = nShard. MT1 is the
-        compile-time token extent. tmpS is one scratch SGPR.
+                              addressDS, srcPitchS, recvBaseS,
+                              outSrcBaseS, outSrcYS, outSrcSliceS,
+                              outDstSliceS, outRectYS, tmpS, tmp64S):
+        """Compute the runtime COPY inputs from (p, j, myRank, M, N, nShard) per
+        §1.3, FOLDING the four coordinates into the two 64-bit base addresses:
+
+          outSrcBase = AddressD + (j*MT1*ldd    + p*nShard) * sizeof(bf16)
+          recvBase  += (myRank*N + j*MT1) * nShard          * sizeof(bf16)
+          src_slice  = M * N                 (single-plane slice pitch, don't-care)
+          dst_slice  = MT1 * nShard          (one band's plane)
+          rect_y     = min(MT1, N - j*MT1)   (clamped: last token-tile is partial)
+
+        The hardware addresses a sub-window as base + y*pitch*elem + x*elem, so
+        adding those terms into the base and leaving x/y at 0 reaches the exact
+        same byte -- see the module docstring for why we want that (the 14-bit
+        coordinate fields overflowed at W=8).
+
+        src_pitch = ldd and dst_pitch = nShard are passed straight through by the
+        caller, as is rect_x = nShard. MT1 is the compile-time token extent.
+
+        BOTH folds are 64-BIT and must stay that way. Neither product is bounded
+        by anything now: j*MT1*ldd grows with N (unconstrained since the fold) and
+        ldd (19-bit), and (myRank*N + j*MT1)*nShard grows with W, N and nShard.
+        At W=8/N=65536/nShard=16383 the dst term alone is 8.6e9. See _mulU32toU64
+        for why the widening multiply is emitted bare and unsigned.
+
+        The elements->bytes shift uses D_DATA_ELEMENT_LOG2, NOT self.elementSizeLog2:
+        a byte offset does not scale with the packet's addressing granularity. See
+        the constant's comment.
+
+        (a+b)<<k == (a<<k)+(b<<k), so the src side shifts the SUM once rather than
+        each term -- one s_lshl_b64 instead of two.
+
+        outSrcYS still holds j*MT1 on return: it is read three times (the src fold,
+        the dst_y precursor, and the rect_y clamp below), so it cannot be scratch.
+        recvBaseS is updated IN PLACE; addressDS is read-only (it is the persistent
+        AddressD pair and must survive). tmpS is one scratch SGPR; tmp64S is a
+        2-ALIGNED scratch pair (the 64-bit ops need SReg_64 alignment) and is dead
+        on return.
 
         rect_y is clamped rather than left at MT1 because N need not be a multiple
         of MT1: the tail tile then covers only N - j*MT1 tokens, and copying a full
-        MT1 rows would read past the end of D. The clamp costs one s_sub_u32 plus
-        one s_min_u32 on the (cold) packet-issue path, reusing the src_y = j*MT1
-        computed just above.
+        MT1 rows would read past the end of D.
 
-        Kept separate from emitBuildCopyPacket so the field arithmetic (what the
+        Kept separate from emitBuildCopyPacket so the address arithmetic (what the
         §1.3 formulas mean) and the bit-packing (how the hardware wants them) are
         each auditable on their own.
         """
-        module.add(SMulI32(dst=sgpr(outSrcXS), src0=sgpr(pS), src1=sgpr(nShardS),
-                           comment="src_x = p * nShard"))
         module.add(SMulI32(dst=sgpr(outSrcYS), src0=sgpr(jS), src1=self.mt1,
-                           comment="src_y = j * MT1"))
+                           comment="src_y = j * MT1 (folded into the base, not a field)"))
         module.add(SMulI32(dst=sgpr(outSrcSliceS), src0=sgpr(mS), src1=sgpr(nS),
                            comment="src_slice = M * N (single-plane, don't-care)"))
-        # dst_y = myRank * N + j * MT1  (== myRank*N + src_y).
+
+        # --- src fold: AddressD + (j*MT1*ldd + p*nShard) * sizeof(bf16) ---
+        module.add(SMulI32(dst=sgpr(tmpS), src0=sgpr(pS), src1=sgpr(nShardS),
+                           comment="src_x = p * nShard (folded into the base, not a field)"))
+        self._mulU32toU64(module, tmp64S, outSrcYS, srcPitchS,
+                          "src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd)")
+        module.add(SAddU32(dst=sgpr(tmp64S + 0), src0=sgpr(tmp64S + 0), src1=sgpr(tmpS),
+                           comment="+ p*nShard (feature offset)"))
+        module.add(SAddCU32(dst=sgpr(tmp64S + 1), src0=sgpr(tmp64S + 1), src1=0,
+                            comment="propagate carry into the high word"))
+        module.add(SLShiftLeftB64(dst=sgpr(tmp64S, 2), src=sgpr(tmp64S, 2),
+                                  shiftHex=D_DATA_ELEMENT_LOG2,
+                                  comment="src offset: elements -> bytes (sizeof(bf16))"))
+        module.add(SAddU64(dst=sgpr(outSrcBaseS, 2), src0=sgpr(addressDS, 2),
+                           src1=sgpr(tmp64S, 2),
+                           comment="srcBase = D + src offset (src_x/src_y now 0)"))
+
+        # --- dst fold: recvBase += (myRank*N + j*MT1) * nShard * sizeof(bf16) ---
         module.add(SMulI32(dst=sgpr(tmpS), src0=sgpr(myRankS), src1=sgpr(nS),
                            comment="myRank * N"))
-        module.add(SAddU32(dst=sgpr(outDstYS), src0=sgpr(tmpS), src1=sgpr(outSrcYS),
-                           comment="dst_y = myRank*N + j*MT1"))
+        module.add(SAddU32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(outSrcYS),
+                           comment="dst row = myRank*N + j*MT1 (folded, not a field)"))
+        self._mulU32toU64(module, tmp64S, tmpS, nShardS,
+                          "dst row offset = dst row * nShard (64-bit: unbounded in W and N)")
+        module.add(SLShiftLeftB64(dst=sgpr(tmp64S, 2), src=sgpr(tmp64S, 2),
+                                  shiftHex=D_DATA_ELEMENT_LOG2,
+                                  comment="dst offset: elements -> bytes (sizeof(bf16))"))
+        module.add(SAddU64(dst=sgpr(recvBaseS, 2), src0=sgpr(recvBaseS, 2),
+                           src1=sgpr(tmp64S, 2),
+                           comment="dstBase = recv slot + dst offset (dst_x/dst_y now 0)"))
+
         module.add(SMulI32(dst=sgpr(outDstSliceS), src0=sgpr(nShardS), src1=self.mt1,
                            comment="dst_slice = MT1 * nShard (one band's plane)"))
         # rect_y = min(MT1, N - j*MT1): the tail token-tile is partial when

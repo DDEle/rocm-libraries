@@ -296,39 +296,75 @@ namespace TensileLite
                 return -1;
             }
 
-            // src_x, rect_x AND dst_y of the SDMA COPY_SUBWIN packet are 14-BIT
-            // fields, and the kernel packs all three with bare s_lshl_b32/s_or_b32
-            // -- no mask (SdmaPacketEmitter._packXY, the DW8 inline shift,
-            // _packRectMinus1). The pure-Python reference encoder DOES mask, so past
-            // 2^14 the two disagree and NEITHER complains: the packet would silently
-            // address a wrapped-around token row / feature column and scatter data
+            // rect_x and rect_y of the SDMA COPY_SUBWIN packet are 14-BIT fields,
+            // and the kernel packs them with a bare s_lshl_b32/s_or_b32 -- no mask
+            // (SdmaPacketEmitter._packRectMinus1). The pure-Python reference encoder
+            // DOES mask, so past 2^14 the two disagree and NEITHER complains: the
+            // packet would silently copy a wrapped-around extent and scatter data
             // into the wrong recv slot. Reject the shape here instead -- this mirrors
             // Tensile/Components/SdmaPacketEmitter.py:checkA2AFieldsFit.
-            //   src_x  max = (W-1)*n_shard        (top peer's feature offset into D)
-            //   rect_x     = n_shard              (the X extent itself; binding only
-            //                                      at W == 1, else <= max src_x)
-            //   dst_y  max = (W-1)*N + (tokenTiles-1)*MT1  (top rank's last tile)
-            // src_y = j*MT1 is <= dst_y, so it needs no separate term. The `>=`
-            // comparison is one value tighter than the hardware for rect_x (which is
-            // minus-one encoded); deliberate, so all three terms read the same.
-            const size_t maxSrcX  = (size_t)(W - 1) * (size_t)nShard;
-            const size_t maxRectX = (size_t)nShard;
-            const size_t maxDstY
-                = (size_t)(W - 1) * N + (size_t)(tokenTiles - 1) * FUSED_A2A_N_TILE;
-            if(maxSrcX >= (1u << 14) || maxRectX >= (1u << 14) || maxDstY >= (1u << 14))
+            //   rect_x = n_shard             (the copy's X EXTENT)
+            //   rect_y = min(MT1, N-j*MT1)   (<= MT1, so MT1 bounds it)
+            //
+            // src_x, src_y and dst_y USED TO BE CHECKED HERE and no longer are: the
+            // emitter folds all four coordinates into the 64-bit base addresses and
+            // emits the fields as a literal 0 (addr = base + y*pitch*elem + x*elem,
+            // so the byte address is unchanged). That is what removed the W=8 limit
+            // -- dst_y = (W-1)*N + (tokenTiles-1)*MT1 was 32512 for the N=4096 shape
+            // and refused the launch. N is now unconstrained by the packet encoding.
+            //
+            // rect_x cannot be folded away the same way: it is the copy's extent, not
+            // a coordinate -- it IS the work.
+            //
+            // The packet addresses in 16-BYTE elements (header ELEMENTSIZE = log2(16);
+            // SdmaPacketEmitter PACKET_ELEMENT_SIZE_LOG2), so every X-direction value
+            // is divided by FUSED_A2A_ELEM_MULTIPLE before it reaches its field. Check
+            // the SCALED value -- that is what the field holds. rect_y is NOT scaled:
+            // it counts rows, and ELEMENTSIZE scales only X.
+            //
+            // Divisibility is a hardware precondition of the wider element (the chosen
+            // element must exactly divide the pitches, the slice pitches, the rect
+            // width and the X offsets). The X offsets are 0 since the fold, leaving
+            // n_shard and ldd. The emitter scales with a right shift, which TRUNCATES
+            // a non-multiple and would silently copy a short band -- so reject rather
+            // than round. (n_shard is already guaranteed a multiple of MacroTile0=256
+            // by the divisibility guard above; ldd is a runtime descriptor value and
+            // is checked separately, next to dNStride.)
+            //
+            // The `>=` comparison is one value tighter than the hardware (the extents
+            // are minus-one encoded); deliberate, so both terms read the same.
+            const size_t FUSED_A2A_ELEM_SHIFT    = 3;   // log2(16B packet elem / 2B bf16)
+            const size_t FUSED_A2A_ELEM_MULTIPLE = (size_t)1 << FUSED_A2A_ELEM_SHIFT;
+            if(nShard % FUSED_A2A_ELEM_MULTIPLE != 0)
+            {
+                std::cerr << "[fused-a2a] ERROR: n_shard is not addressable at the SDMA "
+                             "packet's 16-byte element.\n"
+                          << "  n_shard=AM/W=" << nShard << " must be a multiple of "
+                          << FUSED_A2A_ELEM_MULTIPLE << ".\n"
+                          << "  Refusing to launch (the emitter's >>"
+                          << FUSED_A2A_ELEM_SHIFT
+                          << " would truncate it and copy a short band)." << std::endl;
+                return -1;
+            }
+            const size_t maxRectX = (size_t)nShard >> FUSED_A2A_ELEM_SHIFT;
+            const size_t maxRectY = (size_t)FUSED_A2A_N_TILE;
+            if(maxRectX >= (1u << 14) || maxRectY >= (1u << 14))
             {
                 std::cerr << "[fused-a2a] ERROR: geometry overflows the SDMA packet's "
-                             "14-bit coordinate fields.\n"
+                             "14-bit rect fields.\n"
                           << "  W=" << W << " AM=" << AM << " n_shard=AM/W=" << nShard
                           << " N(token)=" << N
                           << " MacroTile1(token)=" << FUSED_A2A_N_TILE
                           << " tokenTiles=" << tokenTiles << "\n"
-                          << "  max src_x=(W-1)*n_shard=" << maxSrcX
-                          << " rect_x=n_shard=" << maxRectX
-                          << " max dst_y=" << maxDstY
+                          << "  rect_x=n_shard>>" << FUSED_A2A_ELEM_SHIFT << "="
+                          << maxRectX << " max rect_y=MT1=" << maxRectY
                           << "; each must be < " << (1u << 14) << ".\n"
                           << "  Refusing to launch (the copy would silently move the "
-                             "wrong band into the wrong recv slot). Reduce W, AM or N."
+                             "wrong band into the wrong recv slot). rect_x is the copy "
+                             "width itself and cannot be folded into the base address "
+                             "the way the coordinates were: reduce AM or raise W "
+                             "(the bound is AM < "
+                          << ((size_t)(1u << 14) << FUSED_A2A_ELEM_SHIFT) << "*W)."
                           << std::endl;
                 return -1;
             }
@@ -415,6 +451,45 @@ namespace TensileLite
                       << aBoundStride << ") B(freeStride=" << bFreeStride << " boundStride="
                       << bBoundStride << ") D(mStride=" << dMStride << " nStride=" << dNStride
                       << ")\n";
+
+            // Second half of the packet-encoding guard above (the rect one). It lives
+            // down here rather than beside it because dNStride -- D's token-axis
+            // stride, which the packet carries as src_pitch (StrideD1J) -- is only
+            // available once the descriptors have been read.
+            //
+            // src_pitch is a 19-BIT field and _packPitchMinus1 shifts it left by 13
+            // unmasked, so an over-range pitch ORs straight into the neighbouring
+            // field. dst_pitch is n_shard, already bounded far tighter by the 14-bit
+            // rect_x check above, so it needs no separate term. Like rect_x, the pitch
+            // is scaled into 16-byte packet elements first, so both the divisibility
+            // and the range apply to ldd>>3. Mirrors the srcPitch arm of
+            // SdmaPacketEmitter.py:checkA2AFieldsFit.
+            if(dNStride % FUSED_A2A_ELEM_MULTIPLE != 0)
+            {
+                std::cerr << "[fused-a2a] ERROR: D's token-axis stride is not "
+                             "addressable at the SDMA packet's 16-byte element.\n"
+                          << "  ldd(D nStride)=" << dNStride << " must be a multiple of "
+                          << FUSED_A2A_ELEM_MULTIPLE << ".\n"
+                          << "  Refusing to launch (the emitter's >>"
+                          << FUSED_A2A_ELEM_SHIFT
+                          << " would truncate the pitch and skew every token row)."
+                          << std::endl;
+                return -1;
+            }
+            if((dNStride >> FUSED_A2A_ELEM_SHIFT) >= (1u << 19))
+            {
+                std::cerr << "[fused-a2a] ERROR: D's token-axis stride overflows the "
+                             "SDMA packet's 19-bit src_pitch field.\n"
+                          << "  ldd(D nStride)=" << dNStride << " -> ldd>>"
+                          << FUSED_A2A_ELEM_SHIFT << "="
+                          << (dNStride >> FUSED_A2A_ELEM_SHIFT) << " must be < "
+                          << (1u << 19) << " (i.e. ldd < "
+                          << ((size_t)(1u << 19) << FUSED_A2A_ELEM_SHIFT) << ").\n"
+                          << "  Refusing to launch (the pitch would OR into the "
+                             "neighbouring packet field). Reduce M or the D padding."
+                          << std::endl;
+                return -1;
+            }
 
             // Deterministic small-magnitude bf16 inputs (indexed by logical coords,
             // written into the physical slot via the descriptor strides). Small

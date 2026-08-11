@@ -129,36 +129,52 @@ s_add_u32 s20, s20, 0                              // kernarg offset = fusedBase
 s_waitcnt lgkmcnt(0)                               // wait peer_ptr[dst_rank] load
 s_add_u32 s26, s26, 0x1000                         // recv base = peer_ptr[dst_rank] + recv offset
 s_addc_u32 s27, s27, 0                             // recv base hi carry
-s_mul_i32 s28, s18, s12                            // src_x = p * nShard
-s_mul_i32 s29, s[sgprWorkGroup1], 256              // src_y = j * MT1
-s_mul_i32 s30, s[sgprSizesFree+0], s[sgprSizesFree+1] // src_slice = M * N (single-plane, don't-care)
+s_mul_i32 s28, s[sgprWorkGroup1], 256              // src_y = j * MT1 (folded into the base, not a field)
+s_mul_i32 s29, s[sgprSizesFree+0], s[sgprSizesFree+1] // src_slice = M * N (single-plane, don't-care)
+s_mul_i32 s19, s18, s12                            // src_x = p * nShard (folded into the base, not a field)
+s_mul_hi_u32 s35, s28, s[sgprStrideD1J]            // src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd) (hi)
+s_mul_i32 s34, s28, s[sgprStrideD1J]               // src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd) (lo)
+s_add_u32 s34, s34, s19                            // + p*nShard (feature offset)
+s_addc_u32 s35, s35, 0                             // propagate carry into the high word
+s_lshl_b64 s[34:35], s[34:35], 1                   // src offset: elements -> bytes (sizeof(bf16))
+s_add_u32 s32, s8, s34                             // srcBase = D + src offset (src_x/src_y now 0)
+
+s_addc_u32 s33, s9, s35                            // srcBase = D + src offset (src_x/src_y now 0)
 s_mul_i32 s19, s10, s[sgprSizesFree+1]             // myRank * N
-s_add_u32 s31, s19, s29                            // dst_y = myRank*N + j*MT1
-s_mul_i32 s32, s12, 256                            // dst_slice = MT1 * nShard (one band's plane)
-s_sub_u32 s33, s[sgprSizesFree+1], s29             // N - j*MT1 (tokens left in this tile)
-s_min_u32 s33, s33, 256                            // rect_y = min(MT1, N - j*MT1) (clamp tail tile)
-v_mov_b32 v5, 0x20000401                           // SUBWIN DW0: op=COPY sub_op=RECT elementsize=bf16
-v_mov_b32 v6, s8                                   // SUBWIN DW1: srcBase lo
-v_mov_b32 v7, s9                                   // SUBWIN DW2: srcBase hi
-s_lshl_b32 s19, s29, 16                            // SUBWIN DW3: src_x|src_y (y << 16)
-s_or_b32 s19, s19, s28                             // SUBWIN DW3: src_x|src_y | x
-v_mov_b32 v8, s19                                  // SUBWIN DW3: src_x|src_y
-s_sub_u32 s19, s[sgprStrideD1J], 1                 // SUBWIN DW4: src_pitch-1 (pitch - 1)
+s_add_u32 s19, s19, s28                            // dst row = myRank*N + j*MT1 (folded, not a field)
+s_mul_hi_u32 s35, s19, s12                         // dst row offset = dst row * nShard (64-bit: unbounded in W and N) (hi)
+s_mul_i32 s34, s19, s12                            // dst row offset = dst row * nShard (64-bit: unbounded in W and N) (lo)
+s_lshl_b64 s[34:35], s[34:35], 1                   // dst offset: elements -> bytes (sizeof(bf16))
+s_add_u32 s26, s26, s34                            // dstBase = recv slot + dst offset (dst_x/dst_y now 0)
+
+s_addc_u32 s27, s27, s35                           // dstBase = recv slot + dst offset (dst_x/dst_y now 0)
+s_mul_i32 s30, s12, 256                            // dst_slice = MT1 * nShard (one band's plane)
+s_sub_u32 s31, s[sgprSizesFree+1], s28             // N - j*MT1 (tokens left in this tile)
+s_min_u32 s31, s31, 256                            // rect_y = min(MT1, N - j*MT1) (clamp tail tile)
+v_mov_b32 v5, 0x80000401                           // SUBWIN DW0: op=COPY sub_op=RECT elementsize=log2(16B)
+v_mov_b32 v6, s32                                  // SUBWIN DW1: srcBase lo
+v_mov_b32 v7, s33                                  // SUBWIN DW2: srcBase hi
+v_mov_b32 v8, 0x0                                  // SUBWIN DW3: src_x=0|src_y=0 (folded into srcBase)
+s_lshr_b32 s19, s[sgprStrideD1J], 3                // SUBWIN DW4: src_pitch-1 (bf16 elems -> packet elems)
+s_sub_u32 s19, s19, 1                              // SUBWIN DW4: src_pitch-1 (pitch - 1)
 s_lshl_b32 s19, s19, 13                            // SUBWIN DW4: src_pitch-1 (<< 13)
 v_mov_b32 v9, s19                                  // SUBWIN DW4: src_pitch-1
-s_sub_u32 s19, s30, 1                              // SUBWIN DW5: src_slice-1 (slice - 1)
+s_lshr_b32 s19, s29, 3                             // SUBWIN DW5: src_slice-1 (bf16 elems -> packet elems)
+s_sub_u32 s19, s19, 1                              // SUBWIN DW5: src_slice-1 (slice - 1)
 v_mov_b32 v10, s19                                 // SUBWIN DW5: src_slice-1
 v_mov_b32 v11, s26                                 // SUBWIN DW6: dstBase lo
 v_mov_b32 v12, s27                                 // SUBWIN DW7: dstBase hi
-s_lshl_b32 s19, s31, 16                            // SUBWIN DW8: dst_y << 16 (dst_x=0)
-v_mov_b32 v13, s19                                 // SUBWIN DW8: dst_x=0|dst_y
-s_sub_u32 s19, s12, 1                              // SUBWIN DW9: dst_pitch-1 (pitch - 1)
+v_mov_b32 v13, 0x0                                 // SUBWIN DW8: dst_x=0|dst_y=0 (folded into dstBase)
+s_lshr_b32 s19, s12, 3                             // SUBWIN DW9: dst_pitch-1 (bf16 elems -> packet elems)
+s_sub_u32 s19, s19, 1                              // SUBWIN DW9: dst_pitch-1 (pitch - 1)
 s_lshl_b32 s19, s19, 13                            // SUBWIN DW9: dst_pitch-1 (<< 13)
 v_mov_b32 v14, s19                                 // SUBWIN DW9: dst_pitch-1
-s_sub_u32 s19, s32, 1                              // SUBWIN DW10: dst_slice-1 (slice - 1)
+s_lshr_b32 s19, s30, 3                             // SUBWIN DW10: dst_slice-1 (bf16 elems -> packet elems)
+s_sub_u32 s19, s19, 1                              // SUBWIN DW10: dst_slice-1 (slice - 1)
 v_mov_b32 v15, s19                                 // SUBWIN DW10: dst_slice-1
-s_sub_u32 s19, s12, 1                              // SUBWIN DW11: rect_x-1|rect_y-1 (rectX - 1)
-s_sub_u32 s20, s33, 1                              // SUBWIN DW11: rect_x-1|rect_y-1 (rectY - 1)
+s_lshr_b32 s19, s12, 3                             // SUBWIN DW11: rect_x-1|rect_y-1 (rectX) (bf16 elems -> packet elems)
+s_sub_u32 s19, s19, 1                              // SUBWIN DW11: rect_x-1|rect_y-1 (rectX - 1)
+s_sub_u32 s20, s31, 1                              // SUBWIN DW11: rect_x-1|rect_y-1 (rectY - 1, rows: NOT scaled)
 s_lshl_b32 s20, s20, 16                            // SUBWIN DW11: rect_x-1|rect_y-1 ((rectY-1) << 16)
 s_or_b32 s19, s19, s20                             // SUBWIN DW11: rect_x-1|rect_y-1 | (rectY-1) << 16
 v_mov_b32 v16, s19                                 // SUBWIN DW11: rect_x-1|rect_y-1

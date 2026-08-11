@@ -69,12 +69,11 @@ namespace TensileLite
                 return 1;
             }
 
-            // Pick the first problem / first solution: one fused kernel is
-            // launched on all W devices to prove the kernarg fill.
             auto problems = problemFactory.problems();
-            if(problems.empty())
+            if(problems.size() != 1)
             {
-                std::cerr << "[fused-a2a] no problems in config" << std::endl;
+                std::cerr << "[fused-a2a] ERROR: multiple problems are not supported yet"
+                          << std::endl;
                 return 1;
             }
             auto* problem = dynamic_cast<ContractionProblemGemm*>(problems.front().get());
@@ -115,41 +114,21 @@ namespace TensileLite
             std::cout << "[fused-a2a] macro-tile from solution: MT0(M)=" << FUSED_A2A_M_TILE
                       << " MT1(N)=" << FUSED_A2A_N_TILE << "\n";
 
-            // M/N-swap (col-major first-class): A=w[feature,K], B=x[token,K], so
-            // freeSizeA carries FEATURE and freeSizeB carries TOKEN.
+            // M/N-swap (col-major first-class): A=w[feature,K], B=x[token,K].
             const size_t M = problem->freeSizeA(0); // = nFeature (A2A-scattered dim)
             const size_t N = problem->freeSizeB(0); // = nToken (all output cols)
             const size_t K = problem->boundSize(0); // GEMM contraction dim K
 
-            // Runtime check: a solution only knows whether a batch index is
-            // DECLARED, and every fused config declares one while running extent 1.
-            for(size_t i = 0; i < problem->batchIndices().size(); i++)
+            const size_t numBatch = problem->batchIndices().size();
+            if(numBatch > 1 || (numBatch == 1 && problem->batchSize(0) != 1))
             {
-                if(problem->batchSize(i) != 1)
-                {
-                    std::cerr << "[fused-a2a] ERROR: batch extent must be 1, but batch "
-                                 "index "
-                              << i << " has extent " << problem->batchSize(i)
-                              << ". The DRAIN owner is elected by counting work-groups "
-                                 "against NumWorkGroups0*NumWorkGroups1, which excludes "
-                                 "the batch dim, so a larger extent releases the barrier "
-                                 "before every peer has finished sending."
-                              << std::endl;
-                    return 1;
-                }
+                std::cerr << "[fused-a2a] ERROR: batched GEMM is not supported" << std::endl;
+                return 1;
             }
 
-            const size_t nFeature = M; // semantic alias: feature = M = index-0
-            const size_t nToken   = N; // semantic alias: token   = N
             // The first `AM` FEATURE columns go all-to-all; [AM, M) stay local in
             // `out`.
             const size_t AM = (size_t)args["fused-a2a-am"].as<int>();
-            if(AM % (size_t)W != 0)
-            {
-                std::cerr << "[fused-a2a] AM(" << AM << ") not divisible by W(" << W << ")"
-                          << std::endl;
-                return 1;
-            }
             // nShard = AM/W is a FEATURE sub-segment (one rank's slice of feature M).
             const uint32_t nShard = (uint32_t)(AM / (size_t)W);
             // tilesPerRank: whole feature-tiles per rank shard (nShard is feature).
@@ -236,7 +215,7 @@ namespace TensileLite
             const size_t cBytes            = problem->c().totalAllocatedBytes();
             const size_t dBytes            = problem->d().totalAllocatedBytes();
 
-            std::cout << "[fused-a2a] nFeature(M)=" << nFeature << " nToken(N)=" << nToken
+            std::cout << "[fused-a2a] nFeature(M)=" << M << " nToken(N)=" << N
                       << " K=" << K << " AM=" << AM << " nShard=" << nShard
                       << " tilesPerRank=" << tilesPerRank << " tokenTiles=" << tokenTiles
                       << " mTiles=" << mTiles << " drain=" << drain << "\n";
@@ -496,7 +475,7 @@ namespace TensileLite
             // slotStride uses the UNPADDED N, to match the kernel's SizeJ slot
             // multiply.
             const size_t slotStride
-                = (size_t)N * (size_t)nShard; // elems per src slot (nToken*nShard)
+                = (size_t)N * (size_t)nShard; // elems per src slot
             const size_t rowStride = (size_t)nShard; // per-token stride (feature-shard contiguous)
 
             // Only sized when validating; empty otherwise, and no D2H copy-back.

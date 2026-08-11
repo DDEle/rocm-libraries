@@ -1,18 +1,15 @@
 // Copyright Advanced Micro Devices, Inc., or its affiliates.
 // SPDX-License-Identifier: MIT
 //
-// SDMA packet definitions for the fused GEMM+AllToAll SDMA offload route
-// (ROCM-27524). Despite the file name, this is the home for BOTH packets the
+// SDMA packet definitions for the fused GEMM+AllToAll SDMA offload route.
+// Despite the file name, this is the home for BOTH packets the
 // route emits: the rectangular sub-window copy (SDMA_PKT_COPY_LINEAR_SUBWIN,
 // below) and the 64-bit atomic add (SDMA_PKT_ATOMIC, at the bottom) that raises
 // the destination flag once a copy lands. The name is kept as-is on purpose --
 // renaming would churn the T1 gtest target and CMake for no functional gain.
 //
 // This is the canonical, header-only home for the packets that later codegen
-// tasks fill in GPU assembly. The COPY_SUBWIN bit-field layout, the
-// minus-one extent/pitch convention and the ELEMENTSIZE scaling below are the
-// exact form that was validated byte-for-byte on MI355X (3 peers x 8 bands = 24
-// packets, every dword bit-accurate, sentinel margin untouched). MORI only
+// tasks fill in GPU assembly. MORI only
 // defines the flat COPY_LINEAR packet, so this struct is transcribed from the
 // OSS 4.4 sdma.pkt field positions (cross-checked against ROCR's
 // sdma_registers.h and the kernel's vega10_sdma_pkt_open.h -- all three agree).
@@ -24,13 +21,12 @@
 //
 // NOT DEAD CODE -- do not delete. No client-runtime translation unit includes
 // this header: its only includer is its own gtest, so a reachability scan reads
-// it as a self-justifying orphan, and it has been proposed for deletion on that
-// basis before. Keeping it is a deliberate call. The packets that actually ship
+// it as a self-justifying orphan. The packets that actually ship
 // are built in GPU assembly by the Python mirror,
 // Tensile/Components/SdmaPacketEmitter.py; what this header contributes is
 // PROVENANCE, because its gtest drives the real encoder with the dword vectors
-// validated byte-for-byte on MI355X -- that is where the Python side's goldens
-// get their authority, and without it they are self-referential. The two files
+// that the Python side's goldens get their authority from -- without it they
+// are self-referential. The two files
 // are held together mechanically by
 // Tensile/Tests/unit/test_sdma_header_mirror.py, which compares opcodes, packet
 // lengths, field widths and field offsets across the language boundary and

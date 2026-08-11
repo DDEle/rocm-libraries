@@ -2,7 +2,7 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
 ################################################################################
-# SDMA ring-buffer producer emitter structural tests (Task 4, NOGPU).
+# SDMA ring-buffer producer emitter structural tests (NOGPU).
 #
 # The emitter (Tensile/Components/SdmaRingEmitter.py) is a packet-independent
 # rocisa translation of MORI's anvil device ring skeleton. It IS wired into a
@@ -63,7 +63,7 @@ from Tensile.Components.SdmaRingEmitter import (                 # noqa: E402
 # for gfx950 regardless of the host GPU so the asmCaps (which pick sc0/sc1 vs
 # glc/slc) are the ones this code was written against.
 _GFX = "gfx950"
-_PKT_DWORDS = 10  # arbitrary packet size for placePacket exercise (Task 5 sets the real one)
+_PKT_DWORDS = 10  # arbitrary packet size for placePacket exercise (the real emitter sets the actual size)
 
 
 def _init_gfx950():
@@ -207,7 +207,7 @@ def _has_sc1_only(line):
 
 
 # ---------------------------------------------------------------------------
-# Invariant 2: submit publish order (Global Constraint 4)
+# Invariant 2: submit publish order
 # ---------------------------------------------------------------------------
 class TestSubmitOrder:
 
@@ -222,8 +222,8 @@ class TestSubmitOrder:
             f"publish order must be wptr({i_wptr}) < doorbell({i_db}) < committed({i_comm})"
 
     def test_vmcnt_barrier_between_wptr_and_doorbell(self):
-        # Global Constraint 4: an s_waitcnt vmcnt(0) sits between the wptr store
-        # and the doorbell store (orders the wptr write ahead of the ring).
+        # An s_waitcnt vmcnt(0) sits between the wptr store and the doorbell
+        # store (orders the wptr write ahead of the ring).
         lines = _lines(_render_submit())
         i_wptr = _first_idx(lines, lambda l: "store wptr = pending" in l and "global_store" in l)
         i_db = _first_idx(lines, lambda l: "doorbell" in l and "global_store" in l)
@@ -231,7 +231,7 @@ class TestSubmitOrder:
         assert between, "expected s_waitcnt vmcnt(0) between wptr store and doorbell store"
 
     def test_vmcnt_barrier_between_doorbell_and_committed(self):
-        # Global Constraint 4 / MORI anvil_device.hpp:226: an s_waitcnt vmcnt(0)
+        # MORI anvil_device.hpp:226: an s_waitcnt vmcnt(0)
         # sits between the doorbell store and the committedWptr store, so the
         # doorbell (engine kick) is ordered before committedWptr unblocks the next
         # producer. This is on the plan's timing-hang critical path, so it is

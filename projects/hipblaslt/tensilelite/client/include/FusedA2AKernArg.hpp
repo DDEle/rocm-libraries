@@ -125,9 +125,8 @@ namespace TensileLite
             args.append<uint32_t>("FusedW", worldSize);
             args.append<uint32_t>("FusedNShard", nShard);
             args.append<uint32_t>("FusedDrain", drain);
-            // Kernarg "FusedAM" (renamed from FusedAN in Task 6 alongside
-            // Signature.py); the value `an` carries AM (A2A width along FEATURE)
-            // from the swapped client.
+            // Kernarg "FusedAM"; the value `an` carries AM (A2A width along
+            // FEATURE) from the swapped client.
             args.append<uint32_t>("FusedAM", an);
             args.append<uint32_t>("FusedTilesPerRank", tilesPerRank);
             args.append<uint32_t>("FusedTokenTiles", tokenTiles);

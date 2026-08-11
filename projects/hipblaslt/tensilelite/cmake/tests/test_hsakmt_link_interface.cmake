@@ -57,7 +57,7 @@ macro(expect_eq _label _actual _expected)
     endif()
 endmacro()
 
-# --- the D7 regression cases -------------------------------------------------
+# --- the CMAKE_MATCH_1-aliasing regression cases -----------------------------
 
 set(_in "-L${LIVE}" "$<LINK_ONLY:-ldrm>")
 tensilelite_sanitize_hsakmt_link_interface(_out "${SYSDEPS}" _in)

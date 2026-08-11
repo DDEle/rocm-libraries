@@ -11,10 +11,7 @@
 // one-sided change to either reddens its own golden test.
 //
 // This test drives the REAL appendFusedSegment out of client/include/
-// FusedA2AKernArg.hpp. It used to reproduce the append sequence into a private
-// copy, because the function was a TU-private helper inside FusedA2AClient.cpp;
-// that copy made the test self-certifying -- reordering args or changing a type
-// in the real function left it green, since the real function was never called.
+// FusedA2AKernArg.hpp.
 //
 // Every field is written with a distinct sentinel and read back at its golden
 // offset, so a reorder (values land transposed), a type change (following
@@ -55,9 +52,7 @@ namespace
 
     // Independently written oracle: {arg name, intra-segment byte offset, byte
     // size, expected value}. Byte-identical in name and offset to GOLDEN_LAYOUT
-    // in the Python test. Spelled out here rather than derived from the code
-    // under test -- deriving it would restore the self-certification this test
-    // exists to remove.
+    // in the Python test.
     struct GoldenArg
     {
         const char* name;
@@ -198,7 +193,7 @@ TEST(FusedA2AKernArg, GrowthIsUnchangedAtAnAlignedNonZeroBase)
 
 // FusedSdmaQueues sits directly after counter_ptr so the pointer group stays
 // 8-aligned and contiguous; FusedTilesPerRank/FusedTokenTiles are still the
-// last two scalars (append-only, Global Constraint 2).
+// last two scalars, appended after everything else.
 TEST(FusedA2AKernArg, SdmaQueuesFollowCounterTilesAndTokensAreLast)
 {
     const auto table         = goldenTable();
@@ -223,11 +218,9 @@ TEST(FusedA2AKernArg, SdmaQueuesFollowCounterTilesAndTokensAreLast)
 }
 
 // The world size the client accepts is bounded by the ABI, not by the machine:
-// the segment reserves exactly FUSED_A2A_MAX_RANKS peer_ptr slots, so
-// a larger W has no pointer at all for the ranks past the end. W is also used
-// as a divisor (AM % W, AM / W) before any device count is consulted, so the
-// lower bound has to reject 0 and negatives rather than leaving them to a
-// `deviceCount < W` comparison that reads false for both.
+// the segment reserves exactly FUSED_A2A_MAX_RANKS peer_ptr slots, so a larger
+// W has no pointer at all for the ranks past the end. The lower bound rejects
+// 0 and negatives.
 TEST(FusedA2AWorldSize, AcceptsExactlyTheRepresentableRange)
 {
     for(int w = 1; w <= FUSED_A2A_MAX_RANKS; ++w)

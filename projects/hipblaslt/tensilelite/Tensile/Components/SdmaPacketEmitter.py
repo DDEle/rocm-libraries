@@ -1,23 +1,21 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
 ################################################################################
-# SDMA packet-construction emitter (ROCM-27524, SDMA offload codegen Task 5).
+# SDMA packet-construction emitter.
 #
-# Packet-DEPENDENT counterpart to Task 4's SdmaRingEmitter (which is packet-
-# INDEPENDENT ring plumbing). This module turns the §1.3 all-to-all geometry
-# (kernarg values + WG ids) into the 13-dword COPY_SUBWIN and 8-dword ATOMIC
-# ADD_RTN_32 packet dword arrays, laid out in VGPRs; Task 4's emitPlacePacket then
-# writes those dwords into the ring. It is deliberately split from the ring
-# emitter: ring reserve/place/submit is packet-agnostic, packet field encoding
-# is packet-specific -- two responsibilities, two files (SdmaRingEmitter.py was
-# already 505 lines and its reviewer flagged that adding packet logic there
-# would overload it).
+# Packet-DEPENDENT counterpart to SdmaRingEmitter (which is packet-INDEPENDENT
+# ring plumbing). This module turns the all-to-all geometry (kernarg values +
+# WG ids) into the 13-dword COPY_SUBWIN and 8-dword ATOMIC ADD_RTN_32 packet
+# dword arrays, laid out in VGPRs; SdmaRingEmitter.emitPlacePacket then writes
+# those dwords into the ring. It is deliberately split from the ring emitter:
+# ring reserve/place/submit is packet-agnostic, packet field encoding is
+# packet-specific -- two responsibilities, two files.
 #
 # The C++ structs / byte layout / minus-one + element-scaling conventions are
 # the SAME ones frozen in client/src/SdmaPktSubwin.hpp and its golden-vector
 # gtest (SdmaPktSubwin_test.cpp). The COPY_SUBWIN encoding was validated
 # byte-for-byte on MI355X; the ATOMIC struct is MORI's production struct, run on
-# hardware since Task 7/8 and, with the ADD_RTN_32 selector, by the 4-card run.
+# hardware, and, with the ADD_RTN_32 selector, by the 4-card run.
 #
 # TWO surfaces, cross-checked against each other and against the T1 golden:
 #   * encodeCopyDwords / encodeAtomicDwords -- pure-Python integer encoders that
@@ -34,7 +32,7 @@
 # the gfx950 assembler, and (c) structural asserts on the field-packing
 # instruction sequence.
 #
-# §1.3 packet geometry, per (peer p, token-tile j), with this card == myRank:
+# Packet geometry, per (peer p, token-tile j), with this card == myRank:
 #   COPY_SUBWIN (bf16 elements, elementsize header = log2(2) = 1):
 #     src  = D + (j*MT1)*ldd + p*nShard
 #     dst  = peer_ptr[p] + recvOffset + (myRank*N + j*MT1)*nShard
@@ -48,13 +46,13 @@
 #     addr(x, y) = base + y*pitch*elem + x*elem
 # so this is the same byte address written two ways -- not an approximation.
 #
-# Why fold (this REVERSES the original choice; the coordinate form shipped first):
+# Why fold:
 #   * src_x = p*nShard and dst_y = myRank*N + j*MT1 are 14-BIT fields, and both
-#     grow with the world size W. At W=8 with N=4096 the shape that the client
-#     actually wants to run overflows dst_y (32512 >= 16384) and was refused at
-#     launch. Folding removes the coordinate fields from the constraint set
-#     entirely; what remains is rect_x = nShard (14 bit, an extent -- it IS the
-#     copy, so no encoding trick can move it) and the 19-bit pitches.
+#     grow with the world size W. At W=8 with N=4096, dst_y=32512, which exceeds
+#     the 16384 field limit. Folding removes the coordinate fields from the
+#     constraint set entirely; what remains is rect_x = nShard (14 bit, an
+#     extent -- it IS the copy, so no encoding trick can move it) and the
+#     19-bit pitches.
 #   * It shrinks the Python-predicate/C++-guard drift surface (see
 #     checkA2AFieldsFit) from three runtime terms to two.
 # Cost: one 32x32->64 multiply plus a 64-bit shift-add per side, on the cold
@@ -87,12 +85,11 @@ SDMA_OP_ATOMIC         = 10
 SDMA_ATOMIC_ADD_RTN_32 = 15
 ATOMIC_PACKET_DWORDS   = 8
 
-# TWO DIFFERENT "ELEMENT SIZES". They were equal until the packet element was
-# widened to 16 bytes, and conflating them is a silent 8x address error, so they
-# are separate constants with separate jobs:
+# TWO DIFFERENT "ELEMENT SIZES". Conflating them is a silent 8x address error,
+# so they are separate constants with separate jobs:
 #
 #   D_DATA_ELEMENT_LOG2 = log2(sizeof(bf16)). The width of one D element in
-#     BYTES. It converts the §1.3 element-unit geometry into the byte offset
+#     BYTES. It converts the element-unit geometry into the byte offset
 #     folded into the base address. A byte offset is a byte offset at any
 #     packet elementsize, so this NEVER changes with the one below.
 #
@@ -103,9 +100,9 @@ ATOMIC_PACKET_DWORDS   = 8
 #     from 16384*W to 131072*W, and src_pitch = ldd/8 lifts the ldd ceiling from
 #     524288 to 4194304. It does NOT touch y (a row index) or rect_y.
 #
-# 16-byte elements are supported by the engine: measured on MI355X (MED, W=4,
-# recv byte-exact) before this was adopted -- the field is 3 bits wide, but
-# "3 bits wide" is not evidence that the hardware accepts every encoding.
+# 16-byte elements are supported by the engine: validated on MI355X (MED, W=4,
+# recv byte-exact). The field is 3 bits wide, but "3 bits wide" is not evidence
+# that the hardware accepts every encoding.
 D_DATA_ELEMENT_LOG2      = 1
 PACKET_ELEMENT_SIZE_LOG2 = 4
 
@@ -159,11 +156,10 @@ def checkA2AFieldsFit(numRanks, nShard, macroTile1, srcPitch):
     Rank bound: the kernarg segment reserves exactly FUSED_A2A_MAX_RANKS
     peer_ptr slots (Signature.py), so ranks >= that have no pointer.
 
-    WHAT IS NO LONGER CHECKED, and why: src_x, src_y and dst_y used to appear
-    here. They are now folded into the 64-bit base addresses and emitted as a
-    literal 0 (see emitComputeCopyFields), so no world size and no token count
-    can overflow them. In particular N is now completely unconstrained -- it was
-    previously the binding limit via dst_y = myRank*N + j*MT1.
+    WHAT IS NOT CHECKED here, and why: src_x, src_y and dst_y are folded into
+    the 64-bit base addresses and emitted as a literal 0 (see
+    emitComputeCopyFields), so no world size and no token count can overflow
+    them. N in particular is completely unconstrained.
 
     What remains, and where each value comes from. Note every X-direction term is
     checked AFTER the >> ELEMENT_SHIFT scaling into packet elements, because that
@@ -181,12 +177,11 @@ def checkA2AFieldsFit(numRanks, nShard, macroTile1, srcPitch):
     the copy silently moves the wrong band. The pitches are packed unmasked too
     (_packPitchMinus1 shifts left by 13, straight into the neighbouring field).
 
-    DIVISIBILITY is a hardware precondition of the wider element (rocm-ref
-    sdma-engines.md: the chosen element must exactly divide the pitches, the
-    slice pitches, the rect width and the X offsets). The X offsets are 0 since
-    the fold, so what is left is nShard and ldd. A non-multiple would be
-    TRUNCATED by the shift, silently shortening the copy -- so it is rejected,
-    not rounded.
+    DIVISIBILITY is a hardware precondition of the wider element: the chosen
+    element must exactly divide the pitches, the slice pitches, the rect width
+    and the X offsets. The X offsets are 0 since the fold, so what is left is
+    nShard and ldd. A non-multiple would be TRUNCATED by the shift, silently
+    shortening the copy -- so it is rejected, not rounded.
     """
     from .Signature import FUSED_A2A_MAX_RANKS
     if numRanks < 1 or numRanks > FUSED_A2A_MAX_RANKS:
@@ -306,8 +301,8 @@ class SdmaPacketEmitter:
 
     The three encoding conventions (minus-one extents/pitches, element units,
     field bit positions) are isolated in the small `_pack*` helpers below so a
-    future encoding change touches one place -- the same discipline Task 4 used
-    for its CAS primitive.
+    future encoding change touches one place -- the same discipline
+    SdmaRingEmitter uses for its CAS primitive.
     """
 
     def __init__(self, macroTile1: int, elementSizeLog2: int = PACKET_ELEMENT_SIZE_LOG2):
@@ -324,8 +319,8 @@ class SdmaPacketEmitter:
 
         Applies to X-DIRECTION quantities ONLY: the pitches, the slice pitches
         and rect_x. It must NOT be applied to y or rect_y, which are row indices
-        the hardware does not scale by ELEMENTSIZE (rocm-ref sdma-engines.md), nor
-        to the folded base addresses, which are byte offsets.
+        the hardware does not scale by ELEMENTSIZE, nor to the folded base
+        addresses, which are byte offsets.
 
         Emitted even when the shift is 0 would be wasteful, so the callers skip
         the whole helper in that case -- keeping the bf16-granular encoding
@@ -412,7 +407,7 @@ class SdmaPacketEmitter:
                             dstBaseS, dstPitchS, dstSliceS,
                             rectXS, rectYS, tmpS):
         """Build the 13 COPY_SUBWIN dwords into pktV[0:13] from runtime SGPR
-        inputs (pitches and extents in element units; caller does the §1.3
+        inputs (pitches and extents in element units; caller does the
         arithmetic that produces them -- see emitComputeCopyFields). tmpS is TWO
         consecutive scratch SGPRs (the rect dword packs two runtime extents).
 
@@ -485,15 +480,15 @@ class SdmaPacketEmitter:
                            comment=comment + " (lo)"))
         return module
 
-    # ---- §1.3 field arithmetic (runtime geometry -> the SGPR inputs above) --
+    # ---- field arithmetic (runtime geometry -> the SGPR inputs above) --
 
     def emitComputeCopyFields(self, module, w,
                               pS, jS, myRankS, mS, nS, nShardS,
                               addressDS, srcPitchS, recvBaseS,
                               outSrcBaseS, outSrcYS, outSrcSliceS,
                               outDstSliceS, outRectYS, tmpS, tmp64S):
-        """Compute the runtime COPY inputs from (p, j, myRank, M, N, nShard) per
-        §1.3, FOLDING the four coordinates into the two 64-bit base addresses:
+        """Compute the runtime COPY inputs from (p, j, myRank, M, N, nShard),
+        FOLDING the four coordinates into the two 64-bit base addresses:
 
           outSrcBase = AddressD + (j*MT1*ldd    + p*nShard) * sizeof(bf16)
           recvBase  += (myRank*N + j*MT1) * nShard          * sizeof(bf16)
@@ -504,7 +499,7 @@ class SdmaPacketEmitter:
         The hardware addresses a sub-window as base + y*pitch*elem + x*elem, so
         adding those terms into the base and leaving x/y at 0 reaches the exact
         same byte -- see the module docstring for why we want that (the 14-bit
-        coordinate fields overflowed at W=8).
+        coordinate fields would overflow at large W).
 
         src_pitch = ldd and dst_pitch = nShard are passed straight through by the
         caller, as is rect_x = nShard. MT1 is the compile-time token extent.
@@ -534,7 +529,7 @@ class SdmaPacketEmitter:
         MT1 rows would read past the end of D.
 
         Kept separate from emitBuildCopyPacket so the address arithmetic (what the
-        §1.3 formulas mean) and the bit-packing (how the hardware wants them) are
+        formulas mean) and the bit-packing (how the hardware wants them) are
         each auditable on their own.
         """
         module.add(SMulI32(dst=sgpr(outSrcYS), src0=sgpr(jS), src1=self.mt1,
@@ -590,8 +585,7 @@ class SdmaPacketEmitter:
         Stride is 4: the ATOMIC is an ADD_RTN_32, a 4-byte write.
 
         The flag is indexed by SOURCE rank only -- source j's tokenTiles ATOMICs
-        accumulate into one slot, per the §1.1 "== tokenTiles" drain predicate
-        (§1.1's flag[myRank][j] was a typo).
+        accumulate into one slot, matching the "== tokenTiles" drain predicate.
 
         Three things must move with this stride: the host allocates flag as W u32
         slots (FusedA2AClient.cpp flagBytes), the DRAIN poll strides its self-flag

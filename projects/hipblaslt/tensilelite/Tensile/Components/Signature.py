@@ -30,14 +30,14 @@ from ..Activation import ActivationType
 
 from dataclasses import dataclass, field
 
-# Fused GEMM.A2A kernarg segment layout (Task 5).
+# Fused GEMM.A2A kernarg segment layout.
 #
 # When kernel["FusedGemmA2A"] is set, the Signature appends a fixed-size segment
 # of kernarg metadata at the very end of the kernarg buffer (after every GEMM /
 # store arg). These args are registered as kernarg metadata ONLY -- they are
 # deliberately NOT loaded in the prologue (no defineSgpr, not counted in
-# numSgprToLoad). The A2A fusion logic runs solely in the D-store epilogue
-# (Task 6-9), so the epilogue reads each arg on demand via
+# numSgprToLoad). The A2A fusion logic runs solely in the D-store epilogue,
+# so the epilogue reads each arg on demand via
 # loadKernArg(..., sgprOffset=hex(fused_base + intra-offset), dword=...) into a
 # scratch SGPR that is freed immediately after use. A WG maps to a single
 # dst_rank, so it reads exactly one peer_ptr (via a switch on dst_rank); flag
@@ -96,8 +96,8 @@ if FUSED_A2A_MAX_RANKS > 31:
         % (FUSED_A2A_MAX_RANKS, 31))
 
 # Intra-segment byte layout, in emission order. Pointers are 8 bytes
-# (SIG_GLOBALBUFFER), scalars are 4 bytes (u32). Task 6-9 add fused_base (the
-# byte offset of peer_ptr_0 in kernarg memory, exposed as
+# (SIG_GLOBALBUFFER), scalars are 4 bytes (u32). The epilogue adds fused_base
+# (the byte offset of peer_ptr_0 in kernarg memory, exposed as
 # writer.states.fusedA2AKernArgBase) to these to get an absolute sgprOffset.
 def fusedA2AKernArgLayout():
     """Return {argName: intra-segment byte offset} for the fused-A2A segment.
@@ -108,15 +108,15 @@ def fusedA2AKernArgLayout():
                                    offset 0, recv at FUSED_A2A_PEER_RECV_OFFSET)
       counter_ptr      : 8B       (this device's counter base)
       FusedSdmaQueues  : 8B        device pointer to the W-element SdmaQueueDeviceHandle
-                                   array (Task 2 SdmaQueueSet::deviceHandles); consumed
-                                   by the Task 4/5 ring/packet emitters
+                                   array (SdmaQueueSet::deviceHandles); consumed by the
+                                   SDMA ring/packet emitters
       FusedMyRank      : 4B (u32)
       FusedW           : 4B (u32)  world size
       FusedNShard      : 4B (u32)
       FusedDrain       : 4B (u32)  runtime drain flag (NOT a compile-time gate)
       FusedAM          : 4B (u32)  A2A feature-row count (first AM rows PUSH, rest local)
       FusedTilesPerRank: 4B (u32)  feature-tiles per rank shard (nShard/MT0), == the
-                                   SDMA counter target (Task 6)
+                                   SDMA counter target
       FusedTokenTiles  : 4B (u32)  token-tiles across N (N/MT1), == the SDMA flag target
 
     FusedSdmaQueues sits right after counter_ptr, ahead of the scalars. All
@@ -480,10 +480,10 @@ class SignatureDefault(Signature):
             signature.addArg("batchOffsetB", SVK.SIG_VALUE, "u64")
             userArgumentsInfo.gemmArgumentSize += 32  # 4 offsets * 8 bytes each
 
-        # Fused GEMM.A2A kernarg metadata (Task 5). Registered LAST so the fused
+        # Fused GEMM.A2A kernarg metadata. Registered LAST so the fused
         # args occupy the tail of the kernarg buffer. These are metadata-only:
-        # no defineSgpr / no numSgprToLoad change -- the epilogue (Task 6-9)
-        # reads each on demand by absolute byte offset. See the module-level
+        # no defineSgpr / no numSgprToLoad change -- the epilogue reads each
+        # on demand by absolute byte offset. See the module-level
         # fusedA2AKernArgLayout() docstring for the offset contract.
         if kernel["FusedGemmA2A"]:
             # Byte offset of the first fused arg (peer_ptr_0) in kernarg memory,
@@ -501,7 +501,7 @@ class SignatureDefault(Signature):
             signature.addArg("FusedAM",           SVK.SIG_VALUE, "u32")
             signature.addArg("FusedTilesPerRank", SVK.SIG_VALUE, "u32")
             signature.addArg("FusedTokenTiles",   SVK.SIG_VALUE, "u32")
-            # Publish the segment base for the epilogue (Task 6-9). The epilogue
+            # Publish the segment base for the epilogue. The epilogue
             # dereferences fused args against sgprKernArgAddress, which the
             # prologue has already advanced past the common-args header by
             # commonArgsSize (Bypass_ArgType3_to_ArgType0 "Shift common args" in

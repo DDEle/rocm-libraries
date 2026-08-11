@@ -43,6 +43,7 @@ namespace TensileLite
                         std::shared_ptr<Hardware>                                      hardware,
                         ClientProblemFactory& problemFactory)
         {
+#ifdef TENSILELITE_ENABLE_SDMA_A2A
             const int  W        = args["fused-a2a-world"].as<int>();
             const int  drain    = args["fused-a2a-drain"].as<int>() ? 1 : 0;
             const bool validate = args["fused-a2a-validate"].as<int>() != 0;
@@ -324,10 +325,9 @@ namespace TensileLite
             std::vector<void*> peer(W, nullptr), counter(W, nullptr);
             // Views into peer[d]: flag at offset 0, recv at FUSED_A2A_PEER_RECV_OFFSET.
             std::vector<void*> recv(W, nullptr), flag(W, nullptr);
-            std::vector<void*> xA(W, nullptr), wB(W, nullptr), cC(W, nullptr), outD(W, nullptr);
+            std::vector<void*> wA(W, nullptr), xB(W, nullptr), cC(W, nullptr), outD(W, nullptr);
 
-            // Reference image of the counter guard tail: written once per device at
-            // allocation, compared against the device copy after every launch.
+            // Staging buffer for arming each device's guard tail.
             std::vector<uint32_t> hCounterGuard(FUSED_A2A_COUNTER_SENTINEL_WORDS);
             fusedA2ACounterSentinelFill(hCounterGuard.data());
 
@@ -349,13 +349,13 @@ namespace TensileLite
                                         hCounterGuard.data(),
                                         FUSED_A2A_COUNTER_SENTINEL_BYTES,
                                         hipMemcpyHostToDevice));
-                HIP_CHECK_EXC(hipMalloc(&xA[d], aBytes));
-                HIP_CHECK_EXC(hipMalloc(&wB[d], bBytes));
+                HIP_CHECK_EXC(hipMalloc(&wA[d], aBytes));
+                HIP_CHECK_EXC(hipMalloc(&xB[d], bBytes));
                 HIP_CHECK_EXC(hipMalloc(&cC[d], cBytes));
                 HIP_CHECK_EXC(hipMalloc(&outD[d], dBytes));
                 // A is shared by every card; B is this card's own draw.
-                HIP_CHECK_EXC(hipMemcpy(xA[d], hA.data(), aBytes, hipMemcpyHostToDevice));
-                HIP_CHECK_EXC(hipMemcpy(wB[d], hB[d].data(), bBytes, hipMemcpyHostToDevice));
+                HIP_CHECK_EXC(hipMemcpy(wA[d], hA.data(), aBytes, hipMemcpyHostToDevice));
+                HIP_CHECK_EXC(hipMemcpy(xB[d], hB[d].data(), bBytes, hipMemcpyHostToDevice));
                 HIP_CHECK_EXC(hipMemset(cC[d], 0, cBytes));
                 HIP_CHECK_EXC(hipMemset(outD[d], 0, dBytes));
                 HIP_CHECK_EXC(hipMemset(recv[d], 0, recvBytes));
@@ -386,11 +386,7 @@ namespace TensileLite
             // One ring per (device, peer), created AFTER P2P enable so peer pages are
             // already mapped. The self entry (j == d) is a loopback queue, which gives
             // this card's own flag slot a real producer.
-            //
-            // sdmaHandles must stay OUTSIDE the #ifdef: the kernarg append below is
-            // still parsed in an SDMA-off build.
-            std::vector<void*> sdmaHandles(W, nullptr);
-#ifdef TENSILELITE_ENABLE_SDMA_A2A
+            std::vector<void*>                         sdmaHandles(W, nullptr);
             std::vector<std::unique_ptr<SdmaQueueSet>> sdmaSets(W);
             {
                 std::vector<uint32_t> nodes(W);
@@ -404,15 +400,6 @@ namespace TensileLite
                 }
             }
             std::cout << "[fused-a2a] created " << W << " SDMA queues per device (one per peer)\n";
-#else
-            std::cerr << "[fused-a2a] ERROR: this client was built without "
-                         "TENSILELITE_ENABLE_SDMA_A2A, so no SDMA rings exist, but the "
-                         "fused epilogue unconditionally submits SDMA packets and would "
-                         "dereference a null queue handle. Reconfigure with "
-                         "-DTENSILELITE_ENABLE_SDMA_A2A=ON."
-                      << std::endl;
-            return 1;
-#endif
 
             // Each device needs its own adapter: the main one binds its modules to
             // device 0, so launches on 1..W-1 would not resolve the kernel.
@@ -527,8 +514,8 @@ namespace TensileLite
                     HIP_CHECK_EXC(hipSetDevice(d));
 
                     ContractionInputs inputs;
-                    inputs.a     = xA[d];
-                    inputs.b     = wB[d];
+                    inputs.a     = wA[d];
+                    inputs.b     = xB[d];
                     inputs.c     = cC[d];
                     inputs.d     = outD[d];
                     inputs.alpha = static_cast<float>(1);
@@ -903,10 +890,10 @@ namespace TensileLite
                     (void)hipFree(peer[d]);
                 if(counter[d])
                     (void)hipFree(counter[d]);
-                if(xA[d])
-                    (void)hipFree(xA[d]);
-                if(wB[d])
-                    (void)hipFree(wB[d]);
+                if(wA[d])
+                    (void)hipFree(wA[d]);
+                if(xB[d])
+                    (void)hipFree(xB[d]);
                 if(cC[d])
                     (void)hipFree(cC[d]);
                 if(outD[d])
@@ -926,6 +913,15 @@ namespace TensileLite
             if(anyHipError || guardFail)
                 return 2;
             return raceFail ? 3 : 0;
+#else
+            std::cerr << "[fused-a2a] ERROR: this client was built without "
+                         "TENSILELITE_ENABLE_SDMA_A2A, so no SDMA rings exist, but the "
+                         "fused epilogue unconditionally submits SDMA packets and would "
+                         "dereference a null queue handle. Reconfigure with "
+                         "-DTENSILELITE_ENABLE_SDMA_A2A=ON."
+                      << std::endl;
+            return 1;
+#endif
         }
 
     } // namespace Client

@@ -1,6 +1,6 @@
 
 /******************************************/
-/* fused-A2A cross-card handshake (design spec 2.3): counter election + SDMA packet submit + DRAIN */
+/* fused-A2A cross-card handshake: counter election + SDMA packet submit + DRAIN */
 /******************************************/
 s_mov_b64 exec, -1                                 // fused-A2A: full exec before wave-0 election
 // loadKernArg 10 KernArgAddress dword=1 sgprOffset=0x60

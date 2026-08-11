@@ -453,8 +453,7 @@ namespace TensileLite
             };
             // slotStride uses the UNPADDED N, to match the kernel's SizeJ slot
             // multiply.
-            const size_t slotStride
-                = (size_t)N * (size_t)nShard; // elems per src slot
+            const size_t slotStride = (size_t)N * nShard; // elems per src slot
             const size_t rowStride = (size_t)nShard; // per-token stride (feature-shard contiguous)
 
             // Only sized when validating; empty otherwise, and no D2H copy-back.
@@ -488,6 +487,56 @@ namespace TensileLite
             bool                             anyHipError    = false;
             bool guardFail = false; // counter guard tail corrupted (see below)
 
+            // Built once: appendFusedSegment must not run twice on the same args.
+            std::vector<std::vector<KernelInvocation>> perDeviceKernels(W);
+            for(int d = 0; d < W; d++)
+            {
+                HIP_CHECK_EXC(hipSetDevice(d));
+
+                ContractionInputs inputs;
+                inputs.a     = wA[d];
+                inputs.b     = xB[d];
+                inputs.c     = cC[d];
+                inputs.d     = outD[d];
+                inputs.alpha = static_cast<float>(1);
+                inputs.beta  = static_cast<float>(0);
+                inputs.gpu   = true;
+
+                auto kernels
+                    = solution->solve(*problem, inputs, *hardware, nullptr, 0, streams[d]);
+                // Not back(): solve() appends conversion/reduction kernels after the
+                // GEMM, and the fused segment belongs to the GEMM.
+                if(kernels.size() != 1)
+                {
+                    std::cerr << "[fused-a2a] ERROR: expected exactly one kernel on device " << d
+                              << ", got " << kernels.size() << std::endl;
+                    return 1;
+                }
+
+                KernelInvocation& gemm       = kernels.front();
+                size_t            beforeSize = gemm.args.size();
+                appendFusedSegment(gemm.args,
+                                   peer,
+                                   counter[d],
+                                   // SDMA offload args: this device's W-element
+                                   // SdmaQueueDeviceHandle array (one queue per peer).
+                                   sdmaHandles[d],
+                                   (uint32_t)d, // my_rank
+                                   (uint32_t)W,
+                                   nShard,
+                                   (uint32_t)drain,
+                                   // kernarg "FusedAM" (Signature.py); pass AM as
+                                   // the value to keep the client/kernel ABI matched.
+                                   (uint32_t)AM,
+                                   tilesPerRank,
+                                   tokenTiles);
+                std::cout << "[fused-a2a] dev " << d
+                          << " kernarg: host base(before append)=" << beforeSize
+                          << " size(after)=" << gemm.args.size() << "\n";
+
+                perDeviceKernels[d] = std::move(kernels);
+            }
+
             for(int it = 0; it < iters; it++)
             {
                 const bool verbose = (it == 0); // full per-card breakdown only on iter 0
@@ -508,58 +557,9 @@ namespace TensileLite
 
                 // Under DRAIN=ON the last WG polls this device's own flag, set by
                 // peers, so all W must be enqueued before any can be synchronized.
-                std::vector<std::vector<KernelInvocation>> perDeviceKernels(W);
                 for(int d = 0; d < W; d++)
                 {
                     HIP_CHECK_EXC(hipSetDevice(d));
-
-                    ContractionInputs inputs;
-                    inputs.a     = wA[d];
-                    inputs.b     = xB[d];
-                    inputs.c     = cC[d];
-                    inputs.d     = outD[d];
-                    inputs.alpha = static_cast<float>(1);
-                    inputs.beta  = static_cast<float>(0);
-                    inputs.gpu   = true;
-
-                    auto kernels
-                        = solution->solve(*problem, inputs, *hardware, nullptr, 0, streams[d]);
-                    if(kernels.empty())
-                    {
-                        std::cerr << "[fused-a2a] solve() produced no kernels on device " << d
-                                  << " (iter " << it << ")" << std::endl;
-                        return 1;
-                    }
-
-                    // peer pointer view for device d: slot j = peer j's block base.
-                    std::vector<void*> peerView(W);
-                    for(int j = 0; j < W; j++)
-                        peerView[j] = peer[j];
-
-                    KernelInvocation& last       = kernels.back();
-                    size_t            beforeSize = last.args.size();
-                    appendFusedSegment(last.args,
-                                       peerView,
-                                       counter[d],
-                                       // SDMA offload args: this device's W-element
-                                       // SdmaQueueDeviceHandle array (one queue per peer).
-                                       sdmaHandles[d],
-                                       (uint32_t)d, // my_rank
-                                       (uint32_t)W,
-                                       nShard,
-                                       (uint32_t)drain,
-                                       // kernarg "FusedAM" (Signature.py); pass AM as
-                                       // the value to keep the client/kernel ABI matched.
-                                       (uint32_t)AM,
-                                       tilesPerRank,
-                                       tokenTiles);
-                    // A constant size across iterations confirms exactly one segment.
-                    if(it == 0)
-                        std::cout << "[fused-a2a] dev " << d
-                                  << " kernarg: host base(before append)=" << beforeSize
-                                  << " size(after)=" << last.args.size() << "\n";
-
-                    perDeviceKernels[d] = std::move(kernels);
                     HIP_CHECK_EXC(hipEventRecord(startEv[d], streams[d]));
                     HIP_CHECK_EXC(adapters[d]->launchKernels(
                         perDeviceKernels[d], streams[d], nullptr, nullptr));

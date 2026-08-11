@@ -36,6 +36,12 @@
 
 #include <cstddef>
 
+// clang-format off
+//
+// The bitfield layout below is column-aligned to match the upstream sources it
+// was transcribed from (OSS 4.4 sdma.pkt, ROCR sdma_registers.h, the kernel's
+// vega10_sdma_pkt_open.h). Reflowing it breaks that field-by-field
+// correspondence, which is the only way the transcription stays checkable.
 namespace TensileLite
 {
     // SDMA COPY opcode (header op field) and the LINEAR_RECT sub-opcode.
@@ -319,3 +325,4 @@ namespace TensileLite
     }
 
 } // namespace TensileLite
+// clang-format on

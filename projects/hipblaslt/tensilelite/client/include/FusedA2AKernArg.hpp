@@ -97,17 +97,18 @@ namespace TensileLite
         //
         // peerPtrs holds this device's view and may be shorter than
         // FUSED_A2A_MAX_RANKS; the remaining slots are filled with nullptr.
-        inline void appendFusedSegment(KernelArguments&          args,
-                                       std::vector<void*> const& peerPtrs, // size W (device d's per-peer block bases)
-                                       void*                     counterPtr,
-                                       void*                     sdmaQueues, // W-element SdmaQueueDeviceHandle array
-                                       uint32_t                  myRank,
-                                       uint32_t                  worldSize,
-                                       uint32_t                  nShard,
-                                       uint32_t                  drain,
-                                       uint32_t                  an,
-                                       uint32_t                  tilesPerRank,
-                                       uint32_t                  tokenTiles)
+        inline void appendFusedSegment(
+            KernelArguments&          args,
+            std::vector<void*> const& peerPtrs, // size W (device d's per-peer block bases)
+            void*                     counterPtr,
+            void*                     sdmaQueues, // W-element SdmaQueueDeviceHandle array
+            uint32_t                  myRank,
+            uint32_t                  worldSize,
+            uint32_t                  nShard,
+            uint32_t                  drain,
+            uint32_t                  an,
+            uint32_t                  tilesPerRank,
+            uint32_t                  tokenTiles)
         {
             size_t before = args.size();
 

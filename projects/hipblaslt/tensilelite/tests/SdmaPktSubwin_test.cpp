@@ -27,15 +27,15 @@ using namespace TensileLite;
 namespace
 {
     // Shared problem shape (elements), matching the on-hardware validation harness.
-    constexpr unsigned kN        = 18432;  // full output width == src row pitch
-    constexpr unsigned kShard    = 2560;   // columns per peer == rect X extent
-    constexpr unsigned kBand     = 256;    // rows per packet == rect Y extent
+    constexpr unsigned kN        = 18432; // full output width == src row pitch
+    constexpr unsigned kShard    = 2560; // columns per peer == rect X extent
+    constexpr unsigned kBand     = 256; // rows per packet == rect Y extent
     constexpr unsigned kM        = 2048;
     constexpr unsigned kDstPad   = 64;
-    constexpr unsigned kDstPitch = kShard + kDstPad;  // 2624, padded (harness)
-    constexpr unsigned kDstRows  = kM + kBand;        // 2304
+    constexpr unsigned kDstPitch = kShard + kDstPad; // 2624, padded (harness)
+    constexpr unsigned kDstRows  = kM + kBand; // 2304
 
-    constexpr unsigned kSrcSlice = kM * kN;             // src_slice_pitch (harness)
+    constexpr unsigned kSrcSlice = kM * kN; // src_slice_pitch (harness)
     constexpr unsigned kDstSlice = kDstRows * kDstPitch; // dst_slice_pitch (harness)
 
     // View the packet as 13 raw dwords for comparison.
@@ -51,12 +51,17 @@ namespace
 TEST(SdmaPktSubwin, HarnessGoldenVector)
 {
     auto p = makeCopyRectPacket(/*srcBase=*/0,
-                                /*srcX=*/kShard, /*srcY=*/0,
-                                /*srcPitch=*/kN, /*srcSlicePitch=*/kSrcSlice,
+                                /*srcX=*/kShard,
+                                /*srcY=*/0,
+                                /*srcPitch=*/kN,
+                                /*srcSlicePitch=*/kSrcSlice,
                                 /*dstBase=*/0,
-                                /*dstX=*/0, /*dstY=*/0,
-                                /*dstPitch=*/kDstPitch, /*dstSlicePitch=*/kDstSlice,
-                                /*rectX=*/kShard, /*rectY=*/kBand,
+                                /*dstX=*/0,
+                                /*dstY=*/0,
+                                /*dstPitch=*/kDstPitch,
+                                /*dstSlicePitch=*/kDstSlice,
+                                /*rectX=*/kShard,
+                                /*rectY=*/kBand,
                                 /*elementSizeLog2=*/1);
 
     // Field-by-field derivation of each expected dword:
@@ -73,10 +78,19 @@ TEST(SdmaPktSubwin, HarnessGoldenVector)
     //   DW10 dst_slice_pitch-1 = 2304*2624-1 = 6045695         = 0x005C3FFF
     //   DW11 rect_x-1=2559 | (rect_y-1=255)<<16                = 0x00FF09FF
     //   DW12 rect_z=0, cache/swizzle all default               = 0x00000000
-    const unsigned int expected[13] = {
-        0x20000401u, 0x00000000u, 0x00000000u, 0x00000A00u, 0x08FFE000u,
-        0x023FFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x0147E000u,
-        0x005C3FFFu, 0x00FF09FFu, 0x00000000u};
+    const unsigned int expected[13] = {0x20000401u,
+                                       0x00000000u,
+                                       0x00000000u,
+                                       0x00000A00u,
+                                       0x08FFE000u,
+                                       0x023FFFFFu,
+                                       0x00000000u,
+                                       0x00000000u,
+                                       0x00000000u,
+                                       0x0147E000u,
+                                       0x005C3FFFu,
+                                       0x00FF09FFu,
+                                       0x00000000u};
 
     const unsigned int* got = asDwords(p);
     for(int i = 0; i < 13; ++i)
@@ -88,16 +102,21 @@ TEST(SdmaPktSubwin, HarnessGoldenVector)
 //    and dst slice pitch differ from the harness vector. --
 TEST(SdmaPktSubwin, ProductionGoldenVector)
 {
-    constexpr unsigned kProdDstPitch = 2560;              // == kShard, no pad
-    constexpr unsigned kProdDstSlice = kBand * kProdDstPitch;  // one band's plane
+    constexpr unsigned kProdDstPitch = 2560; // == kShard, no pad
+    constexpr unsigned kProdDstSlice = kBand * kProdDstPitch; // one band's plane
 
     auto p = makeCopyRectPacket(/*srcBase=*/0,
-                                /*srcX=*/kShard, /*srcY=*/0,
-                                /*srcPitch=*/kN, /*srcSlicePitch=*/kSrcSlice,
+                                /*srcX=*/kShard,
+                                /*srcY=*/0,
+                                /*srcPitch=*/kN,
+                                /*srcSlicePitch=*/kSrcSlice,
                                 /*dstBase=*/0,
-                                /*dstX=*/0, /*dstY=*/0,
-                                /*dstPitch=*/kProdDstPitch, /*dstSlicePitch=*/kProdDstSlice,
-                                /*rectX=*/kShard, /*rectY=*/kBand,
+                                /*dstX=*/0,
+                                /*dstY=*/0,
+                                /*dstPitch=*/kProdDstPitch,
+                                /*dstSlicePitch=*/kProdDstSlice,
+                                /*rectX=*/kShard,
+                                /*rectY=*/kBand,
                                 /*elementSizeLog2=*/1);
 
     // Derivation (same field rules; only DW9/DW10 change vs harness):
@@ -110,10 +129,19 @@ TEST(SdmaPktSubwin, ProductionGoldenVector)
     //          the rect exactly fills one destination row (boundary case).
     //   DW10 dst_slice_pitch-1 = 256*2560-1 = 655359           = 0x0009FFFF
     //   DW11 rect_x-1=2559 | (rect_y-1=255)<<16                = 0x00FF09FF
-    const unsigned int expected[13] = {
-        0x20000401u, 0x00000000u, 0x00000000u, 0x00000A00u, 0x08FFE000u,
-        0x023FFFFFu, 0x00000000u, 0x00000000u, 0x00000000u, 0x013FE000u,
-        0x0009FFFFu, 0x00FF09FFu, 0x00000000u};
+    const unsigned int expected[13] = {0x20000401u,
+                                       0x00000000u,
+                                       0x00000000u,
+                                       0x00000A00u,
+                                       0x08FFE000u,
+                                       0x023FFFFFu,
+                                       0x00000000u,
+                                       0x00000000u,
+                                       0x00000000u,
+                                       0x013FE000u,
+                                       0x0009FFFFu,
+                                       0x00FF09FFu,
+                                       0x00000000u};
 
     const unsigned int* got = asDwords(p);
     for(int i = 0; i < 13; ++i)
@@ -142,7 +170,7 @@ TEST(SdmaPktAtomic, Add32GoldenVector)
 {
     // A flag slot address with distinct lo/hi bytes so a lo/hi swap would show.
     constexpr unsigned long long kFlagAddr = 0x0000ABCD12345678ull;
-    auto p = makeAtomicAdd32Packet(kFlagAddr, /*addend=*/1);
+    auto                         p         = makeAtomicAdd32Packet(kFlagAddr, /*addend=*/1);
 
     // Field-by-field derivation of each expected dword:
     //   DW0  op=10 | operation=15<<25                           = 0x1E00000A
@@ -153,9 +181,14 @@ TEST(SdmaPktAtomic, Add32GoldenVector)
     //   DW5  cmp_data_lo (unused for fetch-add)                 = 0x00000000
     //   DW6  cmp_data_hi (unused for fetch-add)                 = 0x00000000
     //   DW7  loop_interval = 0                                  = 0x00000000
-    const unsigned int expected[8] = {
-        0x1E00000Au, 0x12345678u, 0x0000ABCDu, 0x00000001u,
-        0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u};
+    const unsigned int expected[8] = {0x1E00000Au,
+                                      0x12345678u,
+                                      0x0000ABCDu,
+                                      0x00000001u,
+                                      0x00000000u,
+                                      0x00000000u,
+                                      0x00000000u,
+                                      0x00000000u};
 
     const unsigned int* got = reinterpret_cast<const unsigned int*>(&p);
     for(int i = 0; i < 8; ++i)

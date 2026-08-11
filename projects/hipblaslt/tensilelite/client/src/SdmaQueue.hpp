@@ -66,11 +66,11 @@ namespace TensileLite
             // use plain uint64_t* rather than hsakmt's HSAuint64* so the header
             // stays hsakmt-free; HSAuint64 is itself a uint64_t typedef, so the
             // layout (and every static_assert below) is unchanged.
-            uint32_t* queueBuf;      // ring base (Uncached)
-            uint64_t* rptr;          // hardware read pointer (byte count)
-            uint64_t* wptr;          // hardware write pointer (byte count)
-            uint64_t* doorbell;      // doorbell (byte count)
-            uint64_t* cachedWptr;    // software producer cursor (shared, uncached)
+            uint32_t* queueBuf; // ring base (Uncached)
+            uint64_t* rptr; // hardware read pointer (byte count)
+            uint64_t* wptr; // hardware write pointer (byte count)
+            uint64_t* doorbell; // doorbell (byte count)
+            uint64_t* cachedWptr; // software producer cursor (shared, uncached)
             uint64_t* committedWptr; // software committed cursor (shared, uncached)
 
             // Per-producer PRIVATE cache seed (a value, not shared state).
@@ -86,7 +86,8 @@ namespace TensileLite
         static_assert(offsetof(SdmaQueueDeviceHandle, wptr) == 2 * 8, "wptr @ 16");
         static_assert(offsetof(SdmaQueueDeviceHandle, doorbell) == 3 * 8, "doorbell @ 24");
         static_assert(offsetof(SdmaQueueDeviceHandle, cachedWptr) == 4 * 8, "cachedWptr @ 32");
-        static_assert(offsetof(SdmaQueueDeviceHandle, committedWptr) == 5 * 8, "committedWptr @ 40");
+        static_assert(offsetof(SdmaQueueDeviceHandle, committedWptr) == 5 * 8,
+                      "committedWptr @ 40");
         static_assert(offsetof(SdmaQueueDeviceHandle, cachedHwReadIndex) == 6 * 8,
                       "cachedHwReadIndex @ 48");
 
@@ -108,9 +109,15 @@ namespace TensileLite
             SdmaQueue& operator=(const SdmaQueue&) = delete;
 
             // Device pointer to this queue's handle (for single-queue device use).
-            SdmaQueueDeviceHandle* deviceHandle() const { return deviceHandle_; }
+            SdmaQueueDeviceHandle* deviceHandle() const
+            {
+                return deviceHandle_;
+            }
             // Host-visible copy of the same handle (for host-side driving/packing).
-            const SdmaQueueDeviceHandle& hostHandle() const { return hostHandle_; }
+            const SdmaQueueDeviceHandle& hostHandle() const
+            {
+                return hostHandle_;
+            }
 
             // ---- Host-side driving (smoke / bring-up only) -----------------
             // The production producer is the GPU kernel (later task). These
@@ -146,7 +153,7 @@ namespace TensileLite
             uint64_t*              cachedWptr_    = nullptr; // uncached device mem
             uint64_t*              committedWptr_ = nullptr; // uncached device mem
             SdmaQueueDeviceHandle* deviceHandle_  = nullptr; // device copy
-            SdmaQueueDeviceHandle  hostHandle_{};            // host copy
+            SdmaQueueDeviceHandle  hostHandle_{}; // host copy
             uint64_t               hostWptr_ = 0; // host-side write cursor
         };
 
@@ -168,11 +175,20 @@ namespace TensileLite
             SdmaQueueSet(const SdmaQueueSet&)            = delete;
             SdmaQueueSet& operator=(const SdmaQueueSet&) = delete;
 
-            size_t size() const { return queues_.size(); }
-            SdmaQueue& queue(size_t i) { return *queues_[i]; }
+            size_t size() const
+            {
+                return queues_.size();
+            }
+            SdmaQueue& queue(size_t i)
+            {
+                return *queues_[i];
+            }
 
             // Device pointer to the W-element SdmaQueueDeviceHandle array.
-            SdmaQueueDeviceHandle* deviceHandles() const { return dHandles_; }
+            SdmaQueueDeviceHandle* deviceHandles() const
+            {
+                return dHandles_;
+            }
 
         private:
             std::vector<std::unique_ptr<SdmaQueue>> queues_;

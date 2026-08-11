@@ -100,7 +100,7 @@ TEST(FusedA2ACounterSentinel, FilledGuardReadsIntact)
 // holding a legal value, and the guard reads intact through the corruption.
 TEST(FusedA2ACounterSentinel, EveryGuardWordIsDistinct)
 {
-    auto           g = freshGuard();
+    auto               g = freshGuard();
     std::set<uint32_t> seen(g.begin(), g.end());
     EXPECT_EQ(seen.size(), g.size());
 }
@@ -113,7 +113,7 @@ TEST(FusedA2ACounterSentinel, DetectsEachCorruptedWord)
     for(size_t i = 0; i < FUSED_A2A_COUNTER_SENTINEL_WORDS; i++)
     {
         auto g = freshGuard();
-        g[i] = ~g[i];
+        g[i]   = ~g[i];
         EXPECT_EQ(fusedA2ACounterSentinelFirstBad(g.data()), (int)i)
             << "corrupted word " << i << " went unnoticed";
     }
@@ -144,8 +144,8 @@ TEST(FusedA2ACounterSentinel, DetectsSingleByteCorruption)
 {
     for(size_t byteIdx = 0; byteIdx < FUSED_A2A_COUNTER_SENTINEL_BYTES; byteIdx++)
     {
-        auto  g  = freshGuard();
-        auto* b  = reinterpret_cast<uint8_t*>(g.data());
+        auto  g = freshGuard();
+        auto* b = reinterpret_cast<uint8_t*>(g.data());
         b[byteIdx] ^= 0xFF;
         EXPECT_EQ(fusedA2ACounterSentinelFirstBad(g.data()), (int)(byteIdx / sizeof(uint32_t)))
             << "byte " << byteIdx << " went unnoticed";

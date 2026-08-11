@@ -115,9 +115,9 @@ namespace TensileLite
                       << " MT1(N)=" << FUSED_A2A_N_TILE << "\n";
 
             // M/N-swap (col-major first-class): A=w[feature,K], B=x[token,K].
-            const size_t M = problem->freeSizeA(0); // = nFeature (A2A-scattered dim)
-            const size_t N = problem->freeSizeB(0); // = nToken (all output cols)
-            const size_t K = problem->boundSize(0); // GEMM contraction dim K
+            const uint32_t M = (uint32_t)problem->freeSizeA(0); // = nFeature (A2A dim)
+            const uint32_t N = (uint32_t)problem->freeSizeB(0); // = nToken (all output cols)
+            const uint32_t K = (uint32_t)problem->boundSize(0); // GEMM contraction dim K
 
             const size_t numBatch = problem->batchIndices().size();
             if(numBatch > 1 || (numBatch == 1 && problem->batchSize(0) != 1))
@@ -128,20 +128,19 @@ namespace TensileLite
 
             // The first `AM` FEATURE columns go all-to-all; [AM, M) stay local in
             // `out`.
-            const size_t AM = (size_t)args["fused-a2a-am"].as<int>();
+            const uint32_t AM = (uint32_t)args["fused-a2a-am"].as<int>();
             // nShard = AM/W is a FEATURE sub-segment (one rank's slice of feature M).
-            const uint32_t nShard = (uint32_t)(AM / (size_t)W);
+            const uint32_t nShard = AM / (uint32_t)W;
             // tilesPerRank: whole feature-tiles per rank shard (nShard is feature).
             const uint32_t tilesPerRank = (uint32_t)(nShard / FUSED_A2A_M_TILE);
             // tokenTiles: token-tiles across N. CEIL, not floor -- it is a DIMENSION
             // of the counter array and the grid has CeilDivide(N, MT1) of them.
-            const uint32_t tokenTiles = (uint32_t)((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE);
+            const uint32_t tokenTiles = (N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE;
             // mTiles: feature-tiles across the full feature dim M (diagnostic only).
-            const uint32_t mTiles = (uint32_t)(M / FUSED_A2A_M_TILE);
+            const uint32_t mTiles = M / FUSED_A2A_M_TILE;
 
-            if(AM % (size_t)W != 0 || (nShard % FUSED_A2A_M_TILE) != 0
-               || (M % (size_t)FUSED_A2A_M_TILE) != 0 || (AM % (size_t)FUSED_A2A_M_TILE) != 0
-               || AM > M)
+            if(AM % (uint32_t)W != 0 || (nShard % FUSED_A2A_M_TILE) != 0
+               || (M % FUSED_A2A_M_TILE) != 0 || (AM % FUSED_A2A_M_TILE) != 0 || AM > M)
             {
                 std::cerr << "[fused-a2a] ERROR: problem shape violates fused-A2A "
                              "constraints (spec section 0).\n"
@@ -199,8 +198,7 @@ namespace TensileLite
             // recv is feature-contiguous [W, token, feature_shard]. Token is padded to
             // a whole MacroTile1 tile: the PUSH store writes the full macro-tile edge
             // with no edge clamp.
-            const size_t nTokenPad
-                = ((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE) * FUSED_A2A_N_TILE;
+            const size_t nTokenPad = (size_t)tokenTiles * FUSED_A2A_N_TILE;
             const size_t recvBytes = (size_t)W * nTokenPad * nShard * sizeof(uint16_t); // bf16
             // One u32 flag slot per source rank. Must stay in step with
             // emitComputeFlagAddr's *4 stride and the DRAIN poll's j*4.
@@ -225,20 +223,14 @@ namespace TensileLite
             const auto&  aDesc        = problem->a();
             const auto&  bDesc        = problem->b();
             const auto&  dDesc        = problem->d();
-            const size_t aFreeAx      = problem->freeIndicesA()[0].i; // A axis carrying M (feature)
-            const size_t aBoundAx     = problem->boundIndices()[0].a; // A axis carrying K
-            const size_t bFreeAx      = problem->freeIndicesB()[0].i; // B axis carrying N (token)
-            const size_t bBoundAx     = problem->boundIndices()[0].b; // B axis carrying K
-            const size_t aFreeStride  = aDesc.strides()[aFreeAx];
-            const size_t aBoundStride = aDesc.strides()[aBoundAx];
-            const size_t bFreeStride  = bDesc.strides()[bFreeAx];
-            const size_t bBoundStride = bDesc.strides()[bBoundAx];
+            const size_t aFreeStride  = aDesc.strides()[problem->freeIndicesA()[0].i];
+            const size_t aBoundStride = aDesc.strides()[problem->boundIndices()[0].a];
+            const size_t bFreeStride  = bDesc.strides()[problem->freeIndicesB()[0].i];
+            const size_t bBoundStride = bDesc.strides()[problem->boundIndices()[0].b];
             // freeIndices()[j].d is the D dim for free index j: 0 = A's M(feature),
             // 1 = B's N(token).
-            const size_t dMAx     = problem->freeIndices()[0].d;
-            const size_t dNAx     = problem->freeIndices()[1].d;
-            const size_t dMStride = dDesc.strides()[dMAx];
-            const size_t dNStride = dDesc.strides()[dNAx];
+            const size_t dMStride = dDesc.strides()[problem->freeIndices()[0].d];
+            const size_t dNStride = dDesc.strides()[problem->freeIndices()[1].d];
             std::cout << "[fused-a2a] layout A(freeStride=" << aFreeStride
                       << " boundStride=" << aBoundStride << ") B(freeStride=" << bFreeStride
                       << " boundStride=" << bBoundStride << ") D(mStride=" << dMStride
@@ -299,7 +291,7 @@ namespace TensileLite
 
             // Dgold[s][m,n] = bf16( sum_k f32(A[m,k]) * f32(B_s[k,n]) ), read from the
             // arrays actually uploaded. Left empty when validate=0.
-            const size_t          goldStride = M * N; // elements per rank within Dgold
+            const size_t          goldStride = (size_t)M * N; // elements per rank within Dgold
             std::vector<BFloat16> Dgold;
             if(validate)
             {
@@ -308,7 +300,7 @@ namespace TensileLite
                 {
                     const BFloat16* bSrc = hB[s].data();
                     BFloat16*       dOut = Dgold.data() + (size_t)s * goldStride;
-#pragma omp parallel for collapse(2) schedule(static)
+#pragma omp parallel for collapse(2)
                     for(size_t m = 0; m < M; m++)
                     {
                         for(size_t n = 0; n < N; n++)

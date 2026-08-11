@@ -208,7 +208,8 @@ TEST(FusedA2AKernArg, SdmaQueuesFollowCounterTilesAndTokensAreLast)
         if(n != "FusedTilesPerRank" && n != "FusedTokenTiles")
             scalarMax = std::max(scalarMax, a.offset);
     }
-    EXPECT_EQ(sdmaQueuesOffset, counterOffset + 8) << "FusedSdmaQueues must directly follow counter_ptr";
+    EXPECT_EQ(sdmaQueuesOffset, counterOffset + 8)
+        << "FusedSdmaQueues must directly follow counter_ptr";
     for(auto const& a : table)
     {
         std::string n = a.name;

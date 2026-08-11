@@ -63,8 +63,8 @@ namespace TensileLite
 
             // HSA + KFD are process-global; initialize once. GPU agents are
             // captured in HIP-device order via the iterate-agents callback.
-            std::once_flag                gHsaInitFlag;
-            std::vector<hsa_agent_t>      gGpuAgents;
+            std::once_flag           gHsaInitFlag;
+            std::vector<hsa_agent_t> gGpuAgents;
 
             hsa_status_t gpuAgentCb(hsa_agent_t agent, void* data)
             {
@@ -94,9 +94,9 @@ namespace TensileLite
         {
             ensureHsaKfd();
             if(hipDeviceId < 0 || hipDeviceId >= (int)gGpuAgents.size())
-                throw std::runtime_error("sdmaNodeIdForDevice: HIP device " + std::to_string(hipDeviceId)
-                                         + " out of range (" + std::to_string(gGpuAgents.size())
-                                         + " GPU agents)");
+                throw std::runtime_error("sdmaNodeIdForDevice: HIP device "
+                                         + std::to_string(hipDeviceId) + " out of range ("
+                                         + std::to_string(gGpuAgents.size()) + " GPU agents)");
             uint32_t node = 0;
             CHK_HSA(hsa_agent_get_info(gGpuAgents[hipDeviceId], HSA_AGENT_INFO_NODE, &node));
             return node;
@@ -144,7 +144,7 @@ namespace TensileLite
         struct SdmaQueue::Impl
         {
             void*            queueBuffer = nullptr; // ring (Uncached)
-            HsaQueueResource queue{};               // KFD queue resource
+            HsaQueueResource queue{}; // KFD queue resource
         };
 
         SdmaQueue::SdmaQueue(uint32_t localNode, uint32_t engineId)
@@ -169,8 +169,8 @@ namespace TensileLite
             // rethrow.
             try
             {
-                CHK_KMT(hsaKmtAllocMemory(
-                    localNode, SDMA_QUEUE_SIZE, memFlags, &impl_->queueBuffer));
+                CHK_KMT(
+                    hsaKmtAllocMemory(localNode, SDMA_QUEUE_SIZE, memFlags, &impl_->queueBuffer));
                 CHK_KMT(hsaKmtMapMemoryToGPU(impl_->queueBuffer, SDMA_QUEUE_SIZE, nullptr));
 
                 std::memset(&impl_->queue, 0, sizeof(HsaQueueResource));
@@ -194,8 +194,8 @@ namespace TensileLite
                 // Seed the cursors to the current HARDWARE write pointer so the
                 // first reserved index is contiguous with whatever the queue was
                 // created at (MORI does exactly this).
-                const uint64_t hwWptr = (uint64_t)*(impl_->queue.Queue_write_ptr_aql);
-                const uint64_t hwRptr = (uint64_t)*(impl_->queue.Queue_read_ptr_aql);
+                const uint64_t hwWptr = (uint64_t) * (impl_->queue.Queue_write_ptr_aql);
+                const uint64_t hwRptr = (uint64_t) * (impl_->queue.Queue_read_ptr_aql);
                 hostWptr_             = hwWptr;
 
                 hostHandle_ = SdmaQueueDeviceHandle{
@@ -300,7 +300,7 @@ namespace TensileLite
             for(uint64_t i = 0; i < timeoutSpins; ++i)
             {
                 const uint64_t rp
-                    = (uint64_t)*(volatile HSAuint64*)(impl_->queue.Queue_read_ptr_aql);
+                    = (uint64_t) * (volatile HSAuint64*)(impl_->queue.Queue_read_ptr_aql);
                 if(rp >= hostWptr_)
                     return true;
             }
@@ -334,8 +334,8 @@ namespace TensileLite
             SdmaQueueDeviceHandle* raw = nullptr;
             CHK_HIP(hipMalloc(&raw, bytes));
             auto hipFreeDeleter = [](SdmaQueueDeviceHandle* p) { (void)hipFree(p); };
-            std::unique_ptr<SdmaQueueDeviceHandle, decltype(hipFreeDeleter)> owned(
-                raw, hipFreeDeleter);
+            std::unique_ptr<SdmaQueueDeviceHandle, decltype(hipFreeDeleter)> owned(raw,
+                                                                                   hipFreeDeleter);
             CHK_HIP(hipMemcpy(owned.get(), handles.data(), bytes, hipMemcpyHostToDevice));
             dHandles_ = owned.release();
         }

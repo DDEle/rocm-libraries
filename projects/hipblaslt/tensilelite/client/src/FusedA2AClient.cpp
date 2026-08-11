@@ -1,15 +1,8 @@
 // Copyright Advanced Micro Devices, Inc., or its affiliates.
 // SPDX-License-Identifier: MIT
 
-// Single-process multi-GPU orchestration entry point for the fused GEMM.A2A
-// kernel; independent of the single-GPU benchmark loop in main.cpp, which
-// dispatches here before it when --fused-a2a is set. Sets up W devices once,
-// then repeatedly launches the fused kernel with a 108-byte fused-A2A segment
-// appended to the host GEMM kernarg -- re-zeroing counter/flag/recv each
-// iteration so the DRAIN handshake is exercised -- and reports "race: N/N
-// iterations passed" plus p50/p90 latency. Success requires the L2(recv)+
-// L1(out) check to pass with no HIP error every iteration (L1 uses two
-// independent methods; see the check below).
+// Single-process multi-GPU orchestration for the fused GEMM.A2A kernel,
+// dispatched from main.cpp when --fused-a2a is set.
 
 #include <Tensile/ContractionProblem.hpp>
 #include <Tensile/ContractionSolution.hpp>
@@ -24,10 +17,7 @@
 #include "FusedA2AKernArg.hpp"
 #include "SolutionIterator.hpp"
 
-// The GPU-initiated SDMA route needs the host to create one ring per (device,
-// peer) and hand the kernel the device-visible handle array. SdmaQueue.cpp is
-// only compiled (and hsakmt only linked) when the option is on, so the include
-// and every use of it are gated on the same macro.
+// SdmaQueue.cpp is only compiled, and hsakmt only linked, under this option.
 #ifdef TENSILELITE_ENABLE_SDMA_A2A
 #include "SdmaQueue.hpp"
 #endif
@@ -47,13 +37,7 @@ namespace TensileLite
 {
     namespace Client
     {
-        // FUSED_A2A_MAX_RANKS, FUSED_A2A_SEGMENT_BYTES, fusedA2AWorldSizeValid
-        // and appendFusedSegment come from FusedA2AKernArg.hpp so that the
-        // gtest can exercise the real definitions rather than a copy.
-
-        // Entry point invoked from main() when --fused-a2a is passed. Returns a
-        // process exit code (0 == all iterations passed: numeric validation when
-        // --fused-a2a-validate=1, else clean exit on all iterations).
+        // Returns a process exit code; 0 == all iterations passed.
         int runFusedA2A(po::variables_map const&                                       args,
                         std::shared_ptr<MasterSolutionLibrary<ContractionProblemGemm>> library,
                         std::shared_ptr<Hardware>                                      hardware,
@@ -61,18 +45,9 @@ namespace TensileLite
         {
             const int  W        = args["fused-a2a-world"].as<int>();
             const int  drain    = args["fused-a2a-drain"].as<int>() ? 1 : 0;
-            // validate=1 (default): compute host golden + numerically check every
-            // iteration (correctness bridge, current behavior). validate=0: SKIP
-            // the golden triple-loop and both compares — used on the full
-            // production shape whose CPU golden (~309 GMAC) is prohibitively slow;
-            // race detection then degrades to "kernel exited cleanly" (no HIP
-            // error / no DRAIN hang), i.e. clean-exit, not byte-verified.
             const bool validate = args["fused-a2a-validate"].as<int>() != 0;
 
-            // Bound W FIRST -- before it is printed, compared against deviceCount, or
-            // used as a divisor: an unbounded W would divide by zero (or produce a
-            // misleading error) in the checks further down before this range check
-            // could ever run.
+            // Bound W before it is used as a divisor further down.
             if(!fusedA2AWorldSizeValid(W))
             {
                 std::cerr << "[fused-a2a] ERROR: world size W=" << W
@@ -127,13 +102,8 @@ namespace TensileLite
             }
             std::cout << "[fused-a2a] solution: " << solution->name() << std::endl;
 
-            // Tile sizes come from THIS solution's macro-tile (not a hardcoded value):
-            // the kernel epilogue computes dst_rank and the counter index/target from
-            // the compile-time MacroTile0/MacroTile1 (see GlobalWriteBatch.py
-            // _emitFusedA2AHandshake). sizeMapping.macroTile.{x,y} are those same
-            // MT0/MT1. `tilesPerRank` (= n_shard/MT0) is the count of PUSH workgroups
-            // sharing one counter slot, compared for equality kernel-side; `tokenTiles`
-            // (= CeilDivide(N,MT1)) is the counter array's token dimension.
+            // Tile sizes must come from THIS solution's macro-tile: the kernel
+            // epilogue derives dst_rank and the counter index from MT0/MT1.
             const uint32_t FUSED_A2A_M_TILE = (uint32_t)solution->sizeMapping.macroTile.x;
             const uint32_t FUSED_A2A_N_TILE = (uint32_t)solution->sizeMapping.macroTile.y;
             if(FUSED_A2A_M_TILE == 0 || FUSED_A2A_N_TILE == 0)
@@ -146,27 +116,14 @@ namespace TensileLite
             std::cout << "[fused-a2a] macro-tile from solution: MT0(M)=" << FUSED_A2A_M_TILE
                       << " MT1(N)=" << FUSED_A2A_N_TILE << "\n";
 
-            // --- Derive fused shape from the problem, using THIS problem's
-            //     real M/N/K. ---
-            // M/N-swap (col-major first-class): A=w[feature,K],
-            // B=x[token,K]. freeSizeA now carries FEATURE (index-0=M, the
-            // A2A-scattered dim), freeSizeB carries TOKEN. Keep M/N as the working
-            // names for the arithmetic below to minimise churn; nFeature/nToken are
-            // semantic aliases used in comments and log lines.
+            // M/N-swap (col-major first-class): A=w[feature,K], B=x[token,K], so
+            // freeSizeA carries FEATURE and freeSizeB carries TOKEN.
             const size_t M = problem->freeSizeA(0); // = nFeature (A2A-scattered dim)
             const size_t N = problem->freeSizeB(0); // = nToken (all output cols)
             const size_t K = problem->boundSize(0); // GEMM contraction dim K
 
-            // The DRAIN owner is the globally last work-group, elected by counting
-            // arrivals against NumWorkGroups0*NumWorkGroups1 -- a product latched in
-            // the kernel prologue (emitFusedA2ATotalWGsLatch) that does NOT include
-            // the batch dim. A batch extent > 1 multiplies the actual work-group
-            // population, so the election would fire at 1/extent of the real arrival
-            // count and release the barrier while peers are still sending.
-            //
-            // Checked here and not at compile time: a solution only knows whether a
-            // batch index is DECLARED, and every fused config declares one while
-            // running extent 1; the extent is only knowable once there is a problem.
+            // Runtime check: a solution only knows whether a batch index is
+            // DECLARED, and every fused config declares one while running extent 1.
             for(size_t i = 0; i < problem->batchIndices().size(); i++)
             {
                 if(problem->batchSize(i) != 1)
@@ -185,12 +142,8 @@ namespace TensileLite
 
             const size_t nFeature = M; // semantic alias: feature = M = index-0
             const size_t nToken   = N; // semantic alias: token   = N
-            // A2A column count along FEATURE (M, index-0). The FIRST `AM` FEATURE
-            // columns go all-to-all (PUSH to remote recv); the remaining [AM, M)
-            // FEATURE columns stay local in `out`. Chosen so AM < M (a local segment
-            // exists) and (AM/W)%MT0==0. AM is supplied via --fused-a2a-am so it can
-            // match the shape being run (medium: AM=2048, full: AM=10240) without
-            // editing this source.
+            // The first `AM` FEATURE columns go all-to-all; [AM, M) stay local in
+            // `out`.
             const size_t AM = (size_t)args["fused-a2a-am"].as<int>();
             if(AM % (size_t)W != 0)
             {
@@ -202,29 +155,12 @@ namespace TensileLite
             const uint32_t nShard       = (uint32_t)(AM / (size_t)W);
             // tilesPerRank: whole feature-tiles per rank shard (nShard is feature).
             const uint32_t tilesPerRank = (uint32_t)(nShard / FUSED_A2A_M_TILE);
-            // tokenTiles: token-tiles across the full token dim N. Post-swap the
-            // A2A-scattered dim is FEATURE (WG0), so TOKEN (WG1) is the replicated
-            // dim -- every token-tile workgroup in a rank's feature shard contributes
-            // one PUSH to that rank.
-            //
-            // CEIL, not floor: tokenTiles is a DIMENSION of the counter array (the
-            // kernel indexes counter[dst_rank*tokenTiles + WorkGroup1]) and the grid
-            // has CeilDivide(N, MT1) token-tiles. There is no N % MT1 == 0 guard below
-            // (token = batch*seqlen, the user gives what they give), so a floor here
-            // would let WG1 == tokenTiles index one past the row -> counter overrun or
-            // a slot no WG ever completes -> DRAIN deadlock.
+            // tokenTiles: token-tiles across N. CEIL, not floor -- it is a DIMENSION
+            // of the counter array and the grid has CeilDivide(N, MT1) of them.
             const uint32_t tokenTiles   = (uint32_t)((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE);
             // mTiles: feature-tiles across the full feature dim M (diagnostic only).
             const uint32_t mTiles       = (uint32_t)(M / FUSED_A2A_M_TILE);
 
-            // Fail-fast on shapes that violate the fused-A2A design constraints. The
-            // kernel maps a whole PUSH workgroup to a SINGLE dst_rank, so each rank's
-            // shard (n_shard = AM/W) must be a whole number of MacroTile0-wide feature
-            // tiles: otherwise a workgroup spans several ranks, scattering data into
-            // the wrong recv buffer and leaving ranks with no supplying workgroup to
-            // poll a flag slot no one ever sets -- the GPU hangs forever. Constraints
-            // apply to AM, not the whole M: AM % W == 0, (AM/W) % MT0 == 0, M % MT0 ==
-            // 0, AM % MT0 == 0, and AM <= M.
             if(AM % (size_t)W != 0 || (nShard % FUSED_A2A_M_TILE) != 0
                || (M % (size_t)FUSED_A2A_M_TILE) != 0
                || (AM % (size_t)FUSED_A2A_M_TILE) != 0 || AM > M)
@@ -246,24 +182,10 @@ namespace TensileLite
                 return -1;
             }
 
-            // rect_x and rect_y of the SDMA COPY_SUBWIN packet are 14-BIT fields, and
-            // the kernel packs them unmasked (s_lshl_b32/s_or_b32); an over-range value
-            // silently wraps and scatters data into the wrong recv slot, so reject the
-            // shape here instead (mirrors SdmaPacketEmitter.py:checkA2AFieldsFit).
-            //   rect_x = n_shard             (the copy's X EXTENT)
-            //   rect_y = min(MT1, N-j*MT1)   (<= MT1, so MT1 bounds it)
-            // The copy's other coordinates (src_x/y, dst_x/y/z) are folded into the
-            // 64-bit base addresses as literal 0 fields, so only rect_x/rect_y need
-            // this check.
-            //
-            // The packet addresses in 16-BYTE elements (header ELEMENTSIZE = log2(16)),
-            // so rect_x is checked in its SCALED (>>FUSED_A2A_ELEM_SHIFT) form -- that
-            // is what the field holds; rect_y counts rows and is not scaled. n_shard
-            // must be a multiple of the element size: the emitter's right shift
-            // TRUNCATES a non-multiple and would silently copy a short band, so this is
-            // rejected rather than rounded (ldd is checked separately, next to
-            // dNStride). The `>=` comparison is one tighter than the hardware because
-            // the extents are minus-one encoded.
+            // SDMA COPY_SUBWIN rect_x/rect_y are 14-bit; rect_x = n_shard scaled into
+            // 16-byte packet elements, rect_y <= MT1. Mirrors
+            // SdmaPacketEmitter.py:checkA2AFieldsFit. `>=` is one tighter than the
+            // hardware because the extents are minus-one encoded.
             const size_t FUSED_A2A_ELEM_SHIFT    = 3;   // log2(16B packet elem / 2B bf16)
             const size_t FUSED_A2A_ELEM_MULTIPLE = (size_t)1 << FUSED_A2A_ELEM_SHIFT;
             if(nShard % FUSED_A2A_ELEM_MULTIPLE != 0)
@@ -300,31 +222,17 @@ namespace TensileLite
                 return -1;
             }
 
-            // recv is feature-contiguous [W, token, feature_shard]: token is the outer
-            // (strided-by-n_shard) axis, feature-shard is the inner stride-1 axis. The
-            // fused PUSH store writes the FULL macro-tile edge with no edge clamp, so a
-            // PUSH WG's lanes address token rows up to the padded MT1 tile -- token is
-            // therefore sized to the MacroTile1-wide tile so those writes stay inside
-            // the allocation (feature-shard needs no such padding since n_shard is
-            // already a multiple of MacroTile0).
+            // recv is feature-contiguous [W, token, feature_shard]. Token is padded to
+            // a whole MacroTile1 tile: the PUSH store writes the full macro-tile edge
+            // with no edge clamp.
             const size_t nTokenPad = ((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE) * FUSED_A2A_N_TILE;
             const size_t recvBytes    = (size_t)W * nTokenPad * nShard * sizeof(uint16_t); // bf16
-            // One u32 flag slot per source rank, raised by an SDMA ATOMIC
-            // ADD_RTN_32. Must stay in step with emitComputeFlagAddr's *4 stride
-            // and the DRAIN poll's j*4.
+            // One u32 flag slot per source rank. Must stay in step with
+            // emitComputeFlagAddr's *4 stride and the DRAIN poll's j*4.
             const size_t flagBytes    = (size_t)W * sizeof(uint32_t);
-            // counter is indexed [dst_rank][token-tile] -> W*tokenTiles u32 slots,
-            // followed by a W-entry second-level counter2[dst_rank] at word index
-            // W*tokenTiles, then a single third-level counter3 at word index
-            // W*tokenTiles + W. counter2 converges the DRAIN spinners to one per
-            // peer; counter3 is the grid-wide workgroup tally that elects the single
-            // DRAIN owner. All three ride this same allocation and this same
-            // per-iteration memset, so the kernarg layout stays untouched.
-            //
-            // Past those live slots the allocation carries a guard tail (see
-            // FusedA2ACounterSentinel.hpp for why). The tail catches an overrun past
-            // the TOP level by absorbing the write. Only counterBytes is memset per
-            // launch; the tail keeps its pattern and is re-checked after each launch.
+            // counter[dst_rank][token-tile], then counter2[dst_rank] at word index
+            // W*tokenTiles, then counter3 at W*tokenTiles + W, then a guard tail
+            // (FusedA2ACounterSentinel.hpp). Only counterBytes is memset per launch.
             const size_t counterBytes      = fusedA2ACounterPayloadBytes((uint32_t)W, tokenTiles);
             const size_t counterAllocBytes = fusedA2ACounterAllocBytes((uint32_t)W, tokenTiles);
             const size_t aBytes       = problem->a().totalAllocatedBytes();
@@ -338,19 +246,8 @@ namespace TensileLite
                       << " mTiles=" << mTiles
                       << " drain=" << drain << "\n";
 
-            // --- Host golden setup (numeric validation) ---------------
-            // The GEMM is a TN GEMM (op(A)=A^T, op(B)=B), bf16 in, fp32 accumulate,
-            // alpha=1, beta=0, C=0. Under the col-major swap, A carries FEATURE (m)
-            // and B carries TOKEN (n): logically A=w[feature,K], B=x[token,K], and the
-            // golden D'=[feature,token]. The golden math Dgold[m,n]=sum_k A[m,k]*B[k,n]
-            // is INVARIANT under the swap -- only the semantic roles of m/n flip and
-            // (for L1) the physical D layout becomes col-major. Physical layouts come
-            // straight from the tensor descriptors (no hardcoded assumption): A element
-            // (m,k) sits at m*aFreeStride + k*aBoundStride, similarly for B(k,n) and
-            // D(m,n); the descriptor-derived strides carry the swapped shapes through
-            // automatically. A is shared by every card but B is drawn per rank, so
-            // there is one golden per rank; each is stored row-major [M,N] (m=feature
-            // slow, n=token fast) and the W of them sit back to back, rank-major.
+            // Physical layouts come from the tensor descriptors, never hardcoded:
+            // A(m,k) sits at m*aFreeStride + k*aBoundStride, likewise B(k,n), D(m,n).
             const auto&  aDesc = problem->a();
             const auto&  bDesc = problem->b();
             const auto&  dDesc = problem->d();
@@ -362,9 +259,8 @@ namespace TensileLite
             const size_t aBoundStride = aDesc.strides()[aBoundAx];
             const size_t bFreeStride  = bDesc.strides()[bFreeAx];
             const size_t bBoundStride = bDesc.strides()[bBoundAx];
-            // D free-index axes: freeIndices()[j].d is the D dim for free index j.
-            // Free index 0 is the A(M=feature) index, free index 1 is the B(N=token)
-            // index. Post-swap D' is col-major, so dMStride==1 (feature contiguous).
+            // freeIndices()[j].d is the D dim for free index j: 0 = A's M(feature),
+            // 1 = B's N(token).
             const size_t dMAx = problem->freeIndices()[0].d;
             const size_t dNAx = problem->freeIndices()[1].d;
             const size_t dMStride = dDesc.strides()[dMAx];
@@ -374,17 +270,9 @@ namespace TensileLite
                       << bBoundStride << ") D(mStride=" << dMStride << " nStride=" << dNStride
                       << ")\n";
 
-            // dNStride -- D's token-axis stride, which the packet carries as
-            // src_pitch (StrideD1J) -- is only available once the descriptors have
-            // been read.
-            //
-            // src_pitch is a 19-BIT field and _packPitchMinus1 shifts it left by 13
-            // unmasked, so an over-range pitch ORs straight into the neighbouring
-            // field. dst_pitch is n_shard, already bounded far tighter by the 14-bit
-            // rect_x check above, so it needs no separate term. Like rect_x, the pitch
-            // is scaled into 16-byte packet elements first, so both the divisibility
-            // and the range apply to ldd>>3. Mirrors the srcPitch arm of
-            // SdmaPacketEmitter.py:checkA2AFieldsFit.
+            // dNStride is the packet's src_pitch (StrideD1J), a 19-bit field, and is
+            // only knowable once the descriptors are read. dst_pitch is n_shard,
+            // already bounded by the rect_x check above.
             if(dNStride % FUSED_A2A_ELEM_MULTIPLE != 0)
             {
                 std::cerr << "[fused-a2a] ERROR: D's token-axis stride is not "
@@ -412,20 +300,8 @@ namespace TensileLite
                 return -1;
             }
 
-            // Small-magnitude bf16 inputs drawn from the same (x%7)-3 alphabet
-            // DataInitialization's InitMode::Random uses, written by logical coords
-            // into the physical slot via the descriptor strides so any padding stays
-            // zero. A is scaled by 0.5 and B by 0.25, which keeps every product a
-            // multiple of 0.125 with |acc| <= 2304 for K=2048 -- exactly representable
-            // in fp32 whatever the summation order, so the GPU's out-of-order MFMA
-            // accumulation and the sequential golden below agree.
-            //
-            // B is drawn PER RANK. Every card shares one A (weights are replicated in
-            // the modelled workload) but holds its own tokens, so the W per-rank GEMM
-            // results differ. That is what makes the L2 check sensitive to WHICH
-            // source filled a recv slot: were the inputs identical on every card, any
-            // bijective relabelling of the source slots would compare equal and pass.
-            // The seed is a fixed constant so a failing run reproduces byte for byte.
+            // Same (x%7)-3 alphabet as DataInitialization's InitMode::Random. Fixed
+            // seed, and B is drawn PER RANK so the W goldens differ.
             constexpr uint32_t kInitSeed = 42;
             auto               draw      = [](std::mt19937& g, float scale) {
                 return BFloat16((float)((int)(g() % 7) - 3) * scale);
@@ -436,8 +312,6 @@ namespace TensileLite
             std::vector<std::vector<BFloat16>> hB(W,
                                                   std::vector<BFloat16>(bElems, BFloat16(0.0f)));
             {
-                // Distinct seed_seq per stream: mt19937 seeded from adjacent raw
-                // integers can start out correlated, and seed_seq mixes that away.
                 std::seed_seq aSeq{kInitSeed, 0u};
                 std::mt19937  aRng(aSeq);
                 for(size_t m = 0; m < M; m++)
@@ -453,15 +327,8 @@ namespace TensileLite
                 }
             }
 
-            // Host golden GEMM, one per rank:
-            //   Dgold[s][m,n] = bf16( sum_k f32(A[m,k]) * f32(B_s[k,n]) ).
-            // Read back out of the arrays that were actually uploaded rather than
-            // recomputed from a closure, so the reference is tied to the bytes the
-            // GPU saw instead of to a parallel derivation of them. Only computed when
-            // validate=1; the loop is O(W*M*N*K) MACs and is the expensive part we
-            // SKIP on the full shape (~309 GMAC per rank). When validate=0 Dgold stays
-            // empty and the numeric compares below are bypassed entirely (not
-            // computed-then-ignored).
+            // Dgold[s][m,n] = bf16( sum_k f32(A[m,k]) * f32(B_s[k,n]) ), read from the
+            // arrays actually uploaded. Left empty when validate=0.
             const size_t          goldStride = M * N; // elements per rank within Dgold
             std::vector<BFloat16> Dgold;
             if(validate)
@@ -524,10 +391,7 @@ namespace TensileLite
                 HIP_CHECK_EXC(hipMalloc(&wB[d], bBytes));
                 HIP_CHECK_EXC(hipMalloc(&cC[d], cBytes));
                 HIP_CHECK_EXC(hipMalloc(&outD[d], dBytes));
-                // Give GEMM operands deterministic real contents -- A shared by every
-                // card, B this card's own draw; zero C, out, recv. A/B are host-filled
-                // bf16 so the kernel computes a non-trivial GEMM we can check
-                // numerically.
+                // A is shared by every card; B is this card's own draw.
                 HIP_CHECK_EXC(hipMemcpy(xA[d], hA.data(), aBytes, hipMemcpyHostToDevice));
                 HIP_CHECK_EXC(hipMemcpy(wB[d], hB[d].data(), bBytes, hipMemcpyHostToDevice));
                 HIP_CHECK_EXC(hipMemset(cC[d], 0, cBytes));
@@ -557,18 +421,12 @@ namespace TensileLite
                 }
             }
 
-            // --- Per-device SDMA queue sets: one ring per (device, peer), created
-            //     AFTER P2P is enabled so a peer's recv/flag pages are already
-            //     mapped into this device's VA space when the engine dereferences
-            //     them. The self entry (j == d) is a loopback queue: this routes the
-            //     p == my_rank packet through SDMA too, which is what gives this
-            //     card's own flag slot a real producer (no DRAIN special case).
+            // One ring per (device, peer), created AFTER P2P enable so peer pages are
+            // already mapped. The self entry (j == d) is a loopback queue, which gives
+            // this card's own flag slot a real producer.
             //
-            //     sdmaHandles is declared OUTSIDE the #ifdef on purpose: the kernarg
-            //     append below is ordinary code that the preprocessor still has to
-            //     parse in an SDMA-off build (the `return 1` in the #else is a
-            //     RUNTIME return, it does not remove later statements from the token
-            //     stream). ---
+            // sdmaHandles must stay OUTSIDE the #ifdef: the kernarg append below is
+            // still parsed in an SDMA-off build.
             std::vector<void*> sdmaHandles(W, nullptr);
 #ifdef TENSILELITE_ENABLE_SDMA_A2A
             std::vector<std::unique_ptr<SdmaQueueSet>> sdmaSets(W);
@@ -594,10 +452,8 @@ namespace TensileLite
             return 1;
 #endif
 
-            // --- Per-device streams + code-object adapters. The main adapter's
-            //     modules are bound to device 0; give each device its own adapter
-            //     with the fused .co loaded in that device's context so launches
-            //     on devices 1..W-1 resolve the kernel correctly. ---
+            // Each device needs its own adapter: the main one binds its modules to
+            // device 0, so launches on 1..W-1 would not resolve the kernel.
             auto filename = args["library-file"].as<std::string>();
             size_t dirPos = filename.rfind('/');
             std::string libraryDirectory = (dirPos != std::string::npos)
@@ -625,18 +481,10 @@ namespace TensileLite
                 (void)loadedAny;
             }
 
-            // --- Repeat loop: race detection + p50/p90 latency. ---
-            // The launch → sync → validate sequence is repeated `iters` times.
-            // Each iteration RE-ZEROES counter/flag/recv on all W devices before
-            // the launch (otherwise a run leaves counters at target and flags at
-            // READY, so the DRAIN barrier releases trivially and the race test is
-            // vacuous). recv is re-zeroed too so a stale-correct recv from the
-            // previous iteration cannot mask a broken scatter this iteration. The
-            // GEMM operands (A/B), P2P access, streams, and code-object adapters
-            // are set up ONCE above and reused. per iteration we rebuild the
-            // KernelInvocation via solution->solve() + appendFusedSegment() so the
-            // kernarg carries exactly one fused segment (reusing the same
-            // invocation would append the tail repeatedly).
+            // Repeat loop: race detection + p50/p90 latency. Each iteration re-zeroes
+            // counter/flag/recv (else the DRAIN barrier releases trivially and a
+            // stale-correct recv masks a broken scatter) and rebuilds the
+            // KernelInvocation (else appendFusedSegment appends the tail repeatedly).
             const int iters  = std::max(1, args["fused-a2a-iters"].as<int>());
             int       warmup = args["fused-a2a-warmup"].as<int>();
             if(warmup < 0)
@@ -648,23 +496,18 @@ namespace TensileLite
                       << " (post-warmup measured=" << (iters - warmup) << ") validate="
                       << (validate ? "1 (numeric)" : "0 (clean-exit only)") << "\n";
 
-            // bf16 tolerance: ~3 decimal digits. Compare in fp32. (shared by
-            // both validation segments, all iterations)
+            // bf16 tolerance: ~3 decimal digits, compared in fp32.
             auto closeBf16 = [](float got, float want) {
                 float diff = std::fabs(got - want);
                 float tol  = 1e-2f * std::max(1.0f, std::fabs(want));
                 return diff <= tol;
             };
-            // slotStride/rowStride index recv per its layout established above: slot
-            // stride = N_token * n_shard (N = logical SizeJ = nToken), token stride =
-            // n_shard (FusedNShard), i.e. element offset = slotElem + t*n_shard +
-            // f_local. recv is a bf16 buffer; slotStride uses the UNPADDED N to match
-            // the kernel's SizeJ slot multiply.
+            // slotStride uses the UNPADDED N, to match the kernel's SizeJ slot
+            // multiply.
             const size_t slotStride = (size_t)N * (size_t)nShard; // elems per src slot (nToken*nShard)
             const size_t rowStride  = (size_t)nShard;             // per-token stride (feature-shard contiguous)
 
-            // Persistent host scratch (reused each iteration, no per-iter alloc).
-            // Only sized when validating; empty otherwise (no D2H copy-back either).
+            // Only sized when validating; empty otherwise, and no D2H copy-back.
             std::vector<uint16_t> hRecv, hOut;
             if(validate)
             {
@@ -672,10 +515,8 @@ namespace TensileLite
                 hOut.resize(dBytes / sizeof(uint16_t));
             }
 
-            // Per-iteration events: start/stop on each device's stream to time the
-            // fused launch. Because DRAIN=ON gates each kernel's exit on receiving
-            // its data, the iteration's latency is the MAX across the W cards (the
-            // slowest card gates all-to-all completion).
+            // DRAIN=ON gates each kernel's exit on receiving its data, so the
+            // iteration's latency is the MAX across the W cards.
             std::vector<hipEvent_t> startEv(W, nullptr), stopEv(W, nullptr);
             for(int d = 0; d < W; d++)
             {
@@ -686,11 +527,8 @@ namespace TensileLite
 
             std::vector<double> latMeasUs;  // post-warmup only (for percentiles)
 
-            // Per-card samples, retained alongside the MAX so the max-vs-mean gap can
-            // be attributed. An iteration feeds perCardUs only when all W cards
-            // reported a clean elapsed time; a partial row would misalign the
-            // per-card percentiles against each other and against the spread, so such
-            // iterations are counted and reported instead.
+            // Fed only when all W cards reported: a partial row would misalign the
+            // per-card percentiles against each other and against the spread.
             std::vector<std::vector<double>> perCardUs(W);
             std::vector<int>                 slowestCount(W, 0);
             int                              perCardSkipped = 0;
@@ -718,10 +556,8 @@ namespace TensileLite
                     HIP_CHECK_EXC(hipDeviceSynchronize());
                 }
 
-                // -- Solve + append fused segment + record start + launch. DRAIN=ON:
-                //    the last WG polls this device's own flag (set by peers), so all
-                //    W must be launched for the barrier to release. Enqueue all,
-                //    then synchronize. --
+                // Under DRAIN=ON the last WG polls this device's own flag, set by
+                // peers, so all W must be enqueued before any can be synchronized.
                 std::vector<std::vector<KernelInvocation>> perDeviceKernels(W);
                 for(int d = 0; d < W; d++)
                 {
@@ -767,8 +603,7 @@ namespace TensileLite
                                        (uint32_t)AM,
                                        tilesPerRank,
                                        tokenTiles);
-                    // Print kernarg size only on iter 0 to avoid log spam; a constant
-                    // size across iterations confirms exactly one fused segment.
+                    // A constant size across iterations confirms exactly one segment.
                     if(it == 0)
                         std::cout << "[fused-a2a] dev " << d
                                   << " kernarg: host base(before append)=" << beforeSize
@@ -812,12 +647,10 @@ namespace TensileLite
                     }
                 }
 
-                // -- Counter guard tail (see FusedA2ACounterSentinel.hpp). --
-                // Checked EVERY iteration, independent of `validate`: an overrun past
-                // the counter payload corrupts unrelated device memory that no numeric
-                // check can see. Read with a non-throwing hipMemcpy so a device already
-                // wedged by a failed launch degrades to a warning instead of masking
-                // the kernel error that was just reported.
+                // Counter guard tail (FusedA2ACounterSentinel.hpp), checked every
+                // iteration independent of `validate`. Non-throwing hipMemcpy so a
+                // device already wedged by a failed launch degrades to a warning
+                // instead of masking the kernel error just reported.
                 for(int d = 0; d < W; d++)
                 {
                     HIP_CHECK_EXC(hipSetDevice(d));
@@ -856,13 +689,10 @@ namespace TensileLite
                 bool l1Pass = ok;
                 if(ok && validate)
                 {
-                    // ---- L2: recv (PUSH segment), per its layout established above. For
-                    // destination card dst, slot src must hold the feature sub-segment
-                    // [dst*nShard, dst*nShard+nShard) of card SRC's golden, across all N
-                    // tokens (token is not sharded -- every rank holds all N of them).
-                    // The expected value depends on src as well as dst precisely so that
-                    // a source slot filled by the wrong sender is visible; a slot no one
-                    // fills is already caught by the per-iteration re-zero of recv.
+                    // L2: on destination card dst, slot src must hold features
+                    // [dst*nShard, dst*nShard+nShard) of card SRC's golden, across all
+                    // N tokens. Depending on src is what makes a slot filled by the
+                    // wrong sender visible.
                     for(int dst = 0; dst < W && l2Pass; dst++)
                     {
                         HIP_CHECK_EXC(hipSetDevice(dst));
@@ -879,9 +709,6 @@ namespace TensileLite
                                     BFloat16 g;
                                     g.data     = hRecv[off];
                                     float got  = (float)g;
-                                    // global feature = dst*nShard + f, token = t; rank
-                                    // src's golden is row-major [M,N] at offset
-                                    // src*goldStride -> [.. + feature*N + token].
                                     float want
                                         = (float)Dgold[(size_t)src * goldStride
                                                        + ((size_t)dst * nShard + f) * N + t];
@@ -905,22 +732,11 @@ namespace TensileLite
                             l2Pass = false;
                     }
 
-                    // ---- L1: out (local segment). Under the col-major swap, the first
-                    // AM FEATURE columns PUSH to recv; the remaining [AM, M) stay local
-                    // in out, so this checks card d's out[m in [AM,M), n in [0,N)]
-                    // against card d's OWN golden -- the local segment never crosses
-                    // cards, so unlike L2 the rank index here is just d.
-                    //
-                    // TWO checks per card, both must pass (l1Pass &= both):
-                    //   (a) descriptor-driven: off = m*dMStride + n*dNStride, via the
-                    //       SAME strides the kernel was told to write with. Cannot
-                    //       distinguish the intended col-major out from any other
-                    //       layout the descriptor also happens to describe.
-                    //   (b) raw-bytes col-major: off = n*M + m, a HARDCODED physical
-                    //       stride independent of the descriptor. Proves out's
-                    //       physical byte layout really is [M,N] col-major with
-                    //       FEATURE contiguous -- if out were physically row-major,
-                    //       (a) could still pass while (b) fails.
+                    // L1: card d's local tail out[m in [AM,M)] against its OWN golden.
+                    // Two independent reads, both must pass: (a) via the descriptor
+                    // strides the kernel was told to write with, and (b) via a
+                    // hardcoded col-major off=n*M+m. (a) alone cannot tell the intended
+                    // layout from any other the descriptor also describes.
                     const bool descColMajor = (dMStride == 1 && dNStride == M);
                     if(verbose)
                         std::cout << "[fused-a2a] D descriptor layout: dMStride=" << dMStride
@@ -958,9 +774,7 @@ namespace TensileLite
                                     }
                                 }
 
-                                // (b) raw-bytes col-major read: hardcoded off=n*M+m,
-                                //     NOT via the descriptor strides. Proves M/feature
-                                //     is physically contiguous in out.
+                                // (b) raw-bytes col-major read.
                                 {
                                     size_t   off = n * M + m;
                                     BFloat16 g;
@@ -1038,11 +852,6 @@ namespace TensileLite
                 (void)hipEventDestroy(stopEv[d]);
             }
 
-            // --- Race verdict + latency percentiles. ---
-            // Wording reflects the mode: validate=1 -> numerically verified;
-            // validate=0 -> exited cleanly (no HIP error / no DRAIN hang), not
-            // byte-verified. Under DRAIN=ON a clean exit still means the barrier
-            // released (data received), just not content-checked.
             std::cout << "[fused-a2a] race: " << passIters << "/" << iters
                       << (validate ? " iterations passed (numeric)"
                                    : " iterations exited cleanly (clean-exit, not byte-verified)")
@@ -1050,10 +859,7 @@ namespace TensileLite
             if(raceFail)
                 std::cout << "[fused-a2a] race: first failing iteration = " << firstFailIt << "\n";
 
-            // Percentiles over post-warmup samples. p50 = sorted[floor(0.5*n)],
-            // p90 = sorted[floor(0.9*n)]. Single-process 4-GPU P2P on ONE node
-            // (not real multi-node xGMI) — a relative on-node datum, not a
-            // production figure. Deliberately NOT compared to any baseline.
+            // p50 = sorted[floor(0.5*n)], p90 = sorted[floor(0.9*n)].
             if(!latMeasUs.empty())
             {
                 std::vector<double> s = latMeasUs;
@@ -1077,18 +883,15 @@ namespace TensileLite
                 std::cout << "[fused-a2a] latency: no post-warmup samples collected\n";
             }
 
-            // --- Per-card breakdown. Distinguishes three sources of the max-vs-mean
-            // gap: order statistics over W roughly-iid cards, one card being
-            // systematically slower, and launch skew from the sequential per-device
-            // enqueue (a card enqueued early waits longer for peers under DRAIN). The
-            // slowest-card histogram separates them: concentrated on the first-enqueued
-            // id means enqueue-order skew, concentrated elsewhere means a slow card,
-            // spread evenly means order statistics.
+            // Per-card breakdown. The slowest-card histogram separates the three
+            // sources of the max-vs-mean gap: concentrated on the first-enqueued id
+            // means enqueue-order skew, concentrated elsewhere means one slow card,
+            // spread evenly means order statistics over W roughly-iid cards.
             if(!perCardUs[0].empty())
             {
                 const size_t n = perCardUs[0].size();
-                // By value: sorting a copy keeps the rows index-aligned, which the
-                // spread computation below depends on.
+                // By value: the spread computation below needs the rows to stay
+                // index-aligned.
                 auto pctOf = [](std::vector<double> v, double p) {
                     std::sort(v.begin(), v.end());
                     return v[std::min(v.size() - 1, (size_t)(p * (double)v.size()))];
@@ -1107,8 +910,8 @@ namespace TensileLite
                               << slowestCount[d] << "/" << n << " iters\n";
                 }
 
-                // Per-iteration spread = max - min across the W cards; this is exactly
-                // what the MAX metric pays over the mean on any given iteration.
+                // Spread = max-min across the W cards: what the MAX metric pays over
+                // the mean on a given iteration.
                 std::vector<double> spread(n, 0.0);
                 for(size_t i = 0; i < n; i++)
                 {

@@ -5,7 +5,7 @@
 # Fused-A2A DRAIN ownership: the single globally-last workgroup drains, elected
 # by a grid-wide counter3, and polls all W flag slots with one vector load
 # reduced by VCCZ -- replacing W per-peer spinners, each of which idled a whole
-# CU at the champion kernel's 1-WG/CU occupancy (ROCM-27524, D15 Step 1).
+# CU at the champion kernel's 1-WG/CU occupancy.
 ################################################################################
 
 import ast
@@ -284,10 +284,9 @@ def test_batch_guard_is_host_side_not_compile_time():
 
     Compile time knows only that a batch index is DECLARED. Every fused config sets
     `Batched: True` -> NumIndicesBatch == 1 while running extent 1, so a
-    compile-time rejection on NumIndicesBatch matched every solution and generated
-    ZERO kernels -- a failure that looks like "no solutions found", not like a bad
-    number. It survived review because it sat behind a default-off flag that nothing
-    ever enabled.
+    compile-time rejection on NumIndicesBatch would match every solution and
+    generate ZERO kernels -- a failure that looks like "no solutions found", not
+    like a bad number.
     """
     with open(os.path.join(TENSILE_ROOT, "Tensile/SolutionStructs/Solution.py")) as f:
         tree = ast.parse(f.read())
@@ -321,8 +320,8 @@ def test_batch_guard_is_host_side_not_compile_time():
 
 
 ################################################################################
-# Task 4 -- the handshake preamble is hoisted above the PUSH gate and every WG
-# tallies itself at counter3.
+# The handshake preamble is hoisted above the PUSH gate and every WG tallies
+# itself at counter3.
 ################################################################################
 
 
@@ -372,10 +371,7 @@ def test_push_gate_falls_through_to_the_local_tally_then_counter3(renderHandshak
 def test_local_path_skips_the_barrier_but_keeps_the_election(renderHandshake):
     """The store wait and the barrier are PUSH-only; the election is not.
 
-    This reverses the earlier layout, where both sat above the gate and all 512
-    local work-groups at the champion shape paid a whole-work-group barrier at the
-    very end of their life for nothing.  The gate had to move ABOVE the barrier
-    rather than the barrier below the gate: s_barrier must be reached by every wave
+    The gate must sit ABOVE the barrier: s_barrier must be reached by every wave
     of a work-group, and the wave-0 election sits between the two, so a barrier
     placed below the election would run on wave 0 alone and hang.  That edge is
     only safe while the gate's predicate is work-group-uniform -- asserted first.
@@ -440,10 +436,10 @@ def test_counter3_is_incremented_exactly_once_by_a_scalar_atomic(renderHandshake
     """The tally is the one block every surviving work-group runs.
 
     It must fire exactly once per work-group, and it must be the SMEM atomic:
-    S_ATOMIC_INC keeps address, data and result in SGPRs, where the vector form it
-    replaced needed three v_mov to stage a scalar address and a scalar 1 into
-    VGPRs, a v_readfirstlane to read the answer back, and -- because a VMEM op
-    issues per active lane -- the single-lane EXEC narrowing.
+    S_ATOMIC_INC keeps address, data and result in SGPRs, whereas a vector atomic
+    would need three v_mov to stage a scalar address and a scalar 1 into VGPRs, a
+    v_readfirstlane to read the answer back, and -- because a VMEM op issues per
+    active lane -- the single-lane EXEC narrowing.
     """
     code = _codeLines(renderHandshake())
     label = [i for i, ln in enumerate(code) if ln.startswith("label_fusedA2A_counter3")]
@@ -461,15 +457,14 @@ def test_counter3_is_incremented_exactly_once_by_a_scalar_atomic(renderHandshake
 
 
 def test_counter3_election_compares_against_the_latched_total(renderHandshake):
-    """The tally must be compared against FusedTotalWGs (Task 3's prologue latch).
+    """The tally must be compared against FusedTotalWGs (the prologue latch).
 
     S_ATOMIC_INC's SDATA carries both operands: the wrap limit goes in and the
     pre-op value comes back out of the SAME register.  Setting the limit to
     FusedTotalWGs-1 makes the globally last work-group read back FusedTotalWGs-1,
-    which is the election the old `old3+1 == FusedTotalWGs` made, and leaves the
-    counter at 0 behind it.  Comparing against anything else -- tokenTiles,
-    TilesPerRank -- would elect a per-peer owner again, which is the occupancy
-    problem this whole line replaced.
+    and leaves the counter at 0 behind it.  Comparing against anything else --
+    tokenTiles, TilesPerRank -- would elect a per-peer owner again, which is the
+    occupancy problem this design avoids.
     """
     code = _codeLines(renderHandshake())
     label = next(i for i, ln in enumerate(code) if ln.startswith("label_fusedA2A_counter3"))
@@ -518,8 +513,8 @@ def test_no_kernarg_value_is_clobbered_before_it_is_read(renderHandshake):
 def test_every_surviving_wg_runs_the_handshake_once():
     """The counter3 target is FusedTotalWGs, so arrivals must equal survivors.
 
-    test_push_gate_falls_through_to_counter3_not_the_exit covers the half of that
-    inside the handshake (both edges of the PUSH gate reach the tally). This covers
+    test_push_gate_falls_through_to_the_local_tally_then_counter3 covers the half
+    of that inside the handshake (both edges of the PUSH gate reach the tally). This covers
     the other half, which lives in the caller: under FusedGemmA2A the whole store
     body -- handshake included -- is emitted TWICE around one hoisted dispatch gate,
     a PUSH pass and a LOCAL pass, and each WG runs exactly one of them.
@@ -674,13 +669,12 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wave
 def test_drain_exec_mask_width_is_the_FusedW_kernarg(renderHandshake):
     """The mask width must be W, not merely *a* register.
 
-    "the width operand is a register" is a shape check, and shape checks are how a
-    register-content bug hid on this branch before: the assembly read
-    `s_mul_i32 s19, s10, ...  // myRank * N` while s10 held AM_tiles, because the
-    comment is frozen at construction time and the register is decided at emission
-    time by the pool. A width operand pointing at the wrong SGPR gives EXEC an
-    arbitrary lane count -- too few and the barrier releases early, too many and the
-    extra lanes poll slots past the W-slot flag allocation -- and reads correctly.
+    "the width operand is a register" is a shape check; the comment is frozen at
+    construction time, but the register is decided at emission time by the pool,
+    so a shape check alone cannot see a swap. A width operand pointing at the
+    wrong SGPR gives EXEC an arbitrary lane count -- too few and the barrier
+    releases early, too many and the extra lanes poll slots past the W-slot flag
+    allocation -- and reads correctly.
     """
     text = renderHandshake()
     # after renderHandshake(), which imports Tensile.Component first (circular-import guard)
@@ -699,10 +693,9 @@ def test_drain_exec_mask_width_is_the_FusedW_kernarg(renderHandshake):
 def test_rendering_is_byte_identical_to_the_golden(renderHandshake):
     """Characterization pin on the whole handshake.
 
-    The structural tests each assert one fact, so between them they leave gaps -- a
-    register clobber introduced by reordering blocks sat in exactly such a gap and
-    reached review. This compares the whole rendering, so drift shows up whether or
-    not someone thought to assert on it.
+    The structural tests each assert one fact, so between them they can leave gaps
+    a register clobber could slip through. This compares the whole rendering, so
+    drift shows up whether or not someone thought to assert on it.
 
     Intentionally changing the handshake? Regenerate deliberately:
         python Tensile/Tests/unit/test_fusedA2A_drain_last.py --update-golden
@@ -717,13 +710,10 @@ def test_rendering_is_byte_identical_to_the_golden(renderHandshake):
 def test_max_ranks_guard_fires_when_the_constant_outgrows_the_mask():
     """The import-time bound on FUSED_A2A_MAX_RANKS must have teeth.
 
-    The guard in Signature.py exists for an event that has never happened -- someone
-    raising the constant past what the S_BFM width operand can encode -- so no
-    ordinary run exercises it, and a guard nobody has watched fail is not evidence.
-    This is that mutation, made permanent: the EXEC-mask guard's `if` is located,
-    lifted out, and re-executed against a constant of 32 (the wave32 arm's first
-    wrapping width). Locating it also pins that it still EXISTS -- deleting the guard
-    reddens here rather than passing quietly, which a test that merely re-checked
+    The EXEC-mask guard's `if` in Signature.py is located, lifted out, and
+    re-executed against a constant of 32 (the wave32 arm's first wrapping width).
+    Locating it also pins that it still EXISTS -- deleting the guard reddens here
+    rather than passing quietly, which a test that merely re-checked
     `FUSED_A2A_MAX_RANKS <= 31` would not do.
     """
     path = os.path.join(TENSILE_ROOT, "Tensile/Components/Signature.py")

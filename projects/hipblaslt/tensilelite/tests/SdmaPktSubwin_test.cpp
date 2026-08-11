@@ -7,10 +7,10 @@
 // changes cannot silently corrupt it.
 //
 // Two vectors are pinned:
-//   * HARNESS -- the exact parameters the on-hardware validation harness used
-//     (~/sdma_rect_test.cpp), including the intentionally PADDED dst pitch
-//     (kShard + kDstPad = 2624). This is the only byte sequence with real HW
-//     backing and is the primary anchor.
+//   * HARNESS -- the exact parameters the on-hardware validation harness used,
+//     including the intentionally PADDED dst pitch (kShard + kDstPad = 2624).
+//     This is the only byte sequence with real HW backing and is the primary
+//     anchor.
 //   * PRODUCTION -- the shape we will actually emit: an unpadded recv buffer
 //     ([src, token, feature_shard], rowStride == nShard == 2560). It has no HW
 //     bytes to copy, so its expected dwords are derived by hand from the same
@@ -26,7 +26,7 @@ using namespace TensileLite;
 
 namespace
 {
-    // Shared problem shape (elements). Matches ~/sdma_rect_test.cpp.
+    // Shared problem shape (elements), matching the on-hardware validation harness.
     constexpr unsigned kN        = 18432;  // full output width == src row pitch
     constexpr unsigned kShard    = 2560;   // columns per peer == rect X extent
     constexpr unsigned kBand     = 256;    // rows per packet == rect Y extent

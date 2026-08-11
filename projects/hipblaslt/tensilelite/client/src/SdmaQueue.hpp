@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // Host-side SDMA queue management for the fused GEMM+AllToAll SDMA offload
-// route (ROCM-27524). This is the host half of "have a GPU kernel push SDMA
+// route. This is the host half of "have a GPU kernel push SDMA
 // packets instead of storing over xGMI from CUs": it allocates the ring,
 // creates the KFD SDMA queue, and exports the device-visible handle(s) that
 // later GPU-assembly tasks read to fill packets and ring the doorbell.
@@ -152,10 +152,9 @@ namespace TensileLite
 
         // -------------------------------------------------------------------
         // A set of W queues for one local device -- one queue per peer (each
-        // peer gets its own queue; we deliberately do NOT fan a peer out over
-        // multiple queues, measured worse). The W device handles are packed
-        // contiguously into a single device array so a kernel can index them by
-        // destination rank.
+        // peer gets its own queue; no fan-out over multiple queues). The W
+        // device handles are packed contiguously into a single device array so
+        // a kernel can index them by destination rank.
         // -------------------------------------------------------------------
         class SdmaQueueSet
         {

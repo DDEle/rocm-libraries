@@ -5,7 +5,7 @@
 # Fused-A2A segment-first workgroup remap: the PUSH segment (wg0 < AM_tiles) is
 # lifted out of its 16 per-token-tile bands and laid down as one run at the front
 # of the grid, so the last PUSH work-group's dispatch index falls from 97.1% to
-# 55.5% and the SDMA tail gets ~355 us of head start (ROCM-27524, D15 Step 2).
+# 55.5% and the SDMA tail gets ~355 us of head start.
 ################################################################################
 
 import os
@@ -27,7 +27,7 @@ def _remap():
 
 
 def test_champion_shape_matches_the_design_table():
-    """The eight points the design pins by hand (design section 2.5)."""
+    """The eight points the design pins by hand."""
     f = _remap()
     want = {0: (0, 0), 39: (39, 0), 40: (0, 1), 639: (39, 15),
             640: (40, 0), 671: (71, 0), 672: (40, 1), 1151: (71, 15)}
@@ -72,7 +72,7 @@ def test_degenerate_am_tiles_fall_back_to_identity(a):
 
     Not defensive padding -- they drop out of the formula. A=0 forces the local
     branch with L=N0; A=N0 forces the PUSH branch with divisor N0. Both are the
-    reason no guard is emitted (design section 3, properties 2 and 3).
+    reason no guard is emitted.
     """
     f = _remap()
     for t in range(_N0 * _N1):
@@ -89,7 +89,7 @@ def test_single_token_tile_is_an_identity_for_every_am_tiles():
 
 
 def test_inverse_round_trips():
-    """The inverse in design section 2.3 is what the tests and any future host-side
+    """The inverse formula is what the tests and any future host-side
     reasoning use to go from (m, j) back to a dispatch index."""
     f = _remap()
     S = _A * _N1

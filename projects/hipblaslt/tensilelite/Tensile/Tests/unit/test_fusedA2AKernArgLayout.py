@@ -2,7 +2,7 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
 ################################################################################
-# Fused GEMM.A2A kernarg segment offset contract (Task 3).
+# Fused GEMM.A2A kernarg segment offset contract.
 #
 # The fused-A2A kernarg segment layout is defined in TWO places that MUST stay
 # byte-identical: the kernel side (Tensile/Components/Signature.py

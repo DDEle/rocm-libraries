@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 ################################################################################
 # Scrape test: the C++ SDMA packet header and the Python packet emitter must
-# describe the SAME wire format (ROCM-27524, deferred item D9).
+# describe the SAME wire format.
 #
 # THE GAP THIS CLOSES. client/src/SdmaPktSubwin.hpp carries 24 static_asserts,
 # and every one of them checks the header against ITSELF -- sizeof and offsetof

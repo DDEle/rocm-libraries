@@ -1,13 +1,13 @@
 // Copyright Advanced Micro Devices, Inc., or its affiliates.
 // SPDX-License-Identifier: MIT
 
-// Single-process 4-GPU orchestration entry point for the fused GEMM.A2A kernel
-// (Task 10). This is deliberately independent of the single-GPU benchmark loop
+// Single-process 4-GPU orchestration entry point for the fused GEMM.A2A kernel.
+// This is deliberately independent of the single-GPU benchmark loop
 // in main.cpp: main() dispatches here (before the benchmark loop) when
 // --fused-a2a is set and returns immediately afterwards. Nothing in the
 // single-GPU path is touched.
 //
-// What this does (spec §3.1 / §3.2):
+// What this does:
 //   1. For each of W devices: allocate fresh per-device GEMM operands
 //      (x=A, w=B, c=C, out=D) plus one fine-grained peer block per device
 //      (flag and recv are offset views into it, written by remote peers) and
@@ -19,11 +19,10 @@
 //      7 u32 scalars) to that same KernelArguments object, and launch on the
 //      device's stream. Because the launch reads kernel.args.size(), appending
 //      to the host-generated args auto-sizes the launch to include the fused
-//      tail — which is what fills the previously-garbage fused kernarg and makes
-//      the hipErrorIllegalAddress(700) crash disappear.
+//      tail.
 //
 // Scope: setup once, then repeat launch + dual-segment numeric validation for
-// N iterations (Task 13a). Each iteration RE-ZEROES counter/flag/recv before
+// N iterations. Each iteration RE-ZEROES counter/flag/recv before
 // the launch so the DRAIN handshake is actually exercised (race detection), and
 // times the launch with per-device hipEvents (the iteration's latency is the MAX
 // across the W cards, since DRAIN gates each kernel's exit on data receipt).
@@ -31,12 +30,12 @@
 // Success == every iteration passes the L2(recv)+L1(out) check with no HIP error
 // (the benign hipErrorPeerAccessAlreadyEnabled aside).
 //
-// L1 validates the local out segment two independent ways (ROCM-27524 scheme D):
+// L1 validates the local out segment two independent ways:
 // (a) through the D descriptor strides, and (b) through a HARDCODED row-major
 // stride (off=m*N+n) read straight from the copied-back raw bytes. (b) proves
 // out's physical layout really is [M,N] with N contiguous -- it cannot be
 // satisfied by a column-major out that merely agrees with a column-major
-// descriptor (the original bug's false-green disguise).
+// descriptor.
 
 #include <Tensile/ContractionProblem.hpp>
 #include <Tensile/ContractionSolution.hpp>
@@ -96,14 +95,8 @@ namespace TensileLite
             const bool validate = args["fused-a2a-validate"].as<int>() != 0;
 
             // Bound W FIRST -- before it is printed, compared against deviceCount, or
-            // used as a divisor. fusedA2AWorldSizeValid carries why the range is what
-            // it is; what matters *here* is the position. The deviceCount check below
-            // only bounds W by the machine, not by the ABI, and it cannot stand in for
-            // the lower bound either: for W <= 0 `deviceCount < W` is false, so it
-            // falls through. The check also has to precede the coordinate guard
-            // further down, because W is already a divisor by then (`AM % W`,
-            // `AM / W`) -- a W of 0 would divide by zero, and a negative W would
-            // produce a misleading divisibility error, both before the range check
+            // used as a divisor: an unbounded W would divide by zero (or produce a
+            // misleading error) in the checks further down before this range check
             // could ever run.
             if(!fusedA2AWorldSizeValid(W))
             {
@@ -127,8 +120,8 @@ namespace TensileLite
                 return 1;
             }
 
-            // Pick the first problem / first solution. Task 10 only needs one
-            // fused kernel launched on all W devices to prove the kernarg fill.
+            // Pick the first problem / first solution: one fused kernel is
+            // launched on all W devices to prove the kernarg fill.
             auto problems = problemFactory.problems();
             if(problems.empty())
             {
@@ -184,9 +177,9 @@ namespace TensileLite
             std::cout << "[fused-a2a] macro-tile from solution: MT0(M)=" << FUSED_A2A_M_TILE
                       << " MT1(N)=" << FUSED_A2A_N_TILE << "\n";
 
-            // --- Derive fused shape from the problem (spec §0 relations, but
-            //     using THIS problem's real M/N/K, not the big §0 defaults). ---
-            // M/N-swap (col-major first-class, design §3.1): A=w[feature,K],
+            // --- Derive fused shape from the problem, using THIS problem's
+            //     real M/N/K. ---
+            // M/N-swap (col-major first-class): A=w[feature,K],
             // B=x[token,K]. freeSizeA now carries FEATURE (index-0=M, the
             // A2A-scattered dim), freeSizeB carries TOKEN. Keep M/N as the working
             // names for the arithmetic below to minimise churn; nFeature/nToken are
@@ -204,8 +197,7 @@ namespace TensileLite
             //
             // Checked here and not at compile time: a solution only knows whether a
             // batch index is DECLARED, and every fused config declares one while
-            // running extent 1. Rejecting on the declaration alone produced zero
-            // kernels; the extent is only knowable once there is a problem.
+            // running extent 1; the extent is only knowable once there is a problem.
             for(size_t i = 0; i < problem->batchIndices().size(); i++)
             {
                 if(problem->batchSize(i) != 1)
@@ -224,17 +216,12 @@ namespace TensileLite
 
             const size_t nFeature = M; // semantic alias: feature = M = index-0
             const size_t nToken   = N; // semantic alias: token   = N
-            // A2A column count along FEATURE (M, index-0). Was AN (feature=N) before
-            // the col-major swap. The FIRST `AM` FEATURE columns go all-to-all (PUSH
-            // to remote recv); the remaining [AM, M) FEATURE columns stay local in
-            // `out`. Chosen so AM < M (a local segment exists) and (AM/W)%MT0==0.
-            // AM is supplied via --fused-a2a-am so it can match the shape being run
-            // (medium: AM=2048, full: AM=10240) without editing this source. The
-            // pre-swap flag --fused-a2a-an is renamed outright to --fused-a2a-am
-            // (design §0): no in-tree caller passed the old flag, and this client's
-            // program_options has no "defaulted" query, so a value-preserving alias
-            // cannot be implemented reliably. A stale --fused-a2a-an now errors loudly
-            // as an unknown option rather than being silently ignored.
+            // A2A column count along FEATURE (M, index-0). The FIRST `AM` FEATURE
+            // columns go all-to-all (PUSH to remote recv); the remaining [AM, M)
+            // FEATURE columns stay local in `out`. Chosen so AM < M (a local segment
+            // exists) and (AM/W)%MT0==0. AM is supplied via --fused-a2a-am so it can
+            // match the shape being run (medium: AM=2048, full: AM=10240) without
+            // editing this source.
             const size_t AM = (size_t)args["fused-a2a-am"].as<int>();
             if(AM % (size_t)W != 0)
             {
@@ -261,8 +248,8 @@ namespace TensileLite
             // mTiles: feature-tiles across the full feature dim M (diagnostic only).
             const uint32_t mTiles       = (uint32_t)(M / FUSED_A2A_M_TILE);
 
-            // Fail-fast on shapes that violate the fused-A2A design constraints
-            // (spec section 0). The kernel maps a whole PUSH workgroup to a
+            // Fail-fast on shapes that violate the fused-A2A design constraints.
+            // The kernel maps a whole PUSH workgroup to a
             // SINGLE dst_rank, which is only correct when each rank's shard is an
             // integer number of macro-tiles along the A2A-scattered dim. Post-swap
             // the scattered dim is FEATURE = M, so the shard (n_shard = AM/W) must be
@@ -417,7 +404,7 @@ namespace TensileLite
                       << " mTiles=" << mTiles
                       << " drain=" << drain << "\n";
 
-            // --- Host golden setup (Task 11 numeric validation) ---------------
+            // --- Host golden setup (numeric validation) ---------------
             // The GEMM is a TN GEMM (op(A)=A^T, op(B)=B), bf16 in, fp32 accumulate,
             // alpha=1, beta=0, C=0. Under the col-major swap, A carries FEATURE (m)
             // and B carries TOKEN (n): logically A=w[feature,K], B=x[token,K], and the
@@ -452,10 +439,9 @@ namespace TensileLite
                       << bBoundStride << ") D(mStride=" << dMStride << " nStride=" << dNStride
                       << ")\n";
 
-            // Second half of the packet-encoding guard above (the rect one). It lives
-            // down here rather than beside it because dNStride -- D's token-axis
-            // stride, which the packet carries as src_pitch (StrideD1J) -- is only
-            // available once the descriptors have been read.
+            // dNStride -- D's token-axis stride, which the packet carries as
+            // src_pitch (StrideD1J) -- is only available once the descriptors have
+            // been read.
             //
             // src_pitch is a 19-BIT field and _packPitchMinus1 shifts it left by 13
             // unmasked, so an over-range pitch ORs straight into the neighbouring
@@ -538,7 +524,7 @@ namespace TensileLite
                              "compares (race = clean-exit only, not byte-verified)\n";
             }
 
-            // --- Phase 1: per-device fresh allocation (spec §3.1). ---
+            // --- Per-device fresh allocation. ---
             std::vector<void*> peer(W, nullptr), counter(W, nullptr);
             // Views into peer[d]: flag at offset 0, recv at FUSED_A2A_PEER_RECV_OFFSET.
             std::vector<void*> recv(W, nullptr), flag(W, nullptr);
@@ -581,7 +567,7 @@ namespace TensileLite
                 HIP_CHECK_EXC(hipMemset(recv[d], 0, recvBytes));
             }
 
-            // --- P2P pairwise enable (spec §3.1). AlreadyEnabled is benign. ---
+            // --- P2P pairwise enable. AlreadyEnabled is benign. ---
             for(int s = 0; s < W; s++)
             {
                 HIP_CHECK_EXC(hipSetDevice(s));
@@ -606,7 +592,7 @@ namespace TensileLite
             // --- Per-device SDMA queue sets: one ring per (device, peer), created
             //     AFTER P2P is enabled so a peer's recv/flag pages are already
             //     mapped into this device's VA space when the engine dereferences
-            //     them. The self entry (j == d) is a loopback queue: §1.5 routes the
+            //     them. The self entry (j == d) is a loopback queue: this routes the
             //     p == my_rank packet through SDMA too, which is what gives this
             //     card's own flag slot a real producer (no DRAIN special case).
             //
@@ -614,8 +600,7 @@ namespace TensileLite
             //     append below is ordinary code that the preprocessor still has to
             //     parse in an SDMA-off build (the `return 1` in the #else is a
             //     RUNTIME return, it does not remove later statements from the token
-            //     stream). Referring to the SdmaQueueSet vector directly down there
-            //     made the default build fail to compile. ---
+            //     stream). ---
             std::vector<void*> sdmaHandles(W, nullptr);
 #ifdef TENSILELITE_ENABLE_SDMA_A2A
             std::vector<std::unique_ptr<SdmaQueueSet>> sdmaSets(W);
@@ -672,7 +657,7 @@ namespace TensileLite
                 (void)loadedAny;
             }
 
-            // --- Repeat loop (Task 13a): race detection + p50/p90 latency. ---
+            // --- Repeat loop: race detection + p50/p90 latency. ---
             // The launch → sync → validate sequence is repeated `iters` times.
             // Each iteration RE-ZEROES counter/flag/recv on all W devices before
             // the launch (otherwise a run leaves counters at target and flags at
@@ -707,10 +692,7 @@ namespace TensileLite
             // SizeJ = nToken), with feature-shard as the stride-1 inner axis, i.e.
             // element offset = slotElem + t*n_shard + f_local.
             // recv is a bf16 buffer. slotStride uses the UNPADDED N to match the
-            // kernel's SizeJ slot multiply. See task3-index-derivation.md.
-            // NOTE (Task 6): nothing writes recv any more -- the CU-side remote PUSH
-            // store was removed and the SDMA copy that replaces it lands in Task 7, so
-            // this L2 check is EXPECTED to fail until then.
+            // kernel's SizeJ slot multiply.
             const size_t slotStride = (size_t)N * (size_t)nShard; // elems per src slot (nToken*nShard)
             const size_t rowStride  = (size_t)nShard;             // per-token stride (feature-shard contiguous)
 
@@ -738,12 +720,10 @@ namespace TensileLite
             std::vector<double> latMeasUs;  // post-warmup only (for percentiles)
 
             // Per-card samples, retained alongside the MAX so the max-vs-mean gap can
-            // be attributed. `latMeasUs` and the MAX reporting below are deliberately
-            // left byte-for-byte alone -- the historical p50 stays comparable and
-            // everything here is purely additive observation. An iteration feeds
-            // perCardUs only when all W cards reported a clean elapsed time; a partial
-            // row would misalign the per-card percentiles against each other and
-            // against the spread, so such iterations are counted and reported instead.
+            // be attributed. An iteration feeds perCardUs only when all W cards
+            // reported a clean elapsed time; a partial row would misalign the
+            // per-card percentiles against each other and against the spread, so such
+            // iterations are counted and reported instead.
             std::vector<std::vector<double>> perCardUs(W);
             std::vector<int>                 slowestCount(W, 0);
             int                              perCardSkipped = 0;
@@ -904,7 +884,7 @@ namespace TensileLite
                     }
                 }
 
-                // -- Dual-segment numeric validation (Task 11), EVERY iteration. --
+                // -- Dual-segment numeric validation, EVERY iteration. --
                 // Skipped entirely when validate=0 (l2Pass/l1Pass default to `ok`,
                 // so the per-iteration verdict reduces to "kernel exited cleanly").
                 bool l2Pass = ok;
@@ -917,7 +897,7 @@ namespace TensileLite
                     // Dgold across all N tokens, laid out as [src, t(token, outer),
                     // f(feature-local, inner/contiguous)]. Token is NOT sharded -- every
                     // rank holds all N tokens. All W src slots carry the identical shard
-                    // in single-card emulation. See task3-index-derivation.md.
+                    // in single-card emulation.
                     for(int dst = 0; dst < W && l2Pass; dst++)
                     {
                         HIP_CHECK_EXC(hipSetDevice(dst));
@@ -976,8 +956,7 @@ namespace TensileLite
                     //       really is [M,N] col-major with FEATURE contiguous, which is
                     //       what the A2A downstream consumes post-swap. If out were
                     //       physically row-major, (a) could still pass while (b) fails
-                    //       -- so (b) is the anti-false-green proof (ROCM-27524
-                    //       gemm-a2a plan validation point 2). When the descriptor is
+                    //       -- so (b) is the anti-false-green proof. When the descriptor is
                     //       col-major (dMStride==1, dNStride==M) the two offset formulas
                     //       coincide; (b) still stands as an explicit, descriptor-
                     //       independent statement of the physical layout.

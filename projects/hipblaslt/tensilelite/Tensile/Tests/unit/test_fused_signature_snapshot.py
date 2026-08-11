@@ -20,9 +20,6 @@
 # nothing here goes red. Closing that too means building the real signature;
 # until someone does, treat a green run here as "the arithmetic agrees with
 # rocisa", not "the kernel gets these offsets".
-#
-# This began as an uncollected __main__ script, which meant the check existed,
-# was correct, and never ran. That is why the filename now starts with test_.
 ################################################################################
 
 import os

@@ -2,9 +2,9 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
 ################################################################################
-# SDMA packet-construction emitter tests (Task 5, NOGPU).
+# SDMA packet-construction emitter tests (NOGPU).
 #
-# The emitter (Tensile/Components/SdmaPacketEmitter.py) turns the §1.3 all-to-all
+# The emitter (Tensile/Components/SdmaPacketEmitter.py) turns the all-to-all
 # geometry into the COPY_SUBWIN + ATOMIC ADD_RTN_32 packet dword arrays. Two surfaces
 # are tested and cross-checked:
 #   * pure-Python encoders (encodeCopyDwords / encodeAtomicDwords) are pinned to
@@ -23,8 +23,8 @@
 #     emitComputeCopyFields / emitComputeFlagAddr) are asserted on their SEMANTIC
 #     field-packing features (header immediates, minus-one encoding, shift
 #     positions) -- NOT a whole-text snapshot -- and every one is run through the
-#     gfx950 assembler (a MUST, not a bonus: Task 4 caught an illegal opcode this
-#     way).
+#     gfx950 assembler (a MUST, not a bonus: assembling has caught an illegal
+#     opcode this way).
 #
 # THE COORDINATE FOLD. The shipped emitter no longer puts src_x/src_y/dst_x/dst_y
 # in the packet: it adds them into the 64-bit base addresses and leaves all four
@@ -75,7 +75,7 @@ from Tensile.Components.SdmaPacketEmitter import (                 # noqa: E402
     checkA2AFieldsFit, XY_FIELD_LIMIT, PITCH_FIELD_LIMIT,
 )
 
-# ---- shared full-shape constants (§1.2), element units -----------------------
+# ---- shared full-shape constants, element units -------------------------------
 M       = 18432   # feature (src row pitch)
 N       = 2048    # token
 NSHARD  = 2560    # feature shard per rank (rect X extent, prod dst pitch)
@@ -93,8 +93,8 @@ _GFX    = "gfx950"
 #
 #   _HARNESS_COPY_GOLDEN -- the only sequence with real hardware backing. These
 #     exact bytes ran on MI355X (3 peers x 8 bands = 24 packets; every dword
-#     bit-accurate, sentinel margin untouched). Independently, the Task 1
-#     reviewer hand-recomputed all 13 dwords from the field spec rather than
+#     bit-accurate, sentinel margin untouched). Independently, a reviewer
+#     hand-recomputed all 13 dwords from the field spec rather than
 #     accepting program output, which is what rules out "the golden is just
 #     whatever the encoder printed".
 #   _PROD_COPY_GOLDEN -- NO hardware backing. Derived by hand from the same
@@ -198,10 +198,10 @@ def test_production_boundary_rect_x_equals_dst_pitch():
 
 
 # ---------------------------------------------------------------------------
-# Part 2: §1.3 field arithmetic reproduces the golden coordinates
+# Part 2: field arithmetic reproduces the golden coordinates
 # ---------------------------------------------------------------------------
 # The pure-Python encoder above takes coordinates as arguments; here we verify
-# that the §1.3 formulas (as the emitter computes them) produce those exact
+# that the formulas (as the emitter computes them) produce those exact
 # coordinates for a representative (p, j, myRank), so the whole packet built from
 # scratch equals the production golden.
 
@@ -246,7 +246,7 @@ def test_geometry_edge_token_tile_clamps_rect_y():
 
 
 def test_self_rank_packet_well_formed():
-    # p == myRank (self-rank copy, §1.5: still goes through SDMA).
+    # p == myRank (self-rank copy: still goes through SDMA).
     for myRank in range(4):
         f = _fields_from_geometry(p=myRank, j=0, myRank=myRank)
         got = encodeCopyDwords(
@@ -362,15 +362,14 @@ def test_fold_equivalence_check_is_sensitive():
 
 
 def test_fold_encodes_geometry_the_coordinate_form_cannot():
-    """The payoff. W=8 with N=4096 is the shape the client used to REFUSE: dst_y
-    = (W-1)*N + (tokenTiles-1)*MT1 = 32512, past the 14-bit field. Folded, the
-    same copy encodes exactly, and the address is the one the §1.3 formula asks
-    for -- computed here independently of the encoder."""
+    """W=8 with N=4096 needs dst_y = (W-1)*N + (tokenTiles-1)*MT1 = 32512, past
+    the 14-bit field the coordinate form uses. Folded, the same copy encodes
+    exactly, and the address is the one the formula asks for -- computed here
+    independently of the encoder."""
     w, n, nShard, ldd = 8, 4096, 1280, 18432
     p, j, myRank = 7, (n // MT1) - 1, 7
     dstRow = myRank * n + j * MT1
-    # Premises, matching what the client actually printed when it refused this
-    # shape: dst_y was the ONLY out-of-range term (32512), src_x fit at 8960.
+    # Premises: dst_y is the ONLY out-of-range term (32512); src_x fits at 8960.
     assert dstRow == 32512 and dstRow >= (1 << 14), \
         "premise: dst_y must overflow the old 14-bit field"
     assert p * nShard == 8960 < (1 << 14), \
@@ -426,15 +425,14 @@ def test_field_fit_guard_rejects_each_overflowing_field():
     checkA2AFieldsFit(numRanks=4, nShard=NSHARD, macroTile1=MT1,
                       srcPitch=PITCH_MAX - ELEMENT_MULTIPLE)
 
-    # REGRESSION PIN for the fold: the geometry that used to be rejected via
-    # dst_y (W=8, N=4096 -> dst_y=32512) must now be ACCEPTED. N is not even an
-    # argument any more -- if someone reintroduces a coordinate term here, this
-    # is what catches it.
+    # This geometry (W=8, N=4096 -> dst_y=32512 in the old coordinate form) must
+    # be ACCEPTED. N is not even an argument any more -- if someone reintroduces
+    # a coordinate term here, this is what catches it.
     checkA2AFieldsFit(numRanks=8, nShard=1280, macroTile1=MT1, srcPitch=18432)
 
-    # REGRESSION PIN for the wider element: the production shape at W=8 with the
-    # AM the fold alone could not reach. nShard = 131072/8 = 16384 would have
-    # overflowed rect_x before the element widened; now it is exactly encodable.
+    # The production shape at W=8 needs nShard = 131072/8 = 16384, which would
+    # overflow rect_x under a narrower element; the wider element makes it
+    # exactly encodable.
     checkA2AFieldsFit(numRanks=8, nShard=16384, macroTile1=MT1, srcPitch=18432)
 
 

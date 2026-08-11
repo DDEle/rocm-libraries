@@ -2846,7 +2846,7 @@ class GlobalWriteBatchWriter:
     elects the DRAIN owner.  See the inline comments at each step below for the
     per-step invariants."""
     kw = self.parentWriter
-    module.addComment2("fused-A2A cross-card handshake (design spec 2.3): counter election + SDMA packet submit + DRAIN")
+    module.addComment2("fused-A2A cross-card handshake: counter election + SDMA packet submit + DRAIN")
 
     afterLabel = Label(kw.labels.getNameInc("fusedA2A_handshake_after"),
                        "fused-A2A: after handshake (non-wave-0 skips)")

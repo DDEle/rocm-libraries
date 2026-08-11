@@ -661,6 +661,17 @@ namespace TensileLite
             }
 
             std::vector<double> latMeasUs;  // post-warmup only (for percentiles)
+
+            // Per-card samples, retained alongside the MAX so the max-vs-mean gap can
+            // be attributed. `latMeasUs` and the MAX reporting below are deliberately
+            // left byte-for-byte alone -- the historical p50 stays comparable and
+            // everything here is purely additive observation. An iteration feeds
+            // perCardUs only when all W cards reported a clean elapsed time; a partial
+            // row would misalign the per-card percentiles against each other and
+            // against the spread, so such iterations are counted and reported instead.
+            std::vector<std::vector<double>> perCardUs(W);
+            std::vector<int>                 slowestCount(W, 0);
+            int                              perCardSkipped = 0;
             int  passIters   = 0;
             bool raceFail     = false;
             int  firstFailIt  = -1;
@@ -751,6 +762,8 @@ namespace TensileLite
                 // -- Wait for every device; collect per-card elapsed time. --
                 bool   ok       = true;
                 double maxCardUs = 0.0;
+                // -1 marks "this card did not report" (HIP error); see perCardUs decl.
+                std::vector<double> cardUs(W, -1.0);
                 for(int d = 0; d < W; d++)
                 {
                     HIP_CHECK_EXC(hipSetDevice(d));
@@ -767,6 +780,7 @@ namespace TensileLite
                         float ms = 0.0f;
                         HIP_CHECK_EXC(hipEventElapsedTime(&ms, startEv[d], stopEv[d]));
                         double us = (double)ms * 1000.0;
+                        cardUs[d] = us;
                         if(us > maxCardUs)
                             maxCardUs = us;
                         if(verbose)
@@ -974,7 +988,26 @@ namespace TensileLite
                 }
 
                 if(it >= warmup)
+                {
                     latMeasUs.push_back(maxCardUs);
+
+                    bool rowComplete = true;
+                    for(int d = 0; d < W; d++)
+                        if(cardUs[d] < 0.0)
+                            rowComplete = false;
+                    if(rowComplete)
+                    {
+                        int slowest = 0;
+                        for(int d = 1; d < W; d++)
+                            if(cardUs[d] > cardUs[slowest])
+                                slowest = d;
+                        for(int d = 0; d < W; d++)
+                            perCardUs[d].push_back(cardUs[d]);
+                        slowestCount[slowest]++;
+                    }
+                    else
+                        perCardSkipped++;
+                }
 
                 // Compact progress line (skip iter 0, which printed full breakdown).
                 if(it != 0)
@@ -1027,6 +1060,62 @@ namespace TensileLite
             else
             {
                 std::cout << "[fused-a2a] latency: no post-warmup samples collected\n";
+            }
+
+            // --- Per-card breakdown. The MAX line above cannot tell apart three
+            // sources of the max-vs-mean gap: order statistics over W roughly-iid
+            // cards, one card being systematically slower, and launch skew from the
+            // sequential per-device enqueue above (under DRAIN every kernel exits only
+            // once its peers have pushed, so a card enqueued early spends the skew
+            // waiting and reads LONGER). The slowest-card histogram separates them:
+            // concentrated on one id means systematic -- and if that id is the
+            // first-enqueued card, the cause is the enqueue order, not the hardware;
+            // spread evenly across ids means order statistics.
+            if(!perCardUs[0].empty())
+            {
+                const size_t n = perCardUs[0].size();
+                // By value: sorting a copy keeps the rows index-aligned, which the
+                // spread computation below depends on.
+                auto pctOf = [](std::vector<double> v, double p) {
+                    std::sort(v.begin(), v.end());
+                    return v[std::min(v.size() - 1, (size_t)(p * (double)v.size()))];
+                };
+
+                std::cout << std::fixed << std::setprecision(1);
+                for(int d = 0; d < W; d++)
+                {
+                    double sum = 0.0;
+                    for(double v : perCardUs[d])
+                        sum += v;
+                    std::cout << "[fused-a2a] per-card dev " << d
+                              << ": mean=" << (sum / (double)n)
+                              << " us p50=" << pctOf(perCardUs[d], 0.5)
+                              << " us p90=" << pctOf(perCardUs[d], 0.9) << " us  slowest in "
+                              << slowestCount[d] << "/" << n << " iters\n";
+                }
+
+                // Per-iteration spread = max - min across the W cards; this is exactly
+                // what the MAX metric pays over the mean on any given iteration.
+                std::vector<double> spread(n, 0.0);
+                for(size_t i = 0; i < n; i++)
+                {
+                    double lo = perCardUs[0][i], hi = perCardUs[0][i];
+                    for(int d = 1; d < W; d++)
+                    {
+                        lo = std::min(lo, perCardUs[d][i]);
+                        hi = std::max(hi, perCardUs[d][i]);
+                    }
+                    spread[i] = hi - lo;
+                }
+                std::cout << "[fused-a2a] per-card spread (max-min across " << W
+                          << " cards): p50=" << pctOf(spread, 0.5)
+                          << " us p90=" << pctOf(spread, 0.9) << " us max=" << pctOf(spread, 1.0)
+                          << " us\n";
+
+                if(perCardSkipped)
+                    std::cout << "[fused-a2a] per-card: " << perCardSkipped
+                              << " post-warmup iteration(s) excluded (not all " << W
+                              << " cards reported)\n";
             }
 
             // Cleanup.

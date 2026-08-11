@@ -2546,9 +2546,9 @@ class GlobalWriteBatchWriter:
     """Load peer_ptr[dst_rank]+recv offset into recvBaseSgpr and dst_rank*n_shard into shardBaseSgpr.
 
     Called by _emitFusedA2ASdmaIssue for the SDMA COPY packet's destination base.  The
-    shard_base output is vestigial there (the packet carries the shard offset as src_x,
-    computed from p*nShard), but the rank scan and the single s_load are exactly what is
-    needed, so the caller takes it and drops it.
+    shard_base output is vestigial there (the shard offset is folded into the packet's
+    source base, recomputed from p*nShard), but the rank scan and the single s_load are
+    exactly what is needed, so the caller takes it and drops it.
 
     Two-phase approach to avoid SMEM WAW hazard (multiple s_load to the same SGPR pair):
       Phase 1 (pure SALU): scan candidate ranks to determine dst_rank (no s_load issued).
@@ -2706,21 +2706,30 @@ class GlobalWriteBatchWriter:
 
     src_pitch is the real StrideD1J (D's token-axis stride, == ldd), so a padded ldd
     is handled correctly.  What this packet DOES still assume is that D is column
-    major -- feature contiguous, dMStride == 1: src_x carries the feature coordinate
-    and src_y the token coordinate, so a row-major D would need x/y (and the pitch)
-    swapped, not merely a different pitch.  The shipping config satisfies this
-    (FusedA2AClient.cpp: "Post-swap D' is col-major, so dMStride==1").
+    major -- feature contiguous, dMStride == 1: the feature offset is added as a
+    plain element count while the token offset is scaled by the pitch, so a
+    row-major D would need the two swapped, not merely a different pitch.  The
+    shipping config satisfies this (FusedA2AClient.cpp: "Post-swap D' is col-major,
+    so dMStride==1").
 
-    ASSUMPTION -- the three runtime-valued 14-bit coordinate fields fit: src_x =
-    p*nShard, rect_x = nShard and dst_y = myRank*N + j*MT1 must all be < 2^14.
-    The emitter packs them unmasked, so an over-range value ORs into the
-    neighbouring field rather than truncating, and the copy silently moves the
-    wrong band. Enforced at launch by client/src/FusedA2AClient.cpp and mirrored
-    by SdmaPacketEmitter.checkA2AFieldsFit(). Separately, src_slice = M*N is
-    packed into a 28-bit field by _packSliceMinus1, likewise unmasked and
-    unguarded; that one is benign because the SUBWIN copy is single-plane, so the
-    slice pitch is a don't-care -- the emitter's own comment at
-    SdmaPacketEmitter.py:327 says "src_slice = M * N (single-plane, don't-care)".
+    The four packet coordinates are FOLDED into the 64-bit base addresses by
+    emitComputeCopyFields and emitted as literal 0 (addr = base + y*pitch*elem +
+    x*elem, so this is the same byte address written differently).  That removes
+    src_x = p*nShard and dst_y = myRank*N + j*MT1 -- both of which grew with the
+    world size and overflowed their 14-bit fields at W=8 -- from the constraint
+    set entirely, and leaves N unconstrained.
+
+    ASSUMPTION -- what still has to fit: rect_x = nShard and rect_y <= MT1 in
+    14-bit fields, and src_pitch = ldd in a 19-bit field.  rect_x is the copy's X
+    EXTENT, so no encoding trick can fold it away.  The emitter packs all of these
+    unmasked, so an over-range value ORs into the neighbouring field rather than
+    truncating, and the copy silently moves the wrong band.  Enforced at launch by
+    client/src/FusedA2AClient.cpp and mirrored by
+    SdmaPacketEmitter.checkA2AFieldsFit().  Separately, src_slice = M*N is packed
+    into a 28-bit field by _packSliceMinus1, likewise unmasked and unguarded; that
+    one is benign because the SUBWIN copy is single-plane, so the slice pitch is a
+    don't-care -- the emitter's own comment says "src_slice = M * N (single-plane,
+    don't-care)".
 
     Args:
       dstRankSgpr:  1 SGPR, the peer rank p (== this WG's dst_rank).
@@ -2782,25 +2791,38 @@ class GlobalWriteBatchWriter:
     # release tagList never frees -- so no kernarg load is needed here.
     packedC1     = self.kernel["PackedC1IndicesX"]
     srcPitchName = "StrideD%s" % kw.states.indexChars[packedC1[0]]
-    fldSgpr = kw.sgprPool.checkOut(6, tag="fusedA2A_sdmaFields", preventOverflow=False)
-    srcXS, srcYS, srcSliceS, dstYS, dstSliceS, rectYS = (fldSgpr + i for i in range(6))
+    # Four outputs, not six: src_x and dst_y are no longer packet fields -- they
+    # are folded into the bases below, computed through tmpSgpr and consumed
+    # immediately.  srcYS survives because j*MT1 is read three times (src fold,
+    # dst row, rect_y clamp).
+    fldSgpr = kw.sgprPool.checkOut(4, tag="fusedA2A_sdmaFields", preventOverflow=False)
+    srcYS, srcSliceS, dstSliceS, rectYS = (fldSgpr + i for i in range(4))
+    # Both must be 2-ALIGNED: they feed s_lshl_b64 / the 64-bit add, which need
+    # SReg_64 operands.  tmpSgpr is a plain checkOut(2) and is NOT usable there.
+    # srcBaseSgpr holds the folded copy of AddressD (which is persistent and must
+    # not be clobbered); recvBaseSgpr is a temp and is folded in place.
+    srcBaseSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaSrcBase", preventOverflow=False)
+    tmp64Sgpr   = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaOffset64", preventOverflow=False)
     pkt.emitComputeCopyFields(module, kw,
                               dstRankSgpr, "WorkGroup1", myRankSgpr,
                               "SizesFree+0", "SizesFree+1", nShardSgpr,
-                              srcXS, srcYS, srcSliceS, dstYS, dstSliceS, rectYS,
-                              tmpSgpr)
+                              kw.sgprs["AddressD"], srcPitchName, recvBaseSgpr,
+                              srcBaseSgpr, srcYS, srcSliceS, dstSliceS, rectYS,
+                              tmpSgpr, tmp64Sgpr)
+    kw.sgprPool.checkIn(tmp64Sgpr)  # dead once the two bases are folded
 
     # --- build the 21 packet dwords: COPY in [0:13], ATOMIC in [13:21]. ---
     pktVgpr = kw.vgprPool.checkOut(totalDwords, tag="fusedA2A_sdmaPacket")
     pkt.emitBuildCopyPacket(module, kw, pktVgpr,
-                            kw.sgprs["AddressD"], srcXS, srcYS, srcPitchName, srcSliceS,
-                            recvBaseSgpr, dstYS, nShardSgpr, dstSliceS,
+                            srcBaseSgpr, srcPitchName, srcSliceS,
+                            recvBaseSgpr, nShardSgpr, dstSliceS,
                             nShardSgpr, rectYS, tmpSgpr)
     flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaFlagAddr", preventOverflow=False)
     pkt.emitComputeFlagAddr(module, kw, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
     pkt.emitBuildAtomicPacket(module, kw, pktVgpr + COPY_PACKET_DWORDS, flagAddrSgpr, addend=1)
     kw.sgprPool.checkIn(flagAddrSgpr)
     kw.sgprPool.checkIn(fldSgpr)
+    kw.sgprPool.checkIn(srcBaseSgpr)
     kw.sgprPool.checkIn(recvBaseSgpr)
 
     # --- reserve once for both packets, place them back to back, submit once. ---

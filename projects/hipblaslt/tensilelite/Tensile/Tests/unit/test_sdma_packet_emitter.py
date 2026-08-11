@@ -26,9 +26,20 @@
 #     gfx950 assembler (a MUST, not a bonus: Task 4 caught an illegal opcode this
 #     way).
 #
+# THE COORDINATE FOLD. The shipped emitter no longer puts src_x/src_y/dst_x/dst_y
+# in the packet: it adds them into the 64-bit base addresses and leaves all four
+# fields at 0 (hardware rule: addr = base + y*pitch*elem + x*elem). Part 2b pins
+# that the two forms name the same byte, and that the fold encodes geometries the
+# coordinate form could not -- W=8 with N=4096 overflowed dst_y at 32512 and was
+# refused at launch.
+#
+# The pure-Python encoders here KEEP their x/y parameters and keep their original
+# golden vectors. They are the wire-format reference, shared with the C++
+# makeCopyRectPacket, and those vectors are the MI355X-validated provenance; only
+# the fused-A2A call site folds. Do not "simplify" them to match the call site.
+#
 # Boundary cases pinned: self-rank (p == myRank) still produces a well-formed
-# packet, and j at both ends of [0, tokenTiles) keeps dst_y within the 14-bit
-# field.
+# packet, and the tail token-tile still clamps rect_y.
 ################################################################################
 
 import os
@@ -59,8 +70,9 @@ from Tensile.Components.SdmaPacketEmitter import (                 # noqa: E402
     encodeCopyDwords, encodeAtomicDwords,
     COPY_HEADER_DW0, ATOMIC_HEADER_DW0,
     COPY_PACKET_DWORDS, ATOMIC_PACKET_DWORDS,
-    BF16_ELEMENT_SIZE_LOG2,
-    checkA2AFieldsFit, XY_FIELD_LIMIT,
+    BF16_ELEMENT_SIZE_LOG2, D_DATA_ELEMENT_LOG2,
+    PACKET_ELEMENT_SIZE_LOG2, ELEMENT_SHIFT, ELEMENT_MULTIPLE,
+    checkA2AFieldsFit, XY_FIELD_LIMIT, PITCH_FIELD_LIMIT,
 )
 
 # ---- shared full-shape constants (§1.2), element units -----------------------
@@ -234,62 +246,196 @@ def test_geometry_edge_token_tile_clamps_rect_y():
 
 
 def test_self_rank_packet_well_formed():
-    # p == myRank (self-rank copy, §1.5: still goes through SDMA). dst_y folds in
-    # myRank*N; assert it stays within the 14-bit dst_y field for the largest rank.
+    # p == myRank (self-rank copy, §1.5: still goes through SDMA).
     for myRank in range(4):
         f = _fields_from_geometry(p=myRank, j=0, myRank=myRank)
-        assert f["dstY"] < (1 << 14), f"dst_y {f['dstY']} overflows 14-bit field"
         got = encodeCopyDwords(
             srcBase=0, srcX=f["srcX"], srcY=f["srcY"], srcPitch=M, srcSlicePitch=f["srcSlice"],
             dstBase=0, dstX=0, dstY=f["dstY"], dstPitch=NSHARD, dstSlicePitch=f["dstSlice"],
             rectX=NSHARD, rectY=f["rectY"], elementSizeLog2=1)
-        # header + rect are rank-independent; only src_x / dst_y move.
-        assert got[0] == COPY_HEADER_DW0
+        # header + rect are rank-independent; only src_x / dst_y move. This is the
+        # bf16-granular encoder form, so its header is NOT the shipped
+        # COPY_HEADER_DW0 (which now carries elementsize=log2(16)).
+        assert (got[0] >> 29) == BF16_ELEMENT_SIZE_LOG2
         assert (got[3] & 0x3FFF) == (myRank * NSHARD) & 0x3FFF
 
 
-def test_token_tile_boundaries_fit_fields():
-    # j at both ends of [0, tokenTiles); tokenTiles = N/MT1 = 8. dst_y = myRank*N
-    # + j*MT1 must fit the 14-bit field even at the top rank + top tile.
-    tokenTiles = N // MT1
-    for j in (0, tokenTiles - 1):
-        f = _fields_from_geometry(p=0, j=j, myRank=3)
-        assert f["dstY"] < (1 << 14), f"dst_y {f['dstY']} (j={j}) overflows 14-bit field"
-        # src_y = j*MT1 must also fit its 14-bit field.
-        assert f["srcY"] < (1 << 14)
+# ---------------------------------------------------------------------------
+# Part 2b: the coordinate fold (what the shipped emitter actually does)
+# ---------------------------------------------------------------------------
+# emitComputeCopyFields no longer emits src_x/src_y/dst_x/dst_y as packet fields:
+# it adds them into the 64-bit base addresses and leaves all four at 0. The
+# hardware rule is addr(x,y) = base + y*pitch*elem + x*elem, so the two forms must
+# name the same byte.
+#
+# WHAT THIS LAYER DOES AND DOES NOT PROVE. It decodes the address back out of the
+# ENCODED dwords (unpacking the bitfields, undoing the minus-one pitch) and
+# compares the two forms. That catches a wrong term, a wrong shift, or a dropped
+# element->byte conversion in the fold arithmetic. It does NOT prove the emitted
+# ASSEMBLY computes this arithmetic -- that is the structural tests (operand
+# registers), the handshake golden, and ultimately the on-card recv comparison.
+
+def _decode_first_element_addr(dw, side, elementSizeLog2=BF16_ELEMENT_SIZE_LOG2):
+    """Byte address of the sub-window's first element, reconstructed from the
+    encoded dwords via the hardware rule addr = base + y*pitch*elem + x*elem.
+
+    Deliberately reads the packed BITS rather than the inputs, so it re-derives
+    the minus-one pitch convention instead of trusting it."""
+    b, c, p = (1, 3, 4) if side == "src" else (6, 8, 9)
+    base  = dw[b] | (dw[b + 1] << 32)
+    x     =  dw[c]        & _XY_MASK
+    y     = (dw[c] >> 16) & _XY_MASK
+    pitch = ((dw[p] >> 13) & _PITCH_MASK) + 1     # stored minus one
+    elem  = 1 << elementSizeLog2
+    return base + y * pitch * elem + x * elem
+
+
+_XY_MASK    = (1 << 14) - 1
+_PITCH_MASK = (1 << 19) - 1
+
+
+def _encode_pair(p, j, myRank, w, n, nShard, ldd, dBase, recvBase):
+    """Encode one (peer, token-tile) copy BOTH ways and return (coordForm, folded).
+
+    coordForm is the pre-fold packet the MI355X golden validated; folded is what
+    the emitter ships. The fold arithmetic here mirrors emitComputeCopyFields."""
+    srcY   = j * MT1
+    srcX   = p * nShard
+    dstRow = myRank * n + srcY
+    rectY  = min(MT1, n - srcY)
+    common = dict(srcPitch=ldd, srcSlicePitch=M * n, dstPitch=nShard,
+                  dstSlicePitch=MT1 * nShard, rectX=nShard, rectY=rectY,
+                  elementSizeLog2=BF16_ELEMENT_SIZE_LOG2)
+    coord = encodeCopyDwords(srcBase=dBase, srcX=srcX, srcY=srcY,
+                             dstBase=recvBase, dstX=0, dstY=dstRow, **common)
+    elemBytes = 1 << D_DATA_ELEMENT_LOG2
+    folded = encodeCopyDwords(
+        srcBase=dBase + (srcY * ldd + srcX) * elemBytes, srcX=0, srcY=0,
+        dstBase=recvBase + (dstRow * nShard) * elemBytes, dstX=0, dstY=0, **common)
+    return coord, folded
+
+
+# Geometries where BOTH forms are representable (the coordinate form needs
+# src_x and dst_y under 2^14), so the two can be compared at all.
+_FOLD_CASES = [
+    (w, n, nShard, p, j, myRank)
+    for w, n, nShard in ((1, 2048, 2560), (2, 2048, 1280), (4, 2048, 640), (4, 512, 256))
+    for p in range(w)
+    for myRank in range(w)
+    for j in (0, 1, (n // MT1) - 1)
+]
+
+
+@pytest.mark.parametrize("w,n,nShard,p,j,myRank", _FOLD_CASES)
+def test_fold_addresses_identical_to_coordinate_form(w, n, nShard, p, j, myRank):
+    dBase, recvBase = 0x7F0000100000, 0x7F0000900000
+    coord, folded = _encode_pair(p, j, myRank, w, n, nShard, M, dBase, recvBase)
+    for side in ("src", "dst"):
+        assert _decode_first_element_addr(folded, side) \
+            == _decode_first_element_addr(coord, side), \
+            "%s address differs after folding (W=%d N=%d nShard=%d p=%d j=%d rank=%d)" \
+            % (side, w, n, nShard, p, j, myRank)
+    # Everything that is NOT an address must be untouched by the fold.
+    assert folded[0] == coord[0]                    # header
+    assert folded[4:6] == coord[4:6]                # src pitch / slice
+    assert folded[9:13] == coord[9:13]              # dst pitch / slice, rect, DW12
+    # ...and the four coordinate fields really are gone.
+    assert folded[3] == 0 and folded[8] == 0
+
+
+def test_fold_equivalence_check_is_sensitive():
+    """Negative control for the test above.
+
+    The comparison is between two encodings of the same geometry, so it would
+    stay green if BOTH sides were wrong in the same way -- or if the decoder
+    ignored the term under test. Perturb the folded base by ONE element and
+    confirm the check goes red, once per side."""
+    dBase, recvBase = 0x7F0000100000, 0x7F0000900000
+    coord, _ = _encode_pair(1, 1, 1, 4, 2048, 640, M, dBase, recvBase)
+    elemBytes = 1 << D_DATA_ELEMENT_LOG2
+    for side, badSrc, badDst in (("src", elemBytes, 0), ("dst", 0, elemBytes)):
+        _, wrong = _encode_pair(1, 1, 1, 4, 2048, 640, M,
+                                dBase + badSrc, recvBase + badDst)
+        assert _decode_first_element_addr(wrong, side) \
+            != _decode_first_element_addr(coord, side), \
+            "%s: a one-element error slipped past the equivalence check" % side
+
+
+def test_fold_encodes_geometry_the_coordinate_form_cannot():
+    """The payoff. W=8 with N=4096 is the shape the client used to REFUSE: dst_y
+    = (W-1)*N + (tokenTiles-1)*MT1 = 32512, past the 14-bit field. Folded, the
+    same copy encodes exactly, and the address is the one the §1.3 formula asks
+    for -- computed here independently of the encoder."""
+    w, n, nShard, ldd = 8, 4096, 1280, 18432
+    p, j, myRank = 7, (n // MT1) - 1, 7
+    dstRow = myRank * n + j * MT1
+    # Premises, matching what the client actually printed when it refused this
+    # shape: dst_y was the ONLY out-of-range term (32512), src_x fit at 8960.
+    assert dstRow == 32512 and dstRow >= (1 << 14), \
+        "premise: dst_y must overflow the old 14-bit field"
+    assert p * nShard == 8960 < (1 << 14), \
+        "premise: src_x fit -- dst_y alone is what rejected this geometry"
+
+    dBase, recvBase = 0x7F0000100000, 0x7F0000900000
+    _, folded = _encode_pair(p, j, myRank, w, n, nShard, ldd, dBase, recvBase)
+    assert folded[3] == 0 and folded[8] == 0
+    elemBytes = 1 << D_DATA_ELEMENT_LOG2
+    assert _decode_first_element_addr(folded, "src") \
+        == dBase + (j * MT1 * ldd + p * nShard) * elemBytes
+    assert _decode_first_element_addr(folded, "dst") \
+        == recvBase + dstRow * nShard * elemBytes
 
 
 def test_field_fit_guard_rejects_each_overflowing_field():
-    # Positive control first: the shipping shape must NOT raise, or the four
-    # negative cases below prove nothing.
-    checkA2AFieldsFit(numRanks=4, nShard=NSHARD, nToken=N, macroTile1=MT1)
+    # Every X-direction bound below is on the SCALED value (>> ELEMENT_SHIFT),
+    # because that is what the packet field holds. Written in terms of the
+    # constants, not literals, so the arithmetic follows if the element widens
+    # again.
+    RECT_X_MAX = XY_FIELD_LIMIT << ELEMENT_SHIFT       # nShard ceiling: 131072
+    PITCH_MAX  = PITCH_FIELD_LIMIT << ELEMENT_SHIFT    # ldd ceiling: 4194304
 
-    # Each case isolates ONE term: the other three stay in range, so a partial
-    # fix (e.g. today's dst_y-only guard) fails the test.
-    # (a) src_x = (W-1)*nShard = 7*2560 = 17920 >= 16384;
-    #     rect_x = 2560 ok, dst_y = 7*256 = 1792 ok, W = 8 ok.
-    with pytest.raises(ValueError):
-        checkA2AFieldsFit(numRanks=8, nShard=2560, nToken=256, macroTile1=MT1)
+    # Positive control first: the shipping shape must NOT raise, or the negative
+    # cases below prove nothing.
+    checkA2AFieldsFit(numRanks=4, nShard=NSHARD, macroTile1=MT1, srcPitch=M)
 
-    # (b) rect_x = nShard = 16384 on its own, W = 1 so src_x = 0, dst_y = 0.
-    #     (Only reachable at W == 1; kept so the term is not silently droppable.)
-    with pytest.raises(ValueError):
-        checkA2AFieldsFit(numRanks=1, nShard=XY_FIELD_LIMIT, nToken=256, macroTile1=MT1)
+    # (a) rect_x at its ceiling. This is the ONE coordinate-space term the fold
+    #     could not remove -- it is the copy's X extent, not an offset.
+    with pytest.raises(ValueError, match="rect"):
+        checkA2AFieldsFit(numRanks=1, nShard=RECT_X_MAX, macroTile1=MT1, srcPitch=M)
 
-    # (c) dst_y = 3*8192 + 31*256 = 32512 >= 16384; src_x = 3*256 = 768 ok.
-    with pytest.raises(ValueError):
-        checkA2AFieldsFit(numRanks=4, nShard=256, nToken=8192, macroTile1=MT1)
+    # (b) src_pitch = ldd at the 19-bit limit; every other term in range.
+    with pytest.raises(ValueError, match="pitch"):
+        checkA2AFieldsFit(numRanks=4, nShard=NSHARD, macroTile1=MT1, srcPitch=PITCH_MAX)
 
-    # (d) W > FUSED_A2A_MAX_RANKS(8): all three coordinate terms are in range
-    #     (src_x = 15*256 = 3840, rect_x = 256, dst_y = 15*256 = 3840), so ONLY
-    #     the rank bound can trip -- the kernarg segment has no slot for ranks 8+.
+    # (c) W > FUSED_A2A_MAX_RANKS(8): rect_x and the pitch are both in range, so
+    #     ONLY the rank bound can trip -- the kernarg segment has no slot for 8+.
     with pytest.raises(ValueError, match="FUSED_A2A_MAX_RANKS"):
-        checkA2AFieldsFit(numRanks=16, nShard=256, nToken=256, macroTile1=MT1)
+        checkA2AFieldsFit(numRanks=16, nShard=256, macroTile1=MT1, srcPitch=M)
 
-    # Boundary: exactly at the limit rejects; one below passes.
-    with pytest.raises(ValueError):
-        checkA2AFieldsFit(numRanks=2, nShard=XY_FIELD_LIMIT, nToken=256, macroTile1=MT1)
-    checkA2AFieldsFit(numRanks=1, nShard=XY_FIELD_LIMIT - 1, nToken=256, macroTile1=MT1)
+    # (d) NOT divisible by the packet element. Both terms, separately, and both
+    #     comfortably inside every range bound -- so only divisibility can trip.
+    #     A right shift would truncate these and copy a short band.
+    with pytest.raises(ValueError, match="multiple"):
+        checkA2AFieldsFit(numRanks=4, nShard=NSHARD + 1, macroTile1=MT1, srcPitch=M)
+    with pytest.raises(ValueError, match="multiple"):
+        checkA2AFieldsFit(numRanks=4, nShard=NSHARD, macroTile1=MT1, srcPitch=M + 1)
+
+    # Boundaries: at the ceiling rejects, one element below passes -- both terms.
+    checkA2AFieldsFit(numRanks=1, nShard=RECT_X_MAX - ELEMENT_MULTIPLE,
+                      macroTile1=MT1, srcPitch=M)
+    checkA2AFieldsFit(numRanks=4, nShard=NSHARD, macroTile1=MT1,
+                      srcPitch=PITCH_MAX - ELEMENT_MULTIPLE)
+
+    # REGRESSION PIN for the fold: the geometry that used to be rejected via
+    # dst_y (W=8, N=4096 -> dst_y=32512) must now be ACCEPTED. N is not even an
+    # argument any more -- if someone reintroduces a coordinate term here, this
+    # is what catches it.
+    checkA2AFieldsFit(numRanks=8, nShard=1280, macroTile1=MT1, srcPitch=18432)
+
+    # REGRESSION PIN for the wider element: the production shape at W=8 with the
+    # AM the fold alone could not reach. nShard = 131072/8 = 16384 would have
+    # overflowed rect_x before the element widened; now it is exactly encodable.
+    checkA2AFieldsFit(numRanks=8, nShard=16384, macroTile1=MT1, srcPitch=18432)
 
 
 # ---------------------------------------------------------------------------
@@ -320,23 +466,22 @@ def _render_copy():
 
 def _render_copy_ns():
     """Render emitBuildCopyPacket AND return the registers it used, so tests can
-    assert on real operands (e.g. DW8 == dst_y<<16 with the actual dstY SGPR)
-    instead of comment text."""
+    assert on real operands instead of comment text."""
     _init_gfx950()
     w = _mock_writer()
     em = SdmaPacketEmitter(macroTile1=MT1)
     pkt = w.vgprPool.checkOut(COPY_PACKET_DWORDS, "pkt")
     s = [w.sgprPool.checkOutAligned(2, 2, "b%d" % i, preventOverflow=False) for i in range(2)]
     srcBase, dstBase = s[0], s[1]
-    fld = [w.sgprPool.checkOut(1, "f%d" % i, preventOverflow=False) for i in range(9)]
-    (srcX, srcY, srcPitch, srcSlice, dstY, dstPitch, dstSlice, rectX, rectY) = fld
+    fld = [w.sgprPool.checkOut(1, "f%d" % i, preventOverflow=False) for i in range(7)]
+    (srcPitch, srcSlice, dstPitch, dstSlice, rectX, rectY, _spare) = fld
     tmp = w.sgprPool.checkOut(2, "tmp", preventOverflow=False)  # rect dword needs 2
     m = Module("copy")
-    em.emitBuildCopyPacket(m, w, pkt, srcBase, srcX, srcY, srcPitch, srcSlice,
-                           dstBase, dstY, dstPitch, dstSlice, rectX, rectY, tmp)
+    em.emitBuildCopyPacket(m, w, pkt, srcBase, srcPitch, srcSlice,
+                           dstBase, dstPitch, dstSlice, rectX, rectY, tmp)
     return SimpleNamespace(text=str(m), pkt=pkt, srcBase=srcBase, dstBase=dstBase,
-                           srcX=srcX, srcY=srcY, srcPitch=srcPitch, srcSlice=srcSlice,
-                           dstY=dstY, dstPitch=dstPitch, dstSlice=dstSlice,
+                           srcPitch=srcPitch, srcSlice=srcSlice,
+                           dstPitch=dstPitch, dstSlice=dstSlice,
                            rectX=rectX, rectY=rectY, tmp=tmp)
 
 
@@ -359,21 +504,31 @@ def _render_fields_ns():
     """Render emitComputeCopyFields AND return the SGPR indices it was given, so
     tests can assert on actual operand registers (s_mul_i32 s<out>, s<a>, s<b>)
     rather than on comment text -- a comment-only assert stays green even if the
-    multiply operands are swapped, which for src/dst coordinates is a silent
+    multiply operands are swapped, which for the folded base addresses is a silent
     cross-rank data-placement bug."""
     _init_gfx950()
     w = _mock_writer()
     em = SdmaPacketEmitter(macroTile1=MT1)
-    ins = [w.sgprPool.checkOut(1, "in%d" % i, preventOverflow=False) for i in range(6)]
-    (p, j, myRank, mS, nS, nShardS) = ins
-    outs = [w.sgprPool.checkOut(1, "o%d" % i, preventOverflow=False) for i in range(7)]
-    (srcX, srcY, srcSlice, dstY, dstSlice, rectY, tmp) = outs
+    ins = [w.sgprPool.checkOut(1, "in%d" % i, preventOverflow=False) for i in range(7)]
+    (p, j, myRank, mS, nS, nShardS, srcPitchS) = ins
+    # The 64-bit operands must be 2-aligned, exactly as the production caller
+    # allocates them (GlobalWriteBatch._emitFusedA2ASdmaIssue).
+    addressD  = w.sgprPool.checkOutAligned(2, 2, "addressD", preventOverflow=False)
+    recvBase  = w.sgprPool.checkOutAligned(2, 2, "recvBase", preventOverflow=False)
+    outSrcBase = w.sgprPool.checkOutAligned(2, 2, "srcBase", preventOverflow=False)
+    tmp64     = w.sgprPool.checkOutAligned(2, 2, "tmp64", preventOverflow=False)
+    outs = [w.sgprPool.checkOut(1, "o%d" % i, preventOverflow=False) for i in range(5)]
+    (srcY, srcSlice, dstSlice, rectY, tmp) = outs
     m = Module("fields")
     em.emitComputeCopyFields(m, w, p, j, myRank, mS, nS, nShardS,
-                             srcX, srcY, srcSlice, dstY, dstSlice, rectY, tmp)
+                             addressD, srcPitchS, recvBase,
+                             outSrcBase, srcY, srcSlice, dstSlice, rectY,
+                             tmp, tmp64)
     return SimpleNamespace(text=str(m), p=p, j=j, myRank=myRank, mS=mS, nS=nS,
-                           nShardS=nShardS, srcX=srcX, srcY=srcY, srcSlice=srcSlice,
-                           dstY=dstY, dstSlice=dstSlice, rectY=rectY, tmp=tmp)
+                           nShardS=nShardS, srcPitchS=srcPitchS, addressD=addressD,
+                           recvBase=recvBase, outSrcBase=outSrcBase, tmp64=tmp64,
+                           srcY=srcY, srcSlice=srcSlice,
+                           dstSlice=dstSlice, rectY=rectY, tmp=tmp)
 
 
 def _render_flag_addr():
@@ -393,6 +548,12 @@ def _lines(text):
     return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
 
+def _reg64(n):
+    """How rocisa renders an aligned SGPR pair: `s[n:n+1]`. Pass this to _has_alu
+    for 64-bit operands, which do not render as a bare `sN`."""
+    return "s[%d:%d]" % (n, n + 1)
+
+
 def _code(ln):
     return ln.split("//")[0]
 
@@ -405,7 +566,7 @@ def _has_alu(lines, mnemonic, dst, operands):
     an immediate "256"). Asserting on the operand registers -- not the comment --
     is what makes these tests catch a swapped multiply."""
     want_srcs = sorted("s%d" % o if isinstance(o, int) else str(o) for o in operands)
-    dst_tok = "s%d" % dst
+    dst_tok = dst if isinstance(dst, str) else "s%d" % dst
     for ln in lines:
         code = _code(ln).strip()
         if not code.startswith(mnemonic + " "):
@@ -421,10 +582,16 @@ def _has_alu(lines, mnemonic, dst, operands):
 
 class TestCopyStructural:
 
-    def test_header_immediate_is_copy_rect_bf16(self):
-        # DW0 must be the exact op=COPY(1) | sub_op=RECT(4)<<8 | elementsize(1)<<29
-        # immediate -- the same constant the C++ golden pins.
-        assert COPY_HEADER_DW0 == 0x20000401
+    def test_header_immediate_is_copy_rect_with_packet_element(self):
+        # DW0 = op=COPY(1) | sub_op=RECT(4)<<8 | elementsize<<29. The elementsize
+        # is log2(16)=4 (the packet addresses in 16-byte elements), NOT log2(2):
+        # 4<<29 = 0x80000000, so the immediate sits ABOVE INT32_MAX -- which is
+        # exactly the value class rocisa renders as a float unless it is passed as
+        # hex. test_bitfield_immediates_never_render_as_float covers the mechanism;
+        # this pins that the shipped header really is in that class.
+        assert COPY_HEADER_DW0 == 0x80000401
+        assert COPY_HEADER_DW0 > 0x7FFFFFFF
+        assert (COPY_HEADER_DW0 >> 29) == PACKET_ELEMENT_SIZE_LOG2
         lines = _lines(_render_copy())
         hdr = [ln for ln in lines if "DW0" in ln and "v_mov_b32" in ln]
         assert hdr and hex(COPY_HEADER_DW0) in _code(hdr[0]), \
@@ -460,19 +627,49 @@ class TestCopyStructural:
         for i in range(COPY_PACKET_DWORDS):
             assert ("DW%d" % i) in text, f"missing packet dword DW{i}"
 
-    def test_dst_x_is_zero(self):
-        # dst_x is always 0 (recv slot base points at the shard start), so DW8 is
-        # just dst_y<<16. Assert the real shift operand (s_lshl_b32 tmp, dstY, 16)
-        # and that no OR mixes another register into it -- a comment-only check
-        # would stay green if dst_x were accidentally added back in.
+    def test_only_x_direction_fields_are_element_scaled(self):
+        # The packet addresses in 16-byte elements, so pitches / slice pitches /
+        # rect_x are shifted right by ELEMENT_SHIFT. rect_y must NOT be: it counts
+        # ROWS, and ELEMENTSIZE scales only the X direction (rocm-ref
+        # sdma-engines.md). Scaling rect_y would copy one eighth of every band --
+        # and the recv buffer would still be the right SIZE, so nothing but a
+        # numeric comparison would notice.
         ns = _render_copy_ns()
         lines = _lines(ns.text)
-        assert _has_alu(lines, "s_lshl_b32", ns.tmp, [ns.dstY, "16"]), \
-            "DW8 must be s_lshl_b32 tmp, dstY, 16 (dst_x==0, dst_y<<16 only)"
-        # No s_or into tmp that would fold a dst_x register into DW8.
-        assert not any(_code(ln).strip().startswith("s_or_b32 s%d," % ns.tmp)
-                       and "dst" in ln.lower() and "<< 16" not in ln
-                       for ln in lines), "DW8 must not OR a dst_x term"
+        shifted = [ln for ln in lines
+                   if "s_lshr_b32" in _code(ln) and (", %d" % ELEMENT_SHIFT) in _code(ln)]
+        # src_pitch, src_slice, dst_pitch, dst_slice, rect_x -- five, no more.
+        assert len(shifted) == 5, \
+            "expected exactly 5 element-scaled fields, got %d: %s" % (len(shifted), shifted)
+        assert not any(str(ns.rectY) == _code(ln).split(",")[1].strip().lstrip("s")
+                       for ln in shifted), "rect_y must NOT be element-scaled"
+        # And the scaled operand for rect_x really is rectX.
+        assert _has_alu(lines, "s_lshr_b32", ns.tmp, [ns.rectX, str(ELEMENT_SHIFT)]), \
+            "rect_x must be the register that gets scaled"
+        # rect_y-1 comes straight off the rectY register, unscaled.
+        assert _has_alu(lines, "s_sub_u32", ns.tmp + 1, [ns.rectY, "1"]), \
+            "rect_y-1 must be computed directly from rectY, with no scaling"
+
+    def test_all_four_coordinates_are_literal_zero(self):
+        # The coordinates are folded into the base addresses, so DW3 and DW8 must
+        # be plain `v_mov_b32 vN, 0` -- no register, no shift, no OR. If any
+        # coordinate leaked back into a field it would ALSO still be in the base,
+        # double-counting the offset and scattering into the wrong recv slot.
+        ns = _render_copy_ns()
+        lines = _lines(ns.text)
+        for dw in (3, 8):
+            movs = [ln for ln in lines
+                    if ("DW%d:" % dw) in ln and "v_mov_b32" in _code(ln)]
+            assert len(movs) == 1, "expected exactly one v_mov for DW%d: %s" % (dw, movs)
+            assert re.search(r"v_mov_b32 v\d+, 0x0\b", _code(movs[0])), \
+                "DW%d must be an immediate 0 (coordinates are folded into the " \
+                "base): %s" % (dw, _code(movs[0]))
+        # And nothing may shift a value into the coordinate y position (bit 16)
+        # except the rect dword, which is a different field entirely.
+        shifts16 = [ln for ln in lines
+                    if "s_lshl_b32" in _code(ln) and ", 16" in _code(ln)]
+        assert all("rect" in ln.lower() for ln in shifts16), \
+            "only rect_y may be shifted to bit 16 now: %s" % shifts16
 
 
 class TestAtomicStructural:
@@ -517,24 +714,73 @@ class TestAtomicStructural:
 
 class TestFieldArithmetic:
 
-    def test_src_x_is_p_times_nshard(self):
-        # src_x = p * nShard: assert the actual multiply operands (srcX = p, nShard),
-        # not the comment -- a swapped operand here silently misplaces the source
-        # feature offset across ranks.
+    def test_src_base_folds_row_offset_plus_feature_offset(self):
+        # srcBase = AddressD + (j*MT1*ldd + p*nShard) * 2. Assert the real operand
+        # registers at every step -- a swapped multiply here silently misplaces the
+        # source band across ranks, and no field-level check can see it any more
+        # now that the coordinates are gone from the packet.
         ns = _render_fields_ns()
         lines = _lines(ns.text)
-        assert _has_alu(lines, "s_mul_i32", ns.srcX, [ns.p, ns.nShardS]), \
-            "src_x must be s_mul_i32 srcX, p, nShard (operands, not comment)"
+        assert _has_alu(lines, "s_mul_i32", ns.srcY, [ns.j, str(MT1)]), \
+            "expected s_mul_i32 srcY, j, MT1"
+        assert _has_alu(lines, "s_mul_i32", ns.tmp, [ns.p, ns.nShardS]), \
+            "expected s_mul_i32 tmp, p, nShard (the feature offset term)"
+        # 32x32 -> 64 widening multiply of the row index by the pitch.
+        assert _has_alu(lines, "s_mul_hi_u32", ns.tmp64 + 1, [ns.srcY, ns.srcPitchS]), \
+            "expected s_mul_hi_u32 tmp64+1, srcY, ldd (high word of j*MT1*ldd)"
+        assert _has_alu(lines, "s_mul_i32", ns.tmp64 + 0, [ns.srcY, ns.srcPitchS]), \
+            "expected s_mul_i32 tmp64+0, srcY, ldd (low word)"
+        # ...then + p*nShard WITH carry, scaled to bytes, added onto AddressD.
+        assert _has_alu(lines, "s_add_u32", ns.tmp64 + 0, [ns.tmp64 + 0, ns.tmp]), \
+            "expected the feature offset added into the low word"
+        assert _has_alu(lines, "s_addc_u32", ns.tmp64 + 1, [ns.tmp64 + 1, "0"]), \
+            "the low-word add MUST propagate its carry -- otherwise a large " \
+            "j*MT1*ldd truncates the address"
+        assert _has_alu(lines, "s_lshl_b64", _reg64(ns.tmp64),
+                        [_reg64(ns.tmp64), str(D_DATA_ELEMENT_LOG2)]), \
+            "expected s_lshl_b64 tmp64, tmp64, log2(sizeof(bf16))"
+        assert _has_alu(lines, "s_add_u32", ns.outSrcBase + 0,
+                        [ns.addressD + 0, ns.tmp64 + 0]) and \
+               _has_alu(lines, "s_addc_u32", ns.outSrcBase + 1,
+                        [ns.addressD + 1, ns.tmp64 + 1]), \
+            "srcBase must be a 64-bit add of AddressD + offset (lo add + hi addc)"
+        # AddressD is persistent: it must never be a destination.
+        for reg in (ns.addressD, ns.addressD + 1):
+            assert not any(_code(ln).strip().split(",")[0].endswith(" s%d" % reg)
+                           for ln in lines), \
+                "AddressD s%d was written -- it is a persistent register" % reg
 
-    def test_dst_y_folds_myrank_n_plus_srcy(self):
-        # dst_y = myRank*N + j*MT1: a multiply (myRank*N into tmp) then an add
-        # (tmp + src_y). Assert the real operands so a wrong factor/addend fails.
+    def test_dst_base_folds_myrank_n_plus_srcy_times_nshard(self):
+        # recvBase += (myRank*N + j*MT1) * nShard * 2, updated IN PLACE.
         ns = _render_fields_ns()
         lines = _lines(ns.text)
         assert _has_alu(lines, "s_mul_i32", ns.tmp, [ns.myRank, ns.nS]), \
             "expected s_mul_i32 tmp, myRank, N"
-        assert _has_alu(lines, "s_add_u32", ns.dstY, [ns.tmp, ns.srcY]), \
-            "expected s_add_u32 dstY, tmp(myRank*N), srcY(j*MT1)"
+        assert _has_alu(lines, "s_add_u32", ns.tmp, [ns.tmp, ns.srcY]), \
+            "expected s_add_u32 tmp, tmp(myRank*N), srcY(j*MT1)"
+        assert _has_alu(lines, "s_mul_hi_u32", ns.tmp64 + 1, [ns.tmp, ns.nShardS]), \
+            "expected s_mul_hi_u32 tmp64+1, dstRow, nShard (high word)"
+        assert _has_alu(lines, "s_mul_i32", ns.tmp64 + 0, [ns.tmp, ns.nShardS]), \
+            "expected s_mul_i32 tmp64+0, dstRow, nShard (low word)"
+        assert _has_alu(lines, "s_add_u32", ns.recvBase + 0,
+                        [ns.recvBase + 0, ns.tmp64 + 0]) and \
+               _has_alu(lines, "s_addc_u32", ns.recvBase + 1,
+                        [ns.recvBase + 1, ns.tmp64 + 1]), \
+            "recvBase must be updated in place by a 64-bit add"
+
+    def test_both_folds_are_64_bit(self):
+        # The single most dangerous way to get this wrong is a 32-bit multiply:
+        # it is correct for every shape small enough to test cheaply and wrong for
+        # the large ones the fold exists to enable. Pin the count of widening
+        # multiplies at exactly two -- one per side.
+        lines = _lines(_render_fields_ns().text)
+        hi = [ln for ln in lines if _code(ln).strip().startswith("s_mul_hi_u32 ")]
+        assert len(hi) == 2, \
+            "expected exactly 2 s_mul_hi_u32 (one per folded base), got %d: %s" \
+            % (len(hi), hi)
+        # Signed high-multiply would misread a stride with bit 31 set as negative.
+        assert not any("s_mul_hi_i32" in _code(ln) for ln in lines), \
+            "the widening multiply must be UNSIGNED"
 
     def test_rect_y_is_clamped_to_tokens_left(self):
         # rect_y = min(MT1, N - j*MT1): a subtract of src_y (== j*MT1) from N

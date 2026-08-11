@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: MIT
 ################################################################################
 # Fused-A2A segment-first workgroup remap: the PUSH segment (wg0 < AM_tiles) is
-# lifted out of its 16 per-token-tile bands and laid down as one run at the front
-# of the grid, so the last PUSH work-group's dispatch index falls from 97.1% to
-# 55.5% and the SDMA tail gets ~355 us of head start.
+# lifted out of its 16 per-token-tile bands and laid down as one run at the
+# front of the grid, giving the SDMA tail a head start (see
+# test_the_last_push_workgroup_moves_to_the_front for the numbers).
 ################################################################################
 
 import os

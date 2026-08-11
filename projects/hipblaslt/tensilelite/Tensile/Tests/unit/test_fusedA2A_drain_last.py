@@ -88,12 +88,9 @@ def renderHandshake():
 
 
 def _codeLines(text):
-    """Comment-stripped, blank-stripped instruction stream.
-
-    Assertions about *what the kernel does* must run against this, never the raw
-    text: every operand name below also appears in the instruction's own comment,
-    so an `in text` check stays green with the operands wired wrong.
-    """
+    """Comment-stripped, blank-stripped instruction stream (see _has_alu in
+    test_sdma_packet_emitter.py for why assertions run against operands, not
+    the instruction's own comment)."""
     return [ln for ln in (l.split("//")[0].strip() for l in text.splitlines()) if ln]
 
 
@@ -560,18 +557,10 @@ def test_every_surviving_wg_runs_the_handshake_once():
 def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wavefrontSize):
     """The DRAIN load must not be issued at EXEC=1.
 
-    Everything before the poll runs single-lane, so the counter atomics fire once
-    per WG rather than once per lane. A vector load issued at that width loads in
-    lane 0 ONLY -- the other W-1 lanes are masked and never load -- so the v_cmp
-    sets VCC from lane 0 alone and VCCZ becomes a one-slot predicate wearing the
-    shape of a W-slot one. The DRAIN would then return as soon as the FIRST peer's
-    slot filled: a barrier that looks correct under light load and corrupts data
-    under real traffic.
-
-    Asserting the load and the vccnz branch merely EXIST cannot see that, which is
-    the whole point of this test. So: between the last EXEC write before the poll
-    and the poll itself, EXEC must have been set from a computed mask rather than
-    to the literal 1.
+    Everything before the poll runs single-lane; a load issued at EXEC=1 would
+    see lane 0 only, so between the last EXEC write before the poll and the poll
+    itself, EXEC must be set from a computed W-lane mask, not left at the
+    literal 1.
     """
     code = _codeLines(renderHandshake(wavefrontSize))
     poll = next(i for i, ln in enumerate(code) if ln.startswith("label_fusedA2A_drain_poll"))
@@ -591,17 +580,8 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wave
     assert src.startswith("s"), \
         f"EXEC for the poll must be a computed W-lane mask, not a literal: {last}"
 
-    # The mask itself: one S_BFM, which computes ((1 << src0[5:0]) - 1) << src1[5:0]
-    # -- i.e. width W at offset 0 -- anchored to the register the EXEC write actually
-    # READS. It replaced a four-instruction arithmetic build (mov 1; shl W; sub 1;
-    # zero the hi dword) whose middle two were each a silent hang if dropped: without
-    # the `- 1` EXEC is 1 << W, a single lane at slot index W, one past the last real
-    # peer and on a slot nobody ever writes; without the hi-dword zeroing lanes 32..63
-    # poll whatever the pool left in the odd register. S_BFM has no separable halves,
-    # so what remains to pin is that it is the mask instruction, that it is the right
-    # WIDTH for the wave (a B32 feeding an EXEC pair leaves the hi dword untouched --
-    # exactly the second hang above), that its width operand is a register rather than
-    # a literal, and that its offset is 0.
+    # The mask itself: one S_BFM computing ((1 << src0[5:0]) - 1) << src1[5:0] --
+    # i.e. width W at offset 0 -- anchored to the register the EXEC write reads.
     base = _baseReg(src)
     assert base, f"cannot resolve the EXEC mask's base SGPR from {src!r}: {last}"
     region = code[:execWrites[-1]]
@@ -629,29 +609,23 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wave
         f"the s_bfm width must be a register (the runtime W), not a literal: {maskLine}"
     assert offset == "0", f"the s_bfm offset must be 0, got {offset!r}: {maskLine}"
     # Nothing may write the mask pair between building it and reading it into EXEC.
-    # This is the window where a remnant of the arithmetic build would still be live:
-    # one left AHEAD of the s_bfm is overwritten by it (S_BFM writes its destination
-    # whole) and changes nothing THAT REACHES EXEC -- s_lshl_b32/s_sub_u32 carry
-    # ImplicitWriteSCC and S_BFM does not, so such a leftover does still change SCC --
-    # while one left behind it corrupts the mask.
+    # A leftover write AHEAD of the s_bfm is safe (S_BFM overwrites its destination
+    # whole); one left behind it corrupts the mask -- which is why the clobber scan
+    # below starts right after masks[0], not from the top of the region.
     hiReg = "s%d" % (int(base[1:]) + 1)
     clobber = [ln for ln in region[masks[0] + 1:]
                if _ops(ln) and _baseReg(_ops(ln)[0]) in (base, hiReg)]
     assert not clobber, \
         f"{clobber} writes the mask register between `{maskLine}` and `{last}`"
 
-    # And the arithmetic build must be GONE, not merely joined by the s_bfm. All four
-    # of its members are fatal on their own if they are ever the operative value: a
-    # seed of 2 gives (2 << W) - 1, i.e. W+1 lanes with the extra one on slot W; a
-    # missing `- 1` gives 1 << W, one lane on that same never-filled slot; a missing
-    # hi-dword zero leaves lanes 32..63 polling whatever the pool left there. All
-    # three are silent hangs. A hybrid keeping any of them is dead code today and one
-    # reordering away from live, so pin the absence rather than trusting the position.
+    # The arithmetic build must be GONE, not merely joined by the s_bfm: a leftover
+    # seed of 2 (not 1), a missing `- 1`, or an unzeroed hi dword are each
+    # independently a silent hang on their own, so a hybrid keeping any one is live
+    # code, not dead code.
     #
-    # Matched by exact shape, not by "writes base": `base` is a recycled pool register
-    # carrying fourteen unrelated values earlier in this handshake, among them
-    # `s_lshl_b32 s28, s22, 3` (a flag-pointer scale, not a mask shift) and
-    # `s_mov_b32 s28, s26` -- a looser predicate reports those and is a false alarm.
+    # Matched by exact shape, not by "writes base": `base` is a recycled pool
+    # register that also carries unrelated values earlier in the handshake (e.g. a
+    # flag-pointer scale), which a looser predicate would misreport.
     def isOldBuild(ln):
         ops = _ops(ln)
         return ((ln.startswith("s_mov_b32 ")  and ops == [base, "1"])          # seed 1
@@ -783,15 +757,10 @@ def test_max_ranks_twins_hold_the_same_value():
 def test_peer_recv_offset_twins_hold_the_same_value():
     """The Python and C++ declarations of FUSED_A2A_PEER_RECV_OFFSET must agree.
 
-    Same ABI hazard as test_max_ranks_twins_hold_the_same_value, one level down:
-    the constant is declared twice -- Signature.py (which the kernel's addArg
-    sequence and offset arithmetic are built from) and FusedA2AKernArg.hpp
-    (which sizes what the host writes into the peer block) -- and nothing but
-    this test ties them to the SAME value. A C++-only edit to the 4096 is
-    invisible to the whole non-GPU suite: Signature.py's golden .s only encodes
-    the Python constant, and the C++ gtest only checks internal self-consistency
-    against its own copy. It would surface only on real multi-GPU hardware, as
-    recv writes landing outside the region the kernel addresses.
+    Same ABI hazard as test_max_ranks_twins_hold_the_same_value. A C++-only edit
+    to the 4096 is invisible to the whole non-GPU suite otherwise: Signature.py's
+    golden .s only encodes the Python constant, and the C++ gtest only checks
+    internal self-consistency against its own copy.
     """
     py_path = os.path.join(TENSILE_ROOT, "Tensile/Components/Signature.py")
     with open(py_path) as f:

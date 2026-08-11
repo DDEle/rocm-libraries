@@ -5,41 +5,13 @@
 # SDMA packet-construction emitter tests (NOGPU).
 #
 # The emitter (Tensile/Components/SdmaPacketEmitter.py) turns the all-to-all
-# geometry into the COPY_SUBWIN + ATOMIC ADD_RTN_32 packet dword arrays. Two surfaces
-# are tested and cross-checked:
-#   * pure-Python encoders (encodeCopyDwords / encodeAtomicDwords) are pinned to
-#     the golden dword vectors below, in BOTH the harness form (padded dst pitch
-#     2624) and the production form (unpadded nShard=2560). This is the plan's
-#     named verification: the emitter's immediates must equal the
-#     byte-for-byte-on-MI355X golden. See the provenance note above the vectors
-#     -- the vectors here are hand-written constants and do not import the C++
-#     packet header. That header is NOT going away: an earlier version of this
-#     note called it "slated for removal" because no client-runtime translation
-#     unit includes it, and that reading was reversed -- it is the
-#     hardware-anchored provenance these goldens inherit their authority from.
-#     See the KEEP note atop client/src/SdmaPktSubwin.hpp, and
-#     test_sdma_header_mirror.py, which now pins the two against each other.
-#   * the rocisa emitters (emitBuildCopyPacket / emitBuildAtomicPacket /
-#     emitComputeCopyFields / emitComputeFlagAddr) are asserted on their SEMANTIC
-#     field-packing features (header immediates, minus-one encoding, shift
-#     positions) -- NOT a whole-text snapshot -- and every one is run through the
-#     gfx950 assembler (a MUST, not a bonus: assembling has caught an illegal
-#     opcode this way).
-#
-# THE COORDINATE FOLD. The shipped emitter no longer puts src_x/src_y/dst_x/dst_y
-# in the packet: it adds them into the 64-bit base addresses and leaves all four
-# fields at 0 (hardware rule: addr = base + y*pitch*elem + x*elem). Part 2b pins
-# that the two forms name the same byte, and that the fold encodes geometries the
-# coordinate form could not -- W=8 with N=4096 overflowed dst_y at 32512 and was
-# refused at launch.
-#
-# The pure-Python encoders here KEEP their x/y parameters and keep their original
-# golden vectors. They are the wire-format reference, shared with the C++
-# makeCopyRectPacket, and those vectors are the MI355X-validated provenance; only
-# the fused-A2A call site folds. Do not "simplify" them to match the call site.
-#
-# Boundary cases pinned: self-rank (p == myRank) still produces a well-formed
-# packet, and the tail token-tile still clamps rect_y.
+# geometry into COPY_SUBWIN + ATOMIC ADD_RTN_32 packet dword arrays. The
+# pure-Python encoders are pinned against the golden dword vectors below (see
+# the provenance note above them, and test_sdma_header_mirror.py for the C++
+# cross-check); the rocisa emitters are asserted on semantic field-packing
+# features -- not a whole-text snapshot -- and assembled on gfx950. Part 2b
+# covers the coordinate fold: src_x/src_y/dst_x/dst_y move out of the packet
+# fields and into the 64-bit base addresses.
 ################################################################################
 
 import os
@@ -55,9 +27,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TENSILE_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 sys.path.insert(0, TENSILE_ROOT)
 
-# rocisa is a declared dev dependency, not an optional artifact: import it
-# directly like the ~28 other unit tests that use it. importorskip would turn a
-# stale or broken build into a SKIP and report the run green.
 import rocisa                                                     # noqa: E402
 
 from rocisa import rocIsa                                          # noqa: E402
@@ -84,36 +53,25 @@ _GFX    = "gfx950"
 
 
 # ---------------------------------------------------------------------------
-# Part 1: pure-Python encoders vs the golden dwords (the plan's named check)
+# Part 1: pure-Python encoders vs the golden dwords
 # ---------------------------------------------------------------------------
-# PROVENANCE OF THESE VECTORS -- they are hand-written constants on purpose. A
-# golden must be an EXTERNAL reference; regenerating it from the code under test
-# would make the check circular. Their authority differs per vector, and the
-# difference matters:
+# PROVENANCE OF THESE VECTORS -- hand-written constants, independent of the code
+# under test, so the check is not circular. Authority differs per vector:
+#   _HARNESS_COPY_GOLDEN -- ran on MI355X (3 peers x 8 bands = 24 packets) and
+#     independently hand-verified against the field spec.
+#   _PROD_COPY_GOLDEN -- no hardware backing; only DW9/DW10 differ from the
+#     harness vector (dst pitch 2560 vs 2624), checkable by inspection:
+#     (2560-1)<<13 == 0x013FE000, 256*2560-1 == 0x0009FFFF.
+#   _ATOMIC_GOLDEN -- derived from MORI's SDMA_PKT_ATOMIC layout with the TC
+#     atomic op table's ADD_RTN_32 selector: DW0 == 10 | (15<<25) == 0x1E00000A.
 #
-#   _HARNESS_COPY_GOLDEN -- the only sequence with real hardware backing. These
-#     exact bytes ran on MI355X (3 peers x 8 bands = 24 packets; every dword
-#     bit-accurate, sentinel margin untouched). Independently, a reviewer
-#     hand-recomputed all 13 dwords from the field spec rather than
-#     accepting program output, which is what rules out "the golden is just
-#     whatever the encoder printed".
-#   _PROD_COPY_GOLDEN -- NO hardware backing. Derived by hand from the same
-#     rules; only DW9/DW10 differ from the harness vector (dst pitch 2560 vs
-#     2624), and both are checkable by inspection: (2560-1)<<13 == 0x013FE000,
-#     256*2560-1 == 0x0009FFFF.
-#   _ATOMIC_GOLDEN -- no second source. Derived from MORI's SDMA_PKT_ATOMIC
-#     layout with the TC atomic op table's ADD_RTN_32 selector:
-#     DW0 == 10 | (15<<25) == 0x1E00000A.
+# The bit positions (minus-one extents/pitches, ELEMENTSIZE scaling, the <<13
+# pitch placement) come from AMD OSS 4.4 sdma.pkt, cross-checked against ROCR
+# sdma_registers.h and vega10_sdma_pkt_open.h; GFX12+ uses a different layout,
+# so these vectors are gfx9xx / gfx95x only.
 #
-# The BIT POSITIONS these encode (minus-one extents/pitches, ELEMENTSIZE
-# scaling, the <<13 pitch placement) come from AMD OSS 4.4 sdma.pkt, cross-
-# checked against ROCR sdma_registers.h and the kernel's vega10_sdma_pkt_open.h
-# -- all three agree. GFX12+ uses a DIFFERENT layout of the same size; these
-# vectors are gfx9xx / gfx95x only.
-#
-# DO NOT "update the golden" to make a red test pass. A mismatch means either
-# the packing code drifted (fix the code) or the rule itself changed (then you
-# need a new source, and this note must be updated to cite it).
+# Do not "update the golden" to make a red test pass -- a mismatch means either
+# the packing code drifted or the rule itself changed (then cite the new source).
 
 # HARNESS: dst pitch padded to 2624 (kShard+kDstPad), the only byte sequence
 # with real MI355X backing.
@@ -463,8 +421,8 @@ def _render_copy():
 
 
 def _render_copy_ns():
-    """Render emitBuildCopyPacket AND return the registers it used, so tests can
-    assert on real operands instead of comment text."""
+    """Render emitBuildCopyPacket AND return the registers it used (see _has_alu
+    for why tests assert on operand registers instead of comment text)."""
     _init_gfx950()
     w = _mock_writer()
     em = SdmaPacketEmitter(macroTile1=MT1)
@@ -499,10 +457,9 @@ def _render_fields():
 
 
 def _render_fields_ns():
-    """Render emitComputeCopyFields AND return the SGPR indices it was given, so
-    tests can assert on actual operand registers (s_mul_i32 s<out>, s<a>, s<b>)
-    rather than on comment text -- a comment-only assert stays green even if the
-    multiply operands are swapped, which for the folded base addresses is a silent
+    """Render emitComputeCopyFields AND return the SGPR indices it was given (see
+    _has_alu for why tests assert on operand registers instead of comment text);
+    for the folded base addresses, a swapped multiply here is a silent
     cross-rank data-placement bug."""
     _init_gfx950()
     w = _mock_writer()

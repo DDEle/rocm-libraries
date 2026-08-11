@@ -1,41 +1,15 @@
 // Copyright Advanced Micro Devices, Inc., or its affiliates.
 // SPDX-License-Identifier: MIT
 
-// Single-process 4-GPU orchestration entry point for the fused GEMM.A2A kernel.
-// This is deliberately independent of the single-GPU benchmark loop
-// in main.cpp: main() dispatches here (before the benchmark loop) when
-// --fused-a2a is set and returns immediately afterwards. Nothing in the
-// single-GPU path is touched.
-//
-// What this does:
-//   1. For each of W devices: allocate fresh per-device GEMM operands
-//      (x=A, w=B, c=C, out=D) plus one fine-grained peer block per device
-//      (flag and recv are offset views into it, written by remote peers) and
-//      a device-scope counter[].
-//   2. Enable pairwise P2P access between all device pairs.
-//   3. Per launch: zero counter[]/flag[] on every device, then for each device
-//      build the host GEMM kernarg via solution->solve(), APPEND the fixed
-//      108-byte fused-A2A segment (8 peer_ptr + counter_ptr + FusedSdmaQueues +
-//      7 u32 scalars) to that same KernelArguments object, and launch on the
-//      device's stream. Because the launch reads kernel.args.size(), appending
-//      to the host-generated args auto-sizes the launch to include the fused
-//      tail.
-//
-// Scope: setup once, then repeat launch + dual-segment numeric validation for
-// N iterations. Each iteration RE-ZEROES counter/flag/recv before
-// the launch so the DRAIN handshake is actually exercised (race detection), and
-// times the launch with per-device hipEvents (the iteration's latency is the MAX
-// across the W cards, since DRAIN gates each kernel's exit on data receipt).
-// After the loop it reports "race: N/N iterations passed" and p50/p90 latency.
-// Success == every iteration passes the L2(recv)+L1(out) check with no HIP error
-// (the benign hipErrorPeerAccessAlreadyEnabled aside).
-//
-// L1 validates the local out segment two independent ways:
-// (a) through the D descriptor strides, and (b) through a HARDCODED row-major
-// stride (off=m*N+n) read straight from the copied-back raw bytes. (b) proves
-// out's physical layout really is [M,N] with N contiguous -- it cannot be
-// satisfied by a column-major out that merely agrees with a column-major
-// descriptor.
+// Single-process multi-GPU orchestration entry point for the fused GEMM.A2A
+// kernel; independent of the single-GPU benchmark loop in main.cpp, which
+// dispatches here before it when --fused-a2a is set. Sets up W devices once,
+// then repeatedly launches the fused kernel with a 108-byte fused-A2A segment
+// appended to the host GEMM kernarg -- re-zeroing counter/flag/recv each
+// iteration so the DRAIN handshake is exercised -- and reports "race: N/N
+// iterations passed" plus p50/p90 latency. Success requires the L2(recv)+
+// L1(out) check to pass with no HIP error every iteration (L1 uses two
+// independent methods; see the check below).
 
 #include <Tensile/ContractionProblem.hpp>
 #include <Tensile/ContractionSolution.hpp>
@@ -152,19 +126,13 @@ namespace TensileLite
             }
             std::cout << "[fused-a2a] solution: " << solution->name() << std::endl;
 
-            // Tile sizes MUST come from THIS solution's macro-tile, not a hardcoded
-            // 256: the kernel epilogue gates PUSH/local and computes dst_rank +
-            // the counter index/target from the compile-time MacroTile0/MacroTile1
-            // (see GlobalWriteBatch.py _emitFusedA2AHandshake, which uses
-            // self.kernel["MacroTile0"]). sizeMapping.macroTile.{x,y} are those
-            // same MT0/MT1 (the runtime WG grid is CeilDivide(M,macroTile.x) x
-            // CeilDivide(N,macroTile.y), ContractionProblem.cpp:795-796).
-            // `tilesPerRank` (= n_shard/MT0) is an EXACT count of the PUSH workgroups
-            // sharing one counter slot (dst_rank, token-tile), compared for equality
-            // kernel-side, and `tokenTiles` (= CeilDivide(N,MT1)) is the counter array's
-            // token dimension; a hardcoded 256 against a 128 macro-tile makes the tile
-            // factors wrong and over-restricts admissible shapes via the M%256/AM%256
-            // guards. macroTile.x = MT0 (M dim), macroTile.y = MT1 (N dim).
+            // Tile sizes come from THIS solution's macro-tile (not a hardcoded value):
+            // the kernel epilogue computes dst_rank and the counter index/target from
+            // the compile-time MacroTile0/MacroTile1 (see GlobalWriteBatch.py
+            // _emitFusedA2AHandshake). sizeMapping.macroTile.{x,y} are those same
+            // MT0/MT1. `tilesPerRank` (= n_shard/MT0) is the count of PUSH workgroups
+            // sharing one counter slot, compared for equality kernel-side; `tokenTiles`
+            // (= CeilDivide(N,MT1)) is the counter array's token dimension.
             const uint32_t FUSED_A2A_M_TILE = (uint32_t)solution->sizeMapping.macroTile.x;
             const uint32_t FUSED_A2A_N_TILE = (uint32_t)solution->sizeMapping.macroTile.y;
             if(FUSED_A2A_M_TILE == 0 || FUSED_A2A_N_TILE == 0)
@@ -248,20 +216,14 @@ namespace TensileLite
             // mTiles: feature-tiles across the full feature dim M (diagnostic only).
             const uint32_t mTiles       = (uint32_t)(M / FUSED_A2A_M_TILE);
 
-            // Fail-fast on shapes that violate the fused-A2A design constraints.
-            // The kernel maps a whole PUSH workgroup to a
-            // SINGLE dst_rank, which is only correct when each rank's shard is an
-            // integer number of macro-tiles along the A2A-scattered dim. Post-swap
-            // the scattered dim is FEATURE = M, so the shard (n_shard = AM/W) must be
-            // a multiple of the MacroTile0-wide (feature) tile. If n_shard < MT0 (or
-            // not a multiple), one workgroup spans several ranks: its lanes are all
-            // attributed to one rank, so data is scattered to the wrong recv buffer
-            // AND, under DRAIN, ranks with no supplying workgroup poll a flag slot no
-            // one ever sets -> the GPU hangs forever. Reject such shapes on the host
-            // instead of launching into a deadlock. Constraints apply to AM (the A2A
-            // width along FEATURE), not the whole M: AM % W == 0, (AM/W) % MT0 == 0
-            // (=> n_shard >= MT0, all W ranks covered), M % MT0 == 0, AM % MT0 == 0
-            // (whole feature-tiles), and AM <= M (local segment fits inside output).
+            // Fail-fast on shapes that violate the fused-A2A design constraints. The
+            // kernel maps a whole PUSH workgroup to a SINGLE dst_rank, so each rank's
+            // shard (n_shard = AM/W) must be a whole number of MacroTile0-wide feature
+            // tiles: otherwise a workgroup spans several ranks, scattering data into
+            // the wrong recv buffer and leaving ranks with no supplying workgroup to
+            // poll a flag slot no one ever sets -- the GPU hangs forever. Constraints
+            // apply to AM, not the whole M: AM % W == 0, (AM/W) % MT0 == 0, M % MT0 ==
+            // 0, AM % MT0 == 0, and AM <= M.
             if(AM % (size_t)W != 0 || (nShard % FUSED_A2A_M_TILE) != 0
                || (M % (size_t)FUSED_A2A_M_TILE) != 0
                || (AM % (size_t)FUSED_A2A_M_TILE) != 0 || AM > M)
@@ -283,43 +245,24 @@ namespace TensileLite
                 return -1;
             }
 
-            // rect_x and rect_y of the SDMA COPY_SUBWIN packet are 14-BIT fields,
-            // and the kernel packs them with a bare s_lshl_b32/s_or_b32 -- no mask
-            // (SdmaPacketEmitter._packRectMinus1). The pure-Python reference encoder
-            // DOES mask, so past 2^14 the two disagree and NEITHER complains: the
-            // packet would silently copy a wrapped-around extent and scatter data
-            // into the wrong recv slot. Reject the shape here instead -- this mirrors
-            // Tensile/Components/SdmaPacketEmitter.py:checkA2AFieldsFit.
+            // rect_x and rect_y of the SDMA COPY_SUBWIN packet are 14-BIT fields, and
+            // the kernel packs them unmasked (s_lshl_b32/s_or_b32); an over-range value
+            // silently wraps and scatters data into the wrong recv slot, so reject the
+            // shape here instead (mirrors SdmaPacketEmitter.py:checkA2AFieldsFit).
             //   rect_x = n_shard             (the copy's X EXTENT)
             //   rect_y = min(MT1, N-j*MT1)   (<= MT1, so MT1 bounds it)
+            // The copy's other coordinates (src_x/y, dst_x/y/z) are folded into the
+            // 64-bit base addresses as literal 0 fields, so only rect_x/rect_y need
+            // this check.
             //
-            // src_x, src_y and dst_y USED TO BE CHECKED HERE and no longer are: the
-            // emitter folds all four coordinates into the 64-bit base addresses and
-            // emits the fields as a literal 0 (addr = base + y*pitch*elem + x*elem,
-            // so the byte address is unchanged). That is what removed the W=8 limit
-            // -- dst_y = (W-1)*N + (tokenTiles-1)*MT1 was 32512 for the N=4096 shape
-            // and refused the launch. N is now unconstrained by the packet encoding.
-            //
-            // rect_x cannot be folded away the same way: it is the copy's extent, not
-            // a coordinate -- it IS the work.
-            //
-            // The packet addresses in 16-BYTE elements (header ELEMENTSIZE = log2(16);
-            // SdmaPacketEmitter PACKET_ELEMENT_SIZE_LOG2), so every X-direction value
-            // is divided by FUSED_A2A_ELEM_MULTIPLE before it reaches its field. Check
-            // the SCALED value -- that is what the field holds. rect_y is NOT scaled:
-            // it counts rows, and ELEMENTSIZE scales only X.
-            //
-            // Divisibility is a hardware precondition of the wider element (the chosen
-            // element must exactly divide the pitches, the slice pitches, the rect
-            // width and the X offsets). The X offsets are 0 since the fold, leaving
-            // n_shard and ldd. The emitter scales with a right shift, which TRUNCATES
-            // a non-multiple and would silently copy a short band -- so reject rather
-            // than round. (n_shard is already guaranteed a multiple of MacroTile0=256
-            // by the divisibility guard above; ldd is a runtime descriptor value and
-            // is checked separately, next to dNStride.)
-            //
-            // The `>=` comparison is one value tighter than the hardware (the extents
-            // are minus-one encoded); deliberate, so both terms read the same.
+            // The packet addresses in 16-BYTE elements (header ELEMENTSIZE = log2(16)),
+            // so rect_x is checked in its SCALED (>>FUSED_A2A_ELEM_SHIFT) form -- that
+            // is what the field holds; rect_y counts rows and is not scaled. n_shard
+            // must be a multiple of the element size: the emitter's right shift
+            // TRUNCATES a non-multiple and would silently copy a short band, so this is
+            // rejected rather than rounded (ldd is checked separately, next to
+            // dNStride). The `>=` comparison is one tighter than the hardware because
+            // the extents are minus-one encoded.
             const size_t FUSED_A2A_ELEM_SHIFT    = 3;   // log2(16B packet elem / 2B bf16)
             const size_t FUSED_A2A_ELEM_MULTIPLE = (size_t)1 << FUSED_A2A_ELEM_SHIFT;
             if(nShard % FUSED_A2A_ELEM_MULTIPLE != 0)
@@ -358,12 +301,11 @@ namespace TensileLite
 
             // recv is feature-contiguous [W, token, feature_shard]: token is the outer
             // (strided-by-n_shard) axis, feature-shard is the inner stride-1 axis. The
-            // fused PUSH store writes the FULL macro-tile edge (not just the logical
-            // token count) and the recv SRD uses no edge clamp (num_records=BufferOOB),
-            // so a PUSH WG's lanes address token rows up to the padded MT1 tile. Size
-            // token to the MacroTile1-wide tile so those padding-row writes stay inside
-            // the allocation. n_shard is already a multiple of MacroTile0 (host
-            // constraint (AM/W)%MT0==0), so the contiguous feature extent is n_shard.
+            // fused PUSH store writes the FULL macro-tile edge with no edge clamp, so a
+            // PUSH WG's lanes address token rows up to the padded MT1 tile -- token is
+            // therefore sized to the MacroTile1-wide tile so those writes stay inside
+            // the allocation (feature-shard needs no such padding since n_shard is
+            // already a multiple of MacroTile0).
             const size_t nTokenPad = ((N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE) * FUSED_A2A_N_TILE;
             const size_t recvBytes    = (size_t)W * nTokenPad * nShard * sizeof(uint16_t); // bf16
             // One u32 flag slot per source rank, raised by an SDMA ATOMIC
@@ -371,26 +313,17 @@ namespace TensileLite
             // and the DRAIN poll's j*4.
             const size_t flagBytes    = (size_t)W * sizeof(uint32_t);
             // counter is indexed [dst_rank][token-tile] -> W*tokenTiles u32 slots,
-            // followed by a W-entry second-level counter2[dst_rank] (target
-            // tokenTiles) at word index W*tokenTiles, then a single third-level
-            // u32 counter3 at word index W*tokenTiles + W. counter2 converges the
-            // DRAIN spinners to one per peer; counter3 is the grid-wide workgroup
-            // tally that elects the single DRAIN owner. All three ride this
-            // same allocation (and this same
-            // per-iteration memset below) so the kernarg layout stays untouched.
+            // followed by a W-entry second-level counter2[dst_rank] at word index
+            // W*tokenTiles, then a single third-level counter3 at word index
+            // W*tokenTiles + W. counter2 converges the DRAIN spinners to one per
+            // peer; counter3 is the grid-wide workgroup tally that elects the single
+            // DRAIN owner. All three ride this same allocation and this same
+            // per-iteration memset, so the kernarg layout stays untouched.
             //
             // Past those live slots the allocation carries a guard tail (see
-            // FusedA2ACounterSentinel.hpp). The tail catches only an overrun past
-            // the TOP level, and it catches it by absorbing the write: the tail is
-            // inside the allocation, so the store reddens the pattern rather than
-            // reaching memory that is not ours. Absent the tail that store lands in
-            // whatever hipMalloc handed back next and stays silent -- the counters
-            // themselves still reach their expected values and every numeric check
-            // passes. An off-by-one in a lower level stays inside the payload and
-            // lands on a live slot instead: at the top of counter2's range that
-            // slot is counter3, so the write would mis-elect the DRAIN owner rather
-            // than raise anything. Only counterBytes is memset per launch; the tail
-            // keeps its pattern and is re-checked after each launch.
+            // FusedA2ACounterSentinel.hpp for why). The tail catches an overrun past
+            // the TOP level by absorbing the write. Only counterBytes is memset per
+            // launch; the tail keeps its pattern and is re-checked after each launch.
             const size_t counterBytes      = fusedA2ACounterPayloadBytes((uint32_t)W, tokenTiles);
             const size_t counterAllocBytes = fusedA2ACounterAllocBytes((uint32_t)W, tokenTiles);
             const size_t aBytes       = problem->a().totalAllocatedBytes();
@@ -687,12 +620,11 @@ namespace TensileLite
                 float tol  = 1e-2f * std::max(1.0f, std::fabs(want));
                 return diff <= tol;
             };
-            // recv is feature-contiguous [W, token, feature_shard]: token stride =
-            // n_shard (FusedNShard) and slot stride = N_token * n_shard (N = logical
-            // SizeJ = nToken), with feature-shard as the stride-1 inner axis, i.e.
-            // element offset = slotElem + t*n_shard + f_local.
-            // recv is a bf16 buffer. slotStride uses the UNPADDED N to match the
-            // kernel's SizeJ slot multiply.
+            // slotStride/rowStride index recv per its layout established above: slot
+            // stride = N_token * n_shard (N = logical SizeJ = nToken), token stride =
+            // n_shard (FusedNShard), i.e. element offset = slotElem + t*n_shard +
+            // f_local. recv is a bf16 buffer; slotStride uses the UNPADDED N to match
+            // the kernel's SizeJ slot multiply.
             const size_t slotStride = (size_t)N * (size_t)nShard; // elems per src slot (nToken*nShard)
             const size_t rowStride  = (size_t)nShard;             // per-token stride (feature-shard contiguous)
 
@@ -846,13 +778,11 @@ namespace TensileLite
                 }
 
                 // -- Counter guard tail (see FusedA2ACounterSentinel.hpp). --
-                // Checked EVERY iteration and independently of `validate`: an
-                // overrun past the counter payload corrupts unrelated device
-                // memory, which no numeric check can see -- the counters
-                // themselves still hold their expected values. Read with a
-                // non-throwing hipMemcpy so that a device already wedged by a
-                // failed launch degrades to a warning instead of masking the
-                // kernel error that was just reported.
+                // Checked EVERY iteration, independent of `validate`: an overrun past
+                // the counter payload corrupts unrelated device memory that no numeric
+                // check can see. Read with a non-throwing hipMemcpy so a device already
+                // wedged by a failed launch degrades to a warning instead of masking
+                // the kernel error that was just reported.
                 for(int d = 0; d < W; d++)
                 {
                     HIP_CHECK_EXC(hipSetDevice(d));
@@ -891,13 +821,11 @@ namespace TensileLite
                 bool l1Pass = ok;
                 if(ok && validate)
                 {
-                    // ---- L2: recv (PUSH segment). recv is feature-contiguous
-                    // [W, token, feature_shard]. For destination card dst, slot src must
-                    // hold the feature sub-segment [dst*nShard, dst*nShard+nShard) of
-                    // Dgold across all N tokens, laid out as [src, t(token, outer),
-                    // f(feature-local, inner/contiguous)]. Token is NOT sharded -- every
-                    // rank holds all N tokens. All W src slots carry the identical shard
-                    // in single-card emulation.
+                    // ---- L2: recv (PUSH segment), per its layout established above. For
+                    // destination card dst, slot src must hold the feature sub-segment
+                    // [dst*nShard, dst*nShard+nShard) of Dgold across all N tokens. Token
+                    // is NOT sharded -- every rank holds all N tokens, so all W src slots
+                    // carry the identical shard in single-card emulation.
                     for(int dst = 0; dst < W && l2Pass; dst++)
                     {
                         HIP_CHECK_EXC(hipSetDevice(dst));
@@ -937,29 +865,21 @@ namespace TensileLite
                             l2Pass = false;
                     }
 
-                    // ---- L1: out (local segment). Under the col-major swap the A2A
-                    // slice runs along FEATURE (M): the first AM feature columns PUSH
-                    // to recv (not written to out), the remaining feature columns
-                    // [AM, M) stay local in out. Every token has such a tail value, so
-                    // this checks out[m in [AM,M), n in [0,N)] against Dgold[m,n].
+                    // ---- L1: out (local segment). Under the col-major swap, the first
+                    // AM FEATURE columns PUSH to recv; the remaining [AM, M) stay local
+                    // in out, so this checks out[m in [AM,M), n in [0,N)] against
+                    // Dgold[m,n].
                     //
                     // TWO checks per card, both must pass (l1Pass &= both):
-                    //   (a) descriptor-driven: off = m*dMStride + n*dNStride. This
-                    //       reads out through the SAME strides the kernel was told
-                    //       to write with. It confirms out matches golden UNDER the
-                    //       descriptor's own layout -- but it CANNOT distinguish the
-                    //       intended col-major out from some other layout the
-                    //       descriptor also happens to describe (a false green).
-                    //   (b) raw-bytes col-major: off = n*M + m, HARDCODED col-major
-                    //       physical stride (M/feature contiguous), independent of the
-                    //       descriptor. This proves the physical byte layout of out
-                    //       really is [M,N] col-major with FEATURE contiguous, which is
-                    //       what the A2A downstream consumes post-swap. If out were
-                    //       physically row-major, (a) could still pass while (b) fails
-                    //       -- so (b) is the anti-false-green proof. When the descriptor is
-                    //       col-major (dMStride==1, dNStride==M) the two offset formulas
-                    //       coincide; (b) still stands as an explicit, descriptor-
-                    //       independent statement of the physical layout.
+                    //   (a) descriptor-driven: off = m*dMStride + n*dNStride, via the
+                    //       SAME strides the kernel was told to write with. Cannot
+                    //       distinguish the intended col-major out from any other
+                    //       layout the descriptor also happens to describe.
+                    //   (b) raw-bytes col-major: off = n*M + m, a HARDCODED physical
+                    //       stride independent of the descriptor. Proves out's
+                    //       physical byte layout really is [M,N] col-major with
+                    //       FEATURE contiguous -- if out were physically row-major,
+                    //       (a) could still pass while (b) fails.
                     const bool descColMajor = (dMStride == 1 && dNStride == M);
                     if(verbose)
                         std::cout << "[fused-a2a] D descriptor layout: dMStride=" << dMStride
@@ -1116,15 +1036,13 @@ namespace TensileLite
                 std::cout << "[fused-a2a] latency: no post-warmup samples collected\n";
             }
 
-            // --- Per-card breakdown. The MAX line above cannot tell apart three
-            // sources of the max-vs-mean gap: order statistics over W roughly-iid
-            // cards, one card being systematically slower, and launch skew from the
-            // sequential per-device enqueue above (under DRAIN every kernel exits only
-            // once its peers have pushed, so a card enqueued early spends the skew
-            // waiting and reads LONGER). The slowest-card histogram separates them:
-            // concentrated on one id means systematic -- and if that id is the
-            // first-enqueued card, the cause is the enqueue order, not the hardware;
-            // spread evenly across ids means order statistics.
+            // --- Per-card breakdown. Distinguishes three sources of the max-vs-mean
+            // gap: order statistics over W roughly-iid cards, one card being
+            // systematically slower, and launch skew from the sequential per-device
+            // enqueue (a card enqueued early waits longer for peers under DRAIN). The
+            // slowest-card histogram separates them: concentrated on the first-enqueued
+            // id means enqueue-order skew, concentrated elsewhere means a slow card,
+            // spread evenly means order statistics.
             if(!perCardUs[0].empty())
             {
                 const size_t n = perCardUs[0].size();

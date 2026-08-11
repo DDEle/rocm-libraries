@@ -3,44 +3,17 @@
 # SPDX-License-Identifier: MIT
 ################################################################################
 # Scrape test: the C++ SDMA packet header and the Python packet emitter must
-# describe the SAME wire format.
+# describe the SAME wire format. C++'s static_asserts only check the header
+# against itself; nothing ties it to Tensile/Components/SdmaPacketEmitter.py,
+# which is what actually builds the shipped packets. Pinned: the op/sub_op
+# constants, packet lengths, field widths, and field OFFSETS (16/13/25/29) --
+# C++ derives an offset from declaration order, Python re-states it as a bare
+# `<< N`, so this recomputes it from the C++ layout to keep the two in lockstep.
 #
-# THE GAP THIS CLOSES. client/src/SdmaPktSubwin.hpp carries 24 static_asserts,
-# and every one of them checks the header against ITSELF -- sizeof and offsetof
-# of its own unions. Nothing checks it against
-# Tensile/Components/SdmaPacketEmitter.py, which is what actually builds the
-# packets that ship (in GPU assembly, from hand-written shift/mask immediates).
-# The Python side names the header as its field spec in eight comments, but a
-# comment is not a link: today you can widen a C++ bit-field or retype a Python
-# shift and nothing, anywhere, goes red. The two are one wire format maintained
-# as two files, so this test is the only thing that makes them one artifact.
-#
-# WHAT IS PINNED, and why each item can drift silently without it:
-#   * the four op/sub_op constants -- duplicated as literals on both sides;
-#   * the packet lengths (13 / 8 dwords) -- C++ states them in a static_assert,
-#     Python in COPY_PACKET_DWORDS / ATOMIC_PACKET_DWORDS;
-#   * the field WIDTHS (_XY_BITS / _Z_BITS / _PITCH_BITS / _SLICE_BITS) -- C++
-#     declares them as bit-field widths, Python re-states them as mask widths;
-#   * the field OFFSETS (16 / 13 / 25 / 29). These are the sharpest end of the
-#     test. In C++ an offset is IMPLIED by declaration order -- resize a
-#     reserved gap and every field after it moves. In Python the same offsets
-#     are bare magic numbers in `<< 16`, `<< 13`, `<< 25`, `<< 29`, checked by
-#     nothing. Recomputing them here by summing the C++ bit-field widths is what
-#     turns "two files that agree today" into "two files that must agree".
-#
-# WHY SCRAPE TEXT RATHER THAN COMPILE. The C++ side cannot be imported from
-# Python, and building a gtest that shells out to Python would invert the
-# dependency (the client must not need Tensile at test time). Reading the
-# declarations is the cheap direction. It is also why this file must FAIL, never
-# skip, when a symbol goes missing: a scrape that silently finds nothing is
-# indistinguishable from a scrape that finds agreement. Deleting the header --
-# which has been proposed before, see the KEEP note at the top of it -- must
-# turn this file red, not green.
-#
-# NOT pinned here: the golden dword vectors. Those live in
-# test_sdma_packet_emitter.py (Python) and tests/SdmaPktSubwin_test.cpp (C++),
-# both anchored to the same MI355X byte-for-byte validation. This test pins the
-# SPEC the two goldens are instances of.
+# Scrapes text (the client must not depend on Tensile at test time) and fails
+# loudly, never skips, if a pattern stops matching. The golden dword vectors
+# live in test_sdma_packet_emitter.py / tests/SdmaPktSubwin_test.cpp; this
+# pins the spec those goldens are instances of.
 ################################################################################
 
 import ast

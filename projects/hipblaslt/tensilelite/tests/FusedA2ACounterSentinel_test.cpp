@@ -1,27 +1,14 @@
 // Copyright Advanced Micro Devices, Inc., or its affiliates.
 // SPDX-License-Identifier: MIT
 //
-// Guard-tail detector for the fused GEMM.A2A counter allocation.
-//
-// The counter allocation carries three levels: counter[dst_rank*tokenTiles +
-// WorkGroup1] over W*tokenTiles slots, then a W-entry counter2[dst_rank], then
-// a single counter3 at W*tokenTiles + W. With no tail there, an index that runs
-// past the TOP level writes into whatever hipMalloc happened to hand back next
-// -- the worst silent failure mode on this branch, because it corrupts
-// unrelated device memory while every numeric check still passes. The tail
-// absorbs that write inside the allocation instead, which is what makes it
-// detectable. (An off-by-one in a lower level is out of the guard's reach by
-// construction: it stays inside the payload, landing on a live slot of the
-// level above.)
-//
-// The detector appends a 64-byte guard tail past the payload, fills it with a
-// known pattern, and re-checks it after each launch. This test is what proves
-// the detector actually bites: a guard that is never verified, or verified with
-// a pattern an overrun could reproduce, is indistinguishable from no guard at
-// all. So the mutation cases below matter more than the positive one -- they
-// corrupt the guard the way a real overrun would (zero-fill from a memset,
-// small integers from an atomic increment, and non-word-aligned partial
-// writes) and require the detector to name the first bad word.
+// Guard-tail detector for the fused GEMM.A2A counter allocation: a 64-byte
+// tail is appended past the three-level counter payload (counter[dst_rank*
+// tokenTiles+j] over W*tokenTiles slots, a W-entry counter2[dst_rank], and a
+// single counter3), filled with a pattern of distinct words, and re-checked
+// after each launch. These tests pin the payload/alloc size formulas and
+// confirm the detector names the first corrupted word across a range of
+// realistic overrun shapes (single word, counter-like values, misaligned
+// bytes, wholesale clobber).
 
 #include <cstdint>
 #include <cstring>
@@ -65,19 +52,8 @@ TEST(FusedA2ACounterSentinel, PayloadMatchesTheCounterLayout)
 
 TEST(FusedA2ACounterSentinel, Counter3SitsImmediatelyAfterCounter2)
 {
-    // Pins the HOST payload formula against a transcribed literal, so a one-sided
-    // edit of fusedA2ACounterPayloadBytes reddens here: the allocation must hold
-    // W*tokenTiles first-level words, W second-level, and exactly one more for
-    // counter3.
-    //
-    // What this does NOT do, despite the name: it does not read the kernel side.
-    // The index the kernel actually uses is built from runtime SGPR arithmetic in
-    // GlobalWriteBatch.py (counter3 index = W*tokenTiles + W), and nothing here or
-    // anywhere else compares the two. A C++ gtest cannot reach the Python emitter;
-    // closing that gap needs a Python-side test that renders the handshake and
-    // scrapes this formula out of the header, the way test_fusedA2A_drain_last.py
-    // already scrapes FusedA2AClient.cpp. Until then this is a one-sided golden,
-    // not the cross-boundary pin the test name suggests.
+    // Pins the host-side payload formula only; the kernel's SGPR arithmetic
+    // that computes the matching index is not cross-checked here.
     for(uint32_t w : {1u, 2u, 4u, 8u})
     {
         for(uint32_t t : {1u, 8u, 16u})

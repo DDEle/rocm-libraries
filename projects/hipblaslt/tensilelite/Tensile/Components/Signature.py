@@ -75,10 +75,7 @@ if FUSED_A2A_MAX_RANKS * 4 > FUSED_A2A_PEER_RECV_OFFSET:
 # 31 is the mask's CEILING, not a recommendation, and the bound is necessary
 # rather than sufficient. The shipped value is 8 because no node is known to
 # carry more than 8 GPUs -- it is the world size this ABI is built for, not a
-# placeholder awaiting a raise. Moving toward 31 would satisfy the guard below
-# while growing FUSED_A2A_SEGMENT_BYTES from 108 to 292, widening the kernarg
-# slot count, and deepening the two unrolled per-rank scans in
-# GlobalWriteBatch.py to ~30 iterations each.
+# placeholder awaiting a raise.
 #
 # `raise`, not `assert`: `python -O` strips asserts, which would collapse "the
 # bound was checked and held" and "the bound was never evaluated" into the same

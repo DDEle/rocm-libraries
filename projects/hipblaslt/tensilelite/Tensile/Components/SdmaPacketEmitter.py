@@ -31,12 +31,10 @@
 #     rect X = nShard (feature, contiguous) ; rect Y = min(MT1, N - j*MT1) (token)
 #   ATOMIC ADD_RTN_32 -> peer_ptr[p] + myRank*4, addend 1 (raise the dest flag).
 #
-# COORDINATES ARE FOLDED INTO THE BASE ADDRESSES: src_x/src_y/dst_x/dst_y are all
-# emitted as a literal 0 and the whole offset is added into the 64-bit base
-# instead (addr(x, y) = base + y*pitch*elem + x*elem, so this is the same byte
-# address written two ways). This keeps the 14-bit coordinate fields from
-# overflowing at large world size x N; see checkA2AFieldsFit for what remains
-# field-encoded and its bit-width bounds.
+# COORDINATES ARE FOLDED INTO THE BASE ADDRESSES: src_x/src_y/dst_x/dst_y are
+# emitted as a literal 0 and the offset added into the 64-bit base instead
+# (addr(x, y) = base + y*pitch*elem + x*elem). checkA2AFieldsFit states what
+# remains field-encoded and its bounds.
 ################################################################################
 
 from rocisa.container import vgpr, sgpr
@@ -60,24 +58,19 @@ SDMA_OP_ATOMIC         = 10
 SDMA_ATOMIC_ADD_RTN_32 = 15
 ATOMIC_PACKET_DWORDS   = 8
 
-# TWO DIFFERENT "ELEMENT SIZES". Conflating them is a silent 8x address error,
-# so they are separate constants with separate jobs:
+# TWO DIFFERENT "ELEMENT SIZES". Conflating them is a silent 8x address error:
 #
-#   D_DATA_ELEMENT_LOG2 = log2(sizeof(bf16)). The width of one D element in
-#     BYTES. It converts the element-unit geometry into the byte offset
-#     folded into the base address. A byte offset is a byte offset at any
-#     packet elementsize, so this NEVER changes with the one below.
+#   D_DATA_ELEMENT_LOG2 = log2(sizeof(bf16)), the width of one D element in
+#     BYTES. Converts element-unit geometry into the byte offset folded into
+#     the base address, so it NEVER changes with the one below.
 #
-#   PACKET_ELEMENT_SIZE_LOG2 = the packet's ADDRESSING GRANULARITY, the unit that
-#     x, the pitches, the slice pitches and rect_x are counted in (header field
-#     [31:29]). Widening it from 1 to 4 divides all of those field values by 8,
-#     which is what buys the headroom: rect_x = nShard/8 lifts the AM ceiling
-#     from 16384*W to 131072*W, and src_pitch = ldd/8 lifts the ldd ceiling from
-#     524288 to 4194304. It does NOT touch y (a row index) or rect_y.
+#   PACKET_ELEMENT_SIZE_LOG2 = the packet's ADDRESSING GRANULARITY (header field
+#     [31:29]): the unit for x, the pitches, the slice pitches and rect_x. NOT
+#     for y or rect_y, which are row indices the hardware does not scale.
 #
-# 16-byte elements are supported by the engine: validated on MI355X (MED, W=4,
-# recv byte-exact). The field is 3 bits wide, but "3 bits wide" is not evidence
-# that the hardware accepts every encoding.
+# 16-byte elements are validated on MI355X (MED, W=4, recv byte-exact). The
+# field is 3 bits wide, but that is not evidence the hardware accepts every
+# encoding.
 D_DATA_ELEMENT_LOG2      = 1
 PACKET_ELEMENT_SIZE_LOG2 = 4
 
@@ -116,13 +109,10 @@ def checkA2AFieldsFit(numRanks, nShard, macroTile1, srcPitch):
     this module's unit tests. THE TWO CAN DRIFT SILENTLY -- nothing links them,
     so keep them in sync by hand.
 
-    Rank bound: the kernarg segment reserves exactly FUSED_A2A_MAX_RANKS
-    peer_ptr slots (Signature.py), so ranks >= that have no pointer.
-
-    src_x, src_y and dst_y are folded into the 64-bit base addresses (see
-    emitComputeCopyFields) and are not checked here; N is unconstrained. What
-    remains -- rect_x, rect_y, src_pitch, dst_pitch and the ELEMENT_SHIFT
-    divisibility precondition -- is derived in the raise() messages below.
+    The coordinates are folded into the base addresses (see
+    emitComputeCopyFields), so N is unconstrained and only rect_x, rect_y,
+    src_pitch, dst_pitch and the ELEMENT_SHIFT divisibility are checked. Each
+    raise() below states its own bound.
     """
     from .Signature import FUSED_A2A_MAX_RANKS
     if numRanks < 1 or numRanks > FUSED_A2A_MAX_RANKS:
@@ -238,12 +228,8 @@ class SdmaPacketEmitter:
     (caller owns the pools) plus a `w` context exposing `.sgprPool`/`.vgprPool`.
     The dword VGPR block it fills is what SdmaRingEmitter.emitPlacePacket writes
     to the ring, so the two emitters compose without either knowing the other's
-    internals.
-
-    The three encoding conventions (minus-one extents/pitches, element units,
-    field bit positions) are isolated in the small `_pack*` helpers below so a
-    future encoding change touches one place -- the same discipline
-    SdmaRingEmitter uses for its CAS primitive.
+    internals. The three encoding conventions (minus-one extents/pitches,
+    element units, field bit positions) are isolated in the `_pack*` helpers.
     """
 
     def __init__(self, macroTile1: int, elementSizeLog2: int = PACKET_ELEMENT_SIZE_LOG2):
@@ -263,13 +249,9 @@ class SdmaPacketEmitter:
         the hardware does not scale by ELEMENTSIZE, nor to the folded base
         addresses, which are byte offsets.
 
-        Emitted even when the shift is 0 would be wasteful, so the callers skip
-        the whole helper in that case -- keeping the bf16-granular encoding
-        byte-identical to what it was if PACKET_ELEMENT_SIZE_LOG2 is ever wound
-        back. Divisibility (every scaled quantity a multiple of ELEMENT_MULTIPLE)
-        is a launch-time precondition, enforced in FusedA2AClient.cpp and mirrored
-        by checkA2AFieldsFit; a non-multiple would truncate here and shrink the
-        copy."""
+        Callers skip this helper entirely when the shift is 0. Divisibility is a
+        launch-time precondition (FusedA2AClient.cpp, mirrored by
+        checkA2AFieldsFit); a non-multiple would truncate here."""
         module.add(SLShiftRightB32(dst=sgpr(dstS), src=sgpr(srcS),
                                    shiftHex=ELEMENT_SHIFT,
                                    comment=comment + " (bf16 elems -> packet elems)"))
@@ -306,16 +288,13 @@ class SdmaPacketEmitter:
 
     def _packRectMinus1(self, module, dstV, rectXS, rectYS, tmpS, comment):
         """dword = ((rectX - 1) & 0x3FFF) | (((rectY - 1) & 0x3FFF) << 16).
-        BOTH extents are runtime SGPRs. rectY cannot be the compile-time MT1: the
-        last token-tile is partial whenever N is not a multiple of MT1, and an
-        unclamped MT1 would make the engine read past the end of D (the recv side
-        has room -- it is allocated to ceil(N/MT1)*MT1 -- but the source does not).
-        emitComputeCopyFields clamps it to min(MT1, N - j*MT1). tmpS is TWO
-        consecutive scratch SGPRs (tmpS, tmpS+1).
+        BOTH extents are runtime SGPRs: rectY cannot be the compile-time MT1
+        because the last token-tile is partial when N % MT1 != 0, and an
+        unclamped MT1 would read past the end of D (emitComputeCopyFields clamps
+        it). tmpS is TWO consecutive scratch SGPRs (tmpS, tmpS+1).
 
-        rect_x IS scaled to packet elements; rect_y is NOT. rect_y counts ROWS,
-        and ELEMENTSIZE scales only the X direction -- scaling it would shorten
-        the copy to an eighth of the band."""
+        rect_x IS scaled to packet elements; rect_y is NOT -- it counts ROWS,
+        and ELEMENTSIZE scales only the X direction."""
         if ELEMENT_SHIFT:
             self._toPacketElements(module, tmpS, rectXS, comment + " (rectX)")
             rectXsrc = tmpS
@@ -403,17 +382,14 @@ class SdmaPacketEmitter:
     def _mulU32toU64(self, module, dstS, aS, bS, comment):
         """dstS[0:1] (64-bit) = aS * bS, both operands unsigned 32-bit.
 
-        Emitted as the bare s_mul_hi_u32 / s_mul_i32 pair rather than through
-        KernelWriterAssembly.s_mul_u64_u32 on purpose. That wrapper picks between
-        s_mul_hi_u32 and a VALU fallback using asmCaps["HasSMulHi"], which is a
-        LIVE ASSEMBLER PROBE (rocisa hardware_caps.hpp) -- so the instruction
-        sequence, and therefore the handshake golden, would depend on the machine
-        that regenerated it. The COPY_SUBWIN encoder in this file is gfx9xx/gfx95x
-        only (see encodeCopyDwords), and s_mul_hi_u32 is unconditional across that
-        range, so there is nothing to select between here.
+        Bare s_mul_hi_u32/s_mul_i32 rather than
+        KernelWriterAssembly.s_mul_u64_u32: that wrapper selects on
+        asmCaps["HasSMulHi"], a LIVE ASSEMBLER PROBE, which would make the
+        emitted sequence depend on the machine that regenerated it.
+        s_mul_hi_u32 is unconditional across this file's gfx9xx/gfx95x range.
 
-        UNSIGNED on purpose: the operands are extents and strides. s_mul_hi_i32
-        would read a stride with bit 31 set as negative and corrupt the high word.
+        UNSIGNED: the operands are extents and strides; s_mul_hi_i32 would read
+        a stride with bit 31 set as negative.
         """
         module.add(SMulHIU32(dst=sgpr(dstS + 1), src0=sgpr(aS), src1=sgpr(bS),
                              comment=comment + " (hi)"))
@@ -437,41 +413,21 @@ class SdmaPacketEmitter:
           dst_slice  = MT1 * nShard          (one band's plane)
           rect_y     = min(MT1, N - j*MT1)   (clamped: last token-tile is partial)
 
-        The hardware addresses a sub-window as base + y*pitch*elem + x*elem, so
-        adding those terms into the base and leaving x/y at 0 reaches the exact
-        same byte -- see the module docstring for why we want that (the 14-bit
-        coordinate fields would overflow at large W).
-
         src_pitch = ldd and dst_pitch = nShard are passed straight through by the
         caller, as is rect_x = nShard. MT1 is the compile-time token extent.
 
-        BOTH folds are 64-BIT and must stay that way. Neither product is bounded
-        by anything now: j*MT1*ldd grows with N (unconstrained since the fold) and
-        ldd (19-bit), and (myRank*N + j*MT1)*nShard grows with W, N and nShard.
-        At W=8/N=65536/nShard=16383 the dst term alone is 8.6e9. See _mulU32toU64
-        for why the widening multiply is emitted bare and unsigned.
+        BOTH folds are 64-BIT and must stay that way: neither product is bounded
+        by anything now that the coordinates are folded in. See _mulU32toU64 for
+        why the widening multiply is emitted bare and unsigned.
 
-        The elements->bytes shift uses D_DATA_ELEMENT_LOG2, NOT self.elementSizeLog2:
-        a byte offset does not scale with the packet's addressing granularity. See
-        the constant's comment.
+        The elements->bytes shift uses D_DATA_ELEMENT_LOG2, NOT
+        self.elementSizeLog2: a byte offset does not scale with the packet's
+        addressing granularity.
 
-        (a+b)<<k == (a<<k)+(b<<k), so the src side shifts the SUM once rather than
-        each term -- one s_lshl_b64 instead of two.
-
-        outSrcYS still holds j*MT1 on return: it is read three times (the src fold,
-        the dst_y precursor, and the rect_y clamp below), so it cannot be scratch.
-        recvBaseS is updated IN PLACE; addressDS is read-only (it is the persistent
-        AddressD pair and must survive). tmpS is one scratch SGPR; tmp64S is a
-        2-ALIGNED scratch pair (the 64-bit ops need SReg_64 alignment) and is dead
-        on return.
-
-        rect_y is clamped rather than left at MT1 because N need not be a multiple
-        of MT1: the tail tile then covers only N - j*MT1 tokens, and copying a full
-        MT1 rows would read past the end of D.
-
-        Kept separate from emitBuildCopyPacket so the address arithmetic (what the
-        formulas mean) and the bit-packing (how the hardware wants them) are
-        each auditable on their own.
+        outSrcYS still holds j*MT1 on return (it is read three times), so it
+        cannot be scratch. recvBaseS is updated IN PLACE; addressDS is read-only.
+        tmpS is one scratch SGPR; tmp64S is a 2-ALIGNED scratch pair (the 64-bit
+        ops need SReg_64 alignment), dead on return.
         """
         module.add(SMulI32(dst=sgpr(outSrcYS), src0=sgpr(jS), src1=self.mt1,
                            comment="src_y = j * MT1 (folded into the base, not a field)"))
@@ -523,16 +479,8 @@ class SdmaPacketEmitter:
         SGPRs), a 64-bit add. flagBaseS is peer_ptr[p] (already selected by the
         caller via _fusedA2ALoadFlagBaseByRank). tmpS is one scratch SGPR.
 
-        Stride is 4: the ATOMIC is an ADD_RTN_32, a 4-byte write.
-
         The flag is indexed by SOURCE rank only -- source j's tokenTiles ATOMICs
         accumulate into one slot, matching the "== tokenTiles" drain predicate.
-
-        Three things must move with this stride: the host allocates flag as W u32
-        slots (FusedA2AClient.cpp flagBytes), the DRAIN poll strides its self-flag
-        address by 4, and that poll compares against tokenTiles (an accumulated
-        count) rather than a one-shot sentinel -- the SDMA ATOMIC adds, it does
-        not store.
         """
         module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(myRankS), shiftHex=2,
                                   comment="myRank * 4 (u32 flag-slot byte offset: the ATOMIC is an ADD_RTN_32)"))

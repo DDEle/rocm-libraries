@@ -99,47 +99,37 @@ def emitFusedA2ATotalWGsLatch(module, sgprName):
 
   The counter3 election in _emitFusedA2AHandshake needs the grid-wide workgroup
   count, but NumWorkGroups0/1 cannot be read in the epilogue: the grouped-gemm
-  path borrows those named SGPRs as temporaries (defineAndResources assigns them
-  to tmpSgprLoopCounter/tmpSgprArgOffsett in KernelWriterAssembly.py), so by
-  store time they may hold something else. Latching once in the prologue is the
-  same move KernelWriterAssembly already makes for its NumGroup SGPR.
+  path borrows those named SGPRs as temporaries, so by store time they may hold
+  something else.
 
   The invariant is over SURVIVING work-groups, not the launched grid: ClusterDim
-  != [1,1] rounds the grid up to the cluster host-side
-  (ContractionSolution::generateSingleCall), but those padded work-groups s_endpgm
-  in the prologue (clusterPadEarlyExit), leaving exactly NumWorkGroups0 *
-  NumWorkGroups1*GSU survivors. The batch (WorkGroup2) extent and GSU are the two
-  factors NOT folded in, and they are guarded in two different places:
+  != [1,1] rounds the grid up host-side, but those padded work-groups s_endpgm in
+  the prologue (clusterPadEarlyExit).  The batch (WorkGroup2) extent and GSU are
+  the two factors NOT folded in, guarded in two different places:
 
     - GlobalSplitU != 1 is rejected at compile time (Solution.py, the FusedGemmA2A
       block), together with SupportUserGSU = False so a runtime caller cannot
-      re-inflate the grid under a latch that is a compile-time constant.
-    - The batch EXTENT is checked host-side, in client/src/FusedA2AClient.cpp,
-      because compile time can only see that a batch index is declared, and every
-      fused config declares one while running extent 1.
+      re-inflate the grid under a compile-time-constant latch.
+    - The batch EXTENT is checked host-side, in client/src/FusedA2AClient.cpp:
+      compile time can only see that a batch index is declared, and every fused
+      config declares one while running extent 1.
 
-  That same FusedGemmA2A block also rejects StreamK!=0, which is load-bearing
-  here even though it was added for another reason: Stream-K's WorkGroup0 is a
-  work-item index, not an M-tile, so the product is not the population."""
+  That same block also rejects StreamK!=0, load-bearing here: Stream-K's
+  WorkGroup0 is a work-item index, not an M-tile, so the product is not the
+  population."""
   module.add(SMulI32(dst=sgpr(sgprName), src0=sgpr("NumWorkGroups0"), src1=sgpr("NumWorkGroups1"),
                      comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
 
 def emitFusedA2ACounter3PtrLatch(module, kw, sgprName):
   """Resolve &counter3 in the PROLOGUE instead of once per work-group at the tally.
 
-  counter_ptr, FusedW and FusedTokenTiles are kernel-invariant.  Re-loading all
-  three and deriving the address from them at the tally would cost every
-  surviving work-group an SMEM round trip plus five SALU, fully exposed because
-  the s_waitcnt sits between the load and its only consumer, with no work left to
-  overlap it with.
-
-  Here the same three values are read once, before the main loop, where their
-  latency disappears under the GEMM.  What the tally then needs is a single
-  register pair.
+  counter_ptr, FusedW and FusedTokenTiles are kernel-invariant, so the address is
+  derived once before the main loop, where the SMEM latency disappears under the
+  GEMM.  The tally then needs a single register pair.
 
   FusedW and FusedTokenTiles are deliberately NOT latched: their only readers are
   the DRAIN mask and the DRAIN poll, which exactly one work-group in the grid ever
-  executes.  Latching them would spend two persistent SGPRs on every kernel to
+  executes, so latching them would spend two persistent SGPRs on every kernel to
   save two loads on one work-group.
   """
   from .Signature import fusedA2AKernArgLayout
@@ -2531,30 +2521,29 @@ class GlobalWriteBatchWriter:
   def _addSubtileStore(self, targetModule, storeModule: Module):
     """Add a 16bit subtile store.
 
-    The A2A tiles write the same local D output as every other tile (the cross-card
-    move is a separate SDMA copy issued after the store path), so both the fused and
-    non-fused paths add the store Module verbatim.  Kept as the single choke point for
-    the subtile store call sites.
+    Both paths add the Module verbatim: A2A tiles write the same local D output,
+    and the cross-card move is a separate SDMA copy issued after the store path.
+    Kept as the single choke point for the subtile store call sites.
     """
     targetModule.add(storeModule)
 
   def _fusedA2ALoadRecvBase(self, module, recvBaseSgpr, shardBaseSgpr, nShardSgpr, tmpSgpr):
     """Load peer_ptr[dst_rank]+recv offset into recvBaseSgpr and dst_rank*n_shard into shardBaseSgpr.
 
-    Called by _emitFusedA2ASdmaIssue for the SDMA COPY packet's destination base.  The
-    shard_base output is vestigial there (the shard offset is folded into the packet's
-    source base, recomputed from p*nShard), but the rank scan and the single s_load are
-    exactly what is needed, so the caller takes it and drops it.
+    Called by _emitFusedA2ASdmaIssue for the SDMA COPY packet's destination base.
+    The shard_base output is VESTIGIAL there -- the shard offset is folded into
+    the packet's source base instead -- but the rank scan and the single s_load
+    are exactly what is needed, so the caller takes it and drops it.
 
     Two-phase approach to avoid SMEM WAW hazard (multiple s_load to the same SGPR pair):
       Phase 1 (pure SALU): scan candidate ranks to determine dst_rank (no s_load issued).
       Phase 2: compute kernarg offset = peer_ptr_0 + dst_rank*8 and issue a single
                s_load_dwordx2.  One load -> zero WAW risk.
 
-    dst_rank is a per-WG constant: n_shard is a multiple of MacroTile0 (design guarantees
-    (AM/W)%256==0), so every macro-tile lies within one rank's shard.  The scan finds the
-    highest j with j*n_shard <= n_col_base_wg = WorkGroup0*MT0.  Ranks j >= FusedW never
-    qualify (harmless compile-time unroll).
+    dst_rank is a per-WG constant: n_shard is a multiple of MacroTile0, so every
+    macro-tile lies within one rank's shard.  The scan finds the highest j with
+    j*n_shard <= n_col_base_wg = WorkGroup0*MT0; ranks j >= FusedW never qualify
+    (harmless compile-time unroll).
 
     Args:
       module:        Module to append instructions to.
@@ -2686,41 +2675,28 @@ class GlobalWriteBatchWriter:
     """Build and submit this (peer, token-tile)'s SDMA packet pair, from the
     single elected lane of the elected WG.
 
-    The band of D this WG's (dst_rank, j) slot completed is moved across xGMI by
-    the SDMA engine, which reads from HBM -- which is why every A2A store carries
-    sc1 (the gfx950 L2 is XCD-local, so an unflushed tile would be invisible to
-    the engine).
+    The SDMA engine reads the completed band from HBM, which is why every A2A
+    store carries sc1.
 
     Two packets, ONE reservation:
       COPY_LINEAR_SUBWIN  D[j*MT1 .. , dst_rank*nShard ..]  ->  peer's recv slot
       ATOMIC ADD_RTN_32   peer_ptr[dst_rank][my_rank] += 1
     They must share a reservation so the engine executes them back to back: the
     flag increment is what releases the peer's DRAIN, and it may not overtake its
-    own copy. One queue per peer (fanning a peer over several queues measured
-    worse), selected by dst_rank out of the FusedSdmaQueues handle array.
+    own copy. One queue per peer, selected by dst_rank out of the FusedSdmaQueues
+    handle array.
 
-    src_pitch is the real StrideD1J (D's token-axis stride, == ldd), so a padded ldd
-    is handled correctly.  What this packet DOES still assume is that D is column
-    major -- feature contiguous, dMStride == 1: the feature offset is added as a
-    plain element count while the token offset is scaled by the pitch, so a
-    row-major D would need the two swapped, not merely a different pitch.  The
-    shipping config satisfies this (FusedA2AClient.cpp: "Post-swap D' is col-major,
-    so dMStride==1").
+    src_pitch is the real StrideD1J (== ldd), so a padded ldd is handled.  This
+    packet DOES still assume D is COLUMN MAJOR (feature contiguous, dMStride ==
+    1): the feature offset is added as a plain element count while the token
+    offset is scaled by the pitch, so a row-major D would need the two swapped,
+    not merely a different pitch.
 
     The four packet coordinates are FOLDED into the 64-bit base addresses by
-    emitComputeCopyFields and emitted as literal 0 (addr = base + y*pitch*elem +
-    x*elem, so this is the same byte address written differently).  That removes
-    src_x = p*nShard and dst_y = myRank*N + j*MT1 -- both of which grew with the
-    world size and overflowed their 14-bit fields at W=8 -- from the constraint
-    set entirely, and leaves N unconstrained.
-
-    ASSUMPTION -- what still has to fit: rect_x = nShard, rect_y <= MT1, and
-    src_pitch = ldd must fit their packet fields, packed unmasked so an
-    over-range value corrupts a neighbouring field rather than truncating.  See
-    SdmaPacketEmitter.checkA2AFieldsFit for the exact bit-width arithmetic and
-    what client/src/FusedA2AClient.cpp enforces at launch.  src_slice = M*N is
-    packed unguarded too, but is benign: the SUBWIN copy is single-plane, so the
-    slice pitch is a don't-care.
+    emitComputeCopyFields and emitted as literal 0, which leaves N unconstrained.
+    What still has to fit -- rect_x, rect_y, src_pitch -- is packed unmasked, so
+    an over-range value corrupts a neighbouring field; see
+    SdmaPacketEmitter.checkA2AFieldsFit for the bounds.
 
     Args:
       dstRankSgpr:  1 SGPR, the peer rank p (== this WG's dst_rank).
@@ -3087,9 +3063,8 @@ class GlobalWriteBatchWriter:
     # times per launch -- 1152 times at the champion N=4096 shape.
     module.add(counter3Label)
     c3Tmp = kw.sgprPool.checkOut(1, tag="fusedA2A_c3Tmp", preventOverflow=False)
-    # The tally is a SCALAR atomic.  Every surviving WG hits this one dword, so the
-    # instruction it uses is the one thing on the whole grid-wide path worth choosing
-    # deliberately.  S_ATOMIC_INC keeps address, data and result in SGPRs:
+    # The tally is a SCALAR atomic: S_ATOMIC_INC keeps address, data and result
+    # in SGPRs.
     #
     #   MEM[addr] = (tmp >= DATA) ? 0 : tmp + 1 ;   RETURN_DATA = tmp
     #
@@ -3133,10 +3108,9 @@ class GlobalWriteBatchWriter:
     # peer, so a per-peer predicate would release it as soon as one peer finished.
     #
     # The predicate is an ACCUMULATED COUNT, not a one-shot sentinel: each source
-    # rank sends tokenTiles packet pairs and each pair's SDMA ATOMIC ADD_RTN_32 adds 1
-    # to the same slot, so "all of source j's data has landed" is flag[j] == tokenTiles.
-    # Slots are 4 bytes wide, matching that op (see the host's flagBytes and
-    # emitComputeFlagAddr); the count never exceeds tokenTiles, so 32 bits is ample.
+    # rank sends tokenTiles packet pairs, each pair's SDMA ATOMIC ADD_RTN_32 adding
+    # 1 to the same 4-byte slot, so "all of source j's data has landed" is
+    # flag[j] == tokenTiles.
     #
     # The p == my_rank packet also routes through SDMA (loopback queue, local recv
     # slot), so this card's own flag slot has a real producer and polling it is
@@ -3160,14 +3134,11 @@ class GlobalWriteBatchWriter:
                             comment="FusedDrain==0 -> skip drain barrier"))
 
     # Second runtime gate: AM_tiles == 0 -> nothing to wait for.  No work-group
-    # passed the PUSH gate, so no (dst_rank, j) counter can reach FusedTilesPerRank,
-    # so not one SDMA packet is submitted -- on any card, since every rank runs this
-    # kernel with the same AM.  Every flag slot then stays 0 while the poll below
-    # tests `flag == FusedTokenTiles`, and the owner spins forever.
-    #
-    # This is the grid-wide form of the PUSH gate's own predicate, reusing the value
-    # it already computed: WorkGroup0 ranges over [0, mTiles) with minimum 0, so
-    # "some WG satisfies AM_tiles > WorkGroup0" is exactly "AM_tiles > 0".
+    # passes the PUSH gate on any card, so not one SDMA packet is submitted, every
+    # flag slot stays 0, and the owner would spin forever on the poll's
+    # `flag == FusedTokenTiles`.  This is the grid-wide form of the PUSH gate's own
+    # predicate, reusing the value it already computed: WorkGroup0 has minimum 0,
+    # so "some WG satisfies AM_tiles > WorkGroup0" is exactly "AM_tiles > 0".
     module.add(SCmpEQU32(src0=sgpr(amTilesSgpr), src1=0,
                          comment="AM_tiles == 0? (no PUSH WG -> no packet -> no flag)"))
     kw.sgprPool.checkIn(amTilesSgpr)

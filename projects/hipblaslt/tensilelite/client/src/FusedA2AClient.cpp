@@ -17,7 +17,8 @@
 #include "FusedA2AKernArg.hpp"
 #include "SolutionIterator.hpp"
 
-// SdmaQueue.cpp is only compiled, and hsakmt only linked, under this option.
+// SdmaQueue.hpp is header-only and pulls in hsakmt, which is only on the
+// include path (and linked) under this option.
 #ifdef TENSILELITE_ENABLE_SDMA_A2A
 #include "SdmaQueue.hpp"
 #endif

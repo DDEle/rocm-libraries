@@ -632,17 +632,17 @@ namespace TensileLite
                 }
 
                 // -- Dual-segment numeric validation, EVERY iteration. --
-                // Skipped entirely when validate=0 (l2Pass/l1Pass default to `ok`,
+                // Skipped entirely when validate=0 (recvPass/localPass default to `ok`,
                 // so the per-iteration verdict reduces to "kernel exited cleanly").
-                bool l2Pass = ok;
-                bool l1Pass = ok;
+                bool recvPass  = ok;
+                bool localPass = ok;
                 if(ok && validate)
                 {
-                    // L2: on destination card dst, slot src must hold features
+                    // Recv: on destination card dst, slot src must hold features
                     // [dst*nShard, dst*nShard+nShard) of card SRC's golden, across all
                     // N tokens. Depending on src is what makes a slot filled by the
                     // wrong sender visible.
-                    for(int dst = 0; dst < W && l2Pass; dst++)
+                    for(int dst = 0; dst < W && recvPass; dst++)
                     {
                         HIP_CHECK_EXC(hipSetDevice(dst));
                         HIP_CHECK_EXC(
@@ -663,7 +663,7 @@ namespace TensileLite
                                     if(!closeBf16(got, want))
                                     {
                                         if(mism < 5)
-                                            std::cerr << "[fused-a2a] L2 MISMATCH iter=" << it
+                                            std::cerr << "[fused-a2a] RECV MISMATCH iter=" << it
                                                       << " card=" << dst << " src=" << src
                                                       << " t=" << t << " f=" << f << " got=" << got
                                                       << " want=" << want << "\n";
@@ -673,14 +673,14 @@ namespace TensileLite
                             }
                         }
                         if(verbose || mism)
-                            std::cout << "[fused-a2a] L2 recv card " << dst << ": "
+                            std::cout << "[fused-a2a] RECV card " << dst << ": "
                                       << (mism == 0 ? "PASS" : "FAIL") << " (mismatches=" << mism
                                       << ")\n";
                         if(mism)
-                            l2Pass = false;
+                            recvPass = false;
                     }
 
-                    // L1: card d's local tail out[m in [AM,M)] against its OWN golden.
+                    // Local: card d's local tail out[m in [AM,M)] against its OWN golden.
                     // Two independent reads, both must pass: (a) via the descriptor
                     // strides the kernel was told to write with, and (b) via a
                     // hardcoded col-major off=n*M+m. (a) alone cannot tell the intended
@@ -691,9 +691,9 @@ namespace TensileLite
                                   << " dNStride=" << dNStride << " -> "
                                   << (descColMajor ? "COL-MAJOR [M,N] (M/feature contiguous)"
                                                    : "NOT col-major (row-major or padded)")
-                                  << "  (raw-bytes L1 check uses hardcoded off=n*M+m"
+                                  << "  (raw-bytes check uses hardcoded off=n*M+m"
                                      " regardless)\n";
-                    for(int d = 0; d < W && l1Pass; d++)
+                    for(int d = 0; d < W && localPass; d++)
                     {
                         HIP_CHECK_EXC(hipSetDevice(d));
                         HIP_CHECK_EXC(
@@ -715,9 +715,10 @@ namespace TensileLite
                                     if(!closeBf16(got, want))
                                     {
                                         if(mismDesc < 5)
-                                            std::cerr << "[fused-a2a] L1(desc) MISMATCH iter=" << it
-                                                      << " card=" << d << " m=" << m << " n=" << n
-                                                      << " got=" << got << " want=" << want << "\n";
+                                            std::cerr
+                                                << "[fused-a2a] LOCAL(desc) MISMATCH iter=" << it
+                                                << " card=" << d << " m=" << m << " n=" << n
+                                                << " got=" << got << " want=" << want << "\n";
                                         mismDesc++;
                                     }
                                 }
@@ -731,7 +732,7 @@ namespace TensileLite
                                     if(!closeBf16(got, want))
                                     {
                                         if(mismRaw < 5)
-                                            std::cerr << "[fused-a2a] L1(raw col-major n*M+m) "
+                                            std::cerr << "[fused-a2a] LOCAL(raw col-major n*M+m) "
                                                          "MISMATCH iter="
                                                       << it << " card=" << d << " m=" << m
                                                       << " n=" << n << " got=" << got
@@ -742,18 +743,18 @@ namespace TensileLite
                             }
                         }
                         if(verbose || mismDesc || mismRaw)
-                            std::cout << "[fused-a2a] L1 out card " << d
+                            std::cout << "[fused-a2a] LOCAL card " << d
                                       << ": desc=" << (mismDesc == 0 ? "PASS" : "FAIL") << "("
                                       << mismDesc
                                       << ") rawColMajor=" << (mismRaw == 0 ? "PASS" : "FAIL") << "("
                                       << mismRaw << ")\n";
                         if(mismDesc || mismRaw)
-                            l1Pass = false;
+                            localPass = false;
                     }
                 }
 
                 // -- Per-iteration verdict + latency bookkeeping. --
-                const bool iterPass = ok && l2Pass && l1Pass;
+                const bool iterPass = ok && recvPass && localPass;
                 if(iterPass)
                     passIters++;
                 else
@@ -762,7 +763,7 @@ namespace TensileLite
                         firstFailIt = it;
                     raceFail = true;
                     std::cerr << "[fused-a2a] RACE FAIL at iter " << it << " (hipOk=" << ok
-                              << " L2=" << l2Pass << " L1=" << l1Pass << ")\n";
+                              << " recv=" << recvPass << " local=" << localPass << ")\n";
                 }
 
                 if(it >= warmup)

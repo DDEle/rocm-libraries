@@ -299,21 +299,49 @@ def test_batch_guard_is_host_side_not_compile_time():
     # Host side. Grepping for `batchIndices()` / `batchSize(` proves only that the
     # API is CALLED -- it stays green with the predicate inverted (`!= 2` accepts the
     # extent 2 that breaks the election, and rejects the extent 1 every fused config
-    # runs) or with the bail-out deleted, i.e. with a guard that guards nothing. So
-    # pin the predicate and the early return, scoped to the loop's own block.
+    # runs) or with the bail-out deleted, i.e. with a guard that guards nothing.
+    #
+    # So assert the properties the guard must have rather than how it spells them.
+    # An earlier revision pinned a `for` loop over batchIndices(); the guard was
+    # later rewritten as one scalar predicate, which is equally correct, and pinning
+    # the shape only moved the failure to the refactor.
+    #
+    # BOTH halves are load-bearing. Testing batchSize(0) alone is complete ONLY
+    # because a count above 1 is refused outright: drop the count test and a second
+    # declared index passes unexamined, giving the grid a third dimension that
+    # emitFusedA2ATotalWGsLatch (NumWorkGroups0 * NumWorkGroups1) does not count, so
+    # counter3 wraps early and elects more than one DRAIN owner.
     host = os.path.join(TENSILE_ROOT, "client/src/FusedA2AClient.cpp")
     with open(host) as f:
         src = f.read()
-    loop = re.search(r"for\s*\(.*?problem->batchIndices\(\)\.size\(\).*?\)\s*\{", src, re.S)
-    assert loop, \
-        "FusedA2AClient.cpp does not loop over batchIndices(); the guard was deleted, not moved"
-    body = _braceBlock(src, loop.end() - 1)
-    preds = re.findall(
-        r"if\s*\(\s*problem->batchSize\(\s*\w+\s*\)\s*(!=|==|<|>|<=|>=)\s*(\d+)\s*\)", body)
-    assert preds == [("!=", "1")], \
-        f"the batch guard must reject every extent other than 1; found {preds} in:\n{body}"
+    # Strip comments FIRST: every check below is a text match, and commented-out code
+    # matches just as well as live code.  Without this, `/*return 1;*/` satisfies the
+    # bail-out assertion -- verified by mutation, it is not a hypothetical.
+    src = re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", src, flags=re.S))
+
+    # The count may reach the predicate through a local, so collect the names that
+    # legitimately hold it alongside the call itself.
+    countNames = {"problem->batchIndices().size()"}
+    countNames.update(re.findall(r"\b(\w+)\s*=\s*problem->batchIndices\(\)\.size\(\)", src))
+
+    guards = [m for m in re.finditer(r"if\s*\(([^{]*?)\)\s*\{", src, re.S)
+              if "batchSize(" in m.group(1)]
+    assert len(guards) == 1, \
+        f"expected exactly one host guard testing a batch EXTENT, found {len(guards)}"
+    cond = guards[0].group(1)
+    body = _braceBlock(src, guards[0].end() - 1)
+
+    extent = re.findall(r"problem->batchSize\(\s*\w+\s*\)\s*(!=|==|<|>|<=|>=)\s*(\d+)", cond)
+    assert extent == [("!=", "1")], \
+        f"the batch guard must reject every extent other than 1; found {extent} in: {cond}"
+
+    counts = [(op, v) for n in countNames
+              for op, v in re.findall(re.escape(n) + r"\s*(!=|==|<|>|<=|>=)\s*(\d+)", cond)]
+    assert (">", "1") in counts, \
+        f"the batch guard must refuse a second DECLARED batch index; found {counts} in: {cond}"
+
     assert re.search(r"\breturn\s+1\s*;", body), \
-        f"the batch guard detects a bad extent but never bails out (no `return 1;`):\n{body}"
+        f"the batch guard detects a bad batch shape but never bails out (no `return 1;`):\n{body}"
 
 
 ################################################################################

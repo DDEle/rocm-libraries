@@ -1117,22 +1117,19 @@ def fusedA2AWgRemapIndex(wg0, wg1, n0, n1, amTiles):
     """Reference model for FusedA2AWgRemap: (wg0_raw, wg1_raw) -> (m, j).
 
     Lifts the PUSH segment (M-tiles [0, amTiles)) out of its per-token-tile bands
-    and lays it down as one run at the front of the dispatch order, so the last
-    PUSH work-group moves from (n1-1)*n0 + amTiles - 1 to amTiles*n1 - 1.  Within
-    each segment m stays the fast axis, which both preserves the band-internal
-    locality the identity mapping had and keeps the in-flight work-groups spread
-    across all dst_ranks, so every SDMA queue stays busy.
+    into one run at the front of the dispatch order.  Within each segment m stays
+    the fast axis, which preserves the band-internal locality the identity mapping
+    had and keeps the in-flight work-groups spread across all dst_ranks, so every
+    SDMA queue stays busy.
 
-    Bijective on [0,n0) x [0,n1), which is what leaves the counter grain, counter2
-    and counter3's FusedTotalWGs untouched.  Correctness therefore does not depend
-    on the hardware dispatching in t order -- only the benefit does.
+    Bijective on [0,n0) x [0,n1), which is what leaves the counter grain and
+    FusedTotalWGs untouched.  Correctness therefore does not depend on the
+    hardware dispatching in t order -- only the benefit does.
 
-    Precondition: amTiles <= n0.  Enforced host-side by the AM <= M check in
-    client/src/FusedA2AClient.cpp:282-284 (together with AM % MT0 == 0 and
-    M % MT0 == 0, which make both quotients exact), so neither this nor the
-    emitted assembly re-checks it.  Above that bound the result is out of range,
-    NOT the identity -- keep the two in step: a reference model more forgiving
-    than the code it models tests something the hardware never runs.
+    Precondition: amTiles <= n0, enforced host-side by the AM <= M check in
+    client/src/FusedA2AClient.cpp (with AM % MT0 == 0 and M % MT0 == 0 making
+    both quotients exact), so neither this nor the emitted assembly re-checks
+    it.  Above that bound the result is out of range, NOT the identity.
     """
     t = wg0 + wg1 * n0
     S = amTiles * n1

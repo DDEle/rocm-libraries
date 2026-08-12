@@ -2868,16 +2868,19 @@ class GlobalWriteBatchWriter:
 
     # --- runtime PUSH gate (same as the store dispatch): PUSH iff WorkGroup0 < AM_tiles,
     #     with AM_tiles = FusedAM >> log2(MacroTile0) read on demand from kernarg. ---
+    #
+    # amTilesSgpr is deliberately NOT released here: the DRAIN guard below reuses
+    # this exact value, so AM_tiles has one definition rather than two that can
+    # drift.  The gate runs BEFORE the branch, so a local WG holds it live too.
     gateModule = Module("fusedA2A_hsPushGate")
-    gateSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsGate", preventOverflow=False)
-    gateModule.add(kw.argLoader.loadKernArg(gateSgpr, "KernArgAddress",
+    amTilesSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsAmTiles", preventOverflow=False)
+    gateModule.add(kw.argLoader.loadKernArg(amTilesSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedAM"]), dword=1))
     gateModule.add(SWaitCnt(kmcnt=0, comment="wait FusedAM"))
-    gateModule.add(SLShiftRightB32(dst=sgpr(gateSgpr), shiftHex=log2mt0, src=sgpr(gateSgpr),
+    gateModule.add(SLShiftRightB32(dst=sgpr(amTilesSgpr), shiftHex=log2mt0, src=sgpr(amTilesSgpr),
                                    comment=f"AM_tiles = FusedAM >> log2(MT0={mt0})"))
-    gateModule.add(SCmpGtU32(src0=sgpr(gateSgpr), src1=sgpr("WorkGroup0"),
+    gateModule.add(SCmpGtU32(src0=sgpr(amTilesSgpr), src1=sgpr("WorkGroup0"),
                              comment="AM_tiles > WorkGroup0? (this WG in PUSH region)"))
-    kw.sgprPool.checkIn(gateSgpr)
     gateModule.add(SCBranchSCC0(
       labelName=localTallyLabel.getLabelName(),
       comment="WorkGroup0 >= AM_tiles -> not a PUSH WG, skip the store wait + barrier"))
@@ -2967,12 +2970,8 @@ class GlobalWriteBatchWriter:
     # Gate SECOND, right after the EXEC restore: everything below it that a local WG
     # would otherwise walk is PUSH-only work.
     #
-    # argModule must stay BEHIND the gate.  gateSgpr is checked in before myRankSgpr
-    # is checked out, so the pool hands both the same physical SGPR; emitting the
-    # gate after argModule would overwrite my_rank with FusedAM and leave the SDMA
-    # block computing dst_y = AM_tiles*N and an ATOMIC at peer_ptr[p] + AM_tiles*8,
-    # past the W-slot flag allocation.  Keeping the gate ahead of the arg reads
-    # leaves its value dead before my_rank is written.
+    # argModule must stay BEHIND the gate, because its kernarg reads feed steps
+    # (3)-(6) and a local WG has to branch over them, not execute them.
     module.add(preModule)
     module.add(gateModule)
     module.add(syncModule)
@@ -3159,6 +3158,21 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(drainSgpr)
     module.add(SCBranchSCC1(labelName=skipDrainLabel.getLabelName(),
                             comment="FusedDrain==0 -> skip drain barrier"))
+
+    # Second runtime gate: AM_tiles == 0 -> nothing to wait for.  No work-group
+    # passed the PUSH gate, so no (dst_rank, j) counter can reach FusedTilesPerRank,
+    # so not one SDMA packet is submitted -- on any card, since every rank runs this
+    # kernel with the same AM.  Every flag slot then stays 0 while the poll below
+    # tests `flag == FusedTokenTiles`, and the owner spins forever.
+    #
+    # This is the grid-wide form of the PUSH gate's own predicate, reusing the value
+    # it already computed: WorkGroup0 ranges over [0, mTiles) with minimum 0, so
+    # "some WG satisfies AM_tiles > WorkGroup0" is exactly "AM_tiles > 0".
+    module.add(SCmpEQU32(src0=sgpr(amTilesSgpr), src1=0,
+                         comment="AM_tiles == 0? (no PUSH WG -> no packet -> no flag)"))
+    kw.sgprPool.checkIn(amTilesSgpr)
+    module.add(SCBranchSCC1(labelName=skipDrainLabel.getLabelName(),
+                            comment="AM_tiles==0 -> nothing will ever set a flag, skip drain barrier"))
 
     # self flag base = peer_ptr[my_rank] (THIS card's own flag buffer).  Loaded here
     # rather than reused from argModule: the winner is frequently a LOCAL WG, which

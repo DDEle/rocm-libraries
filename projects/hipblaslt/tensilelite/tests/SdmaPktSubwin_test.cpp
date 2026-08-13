@@ -164,8 +164,7 @@ TEST(SdmaPktSubwin, PacketSizeAndSubOp)
 }
 
 // -- ATOMIC ADD_RTN_32 golden vector. The route raises a destination flag with a
-//    fetch-add-1 packet (MORI CreateAtomicIncPacket form). This freezes the
-//    8-dword encoding. --
+//    fetch-add-1 packet. This freezes the 8-dword encoding. --
 TEST(SdmaPktAtomic, Add32GoldenVector)
 {
     // A flag slot address with distinct lo/hi bytes so a lo/hi swap would show.

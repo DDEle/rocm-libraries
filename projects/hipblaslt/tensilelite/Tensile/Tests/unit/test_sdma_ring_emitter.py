@@ -5,7 +5,7 @@
 # SDMA ring-buffer producer emitter structural tests (NOGPU).
 #
 # The emitter (Tensile/Components/SdmaRingEmitter.py) is a packet-independent
-# rocisa translation of MORI's anvil device ring skeleton, wired into
+# rocisa emitter for the ring skeleton, wired into
 # GlobalWriteBatch._emitFusedA2ASdmaIssue. These tests render each method's
 # Module to assembly text and assert on semantic features -- mnemonic, scope
 # bits (sc0/sc1), operand offsets -- rather than a whole-text snapshot.
@@ -224,11 +224,11 @@ class TestSubmitOrder:
         assert between, "expected s_waitcnt vmcnt(0) between wptr store and doorbell store"
 
     def test_vmcnt_barrier_between_doorbell_and_committed(self):
-        # MORI anvil_device.hpp:226: an s_waitcnt vmcnt(0)
-        # sits between the doorbell store and the committedWptr store, so the
-        # doorbell (engine kick) is ordered before committedWptr unblocks the next
-        # producer. This is on the plan's timing-hang critical path, so it is
-        # pinned here -- a refactor that drops it must redden a test.
+        # An s_waitcnt vmcnt(0) sits between the doorbell store and the
+        # committedWptr store, so the doorbell (engine kick) is ordered before
+        # committedWptr unblocks the next producer. This is on the timing-hang
+        # critical path, so it is pinned here -- a refactor that drops it must
+        # redden a test.
         lines = _lines(_render_submit())
         i_db = _first_idx(lines, lambda l: "doorbell" in l and "global_store" in l)
         i_comm = _first_idx(lines, lambda l: "store committedWptr = pending" in l and "global_store" in l)

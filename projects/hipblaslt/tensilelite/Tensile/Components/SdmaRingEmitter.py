@@ -3,8 +3,7 @@
 ################################################################################
 # SDMA ring-buffer producer emitter.
 #
-# Packet-INDEPENDENT rocisa translation of MORI's anvil device ring skeleton
-# (mori/include/mori/core/transport/sdma/anvil_device.hpp:121-234): the assembly
+# Packet-INDEPENDENT rocisa emitter for the ring skeleton: the assembly
 # a GPU producer runs to reserve space in a host-created SDMA ring, place
 # already-built packet dwords, and ring the doorbell -- WITHOUT knowing what the
 # packet is. SdmaPacketEmitter builds the packet dwords and calls placePacket.
@@ -40,8 +39,8 @@ from rocisa.instruction import (
 )
 
 
-# 256 KB SDMA ring, matching client/src/SdmaQueue.hpp SDMA_QUEUE_SIZE and MORI's
-# SDMA_QUEUE_SIZE. Power of two => WrapIntoRing is an AND mask, never a divide.
+# 256 KB SDMA ring, matching client/src/SdmaQueue.hpp SDMA_QUEUE_SIZE. Power of
+# two => WrapIntoRing is an AND mask, never a divide.
 SDMA_QUEUE_SIZE = 256 * 1024
 assert (SDMA_QUEUE_SIZE & (SDMA_QUEUE_SIZE - 1)) == 0, "ring size must be a power of two"
 
@@ -134,7 +133,7 @@ class SdmaRingEmitter:
 
     def emitCanWriteUpto(self, module, w, handleBaseS, cachedHwReadIdxS,
                          uptoIdxS, resultS, tmpPairS):
-        """MORI CanWriteUpto (anvil_device.hpp:126-135), two-level full check.
+        """Two-level full check.
 
         Fast path uses the private cache only (no memory traffic):
             if (upto - cachedHwReadIndex) < queueSize: return true
@@ -212,8 +211,8 @@ class SdmaRingEmitter:
 
     def emitReserveQueueSpace(self, module, w, handleBaseS, cachedHwReadIdxS,
                               sizeInBytes, outCurS, outOffsetS):
-        """MORI ReserveQueueSpace (anvil_device.hpp:137-169): reserve `sizeInBytes`
-        in the ring via a compare-exchange loop and compute the wrap-padding.
+        """Reserve `sizeInBytes` in the ring via a compare-exchange loop and
+        compute the wrap-padding.
 
         MUST be CAS, not fetch_add: on wrap the reservation also pads the ring
         tail (offset = queueSize - WrapIntoRing(cur)), and that padding depends
@@ -333,11 +332,11 @@ class SdmaRingEmitter:
 
     def emitPlacePacket(self, module, w, handleBaseS, packetDwordsV, numDwords,
                         pendingWptrS, offsetS):
-        """MORI placePacket (anvil_device.hpp:171-195): write `offsetS` bytes of
-        zero-padding (NOPs) then `numDwords` packet dwords into the ring, all at
-        AGENT scope (sc1). Advances pendingWptrS (2 SGPRs) by offset then by the
-        packet size. `packetDwordsV` is the base VGPR of the already-built packet
-        (SdmaPacketEmitter fills it); `numDwords` is compile-time.
+        """Write `offsetS` bytes of zero-padding (NOPs) then `numDwords` packet
+        dwords into the ring, all at AGENT scope (sc1). Advances pendingWptrS
+        (2 SGPRs) by offset then by the packet size. `packetDwordsV` is the base
+        VGPR of the already-built packet (SdmaPacketEmitter fills it);
+        `numDwords` is compile-time.
 
         Ring addressing is per-dword: base_dword = WrapIntoRing(pending)/4, and
         each store targets queueBuf[base_dword + i]. queueBuf is a uint32_t*, so
@@ -384,7 +383,7 @@ class SdmaRingEmitter:
 
         # ---- packet: store numDwords packet dwords at WrapIntoRing(pending). ----
         # Recompute base after padding advanced pending. numDwords is compile-time,
-        # so unroll (matches MORI's compile-time-bounded loop; one warp writes <=64).
+        # so unroll (one warp writes <=64).
         self._wrapIntoRing(module, wrapS, pendingWptrS + 0, "WrapIntoRing(pending) (packet base)")
         self._emitRingByteAddr(module, vAddr, queueBufPtrS, wrapS)
         for i in range(numDwords):
@@ -424,8 +423,8 @@ class SdmaRingEmitter:
     # ---- submitPacket ------------------------------------------------------
 
     def emitSubmitPacket(self, module, w, handleBaseS, baseS, pendingWptrS):
-        """MORI submitPacket (anvil_device.hpp:197-234): serialize this producer's
-        commit behind earlier reservations, then publish the packet.
+        """Serialize this producer's commit behind earlier reservations, then
+        publish the packet.
 
         (1) spin until committedWptr == base (this producer's turn; earlier
             reservations commit in order). Read committedWptr at AGENT scope.
@@ -440,9 +439,9 @@ class SdmaRingEmitter:
             told to read up to it.
 
         baseS / pendingWptrS are 2-SGPR byte indices from the reserve+place pair.
-        Emitted by a single elected lane, so NO s_barrier here -- MORI's
-        wave_barrier is a C++ compiler fence; in single-lane assembly the
-        s_waitcnt already orders memory and an s_barrier would deadlock.
+        Emitted by a single elected lane, so NO s_barrier here: in single-lane
+        assembly the s_waitcnt already orders memory and an s_barrier would
+        deadlock.
 
         "A single elected lane" means exactly one, never zero -- an election
         leaving EXEC == 0 spins on lane 0's never-loaded register rather than

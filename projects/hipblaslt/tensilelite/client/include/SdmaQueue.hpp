@@ -6,10 +6,6 @@
 // device-visible handle(s) that the GPU assembly reads to fill packets and
 // ring the doorbell.
 //
-// Ported from MORI's anvil (src/application/transport/sdma/anvil.cpp
-// SdmaQueue::SdmaQueue and include/mori/core/transport/sdma/anvil_device.hpp
-// SdmaQueueDeviceHandle).
-//
 // Header-only, and therefore hsakmt-DEPENDENT: including it requires the
 // hsakmt/hsa headers on the include path. Only TUs in tensilelite-client-common
 // have that (the dependency is PRIVATE to that target), and the sole includer
@@ -37,9 +33,9 @@ namespace TensileLite
 {
     namespace Client
     {
-        // 256KB SDMA ring, matching MORI's SDMA_QUEUE_SIZE. wptr/rptr/doorbell
-        // are monotonically increasing BYTE counts; wrap happens only when
-        // indexing into the ring (index % SDMA_QUEUE_SIZE).
+        // 256KB SDMA ring. wptr/rptr/doorbell are monotonically increasing
+        // BYTE counts; wrap happens only when indexing into the ring
+        // (index % SDMA_QUEUE_SIZE).
         constexpr uint32_t SDMA_QUEUE_SIZE = 256 * 1024;
 
         // Device-visible handle. THE FIELD LAYOUT IS A CONTRACT: the GPU
@@ -50,7 +46,7 @@ namespace TensileLite
         // seventh, cachedHwReadIndex, is a VALUE and a per-producer PRIVATE
         // cache seed (the hardware read pointer at construction), not shared
         // state: each producer copies it into its own local and mutates that
-        // copy, never writing back to this memory (see MORI CanWriteUpto).
+        // copy, never writing back to this memory.
         struct SdmaQueueDeviceHandle
         {
             // Producer-shared pointers; plain uint64_t* (not hsakmt's
@@ -149,7 +145,7 @@ namespace TensileLite
 
         // ---- Topology helpers ---------------------------------------------
         // KFD topology node id for a HIP device ordinal (via the HSA agent's
-        // NODE info, mirroring MORI). Initializes HSA + KFD on first call.
+        // NODE info). Initializes HSA + KFD on first call.
         inline uint32_t sdmaNodeIdForDevice(int hipDeviceId)
         {
             detail::ensureHsaKfd();
@@ -166,13 +162,12 @@ namespace TensileLite
 
         // SDMA engine id to use for the srcNode->dstNode link. Prefers the
         // first engine in KFD's RecSdmaEngIdMask for that io-link; for a
-        // loopback (srcNode==dstNode, no io-link) returns a general engine (0),
-        // matching MORI's loopback handling.
+        // loopback (srcNode==dstNode, no io-link) returns a general engine (0).
         inline uint32_t sdmaSelectEngine(uint32_t srcNode, uint32_t dstNode)
         {
             detail::ensureHsaKfd();
             // Loopback (self) has no io-link and no recommended engine; use a
-            // general (non-xGMI) SDMA engine, matching MORI's loopback path.
+            // general (non-xGMI) SDMA engine.
             if(srcNode == dstNode)
                 return 0;
 
@@ -252,7 +247,7 @@ namespace TensileLite
 
                     // Seed the cursors to the current HARDWARE write pointer so the
                     // first reserved index is contiguous with whatever the queue was
-                    // created at (MORI does exactly this).
+                    // created at.
                     const uint64_t hwWptr = (uint64_t) * (queue_.Queue_write_ptr_aql);
                     const uint64_t hwRptr = (uint64_t) * (queue_.Queue_read_ptr_aql);
                     hostWptr_             = hwWptr;

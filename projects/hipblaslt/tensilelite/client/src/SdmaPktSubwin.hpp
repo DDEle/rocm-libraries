@@ -9,10 +9,9 @@
 // renaming would churn the T1 gtest target and CMake for no functional gain.
 //
 // This is the canonical, header-only home for the packets that later codegen
-// tasks fill in GPU assembly. MORI only
-// defines the flat COPY_LINEAR packet, so this struct is transcribed from the
-// OSS 4.4 sdma.pkt field positions (cross-checked against ROCR's
-// sdma_registers.h and the kernel's vega10_sdma_pkt_open.h -- all three agree).
+// tasks fill in GPU assembly. This struct is transcribed from the OSS 4.4
+// sdma.pkt field positions (cross-checked against ROCR's sdma_registers.h and
+// the kernel's vega10_sdma_pkt_open.h -- all three agree).
 //
 // DO NOT reorder fields, change types, or "clean up" the reserved gaps: the
 // static_asserts and the golden-vector unit test (SdmaPktSubwin_test.cpp) exist
@@ -242,14 +241,10 @@ namespace TensileLite
     // -----------------------------------------------------------------------
     // SDMA ATOMIC packet (op 10) -- 8 dwords, pre-GFX12 layout.
     //
-    // Unlike the SUBWIN struct above (hand-transcribed because MORI lacks it),
-    // this is copied VERBATIM from MORI's production
-    // mori/include/mori/core/transport/sdma/sdma_pkt_struct.h
-    // (SDMA_PKT_ATOMIC_TAG, 8 unions == 8 dwords). The route uses it in the
-    // fetch-add form of MORI's CreateAtomicIncPacket (anvil_device.hpp:72):
-    // op=ATOMIC, ADDR=flag slot, SRC_DATA=1 (the increment); the CMP_DATA / LOOP
-    // dwords stay zero for a plain fetch-add. Because this is a fetch-add the
-    // "l" (loop/return-old) header bit is left 0.
+    // The route uses this in fetch-add form: op=ATOMIC, ADDR=flag slot,
+    // SRC_DATA=1 (the increment); the CMP_DATA / LOOP dwords stay zero for a
+    // plain fetch-add. Because this is a fetch-add the "l" (loop/return-old)
+    // header bit is left 0.
     //
     // `operation` is a 7-bit index into the TC atomic op table (ADD_RTN_32 = 15,
     // ADD_RTN_64 = 47). RTN means the op returns the pre-op value; this packet
@@ -304,10 +299,9 @@ namespace TensileLite
 
     // -----------------------------------------------------------------------
     // Fill an ADD_RTN_32 fetch-add packet targeting `dstAddr` with `addend` (the
-    // route passes addend == 1 to raise a flag). Mirrors MORI CreateAtomicIncPacket
-    // but takes the addend explicitly. Address is the raw 64-bit pointer split
-    // lo/hi; compare + loop dwords stay zero (unused for a plain fetch-add).
-    // SRC_DATA_HI is read by the 64-bit ops only and stays zero.
+    // route passes addend == 1 to raise a flag). Address is the raw 64-bit
+    // pointer split lo/hi; compare + loop dwords stay zero (unused for a plain
+    // fetch-add). SRC_DATA_HI is read by the 64-bit ops only and stays zero.
     // -----------------------------------------------------------------------
     inline SDMA_PKT_ATOMIC makeAtomicAdd32Packet(unsigned long long dstAddr,
                                                  unsigned int      addend)

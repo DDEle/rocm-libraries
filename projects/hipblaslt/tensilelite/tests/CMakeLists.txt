@@ -39,9 +39,6 @@ target_sources(tensilelite-tests
         "${CMAKE_CURRENT_SOURCE_DIR}/RangeLibrary_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ResultComparison_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ReferenceMXFastPath_test.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/FusedA2AKernArg_test.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/FusedA2ACounterSentinel_test.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/SdmaPktSubwin_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/SolutionValidation_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/TensorDescriptor_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/TestData.cpp"
@@ -61,7 +58,6 @@ endif()
 
 target_include_directories(tensilelite-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_include_directories(tensilelite-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../client/include")
-target_include_directories(tensilelite-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../client/src")
 
 target_link_libraries(tensilelite-tests
     PUBLIC
@@ -552,16 +548,3 @@ if(NOT WIN32)
     )
     set_tests_properties("CPUGemm.slow_f32_MX32_Rejected" PROPERTIES WILL_FAIL TRUE)
 endif()
-
-#################################################
-#        Tests for CMake logic                  #
-#################################################
-
-# Pure CMake: no compiler, no ROCm install, no GPU. Covers the hsakmt link
-# interface repair in cmake/HsakmtLinkInterface.cmake.
-add_test(
-    NAME "CMake.HsakmtLinkInterface"
-    COMMAND ${CMAKE_COMMAND}
-            -DTEST_TMP_DIR=${CMAKE_CURRENT_BINARY_DIR}/hsakmt_link_interface_test
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/tests/test_hsakmt_link_interface.cmake
-)

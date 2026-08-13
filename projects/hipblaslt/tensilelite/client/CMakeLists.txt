@@ -75,8 +75,7 @@ if(TENSILELITE_ENABLE_SDMA_A2A AND NOT WIN32)
     # ROCm 7.x's hsakmtTargets.cmake bakes BUILD-HOST absolute paths into
     # hsakmt::hsakmt's INTERFACE_LINK_LIBRARIES that do not exist on a fresh
     # container, so every executable linking hsakmt fails. The repair lives in
-    # cmake/HsakmtLinkInterface.cmake -- which documents the two broken forms
-    # and is unit-tested by cmake/tests/test_hsakmt_link_interface.cmake.
+    # cmake/HsakmtLinkInterface.cmake, which documents the two broken forms.
     if(TARGET hsakmt::hsakmt)
         include("${CMAKE_CURRENT_LIST_DIR}/../cmake/HsakmtLinkInterface.cmake")
         get_target_property(_hsakmt_ill hsakmt::hsakmt INTERFACE_LINK_LIBRARIES)

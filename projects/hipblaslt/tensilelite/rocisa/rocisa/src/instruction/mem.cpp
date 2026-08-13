@@ -1325,7 +1325,7 @@ void mem_inst(nb::module_ m_mem)
         });
 
     nb::class_<rocisa::GlobalAtomicAddU32, rocisa::GlobalWriteInstruction>(m_mem,
-                                                                          "GlobalAtomicAddU32")
+                                                                           "GlobalAtomicAddU32")
         .def(nb::init<const std::shared_ptr<rocisa::RegisterContainer>&,
                       const std::shared_ptr<rocisa::RegisterContainer>&,
                       const std::shared_ptr<rocisa::RegisterContainer>&,

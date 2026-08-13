@@ -87,7 +87,7 @@ namespace TensileLite
         int runFusedA2A(po::variables_map const&                                       args,
                         std::shared_ptr<MasterSolutionLibrary<ContractionProblemGemm>> library,
                         std::shared_ptr<Hardware>                                      hardware,
-                        ClientProblemFactory&                                          problemFactory);
+                        ClientProblemFactory& problemFactory);
 
         __global__ void flush_icache()
         {

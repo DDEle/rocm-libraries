@@ -2268,14 +2268,23 @@ namespace rocisa
             return std::make_shared<GlobalAtomicAddU32>(*this);
         }
 
-        std::vector<InstructionInput> getParams() const override { return {vaddr, srcData, saddr}; }
-        std::vector<InstructionInput> getDstParams() const override { return {dst}; }
-        std::vector<InstructionInput> getSrcParams() const override { return {vaddr, srcData, saddr}; }
+        std::vector<InstructionInput> getParams() const override
+        {
+            return {vaddr, srcData, saddr};
+        }
+        std::vector<InstructionInput> getDstParams() const override
+        {
+            return {dst};
+        }
+        std::vector<InstructionInput> getSrcParams() const override
+        {
+            return {vaddr, srcData, saddr};
+        }
 
         std::string getArgStr() const
         {
-            return dst->toString() + ", " + vaddr->toString() + ", "
-                 + srcData->toString() + ", " + saddr->toString();
+            return dst->toString() + ", " + vaddr->toString() + ", " + srcData->toString() + ", "
+                   + saddr->toString();
         }
 
         std::string toString() const override
@@ -2338,14 +2347,23 @@ namespace rocisa
             return std::make_shared<GlobalAtomicCmpswapB64>(*this);
         }
 
-        std::vector<InstructionInput> getParams() const override { return {vaddr, srcData, saddr}; }
-        std::vector<InstructionInput> getDstParams() const override { return {dst}; }
-        std::vector<InstructionInput> getSrcParams() const override { return {vaddr, srcData, saddr}; }
+        std::vector<InstructionInput> getParams() const override
+        {
+            return {vaddr, srcData, saddr};
+        }
+        std::vector<InstructionInput> getDstParams() const override
+        {
+            return {dst};
+        }
+        std::vector<InstructionInput> getSrcParams() const override
+        {
+            return {vaddr, srcData, saddr};
+        }
 
         std::string getArgStr() const
         {
-            return dst->toString() + ", " + vaddr->toString() + ", "
-                 + srcData->toString() + ", " + saddr->toString();
+            return dst->toString() + ", " + vaddr->toString() + ", " + srcData->toString() + ", "
+                   + saddr->toString();
         }
 
         std::string toString() const override

@@ -138,18 +138,18 @@ namespace TensileLite
             // mTiles: diagnostic only.
             const uint32_t mTiles = M / macroTileM;
 
-            if(AM % (uint32_t)W != 0 || (nShard % macroTileM) != 0
-               || (M % macroTileM) != 0 || (AM % macroTileM) != 0 || AM > M)
+            if(AM % (uint32_t)W != 0 || (nShard % macroTileM) != 0 || (M % macroTileM) != 0
+               || (AM % macroTileM) != 0 || AM > M)
             {
                 std::cerr << "[fused-a2a] ERROR: problem shape violates fused-A2A "
                              "constraints (spec section 0).\n"
                           << "  M(feature)=" << M << " N(token)=" << N << " AM=" << AM << " W=" << W
-                          << " n_shard=AM/W=" << nShard
-                          << " MacroTile0(feature)=" << macroTileM << "\n"
+                          << " n_shard=AM/W=" << nShard << " MacroTile0(feature)=" << macroTileM
+                          << "\n"
                           << "  require: AM % W == 0, (AM/W) % " << macroTileM
                           << " == 0 (so n_shard >= " << macroTileM
-                          << " and every rank is covered), M % " << macroTileM
-                          << " == 0, AM % " << macroTileM << " == 0, AM <= M.\n"
+                          << " and every rank is covered), M % " << macroTileM << " == 0, AM % "
+                          << macroTileM << " == 0, AM <= M.\n"
                           << "  e.g. W=4 needs AM >= " << ((size_t)W * macroTileM)
                           << " (n_shard >= " << macroTileM
                           << "). Refusing to launch (would deadlock in the DRAIN barrier)."
@@ -212,10 +212,10 @@ namespace TensileLite
             const size_t cBytes            = problem->c().totalAllocatedBytes();
             const size_t dBytes            = problem->d().totalAllocatedBytes();
 
-            std::cout << "[fused-a2a] nFeature(M)=" << M << " nToken(N)=" << N
-                      << " K=" << K << " AM=" << AM << " nShard=" << nShard
-                      << " tilesPerRank=" << tilesPerRank << " tokenTiles=" << tokenTiles
-                      << " mTiles=" << mTiles << " drain=" << drain << "\n";
+            std::cout << "[fused-a2a] nFeature(M)=" << M << " nToken(N)=" << N << " K=" << K
+                      << " AM=" << AM << " nShard=" << nShard << " tilesPerRank=" << tilesPerRank
+                      << " tokenTiles=" << tokenTiles << " mTiles=" << mTiles << " drain=" << drain
+                      << "\n";
 
             // Physical layouts come from the tensor descriptors, never hardcoded:
             // A(m,k) sits at m*aFreeStride + k*aBoundStride, likewise B(k,n), D(m,n).
@@ -252,10 +252,9 @@ namespace TensileLite
             {
                 std::cerr << "[fused-a2a] ERROR: D's token-axis stride overflows the "
                              "SDMA packet's 19-bit src_pitch field.\n"
-                          << "  ldd(D nStride)=" << dNStride << " -> ldd>>" << elemShift
-                          << "=" << (dNStride >> elemShift) << " must be < "
-                          << (1u << 19) << " (i.e. ldd < "
-                          << ((size_t)(1u << 19) << elemShift) << ").\n"
+                          << "  ldd(D nStride)=" << dNStride << " -> ldd>>" << elemShift << "="
+                          << (dNStride >> elemShift) << " must be < " << (1u << 19)
+                          << " (i.e. ldd < " << ((size_t)(1u << 19) << elemShift) << ").\n"
                           << "  Refusing to launch (the pitch would OR into the "
                              "neighbouring packet field). Reduce M or the D padding."
                           << std::endl;
@@ -452,7 +451,7 @@ namespace TensileLite
             // slotStride uses the UNPADDED N, to match the kernel's SizeJ slot
             // multiply.
             const size_t slotStride = (size_t)N * nShard; // elems per src slot
-            const size_t rowStride = (size_t)nShard; // per-token stride (feature-shard contiguous)
+            const size_t rowStride  = (size_t)nShard; // per-token stride (feature-shard contiguous)
 
             // Only sized when validating; empty otherwise, and no D2H copy-back.
             std::vector<uint16_t> hRecv, hOut;
@@ -500,8 +499,7 @@ namespace TensileLite
                 inputs.beta  = static_cast<float>(0);
                 inputs.gpu   = true;
 
-                auto kernels
-                    = solution->solve(*problem, inputs, *hardware, nullptr, 0, streams[d]);
+                auto kernels = solution->solve(*problem, inputs, *hardware, nullptr, 0, streams[d]);
                 // Not back(): solve() appends conversion/reduction kernels after the
                 // GEMM, and the fused segment belongs to the GEMM.
                 if(kernels.size() != 1)

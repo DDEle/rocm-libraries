@@ -62,7 +62,7 @@ _GFX    = "gfx950"
 #   _PROD_COPY_GOLDEN -- no hardware backing; only DW9/DW10 differ from the
 #     harness vector (dst pitch 2560 vs 2624), checkable by inspection:
 #     (2560-1)<<13 == 0x013FE000, 256*2560-1 == 0x0009FFFF.
-#   _ATOMIC_GOLDEN -- derived from MORI's SDMA_PKT_ATOMIC layout with the TC
+#   _ATOMIC_GOLDEN -- derived from the SDMA_PKT_ATOMIC layout with the TC
 #     atomic op table's ADD_RTN_32 selector: DW0 == 10 | (15<<25) == 0x1E00000A.
 #
 # The bit positions (minus-one extents/pitches, ELEMENTSIZE scaling, the <<13

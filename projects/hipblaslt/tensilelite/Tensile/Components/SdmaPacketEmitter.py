@@ -197,10 +197,9 @@ def encodeCopyDwords(srcBase, srcX, srcY, srcPitch, srcSlicePitch,
 
 
 def encodeAtomicDwords(dstAddr, addend=1):
-    """Return the 8 dwords of an ADD_RTN_32 fetch-add ATOMIC packet (MORI
-    CreateAtomicIncPacket form): op=ATOMIC, operation=ADD_RTN_32, ADDR=dstAddr,
-    SRC_DATA=addend; compare + loop dwords stay zero. Mirrors
-    makeAtomicAdd32Packet in SdmaPktSubwin.hpp."""
+    """Return the 8 dwords of an ADD_RTN_32 fetch-add ATOMIC packet: op=ATOMIC,
+    operation=ADD_RTN_32, ADDR=dstAddr, SRC_DATA=addend; compare + loop dwords
+    stay zero. Mirrors makeAtomicAdd32Packet in SdmaPktSubwin.hpp."""
     dw = [0] * ATOMIC_PACKET_DWORDS
     dw[0] = ((SDMA_OP_ATOMIC & 0xFF)
              | ((SDMA_ATOMIC_ADD_RTN_32 & 0x7F) << 25))  # l bit (16) stays 0 (fetch-add)

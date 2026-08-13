@@ -130,15 +130,12 @@ namespace TensileLite
 
             // The first `AM` FEATURE columns go all-to-all; [AM, M) stay local in
             // `out`.
-            const uint32_t AM = (uint32_t)args["fused-a2a-am"].as<int>();
-            // nShard = AM/W is a FEATURE sub-segment (one rank's slice of feature M).
-            const uint32_t nShard = AM / (uint32_t)W;
-            // tilesPerRank: whole feature-tiles per rank shard (nShard is feature).
+            const uint32_t AM           = (uint32_t)args["fused-a2a-am"].as<int>();
+            const uint32_t nShard       = AM / (uint32_t)W;
             const uint32_t tilesPerRank = (uint32_t)(nShard / FUSED_A2A_M_TILE);
-            // tokenTiles: token-tiles across N. CEIL, not floor -- it is a DIMENSION
-            // of the counter array and the grid has CeilDivide(N, MT1) of them.
+            // tokenTiles sizes the counter array and the padded recv buffer.
             const uint32_t tokenTiles = (N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE;
-            // mTiles: feature-tiles across the full feature dim M (diagnostic only).
+            // mTiles: diagnostic only.
             const uint32_t mTiles = M / FUSED_A2A_M_TILE;
 
             if(AM % (uint32_t)W != 0 || (nShard % FUSED_A2A_M_TILE) != 0

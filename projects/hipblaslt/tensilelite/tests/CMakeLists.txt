@@ -560,10 +560,7 @@ endif()
 #################################################
 
 # Pure CMake: no compiler, no ROCm install, no GPU. Covers the hsakmt link
-# interface repair in cmake/HsakmtLinkInterface.cmake, whose failure mode --
-# rewriting search dirs that are perfectly alive -- is invisible on the one
-# container the workaround was written against and only surfaces on a host
-# whose ROCm exports a different link interface.
+# interface repair in cmake/HsakmtLinkInterface.cmake.
 add_test(
     NAME "CMake.HsakmtLinkInterface"
     COMMAND ${CMAKE_COMMAND}

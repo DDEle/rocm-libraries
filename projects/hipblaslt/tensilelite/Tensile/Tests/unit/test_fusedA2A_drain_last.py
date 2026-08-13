@@ -4,8 +4,7 @@
 ################################################################################
 # Fused-A2A DRAIN ownership: the single globally-last workgroup drains, elected
 # by a grid-wide counter3, and polls all W flag slots with one vector load
-# reduced by VCCZ -- replacing W per-peer spinners, each of which idled a whole
-# CU at the champion kernel's 1-WG/CU occupancy.
+# reduced by VCCZ.
 ################################################################################
 
 import ast
@@ -28,19 +27,8 @@ _GOLDEN = os.path.join(SCRIPT_DIR, "test_data", "fusedA2A_handshake.golden.s")
 def _renderHandshake(wavefrontSize: int = 64) -> str:
     """Render _emitFusedA2AHandshake standalone.
 
-    Same shape as test_fusedA2A_sdma_issue.py's _render, but driving the whole
-    handshake, which reads more off kernel/parentWriter (WavefrontSize via the
-    `wavelen` property, FusedGemmA2A).
-
-    `wavefrontSize` picks the wave width. It defaults to 64 -- what every fused
-    config runs and what the golden below captures -- but the handshake has a wave32
-    arm (EXEC is one dword, `exec_lo`, and the mask instruction is the B32 one), and
-    a fixture that could only render wave64 left that arm covered by nothing at all.
-
-    The argLoader stub echoes its arguments instead of a fixed comment. The real
-    loadKernArg is unavailable here, and a constant stub would render all eleven
-    kernarg loads as the same line -- which would make both any "the counter_ptr
-    kernarg is loaded" assertion and the golden below blind to a wrong offset.
+    `wavefrontSize` picks the wave width and defaults to 64. The argLoader stub
+    echoes its arguments instead of rendering a fixed comment.
     """
     from rocisa import rocIsa
     from rocisa.register import RegisterPool
@@ -65,7 +53,7 @@ def _renderHandshake(wavefrontSize: int = 64) -> str:
     w.sgprPool = RegisterPool(0, RegisterType.Sgpr, defaultPreventOverflow=False, printRP=False)
     w.labels = LabelManager()
     w.vgprPool.checkOut(1)   # v0 reserved (Serial)
-    w.sgprPool.checkOut(8)   # reserve s0..s7
+    w.sgprPool.checkOut(8)
     w.sgprs = {"AddressD": w.sgprPool.checkOutAligned(2, 2, "AddressD", preventOverflow=False)}
     indexChars = [str(i) for i in range(8)]
     indexChars[1] = "1J"                      # matches KernelWriter's "1"+INDEX_CHARS[1]
@@ -88,29 +76,18 @@ def renderHandshake():
 
 
 def _codeLines(text):
-    """Comment-stripped, blank-stripped instruction stream (see _has_alu in
-    test_sdma_packet_emitter.py for why assertions run against operands, not
-    the instruction's own comment)."""
+    """Comment-stripped, blank-stripped instruction stream."""
     return [ln for ln in (l.split("//")[0].strip() for l in text.splitlines()) if ln]
 
 
 def _ops(line):
-    """Operands of a comment-stripped instruction, in source order.
-
-    Operands must be compared BY POSITION -- `"s28" in line` cannot tell a dst from a
-    src, and would keep an assertion green through an operand swap.
-    """
+    """Operands of a comment-stripped instruction, in source order."""
     parts = line.split(None, 1)
     return [] if len(parts) < 2 else [op.strip() for op in parts[1].split(",")]
 
 
 def _baseReg(operand):
-    """Base SGPR of an operand written either as `s28` or as the pair `s[28:29]`.
-
-    The wave64 lowering writes EXEC from an aligned pair, so the register the EXEC
-    write names is not spelled the same as the one the mask arithmetic writes; both
-    have to reduce to the same name before they can be tied together.
-    """
+    """Base SGPR of an operand written either as `s28` or as the pair `s[28:29]`."""
     m = re.fullmatch(r"s\[(\d+):\d+\]", operand) or re.fullmatch(r"s(\d+)", operand)
     return "s" + m.group(1) if m else None
 
@@ -129,27 +106,16 @@ def _braceBlock(src, start):
     raise AssertionError("unbalanced braces after offset %d" % start)
 
 
-# The echoing argLoader stub renders every kernarg load as a comment line carrying
-# its destination register, width and offset -- which is what makes the check below
-# possible at all.
+# Matches the echoing argLoader stub's rendering of one kernarg load.
 _LOAD_RE = re.compile(r"//\s*loadKernArg (\d+) KernArgAddress .*?dword=(\d+).*?sgprOffset=(\S+)")
 
 
 def _deadKernargLoads(text):
     """Kernarg loads whose register is overwritten by another load before any read.
 
-    The register pool recycles a slot the moment it is checked in, so two kernarg
-    values can share one physical SGPR. That is fine while their live ranges do not
-    overlap, and silently wrong when they do -- and it is invisible in review,
-    because the *comment* on each later instruction still names the value the author
-    intended ("myRank * N" reading a register that now holds AM_tiles).
-
-    Reports (reg, offset, clobberOffset) when a load is destroyed before its first
-    read. Deliberately conservative: legitimate reuse always happens after the last
-    read of the previous value, so it cannot trip this, and a value clobbered after
-    one read but before a later one is not modelled (no test here needs that).
-    Reads are counted on the comment-stripped instruction only, so a register named
-    solely in a comment does not mask a clobber.
+    Reports (reg, offset, clobberOffset). A value clobbered after one read but
+    before a later one is not modelled. Reads are counted on the comment-stripped
+    instruction only.
     """
     raw = [ln for ln in text.splitlines() if ln.strip()]
     code = [ln.split("//")[0] for ln in raw]
@@ -159,11 +125,6 @@ def _deadKernargLoads(text):
         if m and m.group(2) == "1":          # single-dword loads; pairs render as s[n:n+1]
             loads.append((i, int(m.group(1)), m.group(3)))
 
-    # _LOAD_RE parses a COMMENT, and nothing enforces that comment's format. If it
-    # ever drifts, every loop below iterates zero times and this returns [] -- which
-    # the caller's `assert not dead` reads as "no clobbers", indistinguishable from
-    # a clean render. Fail loudly instead. (_maskWidthProvenance guards its own use
-    # of the same regex the same way.)
     assert loads, \
         "_LOAD_RE matched no kernarg loads; the emitted comment format has likely " \
         "drifted, so this check is inspecting nothing: %s" % _LOAD_RE.pattern
@@ -183,17 +144,8 @@ def _deadKernargLoads(text):
 def _maskWidthProvenance(text):
     """Where the s_bfm width operand's value came from.
 
-    Every other assertion about the mask can only see the operand's SHAPE -- that it
-    is a register. Nothing in the emitted text distinguishes an s_bfm reading W from
-    the identical line reading a register the pool has since handed to something
-    else; the comment says "(1 << W) - 1" either way. That is the exact failure mode
-    _deadKernargLoads exists for, one step further along.
-
-    The echoing argLoader stub is the only place a register is tied to the kernarg it
-    was loaded from, so resolve the width register back through it. Returns
-    (sgprOffset of the last single-dword kernarg load into that register before the
-    s_bfm, list of instructions writing it in between) -- the second must be empty or
-    the offset says nothing about the value at the s_bfm.
+    Returns (sgprOffset of the last single-dword kernarg load into that register
+    before the s_bfm, list of instructions writing it in between).
     """
     raw = [ln for ln in text.splitlines() if ln.strip()]
     code = [ln.split("//")[0].strip() for ln in raw]
@@ -219,16 +171,9 @@ def test_total_wgs_latch_multiplies_the_two_grid_dims():
     emitFusedA2ATotalWGsLatch(m, "FusedTotalWGs")
     text = str(m)
 
-    # Assert on the comment-stripped instruction, never on `text`: the
-    # instruction's own comment reads "FusedTotalWGs = NumWorkGroups0 *
-    # NumWorkGroups1", so every name below is satisfied by the comment alone and
-    # a `in text` check stays green even with the operands wired wrong.
     code = [ln for ln in (l.split("//")[0].strip() for l in text.splitlines()) if ln]
-    # exactly one instruction -- this is a hot-path prologue, not a place to grow
     assert len(code) == 1, code
     assert code[0].startswith("s_mul_i32 "), code[0]
-    # by position, so a dst/src swap is caught too. Count first: a bare 3-tuple
-    # unpack would die with an opaque ValueError if the operand count drifted.
     ops = [op.strip() for op in code[0].split(None, 1)[1].split(",")]
     assert len(ops) == 3, f"expected a 3-operand s_mul_i32, got {len(ops)}: {code[0]}"
     dst, src0, src1 = ops
@@ -238,13 +183,7 @@ def test_total_wgs_latch_multiplies_the_two_grid_dims():
 
 
 def test_fused_a2a_also_locks_out_the_runtime_GSU_override():
-    # Rejecting GlobalSplitU != 1 only pins the compile-time value. SupportUserGSU
-    # defaults to True, and ContractionSolution.cpp honours problem.getParams().gsu()
-    # when it is set -- so a runtime caller could re-inflate the grid under an
-    # election target that was latched as a compile-time constant. Structural pin
-    # (no toolchain needed): the lockout must live in the FusedGemmA2A block and sit
-    # on the ACCEPTED path -- after the rejects, never nested inside one, or it
-    # never runs for the config it protects.
+    """The SupportUserGSU lockout sits in the FusedGemmA2A block, on the accepted path."""
     with open(os.path.join(TENSILE_ROOT, "Tensile/SolutionStructs/Solution.py")) as f:
         tree = ast.parse(f.read())
 
@@ -258,7 +197,6 @@ def test_fused_a2a_also_locks_out_the_runtime_GSU_override():
     def index_of(pred):
         return next((i for i, stmt in enumerate(body) if pred(stmt)), None)
 
-    # Unconditional now: a bare assignment in the block body, not behind an `if`.
     lockout = index_of(lambda s: ast.unparse(s) == TARGET)
     assert lockout is not None, f"FusedGemmA2A block no longer sets {TARGET}"
 
@@ -266,61 +204,32 @@ def test_fused_a2a_also_locks_out_the_runtime_GSU_override():
                           and "GlobalSplitU" in ast.unparse(s.test)
                           and any(isinstance(b, ast.Return) for b in s.body))
     assert gsu_reject is not None, "the compile-time GlobalSplitU rejection went missing"
-    # Placing the lockout before the reject would set it on solutions that are then
-    # thrown away, and leave the accepted ones untouched.
     assert lockout > gsu_reject, \
         "lockout must come AFTER the GSU rejection, not inside/before it"
 
-    # A top-level return before it would make it unreachable outright.
     assert not any(isinstance(s, (ast.Return, ast.Raise)) for s in body[:lockout]), \
         "a statement before the lockout leaves the block: the lockout is dead code"
 
 
 def test_batch_guard_is_host_side_not_compile_time():
-    """The batch guard must test the EXTENT, which only the host can see.
-
-    Compile time knows only that a batch index is DECLARED. Every fused config sets
-    `Batched: True` -> NumIndicesBatch == 1 while running extent 1, so a
-    compile-time rejection on NumIndicesBatch would match every solution and
-    generate ZERO kernels -- a failure that looks like "no solutions found", not
-    like a bad number.
-    """
+    """The batch guard must test the EXTENT, which only the host can see."""
     with open(os.path.join(TENSILE_ROOT, "Tensile/SolutionStructs/Solution.py")) as f:
         tree = ast.parse(f.read())
     blocks = [n for n in ast.walk(tree)
               if isinstance(n, ast.If) and ast.unparse(n.test) == "state['FusedGemmA2A']"]
     assert len(blocks) == 1, "expected exactly one `if state['FusedGemmA2A']:` block"
-    # Scoped to the block: NumIndicesBatch is a legitimate name elsewhere in the file.
     rejects = [ast.unparse(s) for s in blocks[0].body
                if isinstance(s, ast.If) and "NumIndicesBatch" in ast.unparse(s.test)]
     assert not rejects, \
         f"fused block still rejects on a DECLARED batch index (zero kernels): {rejects}"
 
-    # Host side. Grepping for `batchIndices()` / `batchSize(` proves only that the
-    # API is CALLED -- it stays green with the predicate inverted (`!= 2` accepts the
-    # extent 2 that breaks the election, and rejects the extent 1 every fused config
-    # runs) or with the bail-out deleted, i.e. with a guard that guards nothing.
-    #
-    # So assert the properties the guard must have rather than how it spells them.
-    # An earlier revision pinned a `for` loop over batchIndices(); the guard was
-    # later rewritten as one scalar predicate, which is equally correct, and pinning
-    # the shape only moved the failure to the refactor.
-    #
-    # BOTH halves are load-bearing. Testing batchSize(0) alone is complete ONLY
-    # because a count above 1 is refused outright: drop the count test and a second
-    # declared index passes unexamined, giving the grid a third dimension that
-    # emitFusedA2ATotalWGsLatch (NumWorkGroups0 * NumWorkGroups1) does not count, so
-    # counter3 wraps early and elects more than one DRAIN owner.
     host = os.path.join(TENSILE_ROOT, "client/src/FusedA2AClient.cpp")
     with open(host) as f:
         src = f.read()
-    # Strip comments FIRST: every check below is a text match, and commented-out code
-    # matches just as well as live code.  Without this, `/*return 1;*/` satisfies the
-    # bail-out assertion -- verified by mutation, it is not a hypothetical.
+    # Strip comments first: every check below is a text match.
     src = re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", src, flags=re.S))
 
-    # The count may reach the predicate through a local, so collect the names that
-    # legitimately hold it alongside the call itself.
+    # The count may reach the predicate through a local.
     countNames = {"problem->batchIndices().size()"}
     countNames.update(re.findall(r"\b(\w+)\s*=\s*problem->batchIndices\(\)\.size\(\)", src))
 
@@ -353,15 +262,11 @@ def test_batch_guard_is_host_side_not_compile_time():
 def _pushGateIndex(text):
     """Index, in the comment-stripped stream, of the PUSH gate's branch.
 
-    Located by its comment (the only way to tell it apart from the six other
-    s_cbranch_scc0 in the handshake); every assertion about it then runs against
-    the comment-stripped instruction.
+    Located by its comment.
     """
     raw = [l for l in text.splitlines() if l.strip()]
     hits = [i for i, ln in enumerate(raw) if "not a PUSH WG" in ln]
     assert len(hits) == 1, f"expected exactly one PUSH gate branch, got {hits}"
-    # _codeLines drops nothing but blanks, so raw and code indices coincide only
-    # if no line is comment-only. Re-find by identity instead.
     code = _codeLines(text)
     gate = raw[hits[0]].split("//")[0].strip()
     assert gate, f"PUSH gate line is comment-only: {raw[hits[0]]!r}"
@@ -369,14 +274,7 @@ def _pushGateIndex(text):
 
 
 def test_push_gate_falls_through_to_the_local_tally_then_counter3(renderHandshake):
-    """Local WGs must still reach the counter3 tally -- now via one more hop.
-
-    The gate's not-taken edge lands on the local-tally block (wave-0 election and
-    the single-lane EXEC, without the store wait and the barrier the PUSH path
-    needs), which then FALLS THROUGH into counter3.  What makes FusedTotalWGs the
-    right election target is that every surviving work-group reaches the tally;
-    the extra hop is an implementation detail, the reachability is the invariant.
-    """
+    """The gate's not-taken edge reaches counter3 via the local-tally block."""
     text = renderHandshake()
     code = _codeLines(text)
     _, gate = _pushGateIndex(text)
@@ -387,41 +285,30 @@ def test_push_gate_falls_through_to_the_local_tally_then_counter3(renderHandshak
     c3Idx = next(i for i, ln in enumerate(code)
                  if ln.startswith("label_fusedA2A_counter3"))
     assert localIdx < c3Idx, "the local tally must fall through into counter3"
-    # Fall-through means no UNCONDITIONAL branch between them. The one branch that
-    # is allowed there is the non-wave-0 skip, which is conditional by construction.
+    # Fall-through: no unconditional branch between them.
     between = [ln for ln in code[localIdx + 1:c3Idx] if ln.startswith("s_branch ")]
     assert not between, f"the local tally does not fall through: {between}"
 
 
 def test_local_path_skips_the_barrier_but_keeps_the_election(renderHandshake):
-    """The store wait and the barrier are PUSH-only; the election is not.
-
-    The gate must sit ABOVE the barrier: s_barrier must be reached by every wave
-    of a work-group, and the wave-0 election sits between the two, so a barrier
-    placed below the election would run on wave 0 alone and hang.  That edge is
-    only safe while the gate's predicate is work-group-uniform -- asserted first.
-    """
+    """The store wait and the barrier are PUSH-only; the election is not."""
     text = renderHandshake()
     code = _codeLines(text)
     gateIdx, _ = _pushGateIndex(text)
 
-    # (a) THE deadlock guard: the gate's predicate must be work-group-uniform, or
-    #     the waves of one work-group disagree on the edge and the ones that fall
-    #     through wait at a barrier the others never reach.
+    # (a) the gate's predicate must be work-group-uniform
     assert code[gateIdx - 1].startswith("s_cmp_"), code[gateIdx - 1]
     assert "sgprWorkGroup0" in code[gateIdx - 1], code[gateIdx - 1]
 
-    # (b) exactly one barrier, and it is BELOW the gate (PUSH-only).
+    # (b) exactly one barrier, and it is BELOW the gate (PUSH-only)
     barrier = [i for i, ln in enumerate(code) if ln.startswith("s_barrier")]
     assert len(barrier) == 1, f"expected one s_barrier, got {barrier}"
     assert barrier[0] > gateIdx, "s_barrier must be PUSH-only, i.e. below the gate"
 
-    # (c) the store wait stays immediately ahead of it: each wave retires its own
-    #     stores, THEN the barrier joins them. The other order lets the SDMA engine
-    #     read a band that is not yet in HBM.
+    # (c) the store wait stays immediately ahead of it
     assert code[barrier[0] - 1].startswith("s_waitcnt"), code[barrier[0] - 1]
 
-    # (d) two Serial elections: PUSH (below the gate) and local (after its label).
+    # (d) two Serial elections: PUSH (below the gate) and local (after its label)
     election = [i for i, ln in enumerate(code)
                 if ln.startswith("v_readfirstlane_b32") and "vgprSerial" in ln]
     assert len(election) == 2, f"expected two Serial readfirstlanes, got {election}"
@@ -430,9 +317,7 @@ def test_local_path_skips_the_barrier_but_keeps_the_election(renderHandshake):
     assert gateIdx < election[0] < localIdx < election[1], \
         f"gate={gateIdx} elections={election} localTally={localIdx}"
 
-    # (e) three single-lane EXEC writes, pinned EXACTLY: the PUSH election, the
-    #     local election, and the DRAIN restoring lane 0 after its wide poll. A
-    #     fourth would mean some region silently lost its width. Do not relax to >=.
+    # (e) three single-lane EXEC writes, pinned EXACTLY -- do not relax to >=
     lane0 = [i for i, ln in enumerate(code) if ln.replace(" ", "").endswith("exec,1")]
     assert len(lane0) == 3, (
         f"expected three single-lane EXEC writes (PUSH election, local tally, "
@@ -440,12 +325,10 @@ def test_local_path_skips_the_barrier_but_keeps_the_election(renderHandshake):
 
 
 def test_store_wait_precedes_the_barrier(renderHandshake):
-    """Reordering these breaks the 'all waves' stores landed' guarantee.
+    """A vector-memory wait must precede s_barrier.
 
-    Each wave retires its own stores, then the barrier joins them; the other
-    order lets the SDMA engine read a band that is not yet in HBM. Note the
-    emitted mnemonic is vmcnt, not vscnt -- SWaitCnt(vscnt=0) lowers to
-    `s_waitcnt vmcnt(0)` on gfx950, so keying on "vscnt" would never match.
+    SWaitCnt(vscnt=0) lowers to `s_waitcnt vmcnt(0)` on gfx950, so both spellings
+    are accepted.
     """
     code = _codeLines(renderHandshake())
     waits = [i for i, ln in enumerate(code)
@@ -458,14 +341,7 @@ def test_store_wait_precedes_the_barrier(renderHandshake):
 
 
 def test_counter3_is_incremented_exactly_once_by_a_scalar_atomic(renderHandshake):
-    """The tally is the one block every surviving work-group runs.
-
-    It must fire exactly once per work-group, and it must be the SMEM atomic:
-    S_ATOMIC_INC keeps address, data and result in SGPRs, whereas a vector atomic
-    would need three v_mov to stage a scalar address and a scalar 1 into VGPRs, a
-    v_readfirstlane to read the answer back, and -- because a VMEM op issues per
-    active lane -- the single-lane EXEC narrowing.
-    """
+    """The tally fires exactly once per work-group, as an SMEM atomic."""
     code = _codeLines(renderHandshake())
     label = [i for i, ln in enumerate(code) if ln.startswith("label_fusedA2A_counter3")]
     assert len(label) == 1, f"expected one counter3 label definition, got {label}"
@@ -475,22 +351,12 @@ def test_counter3_is_incremented_exactly_once_by_a_scalar_atomic(renderHandshake
     atomics = [ln for ln in tail if ln.startswith("s_atomic")]
     assert len(atomics) == 1, f"counter3 must increment exactly once, got: {atomics}"
     assert atomics[0].startswith("s_atomic_inc "), atomics[0]
-    # GLC on SMEM is not decoration and not a scope bit: it is what makes an atomic
-    # return its pre-op value at all (CDNA4 ISA Table 75). Without it this becomes a
-    # fire-and-forget increment whose "pre-op value" is whatever the register held.
+    # GLC is what makes an SMEM atomic return its pre-op value (CDNA4 ISA Table 75).
     assert atomics[0].rstrip().endswith("glc"), atomics[0]
 
 
 def test_counter3_election_compares_against_the_latched_total(renderHandshake):
-    """The tally must be compared against FusedTotalWGs (the prologue latch).
-
-    S_ATOMIC_INC's SDATA carries both operands: the wrap limit goes in and the
-    pre-op value comes back out of the SAME register.  Setting the limit to
-    FusedTotalWGs-1 makes the globally last work-group read back FusedTotalWGs-1,
-    and leaves the counter at 0 behind it.  Comparing against anything else --
-    tokenTiles, TilesPerRank -- would elect a per-peer owner again, which is the
-    occupancy problem this design avoids.
-    """
+    """The tally is compared against FusedTotalWGs-1, the prologue latch minus one."""
     code = _codeLines(renderHandshake())
     label = next(i for i, ln in enumerate(code) if ln.startswith("label_fusedA2A_counter3"))
 
@@ -502,8 +368,7 @@ def test_counter3_election_compares_against_the_latched_total(renderHandshake):
     limitReg = subOps[0]
     assert subOps[1] == "s[sgprFusedTotalWGs]" and subOps[2] == "1", subs[0][1]
 
-    # Anchor on the tally itself: the atomic, then the first compare after it. The
-    # DRAIN also sits after the label and carries compares of its own.
+    # Anchor on the tally: the atomic, then the first compare after it.
     atomic = next(i for i, ln in enumerate(code[label:], label)
                   if ln.startswith("s_atomic_inc "))
     sdataReg = _ops(code[atomic])[0]
@@ -512,43 +377,22 @@ def test_counter3_election_compares_against_the_latched_total(renderHandshake):
     assert _ops(code[cmp_i]) == [sdataReg, limitReg], (
         f"the election must compare the atomic's returned SDATA ({sdataReg}) "
         f"against FusedTotalWGs-1 ({limitReg}), got {code[cmp_i]}")
-    # and it must be what decides the DRAIN, i.e. immediately consumed by the branch.
+    # and it must be what decides the DRAIN, i.e. immediately consumed by the branch
     assert code[cmp_i + 1].startswith("s_cbranch_scc0 "), code[cmp_i:cmp_i + 2]
 
 
 def test_no_kernarg_value_is_clobbered_before_it_is_read(renderHandshake):
-    """Reordering the blocks must not make two kernarg values share a live range.
-
-    `gateSgpr` is checked in before `myRankSgpr` is checked out, so the pool hands
-    back the same physical SGPR and the PUSH gate's FusedAM shares one with
-    FusedMyRank. That reuse is only correct while the gate is emitted AHEAD of the
-    arg reads, where its value is already dead. Emitting the gate after them turns
-    it into a clobber: my_rank is destroyed after argModule set it, and the SDMA
-    block goes on to compute dst_y = AM_tiles*N and peer_ptr[p] + AM_tiles*8 --
-    wrong band, and an ATOMIC past the W-slot flag allocation.
-
-    Structural because it cannot be seen any other way: the emitted comments still
-    read "myRank * N" and "myRank * 8" over the clobbered register.
-    """
+    """No two kernarg values share a live range in the emitted handshake."""
     dead = _deadKernargLoads(renderHandshake())
     assert not dead, \
         f"kernarg value overwritten before first read (reg, loaded, clobbered-by) = {dead}"
 
 
 def test_every_surviving_wg_runs_the_handshake_once():
-    """The counter3 target is FusedTotalWGs, so arrivals must equal survivors.
+    """The store body is emitted twice around one hoisted dispatch gate.
 
-    test_push_gate_falls_through_to_the_local_tally_then_counter3 covers the half
-    of that inside the handshake (both edges of the PUSH gate reach the tally). This covers
-    the other half, which lives in the caller: under FusedGemmA2A the whole store
-    body -- handshake included -- is emitted TWICE around one hoisted dispatch gate,
-    a PUSH pass and a LOCAL pass, and each WG runs exactly one of them.
-
-    Two ways that could break, both silent-hang rather than wrong-answer:
-      - gating the handshake call on states.fusedA2ADispatchMode, so only the PUSH
-        pass carries it and local WGs never tally;
-      - dropping one of the two passes.
-    Either leaves the tally short of FusedTotalWGs forever and the DRAIN never fires.
+    A PUSH pass and a LOCAL pass, each work-group running exactly one of them, and
+    the handshake call inside is not gated on the dispatch mode.
     """
     with open(os.path.join(TENSILE_ROOT, "Tensile/Components/GlobalWriteBatch.py")) as f:
         gwb = ast.parse(f.read())
@@ -583,13 +427,7 @@ def test_every_surviving_wg_runs_the_handshake_once():
 
 @pytest.mark.parametrize("wavefrontSize", [64, 32])
 def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wavefrontSize):
-    """The DRAIN load must not be issued at EXEC=1.
-
-    Everything before the poll runs single-lane; a load issued at EXEC=1 would
-    see lane 0 only, so between the last EXEC write before the poll and the poll
-    itself, EXEC must be set from a computed W-lane mask, not left at the
-    literal 1.
-    """
+    """The DRAIN load must not be issued at EXEC=1."""
     code = _codeLines(renderHandshake(wavefrontSize))
     poll = next(i for i, ln in enumerate(code) if ln.startswith("label_fusedA2A_drain_poll"))
     load = next(i for i, ln in enumerate(code[poll:], poll) if ln.startswith("global_load"))
@@ -598,18 +436,15 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wave
                   if ln.startswith("s_mov_b32 exec") or ln.startswith("s_mov_b64 exec")]
     assert execWrites, "no EXEC write before the DRAIN poll at all"
     last = code[execWrites[-1]]
-    # `s_mov_b64 exec, 1` is the single-lane width the tally needs; reaching the
-    # poll with that still in effect is the bug.
     assert not last.rstrip().endswith(", 1"), \
         f"DRAIN poll is issued at EXEC=1 (lane 0 only): {last}"
-    # and the width must come from a register, i.e. be derived from the runtime W --
-    # a wider literal would be wrong for every W but one.
+    # The width must come from a register, i.e. be derived from the runtime W.
     src = last.split(",", 1)[1].strip()
     assert src.startswith("s"), \
         f"EXEC for the poll must be a computed W-lane mask, not a literal: {last}"
 
-    # The mask itself: one S_BFM computing ((1 << src0[5:0]) - 1) << src1[5:0] --
-    # i.e. width W at offset 0 -- anchored to the register the EXEC write reads.
+    # One S_BFM computing ((1 << src0[5:0]) - 1) << src1[5:0], i.e. width W at
+    # offset 0, anchored to the register the EXEC write reads.
     base = _baseReg(src)
     assert base, f"cannot resolve the EXEC mask's base SGPR from {src!r}: {last}"
     region = code[:execWrites[-1]]
@@ -619,9 +454,7 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wave
     assert len(masks) == 1, \
         f"expected exactly one s_bfm writing {base} ((1 << W) - 1), got: {[region[i] for i in masks]}"
     maskLine = region[masks[0]]
-    # Widths are pinned against the kernel's declared wave size, not against each
-    # other: deriving the expected mnemonic from the emitted EXEC write would stay
-    # green if BOTH narrowed to b32 under wave64.
+    # Widths are pinned against the kernel's declared wave size, not against each other.
     wantExec = "s_mov_b32" if wavefrontSize == 32 else "s_mov_b64"
     wantMask = "s_bfm_b32" if wavefrontSize == 32 else "s_bfm_b64"
     assert last.startswith(wantExec + " "), f"wave{wavefrontSize} EXEC write must be {wantExec}: {last}"
@@ -630,30 +463,21 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wave
     dst, width, offset = _ops(maskLine)
     assert dst == src, \
         f"the s_bfm destination is not the operand EXEC reads ({src}): {maskLine}"
-    # src0 is the WIDTH and src1 the offset. Swapped, this is ((1 << 0) - 1) << W == 0:
-    # EXEC = 0, every lane masked off, the poll load never issues and the flags are
-    # never read -- and the comment still says "(1 << W) - 1".
+    # src0 is the WIDTH, src1 the offset.
     assert _baseReg(width), \
         f"the s_bfm width must be a register (the runtime W), not a literal: {maskLine}"
     assert offset == "0", f"the s_bfm offset must be 0, got {offset!r}: {maskLine}"
-    # Nothing may write the mask pair between building it and reading it into EXEC.
-    # A leftover write AHEAD of the s_bfm is safe (S_BFM overwrites its destination
-    # whole); one left behind it corrupts the mask -- which is why the clobber scan
-    # below starts right after masks[0], not from the top of the region.
+    # Nothing may write the mask pair between the s_bfm and the EXEC read. The scan
+    # starts after masks[0] because S_BFM overwrites its destination whole.
     hiReg = "s%d" % (int(base[1:]) + 1)
     clobber = [ln for ln in region[masks[0] + 1:]
                if _ops(ln) and _baseReg(_ops(ln)[0]) in (base, hiReg)]
     assert not clobber, \
         f"{clobber} writes the mask register between `{maskLine}` and `{last}`"
 
-    # The arithmetic build must be GONE, not merely joined by the s_bfm: a leftover
-    # seed of 2 (not 1), a missing `- 1`, or an unzeroed hi dword are each
-    # independently a silent hang on their own, so a hybrid keeping any one is live
-    # code, not dead code.
-    #
-    # Matched by exact shape, not by "writes base": `base` is a recycled pool
-    # register that also carries unrelated values earlier in the handshake (e.g. a
-    # flag-pointer scale), which a looser predicate would misreport.
+    # The arithmetic build must be GONE, not merely joined by the s_bfm. Matched by
+    # exact shape rather than "writes base": `base` is a recycled pool register that
+    # also carries unrelated values earlier in the handshake.
     def isOldBuild(ln):
         ops = _ops(ln)
         return ((ln.startswith("s_mov_b32 ")  and ops == [base, "1"])          # seed 1
@@ -669,15 +493,7 @@ def test_drain_poll_runs_under_an_exec_wider_than_one_lane(renderHandshake, wave
 
 
 def test_drain_exec_mask_width_is_the_FusedW_kernarg(renderHandshake):
-    """The mask width must be W, not merely *a* register.
-
-    "the width operand is a register" is a shape check; the comment is frozen at
-    construction time, but the register is decided at emission time by the pool,
-    so a shape check alone cannot see a swap. A width operand pointing at the
-    wrong SGPR gives EXEC an arbitrary lane count -- too few and the barrier
-    releases early, too many and the extra lanes poll slots past the W-slot flag
-    allocation -- and reads correctly.
-    """
+    """The mask width register must be the one loaded from the FusedW kernarg."""
     text = renderHandshake()
     # after renderHandshake(), which imports Tensile.Component first (circular-import guard)
     from Tensile.Components.Signature import fusedA2AKernArgLayout
@@ -695,10 +511,6 @@ def test_drain_exec_mask_width_is_the_FusedW_kernarg(renderHandshake):
 def test_rendering_is_byte_identical_to_the_golden(renderHandshake):
     """Characterization pin on the whole handshake.
 
-    The structural tests each assert one fact, so between them they can leave gaps
-    a register clobber could slip through. This compares the whole rendering, so
-    drift shows up whether or not someone thought to assert on it.
-
     Intentionally changing the handshake? Regenerate deliberately:
         python Tensile/Tests/unit/test_fusedA2A_drain_last.py --update-golden
     and justify the diff in review -- do not regenerate to silence a red.
@@ -710,13 +522,10 @@ def test_rendering_is_byte_identical_to_the_golden(renderHandshake):
 
 
 def test_max_ranks_guard_fires_when_the_constant_outgrows_the_mask():
-    """The import-time bound on FUSED_A2A_MAX_RANKS must have teeth.
+    """The import-time bound on FUSED_A2A_MAX_RANKS must exist and have teeth.
 
     The EXEC-mask guard's `if` in Signature.py is located, lifted out, and
-    re-executed against a constant of 32 (the wave32 arm's first wrapping width).
-    Locating it also pins that it still EXISTS -- deleting the guard reddens here
-    rather than passing quietly, which a test that merely re-checked
-    `FUSED_A2A_MAX_RANKS <= 31` would not do.
+    re-executed against constants either side of the bound.
     """
     path = os.path.join(TENSILE_ROOT, "Tensile/Components/Signature.py")
     with open(path) as f:
@@ -732,17 +541,12 @@ def test_max_ranks_guard_fires_when_the_constant_outgrows_the_mask():
          f"'EXEC becomes empty' in {path}, found {len(guards)} -- the DRAIN EXEC mask "
          f"bound is unenforced")
 
-    # 8 must pass and 32 must not; a guard that raises unconditionally, or one whose
-    # comparison drifted the wrong way, fails one of these two.
     def run(value):
         ns = {"FUSED_A2A_MAX_RANKS": value}
         exec(compile(ast.Module(body=[guards[0]], type_ignores=[]), path, "exec"), ns)
 
-    run(8)  # the shipped value: must not raise
-    # 31 is the boundary itself -- the widest value S_BFM_B32 can encode. Without it,
-    # 8-passes/32-raises only pins the bound to somewhere in [8, 31], and a guard
-    # written `> 30` would satisfy both. This is the pair that fixes the exact number.
-    run(31)  # the largest legal world size: must not raise
+    run(8)   # the shipped value: must not raise
+    run(31)  # the boundary, the widest value S_BFM_B32 can encode: must not raise
     with pytest.raises(ValueError, match="EXEC becomes empty"):
         run(32)
 
@@ -750,14 +554,8 @@ def test_max_ranks_guard_fires_when_the_constant_outgrows_the_mask():
 def test_max_ranks_twins_hold_the_same_value():
     """The Python and C++ declarations of FUSED_A2A_MAX_RANKS must agree.
 
-    The constant is declared twice -- once for codegen (Signature.py, which sizes the
-    kernarg segment the kernel reads) and once for the host (FusedA2AKernArg.hpp,
-    which sizes what the host appends). Each site now asserts its own upper bound, so
-    neither can be raised past what the mask can encode, but nothing makes them hold
-    the SAME value: 8 on one side and 16 on the other satisfies both assertions and
-    silently breaks the ABI -- the host writes a segment the kernel does not read the
-    same way. The C++ comment says "MUST match", which is exactly the kind of claim
-    this file exists to turn into a check.
+    The constant is declared twice: Signature.py sizes the kernarg segment the
+    kernel reads, FusedA2AKernArg.hpp sizes what the host appends.
     """
     py_path = os.path.join(TENSILE_ROOT, "Tensile/Components/Signature.py")
     with open(py_path) as f:
@@ -783,13 +581,7 @@ def test_max_ranks_twins_hold_the_same_value():
 
 
 def test_peer_recv_offset_twins_hold_the_same_value():
-    """The Python and C++ declarations of FUSED_A2A_PEER_RECV_OFFSET must agree.
-
-    Same ABI hazard as test_max_ranks_twins_hold_the_same_value. A C++-only edit
-    to the 4096 is invisible to the whole non-GPU suite otherwise: Signature.py's
-    golden .s only encodes the Python constant, and the C++ gtest only checks
-    internal self-consistency against its own copy.
-    """
+    """The Python and C++ declarations of FUSED_A2A_PEER_RECV_OFFSET must agree."""
     py_path = os.path.join(TENSILE_ROOT, "Tensile/Components/Signature.py")
     with open(py_path) as f:
         py_tree = ast.parse(f.read(), filename=py_path)

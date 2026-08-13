@@ -2,10 +2,9 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
 ################################################################################
-# Fused-A2A segment-first workgroup remap: the PUSH segment (wg0 < AM_tiles) is
-# lifted out of its 16 per-token-tile bands and laid down as one run at the
-# front of the grid, giving the SDMA tail a head start (see
-# test_the_last_push_workgroup_moves_to_the_front for the numbers).
+# Fused-A2A segment-first workgroup remap: lifts the PUSH segment (wg0 < AM_tiles)
+# out of its 16 per-token-tile bands into one contiguous run at the front of the
+# grid.
 ################################################################################
 
 import os
@@ -37,12 +36,7 @@ def test_champion_shape_matches_the_design_table():
 
 
 def test_is_a_bijection_on_the_champion_grid():
-    """Bijectivity is what leaves the counter/DRAIN election untouched.
-
-    Every (dst_rank, j) bucket must still receive exactly tilesPerRank increments
-    and counter3's FusedTotalWGs is order-independent -- both follow from this and
-    from nothing else.
-    """
+    """The remap is a bijection over the whole grid."""
     f = _remap()
     seen = {f(t % _N0, t // _N0, _N0, _N1, _A) for t in range(_N0 * _N1)}
     assert len(seen) == _N0 * _N1
@@ -53,13 +47,7 @@ def test_is_a_bijection_on_the_champion_grid():
     (72, 16, 40), (72, 16, 1), (72, 16, 71), (5, 3, 2), (1, 7, 0), (9, 1, 4),
 ])
 def test_range_is_closed_inside_the_precondition(n0, n1, a):
-    """m < n0 and j < n1 for every input, given the precondition a <= n0.
-
-    Bijectivity alone does NOT catch an out-of-range image: a map whose values
-    escape [0,n0) can still be injective on its own image. This is the assertion
-    that would fire if the formula ever started producing an M-tile index past the
-    end of D, so it cannot be folded into the bijection test.
-    """
+    """m < n0 and j < n1 for every input, given the precondition a <= n0."""
     f = _remap()
     for t in range(n0 * n1):
         m, j = f(t % n0, t // n0, n0, n1, a)
@@ -68,12 +56,7 @@ def test_range_is_closed_inside_the_precondition(n0, n1, a):
 
 @pytest.mark.parametrize("a", [0, _N0])
 def test_degenerate_am_tiles_fall_back_to_identity(a):
-    """A=0 (no PUSH region) and A=N0 (no local region) are identities.
-
-    Not defensive padding -- they drop out of the formula. A=0 forces the local
-    branch with L=N0; A=N0 forces the PUSH branch with divisor N0. Both are the
-    reason no guard is emitted.
-    """
+    """A=0 (no PUSH region) and A=N0 (no local region) are identities."""
     f = _remap()
     for t in range(_N0 * _N1):
         wg0, wg1 = t % _N0, t // _N0
@@ -89,8 +72,7 @@ def test_single_token_tile_is_an_identity_for_every_am_tiles():
 
 
 def test_inverse_round_trips():
-    """The inverse formula is what the tests and any future host-side
-    reasoning use to go from (m, j) back to a dispatch index."""
+    """The inverse formula round-trips (m, j) back to the dispatch index t."""
     f = _remap()
     S = _A * _N1
     L = _N0 - _A
@@ -101,13 +83,7 @@ def test_inverse_round_trips():
 
 
 def test_the_last_push_workgroup_moves_to_the_front():
-    """The whole point, stated as an assertion.
-
-    Before: the PUSH segment is split across 16 token-tile bands, so the last PUSH
-    work-group sits at (N1-1)*N0 + A - 1 = 1119 of 1152 (97.1%).  After: it sits at
-    A*N1 - 1 = 639 (55.5%).  That 42-point shift is the ~355 us of head start the
-    SDMA tail gets, and every downstream number in the design rests on it.
-    """
+    """The last PUSH work-group moves from near the end of the grid to just past its midpoint."""
     f = _remap()
     before = max(t for t in range(_N0 * _N1) if (t % _N0) < _A)
     after = max(t for t in range(_N0 * _N1) if f(t % _N0, t // _N0, _N0, _N1, _A)[0] < _A)
@@ -118,10 +94,7 @@ def test_the_last_push_workgroup_moves_to_the_front():
 def _renderRemap(wavefrontSize: int = 64, fused: int = 1) -> str:
     """Render FusedA2AWgRemap standalone.
 
-    Modelled on test_fusedA2A_drain_last.py's _renderHandshake: the same rocisa
-    init, the same pool and argLoader stubs. The argLoader echoes its arguments
-    rather than returning a fixed comment, so an assertion about WHICH kernarg is
-    read cannot stay green on a wrong offset.
+    The argLoader echoes its arguments rather than returning a fixed string.
     """
     import shutil
     from types import SimpleNamespace
@@ -159,43 +132,25 @@ def _remapCode(text):
 
 
 def test_emits_nothing_when_the_kernel_is_not_fused():
-    """Zero regression surface: a non-fused kernel must be byte-identical."""
+    """A non-fused kernel emits nothing."""
     assert _remapCode(_renderRemap(fused=0)) == []
 
 
 def test_emitted_block_has_no_branch():
-    """Straight-line code, all the way down.
-
-    The two cases are selected with s_cselect_b32 (a conditional move), not a
-    branch; the divide routine corrects its f64-reciprocal quotient by writing EXEC
-    with v_cmp_x_ge_u32, also not a branch; and no guard is emitted for A >= N0
-    because the client already rejects AM > M.  A branch appearing here means one
-    of those three decisions was quietly reversed.
-    """
+    """The emitted code contains no branch instruction."""
     code = _remapCode(_renderRemap())
     assert not [ln for ln in code if ln.startswith("s_cbranch")], code
 
 
 def test_divides_exactly_once():
-    """One divide, shared by both cases via the cselects.
-
-    The obvious two-branch shape needs two instances of a ~14-instruction routine
-    in the prologue of every work-group. v_rcp_f64 is the marker: the divide is the
-    only thing here that uses it.
-    """
+    """One divide, shared by both cases via the cselects."""
     code = _remapCode(_renderRemap())
     assert len([ln for ln in code if ln.startswith("v_rcp_f64")]) == 1, code
 
 
 def test_scc_is_not_clobbered_between_the_compare_and_the_selects():
-    """s_sub_u32 and s_add_u32 write SCC; s_cselect_b32 reads it.
-
-    So u = t - S and L = N0 - A have to be computed BEFORE the compare, and the
-    three selects have to follow it back-to-back.  Getting this wrong selects from
-    a dead condition and silently produces a different permutation -- still a
-    bijection, so the numerical validation would pass and only the performance
-    would be inexplicable.
-    """
+    """The three s_cselect_b32 selects must immediately follow the s_cmp_lt_u32
+    compare, with no SCC writer in between."""
     code = _remapCode(_renderRemap())
     cmp_i = next(i for i, ln in enumerate(code) if ln.startswith("s_cmp_lt_u32"))
     sel = [i for i, ln in enumerate(code) if ln.startswith("s_cselect_b32")]
@@ -205,11 +160,7 @@ def test_scc_is_not_clobbered_between_the_compare_and_the_selects():
 
 
 def test_reads_fused_am_and_shifts_by_log2_macrotile0():
-    """A = FusedAM >> log2(MT0), the same expression the epilogue's PUSH gate uses.
-
-    Deriving A differently here than at GlobalWriteBatch.py:89 would split the grid
-    at one boundary and classify PUSH/local at another.
-    """
+    """A = FusedAM >> log2(MT0), the same expression the epilogue's PUSH gate uses."""
     from Tensile.Components.Signature import fusedA2AKernArgLayout
     text = _renderRemap()
     want = hex(fusedA2AKernArgLayout()["FusedAM"])
@@ -221,7 +172,7 @@ def test_reads_fused_am_and_shifts_by_log2_macrotile0():
 
 
 def test_writes_both_workgroup_registers():
-    """m -> WorkGroup0 and j -> WorkGroup1; writing only one leaves a half-remap."""
+    """m -> WorkGroup0 and j -> WorkGroup1."""
     code = _remapCode(_renderRemap())
     assert any("sgprWorkGroup0" in ln for ln in code), code
     assert any("sgprWorkGroup1" in ln for ln in code), code

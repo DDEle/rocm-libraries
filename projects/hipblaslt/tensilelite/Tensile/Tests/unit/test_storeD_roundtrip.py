@@ -162,13 +162,8 @@ def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False, source_swap=Fal
 
     mi_wave_group: optional [m0, m1] override (default: derived from cfg tile size).
     use_bf16: if True, use bf16 DestDataType with HighPrecisionAccumulate=True.
-    source_swap: if True, set SourceSwap=True + UseInitialStridesCD (row-major D).
-        Under SourceSwap NotLocalFullTileElementsMFMA puts MIOutputVectorWidth on the
-        vc1 (N) axis and leaves vectorWidth0 (M) = VectorWidthA = 1, so the store's
-        vc0 stride must be 1 — StoreVectorWidth>1 would generate more store elements
-        than there are accumulators and crash codegen (popFirstItem→None).  Force
-        SVW=1 here so the element decomposition stays consistent with the acc count;
-        the N-wide-along-N store this was written for no longer exists.
+    source_swap: if True, set SourceSwap=True + UseInitialStridesCD (row-major D)
+        and force StoreVectorWidth=GlobalWriteVectorWidth=1.
     """
     from gpu_test_helpers import _mock_dtype, _create_kernel
     kernel = _create_kernel(cfg, mi_wave_group=mi_wave_group)
@@ -239,7 +234,7 @@ def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False, source_swap=Fal
     #   bf16 dest (2 B/elem): SVW = min(16/2, 4) = 4 → buffer_store_dwordx2  (8 bytes) ✓
     bpe = int(dest_dtype.numBytes())
     mi_output_vw = kernel["MIOutputVectorWidth"]
-    # SourceSwap forces SVW=1 (see the source_swap docstring above).
+    # SourceSwap forces SVW=1.
     kernel["StoreVectorWidth"] = 1 if source_swap else min(16 // bpe, mi_output_vw)
     kernel["_VectorStore"] = True
 
@@ -528,9 +523,7 @@ def _build_sgprs_for_test(writer):
     nGuard = writer.sgprPool.checkOut(1, "subtileNValidBlocks")
     writer.sgprs["subtileNValidBlocks"] = nGuard
 
-    # StrideDI / StrideCI: index-0 (I/M) stride sgprs.  Only referenced by the store
-    # path when UseInitialStridesCD=True (SourceSwap variant); harmless otherwise.
-    # Allocated after the fixed s[0:27] layout so they don't perturb it.
+    # StrideDI / StrideCI: index-0 (I/M) stride sgprs, used by the SourceSwap store path.
     strdi = writer.sgprPool.checkOut(1, "StrideDI")
     writer.sgprs["StrideDI"] = strdi
     strci = writer.sgprPool.checkOut(1, "StrideCI")
@@ -543,16 +536,8 @@ def _build_prologue(sgprs, num_agprs, mt0, mt1, stride_d=None, use_input_buf=Tru
                     source_swap=False):
     """Generate prologue that loads kernel args and initializes the SRDs.
 
-    source_swap: if True, the D buffer is ROW-MAJOR (N contiguous) to match the
-        production UseInitialStridesCD layout: StrideDI (StrideD0, the M-row stride)
-        = the kernarg stride value (row_stride = round_mt1), and StrideDJ (StrideD1J,
-        the N stride) = 1.  That makes a lane's 4 N-cols physically contiguous, so an
-        N-wide store COULD coalesce them into one buffer_store_dwordx2 -- but no such
-        store exists any more, which is why test_storeD_sourceswap_rowmajor_bf16 is
-        xfail.  The layout is still what the production UseInitialStridesCD path
-        uses, so it stays.  When False the buffer
-        is column-major (StrideDI=1, StrideDJ=stride_d), the original convention used
-        by the non-SourceSwap tests.
+    source_swap: if True, the D buffer is ROW-MAJOR (StrideDI=row_stride, StrideDJ=1);
+        if False, column-major (StrideDI=1, StrideDJ=stride_d).
 
     Kernarg layout (matches args descriptor in the test):
       offset  0: u64 input buffer ptr   (SrdInput base)
@@ -657,8 +642,7 @@ def _build_prologue(sgprs, num_agprs, mt0, mt1, stride_d=None, use_input_buf=Tru
     m.add(SMovB32(dst=sgpr(sgprs["WorkGroup1"]), src=0, comment="WorkGroup1 = 0"))
 
     if source_swap:
-        # Row-major D (production UseInitialStridesCD): the kernarg stride is the M-row
-        # stride (row_stride = round_mt1) -> StrideDI; N is the contiguous dim -> StrideDJ=1.
+        # Row-major D: kernarg stride -> StrideDI; StrideDJ = 1 (N contiguous).
         if "StrideDI" in sgprs:
             m.add(SMovB32(dst=sgpr(sgprs["StrideDI"]), src=sgpr(sgprs["StrideDJ"]),
                           comment="StrideDI = row_stride (row-major M-row stride)"))
@@ -673,8 +657,6 @@ def _build_prologue(sgprs, num_agprs, mt0, mt1, stride_d=None, use_input_buf=Tru
                       comment="StrideCJ = StrideDJ"))
 
         # StrideDI / StrideCI = 1 (I/M is the contiguous dim of the column-major D buffer).
-        # Referenced only when UseInitialStridesCD=True; setting to 1 reproduces the exact
-        # column-major store addressing (coord0*1 + coord1*StrideDJ) of the const-stride path.
         if "StrideDI" in sgprs:
             m.add(SMovB32(dst=sgpr(sgprs["StrideDI"]), src=1, comment="StrideDI = 1"))
         if "StrideCI" in sgprs:
@@ -1156,10 +1138,8 @@ def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
         num_threads:   Total thread count (default: NUM_THREADS = WAVESIZE * NUM_WAVES).
         init_mode:     "matrix" — load from full MT_a×MT_b host matrix (default);
                        "wave_id" — write float(wave_id) to every accvgpr.
-        source_swap:   If True, build the SourceSwap layout: set kernel["SourceSwap"]=True
-                       and UseInitialStridesCD, init accvgprs from a ROW-MAJOR host matrix
-                       with the M<->N-transposed lane mapping (acc[0:3] = 4 N-cols).
-                       Only the init_mode="matrix" path supports this.
+        source_swap:   If True, build the SourceSwap layout (row-major D, transposed
+                       accvgpr init). Only init_mode="matrix" supports this.
 
     Returns:
         (out, tileInfoD, expected_set, round_mt0, round_mt1): output float tuple (sized
@@ -1203,8 +1183,7 @@ def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
     # macrotile footprint is allocated and initialized to the sentinel value.
     round_mt0 = ((size_i + cfg.mt_a - 1) // cfg.mt_a) * cfg.mt_a
     round_mt1 = ((size_j + cfg.mt_b - 1) // cfg.mt_b) * cfg.mt_b
-    # Column-major buffer (non-SS): leading dim = round_mt0 (M contiguous) -> StrideDJ.
-    # Row-major buffer (SourceSwap): leading dim = round_mt1 (N contiguous) -> StrideDI.
+    # Row-major (SourceSwap): stride_d -> StrideDI (round_mt1). Column-major: -> StrideDJ (round_mt0).
     stride_d = round_mt1 if source_swap else round_mt0
 
     if init_mode == "wave_id":
@@ -1240,9 +1219,6 @@ def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
     else:
         vaddr = writer.vgprPool.checkOut(1, "vaddr", preventOverflow=False)
         vtmp2 = writer.vgprPool.checkOut(1, "vtmp2", preventOverflow=False)
-        # SourceSwap uses a ROW-MAJOR D buffer (N contiguous): stride_d (= round_mt1) is
-        # the M-row stride routed to StrideDI, StrideDJ=1.  Non-SS keeps the column-major
-        # buffer (stride_d = round_mt0 -> StrideDJ, StrideDI=1).
         prologue = _build_prologue(sgprs, len(agpr_indices), cfg.mt_a, cfg.mt_b,
                                    stride_d=stride_d, use_input_buf=True,
                                    source_swap=source_swap)
@@ -1360,21 +1336,7 @@ def test_storeD_mfma_layout(cfg, use_bf16, tmp_path):
 )
 @pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: c.label)
 def test_storeD_sourceswap_rowmajor_bf16(cfg, tmp_path):
-    """BF16 store-D roundtrip with SourceSwap=True + row-major D.  XFAIL at HEAD.
-
-    Under SourceSwap the lane's 4 accumulators lie along N (contiguous in
-    row-major D, StrideD1J==1), so a correct store must write them as one wide
-    store along N.  The D output buffer is ROW-MAJOR (N contiguous): StrideDI =
-    row stride, StrideDJ = 1, so the 4 N-cols of one lane are physically
-    contiguous and could coalesce into one buffer_store_dwordx2.  Verifies every
-    output element equals row*MT_b+col at its (row,col) position.
-
-    The dispatch predicate for the row-major N-wide store has no FusedGemmA2A
-    term and this test runs with FusedGemmA2A=0, so the 16-bit subtile dispatch
-    falls through to the column-major paired/orphan M-scatter and the 4 N-col
-    accumulators land on 4 M-rows.  Unwritten positions keep the
-    0xFFFF->0xFFFF0000 quiet-NaN sentinel.
-    """
+    """BF16 store-D roundtrip with SourceSwap=True + row-major D. XFAIL: see marker reason."""
     init_rocisa()
     out, tileInfoD, expected_set, round_mt0, round_mt1 = _run_storeD(
         cfg, tmp_path, cfg.mt_a, cfg.mt_b, use_bf16=True, source_swap=True,
@@ -1600,27 +1562,20 @@ def _build_accvgpr_init_matrix_asm(agpr_indices, kernel, tileInfoD, sgprs, tmp_v
 def _build_accvgpr_init_matrix_transposed_asm(agpr_indices, kernel, tileInfoD, sgprs, tmp_v, vaddr, vtmp2):
     """Init accvgprs for the SourceSwap layout from a row-major MT_a×MT_b host matrix.
 
-    This is the M<->N transpose of _build_accvgpr_init_matrix_asm.  Under SourceSwap
-    the MFMA A/B operands are swapped, so a lane's 4 accumulators (reg_k 0..3 within a
-    subtile) lie along N (consecutive N-cols) at a fixed M-row — instead of along M
-    (consecutive M-rows) at a fixed N-col.  The per-lane role of col_in_wave and
-    lane_group is therefore swapped relative to the non-SourceSwap layout:
+    This is the M<->N transpose of _build_accvgpr_init_matrix_asm: a lane's 4
+    accumulators lie along N (fixed M-row) instead of along M (fixed N-col).
 
       lane_id     = tid % WAVESIZE
       wave_id0    = wave_id % MIWaveGroup[0]   (M dimension)
       wave_id1    = wave_id // MIWaveGroup[0]  (N dimension)
-      row_in_wave = lane_id % mma_m            (0..15) — SourceSwap: lane maps to M-row
-      lane_group  = lane_id // mma_n           (0..3)  — SourceSwap: 4-col groups in N
+      row_in_wave = lane_id % mma_m            (0..15)
+      lane_group  = lane_id // mma_n           (0..3)
 
       For vtile index v (sId0 = v % localSubtileGrid[0], sId1 = v // localSubtileGrid[0]):
         row = wave_id0 * wave_rows + sId0 * mma_m + row_in_wave
         col = wave_id1 * wave_cols + sId1 * mma_n + lane_group * 4 + reg_k
 
     The host matrix is ROW-MAJOR (stride MT_b): flat[row * MT_b + col] = D_ref[row][col].
-    Populating the accs this way makes each acc hold exactly the D value that a correct
-    N-wide-along-N store would write.  That store does not exist, so the shipping
-    16-bit subtile dispatch still scatters accs along M and the roundtrip mismatches —
-    see the xfail on test_storeD_sourceswap_rowmajor_bf16, which is the only caller.
 
     Requires three scratch vgprs: tmp_v, vaddr, vtmp2.
     """
@@ -1639,7 +1594,6 @@ def _build_accvgpr_init_matrix_transposed_asm(agpr_indices, kernel, tileInfoD, s
     local_sg0 = int(tileInfoD.localSubtileGrid[0])        # sId0 range
     local_sg1 = int(tileInfoD.localSubtileGrid[1])        # sId1 range
 
-    # Row-major: elements in a row are contiguous; stride between rows is MT_b.
     row_stride_bytes = MT_b * 4   # bytes per row in the row-major matrix
 
     log2_ws  = WAVESIZE.bit_length() - 1

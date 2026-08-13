@@ -46,7 +46,7 @@ def _render():
     w.sgprPool = RegisterPool(0, RegisterType.Sgpr, defaultPreventOverflow=False, printRP=False)
     w.labels = LabelManager()
     w.vgprPool.checkOut(1)   # v0 reserved (Serial)
-    w.sgprPool.checkOut(8)   # reserve s0..s7
+    w.sgprPool.checkOut(8)
     w.sgprs = {"AddressD": w.sgprPool.checkOutAligned(2, 2, "AddressD", preventOverflow=False)}
     indexChars = [str(i) for i in range(8)]
     indexChars[1] = "1J"                      # matches KernelWriter's "1"+INDEX_CHARS[1]
@@ -71,20 +71,16 @@ def _render():
 
 def test_src_pitch_is_the_D_token_stride_not_the_M_extent():
     lines = _render()
-    # NEGATIVE -- this is the assertion that pins the bug (RED on HEAD).
     assert not any("SUBWIN DW4" in ln and "s[sgprSizesFree+0]" in _code(ln)
                    for ln in lines), \
         "src_pitch must not be the M extent (SizesFree+0); it must be D's token-axis stride"
-    # POSITIVE -- DW4 is sourced from the stride sgpr. It reaches the field via the
-    # element-scaling right shift (the packet addresses in 16-byte elements), so the
-    # stride register appears on the s_lshr rather than on the s_sub.
+    # The stride register appears on the s_lshr, not the s_sub.
     assert any("s_lshr_b32" in _code(ln) and "s[sgprStrideD1J]" in _code(ln)
                and "SUBWIN DW4" in ln for ln in lines), \
         "expected DW4 src_pitch to be scaled from s[sgprStrideD1J]"
 
 
 def test_src_slice_still_uses_M_times_N():
-    # Anti-regression: emitComputeCopyFields' mS must NOT be rewritten.
     lines = _render()
     assert any("s_mul_i32" in _code(ln) and "s[sgprSizesFree+0]" in _code(ln)
                and "s[sgprSizesFree+1]" in _code(ln) for ln in lines), \

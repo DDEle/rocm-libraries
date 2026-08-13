@@ -4,17 +4,14 @@
 ################################################################################
 # Fused GEMM.A2A kernarg segment offset contract.
 #
-# The fused-A2A kernarg segment layout is defined in TWO places that MUST stay
-# byte-identical: the kernel side (Tensile/Components/Signature.py
-# fusedA2AKernArgLayout + the addArg sequence) and the host side
-# (client/src/FusedA2AClient.cpp appendFusedSegment). There is no cross-language
-# test harness, so both sides are pinned against the SAME hardcoded golden table
-# here (Python) and in tests/FusedA2AKernArg_test.cpp (C++): a one-sided change
-# to either side reddens its own golden test.
+# The layout must stay byte-identical between the kernel side
+# (Tensile/Components/Signature.py fusedA2AKernArgLayout) and the host side
+# (client/src/FusedA2AClient.cpp appendFusedSegment); both are pinned against
+# the same golden table here and in tests/FusedA2AKernArg_test.cpp (C++).
 #
-# This test also guards the pointer-packing invariant: every pointer arg
-# (peer_ptr_0..7, counter_ptr, FusedSdmaQueues) sits contiguously at an
-# 8-aligned offset ahead of every scalar arg.
+# Also guards: every pointer arg (peer_ptr_0..7, counter_ptr,
+# FusedSdmaQueues) sits contiguously at an 8-aligned offset ahead of every
+# scalar arg.
 ################################################################################
 
 import os
@@ -29,10 +26,7 @@ sys.path.insert(0, TENSILE_ROOT)
 import Tensile.Components.Signature as sig  # noqa: E402
 
 
-# The single source of truth for this test. Any offset/size change on either the
-# Python or the C++ side must be reflected here, which is exactly what makes a
-# one-sided drift fail. Byte offsets are relative to the segment base
-# (peer_ptr_0 == 0).
+# Byte offsets are relative to the segment base (peer_ptr_0 == 0).
 GOLDEN_LAYOUT = {
     # 8 peer block pointers (8B each): 0..56. Slot j is peer j's block base;
     # flag sits at offset 0 of that block, recv at FUSED_A2A_PEER_RECV_OFFSET.
@@ -49,8 +43,7 @@ GOLDEN_LAYOUT = {
 }
 GOLDEN_SEGMENT_BYTES = 108
 
-# Per-arg byte sizes, needed to check the tight-packing invariant
-# (max(offset)+size == SEGMENT_BYTES). Pointers 8B, u32 scalars 4B.
+# Per-arg byte sizes: pointers 8B, u32 scalars 4B.
 _POINTER_ARGS = (
     ["peer_ptr_%u" % j for j in range(8)]
     + ["counter_ptr", "FusedSdmaQueues"]

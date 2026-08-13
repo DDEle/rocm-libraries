@@ -4,26 +4,23 @@
 ################################################################################
 # SDMA ring-buffer producer emitter structural tests (NOGPU).
 #
-# The emitter (Tensile/Components/SdmaRingEmitter.py) is a packet-independent
-# rocisa emitter for the ring skeleton, wired into
-# GlobalWriteBatch._emitFusedA2ASdmaIssue. These tests render each method's
-# Module to assembly text and assert on semantic features -- mnemonic, scope
-# bits (sc0/sc1), operand offsets -- rather than a whole-text snapshot.
+# Tests Tensile/Components/SdmaRingEmitter.py (wired into
+# GlobalWriteBatch._emitFusedA2ASdmaIssue) by rendering each method's Module
+# to assembly text and asserting on semantic features -- mnemonic, scope bits
+# (sc0/sc1), operand offsets -- rather than a whole-text snapshot.
 #
-# The five load-bearing invariants (a wrong one is a timing-dependent hang
-# that's nearly impossible to debug on hardware):
+# Invariants pinned:
 #   1. scope bits per field: rptr read = SYSTEM (sc0 sc1); queueBuf / wptr /
 #      cachedWptr / committedWptr access = AGENT (sc1); doorbell write = SYSTEM.
 #   2. submit publish order: wptr store -> s_waitcnt vmcnt(0) -> doorbell store
-#      -> committedWptr store, with BOTH vmcnt(0) barriers present, asserted by
-#      relative text position (not mere presence).
-#   3. reserve uses CAS (compare-swap), never an atomic_add fetch-and-increment.
+#      -> committedWptr store, both vmcnt(0) barriers present, by relative
+#      text position.
+#   3. reserve uses CAS, never atomic_add fetch-and-increment.
 #   4. the wrap branch emits a zero-store (ring-tail NOP padding).
-#   5. cachedHwReadIndex (handle+48) is NEVER stored back (private cache, not
-#      shared state).
+#   5. cachedHwReadIndex (handle+48) is never stored back.
 #
-# Bonus: the rendered .s is wrapped in a minimal kernel and run through the
-# assembler to catch "reads right but is not legal opcode/operand" errors.
+# Bonus: the rendered .s is wrapped in a minimal kernel and assembled to catch
+# illegal opcode/operand errors.
 ################################################################################
 
 import os
@@ -51,12 +48,10 @@ from Tensile.Components.SdmaRingEmitter import (                 # noqa: E402
     SdmaRingEmitter, SDMA_QUEUE_SIZE, OFF_cachedHwReadIndex,
 )
 
-# This emitter targets gfx950 (CDNA4); the scope-bit assertions below are the
-# SC[1:0] encoding (sc0/sc1), not gfx1250 scope:/th: syntax. Init the singleton
-# for gfx950 regardless of the host GPU so the asmCaps (which pick sc0/sc1 vs
-# glc/slc) are the ones this code was written against.
+# Targets gfx950 (CDNA4) regardless of host GPU: assertions use SC[1:0]
+# (sc0/sc1) encoding, not gfx1250 scope:/th: syntax.
 _GFX = "gfx950"
-_PKT_DWORDS = 10  # arbitrary packet size for placePacket exercise (the real emitter sets the actual size)
+_PKT_DWORDS = 10  # arbitrary; real emitter sets the actual size
 
 
 def _init_gfx950():
@@ -69,9 +64,8 @@ def _init_gfx950():
 
 
 def _mock_writer():
-    """Minimal writer context the emitter needs: register pools + a label
-    manager. Mirrors the GL2Prefetch mock writer -- the emitter owns no state,
-    the caller owns the pools."""
+    """Minimal writer context: register pools + a label manager. The emitter
+    owns no state; the caller owns the pools."""
     w = SimpleNamespace()
     w.vgprPool = RegisterPool(0, RegisterType.Vgpr, defaultPreventOverflow=False, printRP=False)
     w.sgprPool = RegisterPool(0, RegisterType.Sgpr, defaultPreventOverflow=False, printRP=False)
@@ -106,7 +100,7 @@ def _render(method):
     return str(m)
 
 
-# ---- rendered text of each method (module-scoped so it renders once) --------
+# ---- helpers: render each emitter method to assembly text -----------------
 
 def _render_reserve():
     return _render(lambda m, w, em, ns:
@@ -131,8 +125,8 @@ def _render_submit():
                    em.emitSubmitPacket(m, w, ns.handleBase, ns.base, ns.pend))
 
 
-# A line-level helper: return the list of (idx, line) for lines whose text
-# matches a mnemonic substring, so tests assert on order by index.
+# Rendered lines, stripped and non-blank, in source order (for index-based
+# assertions).
 def _lines(text):
     return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
@@ -150,7 +144,7 @@ def _first_idx(lines, pred):
 class TestScopeBits:
 
     def test_rptr_read_is_system_scope(self):
-        # CanWriteUpto's slow path loads the hardware rptr at SYSTEM scope.
+        # CanWriteUpto's slow path.
         lines = _lines(_render_canwrite())
         rptr = [ln for ln in lines if "load hardware rptr" in ln]
         assert rptr, "expected a rptr load in CanWriteUpto"
@@ -158,7 +152,6 @@ class TestScopeBits:
             f"rptr load must be SYSTEM scope (sc0 sc1): {rptr}"
 
     def test_cachedwptr_access_is_agent_scope(self):
-        # reserve reads cachedWptr (AGENT, sc1) and CAS-writes it (device, sc0).
         lines = _lines(_render_reserve())
         load = [ln for ln in lines if "load cachedWptr" in ln]
         assert load and all("global_load" in ln and _has_sc1_only(ln) for ln in load), \
@@ -184,7 +177,7 @@ class TestScopeBits:
             f"doorbell store must be SYSTEM scope (sc0 sc1): {db}"
 
     def test_ring_stores_are_agent_scope(self):
-        # placePacket writes padding + packet dwords to the ring at AGENT scope.
+        # placePacket writes padding + packet dwords to the ring.
         lines = _lines(_render_place())
         st = [ln for ln in lines if "global_store" in ln and "ring[" in ln]
         assert st, "expected ring stores in placePacket"
@@ -193,8 +186,8 @@ class TestScopeBits:
 
 
 def _has_sc1_only(line):
-    """True iff the instruction carries sc1 but NOT sc0 (AGENT/device scope).
-    Matches the trailing modifier group so a 'sc1' inside a comment is ignored."""
+    """True iff the instruction carries sc1 but not sc0 (AGENT scope); ignores
+    matches inside a trailing comment."""
     code = line.split("//")[0]
     return re.search(r"\bsc1\b", code) is not None and re.search(r"\bsc0\b", code) is None
 
@@ -215,8 +208,6 @@ class TestSubmitOrder:
             f"publish order must be wptr({i_wptr}) < doorbell({i_db}) < committed({i_comm})"
 
     def test_vmcnt_barrier_between_wptr_and_doorbell(self):
-        # An s_waitcnt vmcnt(0) sits between the wptr store and the doorbell
-        # store (orders the wptr write ahead of the ring).
         lines = _lines(_render_submit())
         i_wptr = _first_idx(lines, lambda l: "store wptr = pending" in l and "global_store" in l)
         i_db = _first_idx(lines, lambda l: "doorbell" in l and "global_store" in l)
@@ -224,11 +215,6 @@ class TestSubmitOrder:
         assert between, "expected s_waitcnt vmcnt(0) between wptr store and doorbell store"
 
     def test_vmcnt_barrier_between_doorbell_and_committed(self):
-        # An s_waitcnt vmcnt(0) sits between the doorbell store and the
-        # committedWptr store, so the doorbell (engine kick) is ordered before
-        # committedWptr unblocks the next producer. This is on the timing-hang
-        # critical path, so it is pinned here -- a refactor that drops it must
-        # redden a test.
         lines = _lines(_render_submit())
         i_db = _first_idx(lines, lambda l: "doorbell" in l and "global_store" in l)
         i_comm = _first_idx(lines, lambda l: "store committedWptr = pending" in l and "global_store" in l)
@@ -237,8 +223,6 @@ class TestSubmitOrder:
         assert between, "expected s_waitcnt vmcnt(0) between doorbell store and committedWptr store"
 
     def test_two_vmcnt_barriers_present(self):
-        # One vmcnt(0) orders the packet stores before wptr; one orders wptr
-        # before the doorbell. Both must be present.
         lines = _lines(_render_submit())
         i_wptr = _first_idx(lines, lambda l: "store wptr = pending" in l and "global_store" in l)
         i_db = _first_idx(lines, lambda l: "doorbell" in l and "global_store" in l)
@@ -248,8 +232,7 @@ class TestSubmitOrder:
         assert mid, "expected a vmcnt(0) between wptr and doorbell"
 
     def test_spins_on_committed_equals_base(self):
-        # (1) submitPacket serializes behind earlier reservations by spinning
-        # until committedWptr == base (a loop with a back-branch).
+        # submitPacket spins until committedWptr == base (back-branch).
         text = _render_submit()
         assert "committedWptr == base" in text, "expected the committed==base spin comment"
         lines = _lines(text)
@@ -257,10 +240,7 @@ class TestSubmitOrder:
             "expected a back-branch that re-polls committedWptr"
 
     def test_spin_backoff_is_inside_the_loop_body(self):
-        # Regression guard: the s_sleep backoff must sit INSIDE the spin cycle,
-        # i.e. between the spin label and the FIRST back-branch. If it drifts
-        # after the back-branches it runs exactly once, on loop exit, and the
-        # committedWptr poll becomes a tight zero-backoff spin.
+        # s_sleep backoff must sit between the spin label and the first back-branch.
         lines = _lines(_render_submit())
         def _code(l): return l.split("//")[0]
         i_label = _first_idx(lines, lambda l: _code(l).strip().startswith("label_sdma_submit_spin:"))
@@ -290,10 +270,6 @@ class TestReserveIsCas:
         assert cas, "ReserveQueueSpace must use a compare-swap atomic"
 
     def test_cas_is_x2_with_sc0_on_gfx950(self):
-        # The reserve CAS must be the 64-bit global compare-swap with the gfx9
-        # "_x2" mnemonic and sc0 (return-of-pre-op; the assembler REQUIRES sc0 on
-        # this op). This is the load-bearing detail: a wrong mnemonic/suffix or a
-        # missing sc0 is a silent illegal-instruction or a dropped-return bug.
         code_lines = [ln for ln in _lines(_render_reserve())
                       if "atomic_cmpswap" in ln.split("//")[0]]
         assert code_lines, "expected a global CAS in ReserveQueueSpace"
@@ -305,8 +281,6 @@ class TestReserveIsCas:
                 f"CAS must carry sc0 (return-of-pre-op; assembler requires it): {ln}"
 
     def test_no_atomic_add_reservation(self):
-        # A fetch_add reservation (the WRONG primitive) would show an atomic_add
-        # writing the reservation cursor; assert none exists.
         code = "\n".join(ln.split("//")[0] for ln in _lines(_render_reserve()))
         assert "atomic_add" not in code, \
             "ReserveQueueSpace must NOT use atomic_add (fetch_add breaks wrap padding)"
@@ -329,7 +303,6 @@ class TestWrapPadding:
         assert pad, "placePacket must emit a zero-store for ring-tail padding"
 
     def test_padding_value_is_zero(self):
-        # The padded value comes from a register set to 0.
         text = _render_place()
         assert "padding NOP value = 0" in text, "expected a v_mov ...,0 seeding the padding value"
 
@@ -345,20 +318,16 @@ class TestWrapPadding:
 class TestCachedHwReadIndexNeverStored:
 
     def test_no_store_to_handle_plus_48(self):
-        # The private cache seed lives at handle+48. No emitter method may store
-        # to it (it is per-producer register state, not shared memory).
         assert OFF_cachedHwReadIndex == 48
         for text in (_render_reserve(), _render_canwrite(), _render_place(), _render_submit()):
             code = "\n".join(ln.split("//")[0] for ln in _lines(text))
-            # A store to handle+48 would appear as an s_load/global access at
-            # offset 0x30 off handleBase; assert no field pointer at 0x30 is
-            # loaded (the emitter only touches offsets 0/8/16/24/32/40).
+            # handle+48 == offset 0x30 off handleBase (emitter only touches
+            # 0/8/16/24/32/40).
             assert "0x30" not in code, \
                 "no access to handle+48 (cachedHwReadIndex) may be emitted"
 
     def test_only_expected_field_offsets_accessed(self):
-        # Whitelist: queueBuf(0) rptr(8) wptr(16) doorbell(24) cachedWptr(32)
-        # committedWptr(40). Any other handleBase offset is a layout mistake.
+        # queueBuf(0) rptr(8) wptr(16) doorbell(24) cachedWptr(32) committedWptr(40)
         allowed = {"0x0", "0x8", "0x10", "0x18", "0x20", "0x28"}
         for text in (_render_reserve(), _render_canwrite(), _render_place(), _render_submit()):
             for ln in _lines(text):
@@ -381,9 +350,6 @@ class TestCanWriteUptoResultAlwaysDefined:
         return m.group(1)
 
     def test_result_defaulted_to_zero_before_first_branch(self):
-        # The refresh-retest tail branch ("hi != 0 -> full") jumps straight to
-        # the done label WITHOUT writing resultS. So resultS must be defaulted
-        # to 0 before the first branch, or the caller reads a stale value.
         lines = _lines(_render_canwrite())
         reg = self._result_reg(lines)
         i_branch = _first_idx(lines, lambda l: "s_cbranch" in l.split("//")[0])
@@ -411,9 +377,7 @@ class TestAssembles:
                              ids=["reserve", "canwrite", "place", "submit"])
     def test_body_assembles(self, render, tmp_path):
         body = render()
-        # Wrap the body in a minimal gfx950 kernel. The body references v0..vN
-        # and s0..sN directly (numeric), so no .set directives are needed; the
-        # assembler only checks opcode/operand legality, which is the point.
+        # Wrap in a minimal gfx950 kernel; numeric v/s regs need no .set directives.
         asm = _MINIMAL_KERNEL % {"gfx": _GFX, "body": body}
         s_path = tmp_path / "sdma_ring.s"
         o_path = tmp_path / "sdma_ring.o"
@@ -425,9 +389,8 @@ class TestAssembles:
         assert r.returncode == 0, f"assembly failed:\n{r.stderr}\n---\n{asm}"
 
 
-# Minimal assemblable kernel: just the body between a label and s_endpgm. The
-# body's registers are self-contained (numeric v/s indices); we bump the
-# declared vgpr/sgpr counts high enough to cover them.
+# Minimal kernel: body between a label and s_endpgm; vgpr/sgpr counts bumped
+# high enough for the numeric registers used.
 _MINIMAL_KERNEL = """\
 .amdgcn_target "amdgcn-amd-amdhsa--%(gfx)s"
 .text

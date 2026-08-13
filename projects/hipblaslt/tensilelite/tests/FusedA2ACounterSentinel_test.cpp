@@ -35,16 +35,13 @@ namespace
 
 // ---- Layout ---------------------------------------------------------------
 
-// Pins the payload formula against counterBytes in FusedA2AClient.cpp. If the
-// counter layout ever grows a fourth region, this reddens rather than letting
-// the guard silently overlap live counter slots.
+// Pins the payload formula against counterBytes in FusedA2AClient.cpp.
 TEST(FusedA2ACounterSentinel, PayloadMatchesTheCounterLayout)
 {
     // Three levels ride one allocation, in this order:
     //   [0, W*tokenTiles)              counter[dst_rank*tokenTiles + j]
     //   [W*tokenTiles, W*tokenTiles+W) counter2[dst_rank]
     //   [W*tokenTiles+W]               counter3, the single grid-wide WG tally
-    // The kernel hardcodes those index expressions, so this is the size contract.
     EXPECT_EQ(fusedA2ACounterPayloadBytes(4, 16), (size_t)(4 * 16 + 4 + 1) * sizeof(uint32_t));
     EXPECT_EQ(fusedA2ACounterPayloadBytes(8, 1), (size_t)(8 * 1 + 8 + 1) * sizeof(uint32_t));
     EXPECT_EQ(fusedA2ACounterPayloadBytes(1, 1), (size_t)(1 * 1 + 1 + 1) * sizeof(uint32_t));
@@ -59,8 +56,7 @@ TEST(FusedA2ACounterSentinel, Counter3SitsImmediatelyAfterCounter2)
         for(uint32_t t : {1u, 8u, 16u})
         {
             const size_t words = fusedA2ACounterPayloadBytes(w, t) / sizeof(uint32_t);
-            // One assertion only: `words - 1 == w*t + w` is algebraically implied
-            // by this and cannot fail independently of it.
+            // One assertion only: `words - 1 == w*t + w` is implied by this.
             EXPECT_EQ(words, (size_t)w * t + w + 1) << "W=" << w << " tokenTiles=" << t;
         }
     }
@@ -85,8 +81,6 @@ TEST(FusedA2ACounterSentinel, AllocIsPayloadPlusGuardTail)
 
 // ---- The detector must not cry wolf ---------------------------------------
 
-// The GPU run is what ultimately proves no false positive, but a guard that
-// fails its own fill would waste that run.
 TEST(FusedA2ACounterSentinel, FilledGuardReadsIntact)
 {
     auto g = freshGuard();
@@ -95,9 +89,6 @@ TEST(FusedA2ACounterSentinel, FilledGuardReadsIntact)
 
 // ---- The detector must bite ------------------------------------------------
 
-// Distinct per-word values are what make a SHIFTED overrun detectable: with a
-// uniform pattern, a write that lands one word off still leaves every word
-// holding a legal value, and the guard reads intact through the corruption.
 TEST(FusedA2ACounterSentinel, EveryGuardWordIsDistinct)
 {
     auto               g = freshGuard();
@@ -105,9 +96,7 @@ TEST(FusedA2ACounterSentinel, EveryGuardWordIsDistinct)
     EXPECT_EQ(seen.size(), g.size());
 }
 
-// The general mutation: corrupt exactly one word, require the detector to name
-// that word. Covers every guard position, so a detector that only checks the
-// first or last word reddens here.
+// Corrupts each word in turn; the detector must name that word.
 TEST(FusedA2ACounterSentinel, DetectsEachCorruptedWord)
 {
     for(size_t i = 0; i < FUSED_A2A_COUNTER_SENTINEL_WORDS; i++)
@@ -119,10 +108,7 @@ TEST(FusedA2ACounterSentinel, DetectsEachCorruptedWord)
     }
 }
 
-// The realistic overrun shapes. A counter slot is written either by the
-// per-launch memset (zero) or by an atomic increment (a small tile count), so
-// these are the values an out-of-bounds counter index actually deposits -- the
-// pattern must not collide with any of them.
+// Realistic overrun values: per-launch memset (zero) or atomic-increment tile counts.
 TEST(FusedA2ACounterSentinel, DetectsCounterLikeWrites)
 {
     for(uint32_t v : {0u, 1u, 2u, 3u, 16u, 64u, 255u, 4096u})
@@ -137,9 +123,7 @@ TEST(FusedA2ACounterSentinel, DetectsCounterLikeWrites)
     }
 }
 
-// An overrun need not be word-aligned (a byte-granular or misaligned copy can
-// clip the guard). A detector comparing anything coarser than the full word
-// reddens here.
+// An overrun need not be word-aligned (byte-granular or misaligned copies can clip the guard).
 TEST(FusedA2ACounterSentinel, DetectsSingleByteCorruption)
 {
     for(size_t byteIdx = 0; byteIdx < FUSED_A2A_COUNTER_SENTINEL_BYTES; byteIdx++)
@@ -152,8 +136,7 @@ TEST(FusedA2ACounterSentinel, DetectsSingleByteCorruption)
     }
 }
 
-// A wholesale clobber must report the FIRST bad word, not merely "something is
-// wrong" -- the index is what tells you how far past the payload the write ran.
+// A wholesale clobber must report the FIRST bad word, not merely "something is wrong".
 TEST(FusedA2ACounterSentinel, ReportsFirstBadWordWhenManyAreCorrupt)
 {
     auto g = freshGuard();

@@ -2,18 +2,14 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
 ################################################################################
-# Scrape test: the C++ SDMA packet header and the Python packet emitter must
-# describe the SAME wire format. C++'s static_asserts only check the header
-# against itself; nothing ties it to Tensile/Components/SdmaPacketEmitter.py,
-# which is what actually builds the shipped packets. Pinned: the op/sub_op
-# constants, packet lengths, field widths, and field OFFSETS (16/13/25/29) --
-# C++ derives an offset from declaration order, Python re-states it as a bare
-# `<< N`, so this recomputes it from the C++ layout to keep the two in lockstep.
+# Scrape test: pins the C++ SDMA packet header and the Python packet emitter
+# to the SAME wire format -- op/sub_op constants, packet lengths, field
+# widths, and field offsets (16/13/25/29).
 #
-# Scrapes text (the client must not depend on Tensile at test time) and fails
-# loudly, never skips, if a pattern stops matching. The golden dword vectors
-# live in test_sdma_packet_emitter.py / tests/SdmaPktSubwin_test.cpp; this
-# pins the spec those goldens are instances of.
+# Scrapes text and fails loudly, never skips, if a pattern stops matching.
+# The golden dword vectors live in test_sdma_packet_emitter.py /
+# tests/SdmaPktSubwin_test.cpp; this pins the spec those goldens are
+# instances of.
 ################################################################################
 
 import ast
@@ -30,8 +26,7 @@ PY_EMITTER = os.path.join(TENSILE_ROOT, "Tensile", "Components", "SdmaPacketEmit
 
 
 # ---------------------------------------------------------------------------
-# Scrapers. Every one raises (never returns a default) when it finds nothing --
-# see the "must FAIL, never skip" note above.
+# Scrapers: every one raises (never returns a default) if it finds nothing.
 # ---------------------------------------------------------------------------
 
 def _read(path):
@@ -51,12 +46,7 @@ def _cpp_constexprs(text):
 
 
 def _cpp_packet_bodies(text):
-    """Split the header into the COPY and ATOMIC struct bodies.
-
-    Needed because both packets declare a union literally named HEADER_UNION;
-    scraping the file as one blob would silently let one packet's header answer
-    for the other's.
-    """
+    """Split the header into the COPY and ATOMIC struct bodies."""
     copy_at = text.index("SDMA_PKT_COPY_LINEAR_SUBWIN_TAG")
     atomic_at = text.index("SDMA_PKT_ATOMIC_TAG")
     assert copy_at < atomic_at, "expected COPY to be declared before ATOMIC"
@@ -64,12 +54,7 @@ def _cpp_packet_bodies(text):
 
 
 def _cpp_bitfields(body):
-    """{union_name: [(field, width), ...]} in DECLARATION ORDER.
-
-    Order is the whole point: a bit-field's offset is the sum of the widths
-    declared before it, so this is what lets the offset checks below recompute
-    the Python shift constants from the C++ layout.
-    """
+    """{union_name: [(field, width), ...]} in DECLARATION ORDER."""
     unions = {}
     pattern = re.compile(
         r"struct\s*\{(?P<fields>.*?)\}\s*;\s*"
@@ -114,12 +99,8 @@ def _cpp_packet_dwords(text, struct_name):
 
 
 def _py_constants(text):
-    """{name: value} for module-level literal assignments.
-
-    Parsed with ast rather than imported: importing SdmaPacketEmitter pulls in
-    rocisa, and a missing rocisa would turn this pure-text check into a skip --
-    exactly the silent pass this test must not have.
-    """
+    """{name: value} for module-level literal assignments, parsed via ast
+    (not import)."""
     consts = {}
     for node in ast.parse(text).body:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
@@ -135,12 +116,8 @@ def _py_constants(text):
 
 
 def _py_dword_exprs(text, func_name):
-    """{index: source of the RHS} for every `dw[<index>] = ...` in `func_name`.
-
-    Scoped to one function, and to one dword within it, on purpose: a bare
-    "somewhere in this file there is a << 16" would stay green if the shift were
-    moved to the wrong dword, which is precisely the drift worth catching.
-    """
+    """{index: source of the RHS} for every `dw[<index>] = ...` in `func_name`,
+    scoped to one function and one dword."""
     for node in ast.walk(ast.parse(text)):
         if not (isinstance(node, ast.FunctionDef) and node.name == func_name):
             continue
@@ -231,9 +208,8 @@ def test_atomic_packet_dword_count_matches(cpp, py):
 # ---------------------------------------------------------------------------
 # 3. Field widths
 # ---------------------------------------------------------------------------
-# Python collapses each family of same-width fields into ONE constant, so the
-# check is: every C++ member of the family has that width. A single widened
-# field would otherwise leave the Python mask too narrow for it alone.
+# Python collapses each family of same-width fields into ONE constant; the
+# check is that every C++ member of the family has that width.
 
 _XY_FIELDS = [("DW_3_UNION", "src_x"), ("DW_3_UNION", "src_y"),
               ("DW_8_UNION", "dst_x"), ("DW_8_UNION", "dst_y"),
@@ -261,15 +237,12 @@ def test_field_widths_match(cpp, py, py_name, fields):
 
 
 # ---------------------------------------------------------------------------
-# 4. Field offsets -- the C++ layout must justify Python's magic shifts
+# 4. Field offsets
 # ---------------------------------------------------------------------------
-# Each assertion recomputes an offset from the declared C++ bit-field order and
-# compares it to the literal the Python emitter shifts by. Nothing else checks
-# these numbers on either side.
+# Each assertion recomputes an offset from the C++ bit-field declaration order
+# and compares it to the literal the Python emitter shifts by.
 
 def test_y_offset_is_16(cpp, py):
-    # The y half of each coordinate dword sits at bit 16 (x is 14 bits + a 2-bit
-    # reserved gap). encodeCopyDwords writes that as `<< 16` in dw[3]/dw[8]/dw[11].
     for union_name, field in [("DW_3_UNION", "src_y"), ("DW_8_UNION", "dst_y"),
                               ("DW_11_UNION", "rect_y")]:
         got = _offset(cpp["copy"], union_name, field)
@@ -282,9 +255,6 @@ def test_y_offset_is_16(cpp, py):
 
 
 def test_pitch_offset_is_13(cpp, py):
-    # Pitch starts at bit 13: z (11 bits) plus a 2-bit reserved gap. The 13 looks
-    # arbitrary on the Python side because the gap it steps over is only visible
-    # in the C++ declaration.
     for union_name, field in _PITCH_FIELDS:
         got = _offset(cpp["copy"], union_name, field)
         assert got == 13, (
@@ -296,17 +266,12 @@ def test_pitch_offset_is_13(cpp, py):
 
 
 def test_copy_header_elementsize_offset_is_29(cpp, py):
-    # elementsize lands after op(8) + sub_op(8) + reserved(2) + tmz(1) +
-    # reserved(10); COPY_HEADER_DW0 folds it in at `<< 29`.
     assert _offset(cpp["copy"], "HEADER_UNION", "elementsize") == 29
     _assert_shifted_by(_py_dword_exprs(py["text"], "encodeCopyDwords"),
                        0, 29, "elementsize")
 
 
 def test_atomic_header_operation_offset_is_25(cpp, py):
-    # operation lands after op(8) + sub_op(8) + l(1) + reserved(8). The `l` bit is
-    # what makes this 25 rather than 24 -- exactly the kind of one-bit slip that
-    # nothing else on either side would catch.
     assert _offset(cpp["atomic"], "HEADER_UNION", "operation") == 25
     _assert_shifted_by(_py_dword_exprs(py["text"], "encodeAtomicDwords"),
                        0, 25, "ADD_RTN_32 operation code")
@@ -315,8 +280,8 @@ def test_atomic_header_operation_offset_is_25(cpp, py):
 # ---------------------------------------------------------------------------
 # 5. The scrapers themselves found something
 # ---------------------------------------------------------------------------
-# Guards against the failure mode where a refactor changes the declaration shape
-# so the regexes match nothing and every test above passes vacuously.
+# Guards against a declaration-shape refactor making the regexes above match
+# nothing, so every test up to this point would pass vacuously.
 
 def test_scrape_actually_found_the_declarations(cpp, py):
     assert len(cpp["consts"]) >= 4, cpp["consts"]

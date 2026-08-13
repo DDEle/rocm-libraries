@@ -153,7 +153,7 @@ def _mock_bf16_dtype():
     return m
 
 
-def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False, source_swap=False):
+def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False):
     """Build kernel dict for the store-D test.
 
     Extends the minimal kernel from create_writer with all fields needed by
@@ -162,8 +162,6 @@ def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False, source_swap=Fal
 
     mi_wave_group: optional [m0, m1] override (default: derived from cfg tile size).
     use_bf16: if True, use bf16 DestDataType with HighPrecisionAccumulate=True.
-    source_swap: if True, set SourceSwap=True + UseInitialStridesCD (row-major D)
-        and force StoreVectorWidth=GlobalWriteVectorWidth=1.
     """
     from gpu_test_helpers import _mock_dtype, _create_kernel
     kernel = _create_kernel(cfg, mi_wave_group=mi_wave_group)
@@ -212,7 +210,7 @@ def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False, source_swap=Fal
     kernel["CompactLoopStore"] = False
     kernel["LocalSplitU"] = 1
     kernel["StoreRemapVectorWidth"] = 0
-    kernel["SourceSwap"] = source_swap
+    kernel["SourceSwap"] = False
     kernel["EnableMatrixInstruction"] = True
     kernel["AdaptiveGemm"] = 0
     kernel["AdaptiveGemmGSUA"] = 0
@@ -234,8 +232,7 @@ def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False, source_swap=Fal
     #   bf16 dest (2 B/elem): SVW = min(16/2, 4) = 4 → buffer_store_dwordx2  (8 bytes) ✓
     bpe = int(dest_dtype.numBytes())
     mi_output_vw = kernel["MIOutputVectorWidth"]
-    # SourceSwap forces SVW=1.
-    kernel["StoreVectorWidth"] = 1 if source_swap else min(16 // bpe, mi_output_vw)
+    kernel["StoreVectorWidth"] = min(16 // bpe, mi_output_vw)
     kernel["_VectorStore"] = True
 
     # PackedC1IndicesX: [1] means the J-dim index is index 1
@@ -255,7 +252,7 @@ def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False, source_swap=Fal
     kernel["PackedC0IndicesX"] = [0]
     kernel["NumWaveSplitK"] = 1
     kernel["GroupLoadStore"] = False
-    kernel["GlobalWriteVectorWidth"] = 1 if source_swap else min(16 // bpe, mi_output_vw)
+    kernel["GlobalWriteVectorWidth"] = min(16 // bpe, mi_output_vw)
     kernel["NonTemporalD"] = 0
     kernel["NonTemporalC"] = 0
     kernel["NonTemporalE"] = 0
@@ -296,7 +293,7 @@ def _build_store_kernel(cfg, mi_wave_group=None, use_bf16=False, source_swap=Fal
     kernel["ProblemType"]["ActivationComputeDataType"] = compute_dtype
     kernel["ProblemType"]["HighPrecisionAccumulate"] = use_bf16
     kernel["ProblemType"]["StochasticRounding"] = False
-    kernel["ProblemType"]["UseInitialStridesCD"] = source_swap
+    kernel["ProblemType"]["UseInitialStridesCD"] = False
     kernel["ProblemType"]["UseInitialStridesAB"] = False
     kernel["ProblemType"]["Fp16AltImpl"] = False
     kernel["ProblemType"]["Fp16AltImplRound"] = False
@@ -523,21 +520,11 @@ def _build_sgprs_for_test(writer):
     nGuard = writer.sgprPool.checkOut(1, "subtileNValidBlocks")
     writer.sgprs["subtileNValidBlocks"] = nGuard
 
-    # StrideDI / StrideCI: index-0 (I/M) stride sgprs, used by the SourceSwap store path.
-    strdi = writer.sgprPool.checkOut(1, "StrideDI")
-    writer.sgprs["StrideDI"] = strdi
-    strci = writer.sgprPool.checkOut(1, "StrideCI")
-    writer.sgprs["StrideCI"] = strci
-
     return writer.sgprs
 
 
-def _build_prologue(sgprs, num_agprs, mt0, mt1, stride_d=None, use_input_buf=True,
-                    source_swap=False):
+def _build_prologue(sgprs, num_agprs, mt0, mt1, stride_d=None, use_input_buf=True):
     """Generate prologue that loads kernel args and initializes the SRDs.
-
-    source_swap: if True, the D buffer is ROW-MAJOR (StrideDI=row_stride, StrideDJ=1);
-        if False, column-major (StrideDI=1, StrideDJ=stride_d).
 
     Kernarg layout (matches args descriptor in the test):
       offset  0: u64 input buffer ptr   (SrdInput base)
@@ -641,26 +628,9 @@ def _build_prologue(sgprs, num_agprs, mt0, mt1, stride_d=None, use_input_buf=Tru
     m.add(SMovB32(dst=sgpr(sgprs["WorkGroup0"]), src=0, comment="WorkGroup0 = 0"))
     m.add(SMovB32(dst=sgpr(sgprs["WorkGroup1"]), src=0, comment="WorkGroup1 = 0"))
 
-    if source_swap:
-        # Row-major D: kernarg stride -> StrideDI; StrideDJ = 1 (N contiguous).
-        if "StrideDI" in sgprs:
-            m.add(SMovB32(dst=sgpr(sgprs["StrideDI"]), src=sgpr(sgprs["StrideDJ"]),
-                          comment="StrideDI = row_stride (row-major M-row stride)"))
-        if "StrideCI" in sgprs:
-            m.add(SMovB32(dst=sgpr(sgprs["StrideCI"]), src=sgpr(sgprs["StrideDJ"]),
-                          comment="StrideCI = StrideDI"))
-        m.add(SMovB32(dst=sgpr(sgprs["StrideDJ"]), src=1, comment="StrideDJ = 1 (N contiguous)"))
-        m.add(SMovB32(dst=sgpr(sgprs["StrideCJ"]), src=1, comment="StrideCJ = 1"))
-    else:
-        # StrideCJ = StrideDJ (loaded from kernargs above)
-        m.add(SMovB32(dst=sgpr(sgprs["StrideCJ"]), src=sgpr(sgprs["StrideDJ"]),
-                      comment="StrideCJ = StrideDJ"))
-
-        # StrideDI / StrideCI = 1 (I/M is the contiguous dim of the column-major D buffer).
-        if "StrideDI" in sgprs:
-            m.add(SMovB32(dst=sgpr(sgprs["StrideDI"]), src=1, comment="StrideDI = 1"))
-        if "StrideCI" in sgprs:
-            m.add(SMovB32(dst=sgpr(sgprs["StrideCI"]), src=1, comment="StrideCI = 1"))
+    # StrideCJ = StrideDJ (loaded from kernargs above)
+    m.add(SMovB32(dst=sgpr(sgprs["StrideCJ"]), src=sgpr(sgprs["StrideDJ"]),
+                  comment="StrideCJ = StrideDJ"))
 
     # NumWorkGroups0/1 = 1 (only one workgroup in each dimension)
     m.add(SMovB32(dst=sgpr(sgprs["NumWorkGroups0"]), src=1, comment="NumWorkGroups0 = 1"))
@@ -1125,8 +1095,7 @@ def _inject_bf16_permute(store_asm: str, perm_addr_reg: int, perm_tmp_regs: tupl
 
 def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
                 num_threads=None, dump_asm=False, dump_store_insts=False,
-                asm_output_dir=None, use_bf16=False, init_mode="matrix",
-                source_swap=False):
+                asm_output_dir=None, use_bf16=False, init_mode="matrix"):
     """Assemble and run the store-D roundtrip for the given tile and wave configuration.
 
     Args:
@@ -1138,8 +1107,6 @@ def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
         num_threads:   Total thread count (default: NUM_THREADS = WAVESIZE * NUM_WAVES).
         init_mode:     "matrix" — load from full MT_a×MT_b host matrix (default);
                        "wave_id" — write float(wave_id) to every accvgpr.
-        source_swap:   If True, build the SourceSwap layout (row-major D, transposed
-                       accvgpr init). Only init_mode="matrix" supports this.
 
     Returns:
         (out, tileInfoD, expected_set, round_mt0, round_mt1): output float tuple (sized
@@ -1149,10 +1116,7 @@ def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
     if num_threads is None:
         num_threads = NUM_THREADS
 
-    if source_swap:
-        assert init_mode == "matrix", "source_swap only supported with init_mode='matrix'"
-    kernel = _build_store_kernel(cfg, mi_wave_group=mi_wave_group, use_bf16=use_bf16,
-                                 source_swap=source_swap)
+    kernel = _build_store_kernel(cfg, mi_wave_group=mi_wave_group, use_bf16=use_bf16)
     kernel["NumThreads"] = num_threads
     kernel["UseSubtileImpl"] = True
 
@@ -1183,8 +1147,7 @@ def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
     # macrotile footprint is allocated and initialized to the sentinel value.
     round_mt0 = ((size_i + cfg.mt_a - 1) // cfg.mt_a) * cfg.mt_a
     round_mt1 = ((size_j + cfg.mt_b - 1) // cfg.mt_b) * cfg.mt_b
-    # Row-major (SourceSwap): stride_d -> StrideDI (round_mt1). Column-major: -> StrideDJ (round_mt0).
-    stride_d = round_mt1 if source_swap else round_mt0
+    stride_d = round_mt0
 
     if init_mode == "wave_id":
         prologue = _build_prologue(sgprs, len(agpr_indices), cfg.mt_a, cfg.mt_b,
@@ -1220,8 +1183,9 @@ def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
         vaddr = writer.vgprPool.checkOut(1, "vaddr", preventOverflow=False)
         vtmp2 = writer.vgprPool.checkOut(1, "vtmp2", preventOverflow=False)
         prologue = _build_prologue(sgprs, len(agpr_indices), cfg.mt_a, cfg.mt_b,
-                                   stride_d=stride_d, use_input_buf=True,
-                                   source_swap=source_swap)
+                                   stride_d=stride_d, use_input_buf=True)
+        init_mod = _build_accvgpr_init_matrix_asm(agpr_indices, kernel, tileInfoD, sgprs,
+                                                  tmp_v, vaddr, vtmp2)
         args = [
             ("input",    8, "global_buffer", "u8"),
             ("output",   8, "global_buffer", "u8"),
@@ -1229,17 +1193,8 @@ def _run_storeD(cfg, tmp_path, size_i, size_j, mi_wave_group=None,
             ("size_j",   4, "by_value",      "u32"),
             ("stride_d", 4, "by_value",      "u32"),
         ]
-        if source_swap:
-            # SourceSwap: acc[0:3] lie along N, host matrix is row-major, init transposed.
-            init_mod = _build_accvgpr_init_matrix_transposed_asm(
-                agpr_indices, kernel, tileInfoD, sgprs, tmp_v, vaddr, vtmp2)
-            input_bytes, ref_arr = _compute_reference_rowmajor(cfg, kernel, size_i, size_j)
-            expected_set = ref_arr
-        else:
-            init_mod = _build_accvgpr_init_matrix_asm(agpr_indices, kernel, tileInfoD, sgprs,
-                                                      tmp_v, vaddr, vtmp2)
-            input_bytes, expected_set, _ = _compute_reference(cfg, kernel, tileInfoD,
-                                                              size_i, size_j)
+        input_bytes, expected_set, _ = _compute_reference(cfg, kernel, tileInfoD,
+                                                          size_i, size_j)
         run_inputs = (np.frombuffer(input_bytes, dtype=np.float32),)
 
     init_asm = str(init_mod)
@@ -1324,24 +1279,6 @@ def test_storeD_mfma_layout(cfg, use_bf16, tmp_path):
     else:
         _verify_output(out, expected_set)
         _verify_matrix_positions(out, round_mt0, round_mt1)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="SourceSwap row-major N-wide subtile store does not exist: its dispatch "
-           "predicate never included FusedGemmA2A, so this non-fused row-major case "
-           "falls through to the column-major paired/orphan M-scatter "
-           "(GlobalWriteBatch.py), which writes the lane's 4 N-col accumulators as "
-           "4 M-rows. Remove this marker if the N-wide store is restored.",
-)
-@pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: c.label)
-def test_storeD_sourceswap_rowmajor_bf16(cfg, tmp_path):
-    """BF16 store-D roundtrip with SourceSwap=True + row-major D. XFAIL: see marker reason."""
-    init_rocisa()
-    out, tileInfoD, expected_set, round_mt0, round_mt1 = _run_storeD(
-        cfg, tmp_path, cfg.mt_a, cfg.mt_b, use_bf16=True, source_swap=True,
-    )
-    _verify_bf16_matrix_positions_rowmajor(out, round_mt0, round_mt1)
 
 
 @pytest.mark.parametrize("cfg", BF16_ODD_MIWT_CONFIGS, ids=lambda c: c.label)
@@ -1557,163 +1494,6 @@ def _build_accvgpr_init_matrix_asm(agpr_indices, kernel, tileInfoD, sgprs, tmp_v
                 f"  v_accvgpr_write_b32 a{agpr}, v{tmp_v}\n"
             ))
     return m
-
-
-def _build_accvgpr_init_matrix_transposed_asm(agpr_indices, kernel, tileInfoD, sgprs, tmp_v, vaddr, vtmp2):
-    """Init accvgprs for the SourceSwap layout from a row-major MT_a×MT_b host matrix.
-
-    This is the M<->N transpose of _build_accvgpr_init_matrix_asm: a lane's 4
-    accumulators lie along N (fixed M-row) instead of along M (fixed N-col).
-
-      lane_id     = tid % WAVESIZE
-      wave_id0    = wave_id % MIWaveGroup[0]   (M dimension)
-      wave_id1    = wave_id // MIWaveGroup[0]  (N dimension)
-      row_in_wave = lane_id % mma_m            (0..15)
-      lane_group  = lane_id // mma_n           (0..3)
-
-      For vtile index v (sId0 = v % localSubtileGrid[0], sId1 = v // localSubtileGrid[0]):
-        row = wave_id0 * wave_rows + sId0 * mma_m + row_in_wave
-        col = wave_id1 * wave_cols + sId1 * mma_n + lane_group * 4 + reg_k
-
-    The host matrix is ROW-MAJOR (stride MT_b): flat[row * MT_b + col] = D_ref[row][col].
-
-    Requires three scratch vgprs: tmp_v, vaddr, vtmp2.
-    """
-    srd_in = sgprs["SrdInput"]
-
-    MIWaveGroup = kernel["MIWaveGroup"]
-    wg0, wg1    = MIWaveGroup
-    MT_a        = kernel["MacroTile0"]
-    MT_b        = kernel["MacroTile1"]
-    mma_m       = kernel["MatrixInstM"]   # 16
-    mma_n       = kernel["MatrixInstN"]   # 16
-    regs_per_subtile = int(tileInfoD.mmaTileRegCount)  # 4
-
-    wave_rows = MT_a // wg0                              # rows owned by one wave
-    wave_cols = MT_b // wg1                              # cols owned by one wave
-    local_sg0 = int(tileInfoD.localSubtileGrid[0])        # sId0 range
-    local_sg1 = int(tileInfoD.localSubtileGrid[1])        # sId1 range
-
-    row_stride_bytes = MT_b * 4   # bytes per row in the row-major matrix
-
-    log2_ws  = WAVESIZE.bit_length() - 1
-    log2_wg0 = (wg0).bit_length() - 1   # assumes wg0 is power of 2
-
-    # Phase 1: compute the per-thread dynamic base byte offset into vaddr.
-    #
-    # row_byte_dyn = (wave_id0 * wave_rows + row_in_wave) * row_stride_bytes
-    # col_byte_dyn = (wave_id1 * wave_cols + lane_group * 4) * 4
-    # base_byte    = row_byte_dyn + col_byte_dyn
-    m = Module("accvgpr_init_matrix_transposed")
-    m.add(TextBlock(
-        # tmp_v = wave_id0 = (tid >> log2_ws) & (wg0-1)
-        f"  v_lshrrev_b32 v{tmp_v}, {log2_ws}, v0               // wave_id\n"
-        f"  v_and_b32 v{tmp_v}, {wg0 - 1}, v{tmp_v}             // wave_id0\n"
-        f"  v_mul_u32_u24 v{tmp_v}, {wave_rows}, v{tmp_v}       // wave_id0 * {wave_rows}\n"
-        # vtmp2 = row_in_wave = lane_id & 15 = v0 & 15  (SourceSwap: lane -> M-row)
-        f"  v_and_b32 v{vtmp2}, 15, v0                          // row_in_wave\n"
-        f"  v_add_u32 v{tmp_v}, v{vtmp2}, v{tmp_v}              // + row_in_wave\n"
-        # vaddr = row_byte_dyn = above * row_stride_bytes
-        f"  v_mul_u32_u24 v{vaddr}, {row_stride_bytes}, v{tmp_v} // row_byte_dyn\n"
-        # tmp_v = wave_id1 = tid >> (log2_ws + log2_wg0)
-        f"  v_lshrrev_b32 v{tmp_v}, {log2_ws + log2_wg0}, v0     // wave_id1\n"
-        f"  v_mul_u32_u24 v{tmp_v}, {wave_cols}, v{tmp_v}        // wave_id1 * {wave_cols}\n"
-        # vtmp2 = lane_group = (lane_id >> 4) & 3  (SourceSwap: 4-col groups in N)
-        f"  v_lshrrev_b32 v{vtmp2}, 4, v0                        // lane_id >> 4\n"
-        f"  v_and_b32 v{vtmp2}, 3, v{vtmp2}                      // lane_group (0..3)\n"
-        f"  v_lshlrev_b32 v{vtmp2}, 2, v{vtmp2}                  // lane_group * 4 (N cols)\n"
-        f"  v_add_u32 v{tmp_v}, v{vtmp2}, v{tmp_v}               // + lane_group*4\n"
-        # tmp_v = col_byte_dyn = (wave_id1*wave_cols + lane_group*4) * 4
-        f"  v_lshlrev_b32 v{tmp_v}, 2, v{tmp_v}                  // col_byte_dyn (*4)\n"
-        # vaddr = base_byte = row_byte_dyn + col_byte_dyn
-        f"  v_add_u32 v{vaddr}, v{tmp_v}, v{vaddr}               // base_byte\n"
-    ))
-
-    # Phase 2: walk vtiles in allocation order: sId1-outer, sId0-inner
-    # (getLocalMMATileLinearId: i = sId1 * localMMATileGrid[0] + sId0)
-    prev_static = 0
-    num_vtiles = len(agpr_indices) // regs_per_subtile
-    for vtile_idx in range(num_vtiles):
-        sId0 = vtile_idx % local_sg0
-        sId1 = vtile_idx // local_sg0
-        # static per-vtile offset from the wave's base (row-major):
-        #   row contribution: sId0 * mma_m * row_stride_bytes
-        #   col contribution: sId1 * mma_n * 4
-        static_off = sId0 * mma_m * row_stride_bytes + sId1 * mma_n * 4
-        delta = static_off - prev_static
-        if delta != 0:
-            m.add(TextBlock(
-                f"  v_add_u32 v{vaddr}, {delta}, v{vaddr}  // subtile ({sId0},{sId1})\n"
-            ))
-        prev_static = static_off
-        base = vtile_idx * regs_per_subtile
-        for k in range(regs_per_subtile):
-            agpr = agpr_indices[base + k]
-            # reg k within the subtile is the next N-col: +k*4 bytes (row-major contiguous)
-            m.add(TextBlock(
-                f"  buffer_load_dword v{tmp_v}, v{vaddr}, s[{srd_in}:{srd_in+3}], 0 offen offset:{k*4}\n"
-                f"  s_waitcnt vmcnt(0)\n"
-                f"  v_accvgpr_write_b32 a{agpr}, v{tmp_v}\n"
-            ))
-    return m
-
-
-def _compute_reference_rowmajor(cfg, kernel, size_i, size_j):
-    """Build the MT_a × MT_b ROW-MAJOR input buffer for the SourceSwap roundtrip test.
-
-    Buffer layout (stride MT_b): flat[row * MT_b + col] = float(row * MT_b + col)
-    for row < size_i, col < size_j; sentinel (0xFFFFFFFF as f32) otherwise.
-
-    Returns (input_bytes, ref_arr) — raw bytes and the numpy float32 flat array.
-    """
-    MT_a = kernel["MacroTile0"]
-    MT_b = kernel["MacroTile1"]
-    _SENTINEL = struct.unpack('f', struct.pack('I', 0xFFFFFFFF))[0]
-    flat = []
-    for row in range(MT_a):
-        for col in range(MT_b):
-            if row < size_i and col < size_j:
-                flat.append(float(row * MT_b + col))
-            else:
-                flat.append(_SENTINEL)
-    ref_arr = np.array(flat, dtype=np.float32)
-    return ref_arr.tobytes(), ref_arr
-
-
-def _verify_bf16_matrix_positions_rowmajor(out, round_mt0, round_mt1, size_i=None, size_j=None):
-    """Verify bf16 output matches the row-major serial matrix down-cast to bf16 (RNE).
-
-    Input (host) matrix is ROW-MAJOR: D_ref[row][col] = float(row * MT_b + col).
-    The SourceSwap store writes to a ROW-MAJOR D buffer (N contiguous, StrideD1J=1),
-    so the output buffer is read ROW-MAJOR (order='C', stride round_mt1): every output
-    element at (row, col) must equal bf16_rne(row * MT_b + col), i.e. flat position
-    row*round_mt1 + col holds the value for logical (row, col).
-
-    Args:
-        out:        Flat tuple of bf16-upcast-to-f32 values from the GPU output buffer.
-        round_mt0:  Number of rows.
-        round_mt1:  Number of cols (leading dimension of the row-major output buffer).
-        size_i:     Valid row count (defaults to round_mt0 — full tile).
-        size_j:     Valid col count (defaults to round_mt1 — full tile).
-    """
-    if size_i is None:
-        size_i = round_mt0
-    if size_j is None:
-        size_j = round_mt1
-    D = np.array(out, dtype=np.float32).reshape(round_mt0, round_mt1, order='C')
-    ref_f32 = np.fromfunction(lambda r, c: r * round_mt1 + c,
-                              (round_mt0, round_mt1), dtype=np.float32)
-    ref = _bf16_rne(ref_f32)
-    errors = []
-    for r in range(size_i):
-        for c in range(size_j):
-            if D[r, c] != ref[r, c]:
-                errors.append((r, c, float(ref[r, c]), float(D[r, c])))
-    if errors:
-        assert False, (
-            f"BF16 row-major matrix position mismatch in {len(errors)} valid elements "
-            f"(first 5 (row,col,expected,got): {errors[:5]})"
-        )
 
 
 def _build_accvgpr_init_wave_id_asm(agpr_indices, tmp_v):

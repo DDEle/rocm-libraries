@@ -3,19 +3,15 @@
 //
 // Golden offset-table regression for the fused GEMM.A2A kernarg segment.
 //
-// The segment layout is defined on TWO sides that must stay byte-identical: the
-// kernel side (Tensile/Components/Signature.py fusedA2AKernArgLayout + addArg
-// sequence) and the host side (appendFusedSegment). There is no cross-language
-// test harness, so both sides are pinned against the SAME golden table -- here
-// (C++) and in Tensile/Tests/unit/test_fusedA2AKernArgLayout.py (Python). A
-// one-sided change to either reddens its own golden test.
+// The segment layout must stay byte-identical between the kernel side
+// (Tensile/Components/Signature.py fusedA2AKernArgLayout + addArg sequence)
+// and the host side (appendFusedSegment); both are pinned against the same
+// golden table, mirrored in Tensile/Tests/unit/test_fusedA2AKernArgLayout.py
+// (Python).
 //
-// This test drives the REAL appendFusedSegment out of client/include/
-// FusedA2AKernArg.hpp.
-//
+// Drives the REAL appendFusedSegment out of client/include/FusedA2AKernArg.hpp.
 // Every field is written with a distinct sentinel and read back at its golden
-// offset, so a reorder (values land transposed), a type change (following
-// fields shift) and a rename (the caller stops compiling) all redden here.
+// offset.
 
 #include <algorithm>
 #include <cstdint>
@@ -34,7 +30,7 @@ using namespace TensileLite::Client;
 
 namespace
 {
-    // Sentinels. Distinct per field, so a transposition cannot go unnoticed.
+    // Sentinels, distinct per field.
     void* peerPtr(int j)
     {
         return reinterpret_cast<void*>(static_cast<uintptr_t>(0x1000 + j));
@@ -89,9 +85,9 @@ namespace
         return t;
     }
 
-    // Drive the real appendFusedSegment with the sentinels above. `slots` is how
-    // many peer pointers the caller supplies; the function pads the rest of the
-    // fixed FUSED_A2A_MAX_RANKS slots with nullptr.
+    // Drive the real appendFusedSegment with the sentinels above. `slots` is the
+    // number of peer pointers supplied; the rest of FUSED_A2A_MAX_RANKS is
+    // padded with nullptr.
     void appendWithSentinels(KernelArguments& args, int slots = FUSED_A2A_MAX_RANKS)
     {
         std::vector<void*> peers;
@@ -130,9 +126,8 @@ TEST(FusedA2AKernArg, SegmentBytesIs108)
 }
 
 // Each arg lands at its golden intra-segment offset carrying its own value.
-// The segment is appended onto an empty KernelArguments, so the segment base is
-// 0 and intra-offsets can be compared directly -- the same convention the
-// Python layout uses.
+// Appended onto an empty KernelArguments, so the segment base is 0 and
+// intra-offsets are directly comparable, matching the Python convention.
 TEST(FusedA2AKernArg, FieldOffsetsAndValuesMatchGolden)
 {
     KernelArguments args(/*log=*/false);
@@ -153,8 +148,8 @@ TEST(FusedA2AKernArg, FieldOffsetsAndValuesMatchGolden)
 }
 
 // The kernel metadata always reserves FUSED_A2A_MAX_RANKS slots regardless of
-// the runtime world size, so a caller supplying fewer must get nullptr in the
-// remainder rather than a short segment.
+// the runtime world size; unused slots must read nullptr, not shrink the
+// segment.
 TEST(FusedA2AKernArg, UnusedRankSlotsAreNullAndSegmentStaysFixed)
 {
     KernelArguments args(/*log=*/false);
@@ -171,8 +166,8 @@ TEST(FusedA2AKernArg, UnusedRankSlotsAreNullAndSegmentStaysFixed)
 }
 
 // In the client the segment is appended after the common args, not onto an
-// empty buffer. peer_ptr_0 uses appendAligned<void*>, so an 8-aligned base must
-// still produce exactly FUSED_A2A_SEGMENT_BYTES of growth with no padding.
+// empty buffer. peer_ptr_0 uses appendAligned<void*>; at an 8-aligned base that
+// must still add no padding.
 TEST(FusedA2AKernArg, GrowthIsUnchangedAtAnAlignedNonZeroBase)
 {
     KernelArguments args(/*log=*/false);
@@ -191,9 +186,8 @@ TEST(FusedA2AKernArg, GrowthIsUnchangedAtAnAlignedNonZeroBase)
     }
 }
 
-// FusedSdmaQueues sits directly after counter_ptr so the pointer group stays
-// 8-aligned and contiguous; FusedTilesPerRank/FusedTokenTiles are still the
-// last two scalars, appended after everything else.
+// FusedSdmaQueues sits directly after counter_ptr; FusedTilesPerRank and
+// FusedTokenTiles are the last two scalars.
 TEST(FusedA2AKernArg, SdmaQueuesFollowCounterTilesAndTokensAreLast)
 {
     const auto table         = goldenTable();
@@ -218,10 +212,8 @@ TEST(FusedA2AKernArg, SdmaQueuesFollowCounterTilesAndTokensAreLast)
     }
 }
 
-// The world size the client accepts is bounded by the ABI, not by the machine:
-// the segment reserves exactly FUSED_A2A_MAX_RANKS peer_ptr slots, so a larger
-// W has no pointer at all for the ranks past the end. The lower bound rejects
-// 0 and negatives.
+// World size is bounded by the ABI (FUSED_A2A_MAX_RANKS peer_ptr slots), not
+// the machine. The lower bound rejects 0 and negatives.
 TEST(FusedA2AWorldSize, AcceptsExactlyTheRepresentableRange)
 {
     for(int w = 1; w <= FUSED_A2A_MAX_RANKS; ++w)

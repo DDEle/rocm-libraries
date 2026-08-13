@@ -1,22 +1,19 @@
 // Copyright Advanced Micro Devices, Inc., or its affiliates.
 // SPDX-License-Identifier: MIT
 //
-// Golden-vector regression test for the SDMA rectangular sub-window copy packet
-// (SdmaPktSubwin.hpp). The packet layout + encoding conventions were validated
-// byte-for-byte on MI355X; this test freezes that encoding so later codegen
-// changes cannot silently corrupt it.
+// Golden-vector regression for the SDMA rectangular sub-window copy packet
+// (SdmaPktSubwin.hpp). Layout + encoding were validated byte-for-byte on
+// MI355X; this test freezes that encoding.
 //
-// Two vectors are pinned:
-//   * HARNESS -- the exact parameters the on-hardware validation harness used,
-//     including the intentionally PADDED dst pitch (kShard + kDstPad = 2624).
-//     This is the only byte sequence with real HW backing and is the primary
-//     anchor.
-//   * PRODUCTION -- the shape we will actually emit: an unpadded recv buffer
-//     ([src, token, feature_shard], rowStride == nShard == 2560). It has no HW
-//     bytes to copy, so its expected dwords are derived by hand from the same
-//     field rules and annotated per dword. It is also the rect_x == dst_pitch
-//     boundary case (the X extent exactly fills one row), a degenerate-looking
-//     shape that is easy to break later, so it is worth its own anchor.
+// Two vectors:
+//   * HARNESS -- exact on-hardware validation parameters, including the
+//     intentionally PADDED dst pitch (kShard + kDstPad = 2624). The only
+//     vector with real HW backing.
+//   * PRODUCTION -- the shape actually emitted: an unpadded recv buffer
+//     ([src, token, feature_shard], rowStride == nShard == 2560). No HW
+//     bytes; expected dwords derived by hand from the same field rules and
+//     annotated per dword. Also the rect_x == dst_pitch boundary case (the X
+//     extent exactly fills one row).
 
 #include <gtest/gtest.h>
 
@@ -45,9 +42,9 @@ namespace
     }
 }
 
-// -- HARNESS vector: dstPitch = 2624 (padded). Byte-for-byte the packet the
-//    MI355X validation emitted (with zero addresses, which the harness fills at
-//    runtime; the address dwords are shape-independent and checked as 0 here). --
+// -- HARNESS vector: dstPitch = 2624 (padded), byte-for-byte the MI355X
+//    validation packet (zero addresses; the harness fills these at runtime,
+//    shape-independent here). --
 TEST(SdmaPktSubwin, HarnessGoldenVector)
 {
     auto p = makeCopyRectPacket(/*srcBase=*/0,
@@ -153,8 +150,7 @@ TEST(SdmaPktSubwin, ProductionGoldenVector)
 }
 
 // Structural sanity: the packet really is 13 dwords and the sub-op is the
-// rect variant. (The layout offsets are locked by static_assert in the header;
-// this just documents the runtime-visible expectation.)
+// rect variant. (Layout offsets are locked by static_assert in the header.)
 TEST(SdmaPktSubwin, PacketSizeAndSubOp)
 {
     EXPECT_EQ(sizeof(SDMA_PKT_COPY_LINEAR_SUBWIN), 13u * sizeof(unsigned int));

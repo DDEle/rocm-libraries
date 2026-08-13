@@ -4,22 +4,12 @@
 ################################################################################
 # Emitted-metadata check for the fused-A2A kernarg segment.
 #
-# WHAT THIS PINS. fusedA2AKernArgLayout() states the segment's offsets as
-# arithmetic. That arithmetic is only a claim about what rocisa will emit; the
-# offsets the kernel actually gets come out of SignatureBase.addArg(), which
-# packs and aligns on its own rules. This file drives a REAL SignatureBase,
-# reads the offsets back out of the emitted metadata, and compares them to the
-# table. A change to either side that the other does not match reddens here.
+# Drives a real SignatureBase and compares fusedA2AKernArgLayout()'s offsets
+# against what rocisa actually emits.
 #
-# WHAT IT DOES NOT PIN, and why the name is "snapshot" rather than "contract".
 # The addArg sequence below is a hand-transcribed mirror of the fused block in
-# SignatureDefault.__call__, not a call into it -- driving the real thing needs
-# a full kernel dict and a Solution, which is a much larger fixture. So this
-# closes the layout-vs-rocisa gap but NOT the mirror-vs-real-emitter gap: edit
-# SignatureDefault.__call__'s fused block without editing the mirror below and
-# nothing here goes red. Closing that too means building the real signature;
-# until someone does, treat a green run here as "the arithmetic agrees with
-# rocisa", not "the kernel gets these offsets".
+# SignatureDefault.__call__, not a call into it, so it does not catch the two
+# drifting out of sync with each other.
 ################################################################################
 
 import os
@@ -32,10 +22,7 @@ sys.path.insert(0, TENSILE_ROOT)
 from rocisa.code import SignatureBase
 from rocisa.enum import SignatureValueKind as SVK
 
-# Import the Component package first so the Tensile.Components sub-package is
-# fully initialised before we reach Signature; importing Signature directly as
-# the very first Tensile module re-enters the Components package mid-init and
-# trips its circular-import guard (pytest avoids this by loading Tensile first).
+# Must import Component before Signature, or the circular-import guard trips.
 import Tensile.Component  # noqa: F401
 import Tensile.Components.Signature as sigmod
 
@@ -43,21 +30,17 @@ FUSED_A2A_MAX_RANKS = sigmod.FUSED_A2A_MAX_RANKS
 FUSED_A2A_SEGMENT_BYTES = sigmod.FUSED_A2A_SEGMENT_BYTES
 fusedA2AKernArgLayout = sigmod.fusedA2AKernArgLayout
 
-# The last argument of the fused block. Used to derive the segment's real extent
-# from emitted metadata instead of restating 108 as a literal.
+# Last argument of the fused block.
 LAST_ARG = "FusedTokenTiles"
 
-# All pointer args, in emitted order: they sit contiguously at the front.
+# All pointer args, in emitted order (contiguous at the front).
 POINTER_ARGS = ["peer_ptr_%u" % j for j in range(FUSED_A2A_MAX_RANKS)] + \
     ["counter_ptr", "FusedSdmaQueues"]
 
 
 def build_fused_signature():
-    """Emit just the fused-A2A addArg tail onto a fresh SignatureBase.
-
-    Hand-mirrors SignatureDefault.__call__'s fused block -- see the header note
-    on what that does and does not buy.
-    """
+    """Emit just the fused-A2A addArg tail onto a fresh SignatureBase, hand-mirroring
+    SignatureDefault.__call__'s fused block (see the header note)."""
     sig = SignatureBase(
         kernelName="fused_a2a_snapshot",
         kernArgsVersion=1,
@@ -84,10 +67,9 @@ def build_fused_signature():
 def parse_args(text):
     """Pull {argName: (offset, size)} out of emitted .args metadata.
 
-    Order-independent: the emitter writes .name/.size/.offset, but nothing in the
-    format guarantees that order, so each arg is committed once both numbers have
-    been seen rather than at a fixed line. The kernel's own leading `.name:` entry
-    carries neither and is dropped.
+    Order-independent: commits an arg once both .offset and .size have been seen,
+    rather than at a fixed line. The kernel's own leading `.name:` entry carries
+    neither and is dropped.
     """
     args = {}
     name, pending = None, {}
@@ -105,12 +87,7 @@ def parse_args(text):
 
 
 def _emitted():
-    """Emitted metadata and the layout table, with the scrape itself guarded.
-
-    A metadata format change would make parse_args return {}, and a comparison
-    driven off an empty set passes vacuously. Same for an empty layout table.
-    Both are asserted here so that failure mode is loud rather than green.
-    """
+    """Emitted metadata and the layout table, both guarded against being empty."""
     args = parse_args(str(build_fused_signature()))
     assert args, "parsed no args out of the emitted metadata; the .name/.offset/" \
                  ".size format has likely changed, so nothing below checks anything"
@@ -139,11 +116,7 @@ def test_pointers_are_appended_first():
 
 
 def test_segment_bytes_matches_the_emitted_extent():
-    """FUSED_A2A_SEGMENT_BYTES equals where the emitted segment actually ends.
-
-    Derived from metadata rather than compared against a transcribed 108, so it
-    fails if either the constant or the argument list moves without the other.
-    """
+    """FUSED_A2A_SEGMENT_BYTES equals where the emitted segment actually ends."""
     args, _ = _emitted()
     offset, size = args[LAST_ARG]
     assert offset + size == FUSED_A2A_SEGMENT_BYTES, \

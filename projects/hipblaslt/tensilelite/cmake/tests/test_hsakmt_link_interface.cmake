@@ -4,8 +4,7 @@
 # Unit test for tensilelite_sanitize_hsakmt_link_interface().
 #
 # Runs standalone: `cmake -P test_hsakmt_link_interface.cmake`. Needs no ROCm,
-# no compiler and no configured build tree, so it is cheap enough to run in CI
-# on every platform.
+# no compiler and no configured build tree.
 #
 # The cases below regression-test the CMAKE_MATCH_1 aliasing bug described in
 # HsakmtLinkInterface.cmake.
@@ -16,8 +15,7 @@ get_filename_component(_here "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
 include("${_here}/../HsakmtLinkInterface.cmake")
 
 # Real directories, so the IS_DIRECTORY checks exercise the real filesystem
-# rather than a stub. LIVE and SYSDEPS are distinct existing dirs, which is
-# what lets an unwanted repoint show up as a changed string.
+# rather than a stub. LIVE and SYSDEPS are distinct existing dirs.
 set(LIVE "${_here}")
 get_filename_component(SYSDEPS "${_here}/.." ABSOLUTE)
 set(DEAD "${_here}/__no_such_search_dir__")
@@ -99,7 +97,7 @@ expect_eq("no vendored dir to repoint at: the -L is left as it was"
 # --- the shape ROCm 7.2.0 actually ships -------------------------------------
 #
 # Two -L entries, both pointing at the same live system dir that genuinely
-# supplies -ldrm/-ldrm_amdgpu. The buggy guard rewrote both.
+# supplies -ldrm/-ldrm_amdgpu.
 
 set(_in "-L${LIVE}" "$<LINK_ONLY:-ldrm>"
         "-L${LIVE}" "$<LINK_ONLY:-ldrm_amdgpu>"

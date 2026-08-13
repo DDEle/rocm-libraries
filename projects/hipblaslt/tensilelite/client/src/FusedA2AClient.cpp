@@ -104,17 +104,17 @@ namespace TensileLite
 
             // Tile sizes must come from THIS solution's macro-tile: the kernel
             // epilogue derives dst_rank and the counter index from MT0/MT1.
-            const uint32_t FUSED_A2A_M_TILE = (uint32_t)solution->sizeMapping.macroTile.x;
-            const uint32_t FUSED_A2A_N_TILE = (uint32_t)solution->sizeMapping.macroTile.y;
-            if(FUSED_A2A_M_TILE == 0 || FUSED_A2A_N_TILE == 0)
+            const uint32_t macroTileM = (uint32_t)solution->sizeMapping.macroTile.x;
+            const uint32_t macroTileN = (uint32_t)solution->sizeMapping.macroTile.y;
+            if(macroTileM == 0 || macroTileN == 0)
             {
-                std::cerr << "[fused-a2a] solution macro-tile is zero (MT0=" << FUSED_A2A_M_TILE
-                          << " MT1=" << FUSED_A2A_N_TILE << "); cannot derive fused-A2A tile sizes"
+                std::cerr << "[fused-a2a] solution macro-tile is zero (MT0=" << macroTileM
+                          << " MT1=" << macroTileN << "); cannot derive fused-A2A tile sizes"
                           << std::endl;
                 return 1;
             }
-            std::cout << "[fused-a2a] macro-tile from solution: MT0(M)=" << FUSED_A2A_M_TILE
-                      << " MT1(N)=" << FUSED_A2A_N_TILE << "\n";
+            std::cout << "[fused-a2a] macro-tile from solution: MT0(M)=" << macroTileM
+                      << " MT1(N)=" << macroTileN << "\n";
 
             // M/N-swap (col-major first-class): A=w[feature,K], B=x[token,K].
             const uint32_t M = (uint32_t)problem->freeSizeA(0); // = nFeature (A2A dim)
@@ -132,26 +132,26 @@ namespace TensileLite
             // `out`.
             const uint32_t AM           = (uint32_t)args["fused-a2a-am"].as<int>();
             const uint32_t nShard       = AM / (uint32_t)W;
-            const uint32_t tilesPerRank = (uint32_t)(nShard / FUSED_A2A_M_TILE);
+            const uint32_t tilesPerRank = (uint32_t)(nShard / macroTileM);
             // tokenTiles sizes the counter array and the padded recv buffer.
-            const uint32_t tokenTiles = (N + FUSED_A2A_N_TILE - 1) / FUSED_A2A_N_TILE;
+            const uint32_t tokenTiles = (N + macroTileN - 1) / macroTileN;
             // mTiles: diagnostic only.
-            const uint32_t mTiles = M / FUSED_A2A_M_TILE;
+            const uint32_t mTiles = M / macroTileM;
 
-            if(AM % (uint32_t)W != 0 || (nShard % FUSED_A2A_M_TILE) != 0
-               || (M % FUSED_A2A_M_TILE) != 0 || (AM % FUSED_A2A_M_TILE) != 0 || AM > M)
+            if(AM % (uint32_t)W != 0 || (nShard % macroTileM) != 0
+               || (M % macroTileM) != 0 || (AM % macroTileM) != 0 || AM > M)
             {
                 std::cerr << "[fused-a2a] ERROR: problem shape violates fused-A2A "
                              "constraints (spec section 0).\n"
                           << "  M(feature)=" << M << " N(token)=" << N << " AM=" << AM << " W=" << W
                           << " n_shard=AM/W=" << nShard
-                          << " MacroTile0(feature)=" << FUSED_A2A_M_TILE << "\n"
-                          << "  require: AM % W == 0, (AM/W) % " << FUSED_A2A_M_TILE
-                          << " == 0 (so n_shard >= " << FUSED_A2A_M_TILE
-                          << " and every rank is covered), M % " << FUSED_A2A_M_TILE
-                          << " == 0, AM % " << FUSED_A2A_M_TILE << " == 0, AM <= M.\n"
-                          << "  e.g. W=4 needs AM >= " << ((size_t)W * FUSED_A2A_M_TILE)
-                          << " (n_shard >= " << FUSED_A2A_M_TILE
+                          << " MacroTile0(feature)=" << macroTileM << "\n"
+                          << "  require: AM % W == 0, (AM/W) % " << macroTileM
+                          << " == 0 (so n_shard >= " << macroTileM
+                          << " and every rank is covered), M % " << macroTileM
+                          << " == 0, AM % " << macroTileM << " == 0, AM <= M.\n"
+                          << "  e.g. W=4 needs AM >= " << ((size_t)W * macroTileM)
+                          << " (n_shard >= " << macroTileM
                           << "). Refusing to launch (would deadlock in the DRAIN barrier)."
                           << std::endl;
                 return -1;
@@ -161,28 +161,28 @@ namespace TensileLite
             // 16-byte packet elements, rect_y <= MT1. Mirrors
             // SdmaPacketEmitter.py:checkA2AFieldsFit. `>=` is one tighter than the
             // hardware because the extents are minus-one encoded.
-            const size_t FUSED_A2A_ELEM_SHIFT    = 3; // log2(16B packet elem / 2B bf16)
-            const size_t FUSED_A2A_ELEM_MULTIPLE = (size_t)1 << FUSED_A2A_ELEM_SHIFT;
-            if(nShard % FUSED_A2A_ELEM_MULTIPLE != 0)
+            const size_t elemShift    = 3; // log2(16B packet elem / 2B bf16)
+            const size_t elemMultiple = (size_t)1 << elemShift;
+            if(nShard % elemMultiple != 0)
             {
                 std::cerr << "[fused-a2a] ERROR: n_shard is not addressable at the SDMA "
                              "packet's 16-byte element.\n"
                           << "  n_shard=AM/W=" << nShard << " must be a multiple of "
-                          << FUSED_A2A_ELEM_MULTIPLE << ".\n"
-                          << "  Refusing to launch (the emitter's >>" << FUSED_A2A_ELEM_SHIFT
+                          << elemMultiple << ".\n"
+                          << "  Refusing to launch (the emitter's >>" << elemShift
                           << " would truncate it and copy a short band)." << std::endl;
                 return -1;
             }
-            const size_t maxRectX = (size_t)nShard >> FUSED_A2A_ELEM_SHIFT;
-            const size_t maxRectY = (size_t)FUSED_A2A_N_TILE;
+            const size_t maxRectX = (size_t)nShard >> elemShift;
+            const size_t maxRectY = (size_t)macroTileN;
             if(maxRectX >= (1u << 14) || maxRectY >= (1u << 14))
             {
                 std::cerr << "[fused-a2a] ERROR: geometry overflows the SDMA packet's "
                              "14-bit rect fields.\n"
                           << "  W=" << W << " AM=" << AM << " n_shard=AM/W=" << nShard
-                          << " N(token)=" << N << " MacroTile1(token)=" << FUSED_A2A_N_TILE
+                          << " N(token)=" << N << " MacroTile1(token)=" << macroTileN
                           << " tokenTiles=" << tokenTiles << "\n"
-                          << "  rect_x=n_shard>>" << FUSED_A2A_ELEM_SHIFT << "=" << maxRectX
+                          << "  rect_x=n_shard>>" << elemShift << "=" << maxRectX
                           << " max rect_y=MT1=" << maxRectY << "; each must be < " << (1u << 14)
                           << ".\n"
                           << "  Refusing to launch (the copy would silently move the "
@@ -190,14 +190,14 @@ namespace TensileLite
                              "width itself and cannot be folded into the base address "
                              "the way the coordinates were: reduce AM or raise W "
                              "(the bound is AM < "
-                          << ((size_t)(1u << 14) << FUSED_A2A_ELEM_SHIFT) << "*W)." << std::endl;
+                          << ((size_t)(1u << 14) << elemShift) << "*W)." << std::endl;
                 return -1;
             }
 
             // recv is feature-contiguous [W, token, feature_shard]. Token is padded to
             // a whole MacroTile1 tile: the PUSH store writes the full macro-tile edge
             // with no edge clamp.
-            const size_t nTokenPad = (size_t)tokenTiles * FUSED_A2A_N_TILE;
+            const size_t nTokenPad = (size_t)tokenTiles * macroTileN;
             const size_t recvBytes = (size_t)W * nTokenPad * nShard * sizeof(uint16_t); // bf16
             // One u32 flag slot per source rank. Must stay in step with
             // emitComputeFlagAddr's *4 stride and the DRAIN poll's j*4.
@@ -238,24 +238,24 @@ namespace TensileLite
             // dNStride is the packet's src_pitch (StrideD1J), a 19-bit field, and is
             // only knowable once the descriptors are read. dst_pitch is n_shard,
             // already bounded by the rect_x check above.
-            if(dNStride % FUSED_A2A_ELEM_MULTIPLE != 0)
+            if(dNStride % elemMultiple != 0)
             {
                 std::cerr << "[fused-a2a] ERROR: D's token-axis stride is not "
                              "addressable at the SDMA packet's 16-byte element.\n"
                           << "  ldd(D nStride)=" << dNStride << " must be a multiple of "
-                          << FUSED_A2A_ELEM_MULTIPLE << ".\n"
-                          << "  Refusing to launch (the emitter's >>" << FUSED_A2A_ELEM_SHIFT
+                          << elemMultiple << ".\n"
+                          << "  Refusing to launch (the emitter's >>" << elemShift
                           << " would truncate the pitch and skew every token row)." << std::endl;
                 return -1;
             }
-            if((dNStride >> FUSED_A2A_ELEM_SHIFT) >= (1u << 19))
+            if((dNStride >> elemShift) >= (1u << 19))
             {
                 std::cerr << "[fused-a2a] ERROR: D's token-axis stride overflows the "
                              "SDMA packet's 19-bit src_pitch field.\n"
-                          << "  ldd(D nStride)=" << dNStride << " -> ldd>>" << FUSED_A2A_ELEM_SHIFT
-                          << "=" << (dNStride >> FUSED_A2A_ELEM_SHIFT) << " must be < "
+                          << "  ldd(D nStride)=" << dNStride << " -> ldd>>" << elemShift
+                          << "=" << (dNStride >> elemShift) << " must be < "
                           << (1u << 19) << " (i.e. ldd < "
-                          << ((size_t)(1u << 19) << FUSED_A2A_ELEM_SHIFT) << ").\n"
+                          << ((size_t)(1u << 19) << elemShift) << ").\n"
                           << "  Refusing to launch (the pitch would OR into the "
                              "neighbouring packet field). Reduce M or the D padding."
                           << std::endl;

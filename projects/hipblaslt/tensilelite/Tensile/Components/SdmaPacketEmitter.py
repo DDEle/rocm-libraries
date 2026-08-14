@@ -379,24 +379,6 @@ class SdmaPacketEmitter:
         self._movImm(module, pktV + 7, 0, "ATOMIC DW7: loop_interval=0")
         return module
 
-    def _mulU32toU64(self, module, dstS, aS, bS, comment):
-        """dstS[0:1] (64-bit) = aS * bS, both operands unsigned 32-bit.
-
-        Bare s_mul_hi_u32/s_mul_i32 rather than
-        KernelWriterAssembly.s_mul_u64_u32: that wrapper selects on
-        asmCaps["HasSMulHi"], a LIVE ASSEMBLER PROBE, which would make the
-        emitted sequence depend on the machine that regenerated it.
-        s_mul_hi_u32 is unconditional across this file's gfx9xx/gfx95x range.
-
-        UNSIGNED: the operands are extents and strides; s_mul_hi_i32 would read
-        a stride with bit 31 set as negative.
-        """
-        module.add(SMulHIU32(dst=sgpr(dstS + 1), src0=sgpr(aS), src1=sgpr(bS),
-                             comment=comment + " (hi)"))
-        module.add(SMulI32(dst=sgpr(dstS + 0), src0=sgpr(aS), src1=sgpr(bS),
-                           comment=comment + " (lo)"))
-        return module
-
     # ---- field arithmetic (runtime geometry -> the SGPR inputs above) --
 
     def emitComputeCopyFields(self, module, w,
@@ -417,8 +399,9 @@ class SdmaPacketEmitter:
         caller, as is rect_x = nShard. MT1 is the compile-time token extent.
 
         BOTH folds are 64-BIT and must stay that way: neither product is bounded
-        by anything now that the coordinates are folded in. See _mulU32toU64 for
-        why the widening multiply is emitted bare and unsigned.
+        by anything now that the coordinates are folded in. Each widening
+        multiply writes its high half first, so tmp64S+1 must not alias either
+        source.
 
         The elements->bytes shift uses D_DATA_ELEMENT_LOG2, NOT
         PACKET_ELEMENT_SIZE_LOG2: a byte offset does not scale with the packet's
@@ -437,8 +420,10 @@ class SdmaPacketEmitter:
         # --- src fold: AddressD + (j*MT1*ldd + p*nShard) * sizeof(bf16) ---
         module.add(SMulI32(dst=sgpr(tmpS), src0=sgpr(pS), src1=sgpr(nShardS),
                            comment="src_x = p * nShard (folded into the base, not a field)"))
-        self._mulU32toU64(module, tmp64S, outSrcYS, srcPitchS,
-                          "src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd)")
+        module.add(SMulHIU32(dst=sgpr(tmp64S + 1), src0=sgpr(outSrcYS), src1=sgpr(srcPitchS),
+                             comment="src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd) (hi)"))
+        module.add(SMulI32(dst=sgpr(tmp64S + 0), src0=sgpr(outSrcYS), src1=sgpr(srcPitchS),
+                           comment="src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd) (lo)"))
         module.add(SAddU32(dst=sgpr(tmp64S + 0), src0=sgpr(tmp64S + 0), src1=sgpr(tmpS),
                            comment="+ p*nShard (feature offset)"))
         module.add(SAddCU32(dst=sgpr(tmp64S + 1), src0=sgpr(tmp64S + 1), src1=0,
@@ -455,8 +440,10 @@ class SdmaPacketEmitter:
                            comment="myRank * N"))
         module.add(SAddU32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(outSrcYS),
                            comment="dst row = myRank*N + j*MT1 (folded, not a field)"))
-        self._mulU32toU64(module, tmp64S, tmpS, nShardS,
-                          "dst row offset = dst row * nShard (64-bit: unbounded in W and N)")
+        module.add(SMulHIU32(dst=sgpr(tmp64S + 1), src0=sgpr(tmpS), src1=sgpr(nShardS),
+                             comment="dst row offset = dst row * nShard (64-bit: unbounded in W and N) (hi)"))
+        module.add(SMulI32(dst=sgpr(tmp64S + 0), src0=sgpr(tmpS), src1=sgpr(nShardS),
+                           comment="dst row offset = dst row * nShard (64-bit: unbounded in W and N) (lo)"))
         module.add(SLShiftLeftB64(dst=sgpr(tmp64S, 2), src=sgpr(tmp64S, 2),
                                   shiftHex=D_DATA_ELEMENT_LOG2,
                                   comment="dst offset: elements -> bytes (sizeof(bf16))"))

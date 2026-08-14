@@ -2813,7 +2813,11 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(tmp64Sgpr)  # dead once the two bases are folded
 
     # --- build the 21 packet dwords: COPY in [0:13], ATOMIC in [13:21]. ---
-    pktVgpr = kw.vgprPool.checkOut(totalDwords, tag="fusedA2A_sdmaPacket")
+    # 2-ALIGNED: emitPlacePacket widens the ring stores to dwordx2/x4, which
+    # gfx950 accepts only from an EVEN first VGPR. An odd base still works --
+    # the split pays one leading b32 -- but the COPY packet is the bigger of
+    # the two, so give it the aligned start.
+    pktVgpr = kw.vgprPool.checkOutAligned(totalDwords, 2, tag="fusedA2A_sdmaPacket")
     pkt.emitBuildCopyPacket(module, pktVgpr,
                             srcBaseSgpr, srcPitchName, srcSliceS,
                             recvBaseSgpr, nShardSgpr, dstSliceS,

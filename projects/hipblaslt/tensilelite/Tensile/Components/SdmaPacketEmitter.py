@@ -287,8 +287,8 @@ class SdmaPacketEmitter:
     def emitComputeCopyFields(self, module,
                               pS, jS, myRankS, mS, nS, nShardS,
                               addressDS, srcPitchS, recvBaseS,
-                              outSrcBaseS, outSrcYS, outSrcSliceS,
-                              outDstSliceS, outRectYS, tmpS, tmp64S):
+                              outSrcBaseS, outSrcSliceS, outDstSliceS,
+                              outRectYS, tmpS, tokenRowS, tmp64S):
         """Compute the runtime COPY inputs from (p, j, myRank, M, N, nShard),
         FOLDING the four coordinates into the two 64-bit base addresses:
 
@@ -310,22 +310,24 @@ class SdmaPacketEmitter:
         PACKET_ELEMENT_SIZE_LOG2: a byte offset does not scale with the packet's
         addressing granularity.
 
-        outSrcYS still holds j*MT1 on return (it is read three times), so it
-        cannot be scratch. recvBaseS is updated IN PLACE; addressDS is read-only.
-        tmpS is one scratch SGPR; tmp64S is a 2-ALIGNED scratch pair (the 64-bit
-        ops need SReg_64 alignment), dead on return.
+        recvBaseS is updated IN PLACE; addressDS is read-only. All three
+        scratch registers are dead on return and none is read by the caller:
+        tmpS is one SGPR reused between uses, tokenRowS is one SGPR that must
+        NOT be reused because j*MT1 stays live across the whole body (src fold,
+        dst row, rect_y clamp), and tmp64S is a 2-ALIGNED pair (the 64-bit ops
+        need SReg_64 alignment).
         """
-        module.add(SMulI32(dst=sgpr(outSrcYS), src0=sgpr(jS), src1=self.mt1,
-                           comment="src_y = j * MT1 (folded into the base, not a field)"))
+        module.add(SMulI32(dst=sgpr(tokenRowS), src0=sgpr(jS), src1=self.mt1,
+                           comment="token row of tile j = j * MT1 (folded into the bases)"))
         module.add(SMulI32(dst=sgpr(outSrcSliceS), src0=sgpr(mS), src1=sgpr(nS),
                            comment="src_slice = M * N (single-plane, don't-care)"))
 
         # --- src fold: AddressD + (j*MT1*ldd + p*nShard) * sizeof(bf16) ---
         module.add(SMulI32(dst=sgpr(tmpS), src0=sgpr(pS), src1=sgpr(nShardS),
                            comment="src_x = p * nShard (folded into the base, not a field)"))
-        module.add(SMulHIU32(dst=sgpr(tmp64S + 1), src0=sgpr(outSrcYS), src1=sgpr(srcPitchS),
+        module.add(SMulHIU32(dst=sgpr(tmp64S + 1), src0=sgpr(tokenRowS), src1=sgpr(srcPitchS),
                              comment="src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd) (hi)"))
-        module.add(SMulI32(dst=sgpr(tmp64S + 0), src0=sgpr(outSrcYS), src1=sgpr(srcPitchS),
+        module.add(SMulI32(dst=sgpr(tmp64S + 0), src0=sgpr(tokenRowS), src1=sgpr(srcPitchS),
                            comment="src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd) (lo)"))
         module.add(SAddU32(dst=sgpr(tmp64S + 0), src0=sgpr(tmp64S + 0), src1=sgpr(tmpS),
                            comment="+ p*nShard (feature offset)"))
@@ -341,7 +343,7 @@ class SdmaPacketEmitter:
         # --- dst fold: recvBase += (myRank*N + j*MT1) * nShard * sizeof(bf16) ---
         module.add(SMulI32(dst=sgpr(tmpS), src0=sgpr(myRankS), src1=sgpr(nS),
                            comment="myRank * N"))
-        module.add(SAddU32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(outSrcYS),
+        module.add(SAddU32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(tokenRowS),
                            comment="dst row = myRank*N + j*MT1 (folded, not a field)"))
         module.add(SMulHIU32(dst=sgpr(tmp64S + 1), src0=sgpr(tmpS), src1=sgpr(nShardS),
                              comment="dst row offset = dst row * nShard (64-bit: unbounded in W and N) (hi)"))
@@ -358,7 +360,7 @@ class SdmaPacketEmitter:
                            comment="dst_slice = MT1 * nShard (one band's plane)"))
         # rect_y = min(MT1, N - j*MT1): the tail token-tile is partial when
         # N % MT1 != 0; an unclamped MT1 would read past the end of D.
-        module.add(SSubU32(dst=sgpr(outRectYS), src0=sgpr(nS), src1=sgpr(outSrcYS),
+        module.add(SSubU32(dst=sgpr(outRectYS), src0=sgpr(nS), src1=sgpr(tokenRowS),
                            comment="N - j*MT1 (tokens left in this tile)"))
         module.add(SMinU32(dst=sgpr(outRectYS), src0=sgpr(outRectYS), src1=self.mt1,
                            comment="rect_y = min(MT1, N - j*MT1) (clamp tail tile)"))

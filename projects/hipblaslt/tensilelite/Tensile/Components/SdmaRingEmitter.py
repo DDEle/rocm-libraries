@@ -34,7 +34,7 @@ from rocisa.instruction import (
     SCBranchSCC0, SCBranchSCC1, SBranch,
     SWaitCnt, SSleep,
     VReadfirstlaneB32, VAddCOU32, VAddCCOU32,
-    GlobalStoreB32, GlobalStoreB64, GlobalLoadB64,
+    GlobalStoreB32, GlobalStoreB64, GlobalStoreB128, GlobalLoadB64,
     GlobalAtomicCmpswapB64,
 )
 
@@ -386,11 +386,14 @@ class SdmaRingEmitter:
         # so unroll (one warp writes <=64).
         self._wrapIntoRing(module, wrapS, pendingWptrS + 0, "WrapIntoRing(pending) (packet base)")
         self._emitRingByteAddr(module, vAddr, queueBufPtrS, wrapS)
-        for i in range(numDwords):
-            module.add(GlobalStoreB32(
-                vaddr=vgpr(vAddr, 2), src=vgpr(packetDwordsV + i), saddr=off,
+        for i, width in self._packetStoreWidths(packetDwordsV, numDwords):
+            op = {1: GlobalStoreB32, 2: GlobalStoreB64, 4: GlobalStoreB128}[width]
+            src = vgpr(packetDwordsV + i) if width == 1 else vgpr(packetDwordsV + i, width)
+            module.add(op(
+                vaddr=vgpr(vAddr, 2), src=src, saddr=off,
                 modifier=GLOBALModifiers(offset=i * 4, glc=False, slc=True, isStore=True),
-                comment="ring[base + %d] = packet dword %d (AGENT scope, sc1)" % (i, i)))
+                comment="ring[base + %d] = packet dword%s (AGENT scope, sc1)"
+                        % (i, "" if width == 1 else "s %d..%d" % (i, i + width - 1))))
         # pending += numDwords*4 (packet size).
         module.add(SAddU32(dst=sgpr(pendingWptrS + 0), src0=sgpr(pendingWptrS + 0), src1=numDwords * 4,
                            comment="pending += packet size"))
@@ -402,6 +405,33 @@ class SdmaRingEmitter:
         w.sgprPool.checkIn(cntS)
         w.sgprPool.checkIn(queueBufPtrS)
         return module
+
+    @staticmethod
+    def _packetStoreWidths(baseV, numDwords):
+        """Split a run of `numDwords` consecutive VGPRs starting at `baseV` into
+        the widest global stores gfx950 will take. Returns [(dwordIndex, width)].
+
+        The only constraint is VGPR PARITY, measured at the assembler on gfx950:
+        a multi-dword global store needs an EVEN first register --
+        global_store_dwordx4 v[6:9] assembles, v[5:8] does not. Four-alignment is
+        NOT required. So an odd baseV costs exactly one leading b32, after which
+        every step of 2 or 4 keeps the parity.
+
+        Ring ADDRESS alignment is not a constraint here: for Dword or larger
+        accesses the two LSBs of the byte address are ignored (CDNA4 ISA, "Buffer
+        Alignment"), and packets start at arbitrary dword offsets in the ring.
+        The ISA does note that mis-aligned multi-dword access is slower, which is
+        why this is a throughput change to be measured, not assumed."""
+        out, i = [], 0
+        while i < numDwords and (baseV + i) % 2:
+            out.append((i, 1)); i += 1
+        while i + 4 <= numDwords:
+            out.append((i, 4)); i += 4
+        while i + 2 <= numDwords:
+            out.append((i, 2)); i += 2
+        while i < numDwords:
+            out.append((i, 1)); i += 1
+        return out
 
     def _emitRingByteAddr(self, module, vAddrV, queueBufPtrS, wrapS):
         """Compute the 64-bit VGPR byte address queueBuf + WrapIntoRing(pending)

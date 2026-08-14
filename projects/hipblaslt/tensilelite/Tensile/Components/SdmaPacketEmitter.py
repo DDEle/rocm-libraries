@@ -231,12 +231,13 @@ class SdmaPacketEmitter:
     element units, field bit positions) are isolated in the `_pack*` helpers.
     """
 
-    def __init__(self, macroTile1: int, elementSizeLog2: int = PACKET_ELEMENT_SIZE_LOG2):
-        # MT1 (token extent / rect_y) and the element-size header are compile-time
-        # solution constants; the geometric fields (p, j, myRank, M, N, nShard)
-        # are runtime SGPRs.
+    def __init__(self, macroTile1: int):
+        # MT1 (token extent / rect_y) is a compile-time solution constant; the
+        # geometric fields (p, j, myRank, M, N, nShard) are runtime SGPRs. The
+        # element size is NOT per-instance: PACKET_ELEMENT_SIZE_LOG2 feeds the
+        # module-level COPY_HEADER_DW0 and ELEMENT_SHIFT, and only the 16-byte
+        # encoding is hardware-validated.
         self.mt1 = macroTile1
-        self.elementSizeLog2 = elementSizeLog2
 
     # ---- field-packing helpers (isolate the encoding conventions) -----------
 
@@ -420,7 +421,7 @@ class SdmaPacketEmitter:
         why the widening multiply is emitted bare and unsigned.
 
         The elements->bytes shift uses D_DATA_ELEMENT_LOG2, NOT
-        self.elementSizeLog2: a byte offset does not scale with the packet's
+        PACKET_ELEMENT_SIZE_LOG2: a byte offset does not scale with the packet's
         addressing granularity.
 
         outSrcYS still holds j*MT1 on return (it is read three times), so it

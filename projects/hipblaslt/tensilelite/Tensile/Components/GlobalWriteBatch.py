@@ -40,7 +40,7 @@ from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, \
   VFmaF32, VFmaF64, VFmaPKF32, VFmaMixF32, VAndB32, VLShiftLeftB32, VPermlane16SwapB32, VPermlane32SwapB32, \
   VLShiftRightB32, VMacF32, VMadMixF32, VMaxF32, VMovB32, VMovB64, VMulF32, VMulF64, \
   VMulLOU32, VMulPKF16, VMulPKF32, VPackF16toB32, VReadfirstlaneB32, VRndneF32, VCvtBF16toFP32
-from rocisa.functions import vectorStaticMultiply
+from rocisa.functions import scalarUInt32DivideAndRemainder, vectorStaticMultiply
 
 from ..Common import DataDirection, SemanticVersion, isSubtileMultiDU
 from ..Common.DataType import DataType
@@ -119,6 +119,36 @@ def emitFusedA2ATotalWGsLatch(module, sgprName):
   population."""
   module.add(SMulI32(dst=sgpr(sgprName), src0=sgpr("NumWorkGroups0"), src1=sgpr("NumWorkGroups1"),
                      comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
+
+def emitFusedA2ANShardLatch(module, kw, sgprName):
+  """Latch AM/W into a persistent SGPR in the PROLOGUE.
+
+  n_shard is not a kernarg: it is the quotient of two that are. W is not
+  constrained to a power of two, so this is a real u32 divide rather than a
+  shift, which is why it runs here -- the prologue already has kernarg loads
+  in flight for the other latches, so the divide's latency overlaps them
+  instead of standing exposed in the store epilogue where n_shard is read."""
+  from .Signature import fusedA2AKernArgLayout
+  layout    = fusedA2AKernArgLayout()
+  fusedBase = kw.states.fusedA2AKernArgBase
+  amSgpr  = kw.sgprPool.checkOut(1, tag="fusedA2A_latchAM", preventOverflow=False)
+  wSgpr   = kw.sgprPool.checkOut(1, tag="fusedA2A_latchNsW", preventOverflow=False)
+  remSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_latchNsRem", preventOverflow=False)
+  module.add(kw.argLoader.loadKernArg(amSgpr, "KernArgAddress",
+    sgprOffset=hex(fusedBase + layout["FusedAM"]), dword=1))
+  module.add(kw.argLoader.loadKernArg(wSgpr, "KernArgAddress",
+    sgprOffset=hex(fusedBase + layout["FusedW"]), dword=1))
+  module.add(SWaitCnt(kmcnt=0, comment="wait FusedAM/FusedW for the n_shard latch"))
+  tmpVgpr    = kw.vgprPool.checkOut(2, tag="fusedA2A_latchNShardVgpr")
+  tmpVgprRes = ContinuousRegister(tmpVgpr, 2)
+  module.add(scalarUInt32DivideAndRemainder(
+    qReg=sgprName, dReg=amSgpr, divReg=wSgpr, rReg=remSgpr, tmpVgprRes=tmpVgprRes,
+    wavewidth=kw.states.kernel["WavefrontSize"], doRemainder=False,
+    comment="FusedNShard = FusedAM / FusedW"))
+  kw.vgprPool.checkIn(tmpVgpr)
+  kw.sgprPool.checkIn(remSgpr)
+  kw.sgprPool.checkIn(wSgpr)
+  kw.sgprPool.checkIn(amSgpr)
 
 def emitFusedA2ACounter3PtrLatch(module, kw, sgprName):
   """Resolve &counter3 in the PROLOGUE instead of once per work-group at the tally.
@@ -2552,7 +2582,7 @@ class GlobalWriteBatchWriter:
       module:        Module to append instructions to.
       recvBaseSgpr:  2-SGPR pair (aligned) to receive peer_ptr[dst_rank]+recv offset.
       shardBaseSgpr: 1 SGPR to receive dst_rank*n_shard (element units).
-      nShardSgpr:    1 SGPR pre-loaded with FusedNShard (n_shard, element units).
+      nShardSgpr:    persistent SGPR holding n_shard (element units).
       tmpSgpr:       2 scratch SGPRs; tmpSgpr+0 = n_col_base_wg, tmpSgpr+1 = scratch.
     """
     from .Signature import fusedA2AKernArgLayout, FUSED_A2A_MAX_RANKS, FUSED_A2A_PEER_RECV_OFFSET
@@ -2609,7 +2639,7 @@ class GlobalWriteBatchWriter:
       module:       Module to append instructions to.
       flagBaseSgpr: 2-SGPR pair (aligned) to receive peer_ptr[dst_rank].
       dstRankSgpr:  1 SGPR to receive dst_rank (integer rank index).
-      nShardSgpr:   1 SGPR pre-loaded with FusedNShard (n_shard, element units).
+      nShardSgpr:   persistent SGPR holding n_shard (element units).
       tmpSgpr:      2 scratch SGPRs; tmpSgpr+0 = n_col_base_wg, tmpSgpr+1 = scratch.
     """
     from .Signature import fusedA2AKernArgLayout, FUSED_A2A_MAX_RANKS
@@ -2704,7 +2734,7 @@ class GlobalWriteBatchWriter:
     Args:
       dstRankSgpr:  1 SGPR, the peer rank p (== this WG's dst_rank).
       myRankSgpr:   1 SGPR, this card's rank.
-      nShardSgpr:   1 SGPR, FusedNShard (also dst_pitch and rect_x).
+      nShardSgpr:   persistent SGPR, n_shard (also dst_pitch and rect_x).
       flagBaseSgpr: 2 SGPRs, peer_ptr[dst_rank] (untouched base, not offset).
       tmpSgpr:      2 scratch SGPRs.
     """
@@ -2878,18 +2908,16 @@ class GlobalWriteBatchWriter:
     argModule = Module("fusedA2A_hsArgs")
     myRankSgpr     = kw.sgprPool.checkOut(1, tag="fusedA2A_hsMyRank", preventOverflow=False)
     targetSgpr     = kw.sgprPool.checkOut(1, tag="fusedA2A_hsTarget", preventOverflow=False)
-    nShardSgpr     = kw.sgprPool.checkOut(1, tag="fusedA2A_hsNShard", preventOverflow=False)
+    nShardSgpr     = "FusedNShard"  # persistent, latched in the prologue
     tokenTilesSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsTokenTiles", preventOverflow=False)
     argModule.add(kw.argLoader.loadKernArg(myRankSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedMyRank"]), dword=1))
-    argModule.add(kw.argLoader.loadKernArg(nShardSgpr, "KernArgAddress",
-      sgprOffset=hex(fusedBase + layout["FusedNShard"]), dword=1))
 
     # counter_ptr (dword=2) into an aligned pair.
     counterPtrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsCounterPtr", preventOverflow=False)
     argModule.add(kw.argLoader.loadKernArg(counterPtrSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["counter_ptr"]), dword=2))
-    argModule.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/NShard/counter_ptr"))
+    argModule.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/counter_ptr"))
     # Election target: the feature-tiles of ONE token-tile row in one rank's shard,
     # since the counter is per (dst_rank, token-tile) pair.
     argModule.add(SLShiftRightB32(dst=sgpr(targetSgpr), shiftHex=log2mt0, src=sgpr(nShardSgpr),
@@ -3225,7 +3253,6 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(flagBaseSgpr)
     kw.sgprPool.checkIn(counterPtrSgpr)
     kw.sgprPool.checkIn(tokenTilesSgpr)
-    kw.sgprPool.checkIn(nShardSgpr)
     kw.sgprPool.checkIn(targetSgpr)
     kw.sgprPool.checkIn(myRankSgpr)
     # Restore full EXEC: wave 0 narrowed EXEC to a single lane for the counter

@@ -520,8 +520,7 @@ namespace TensileLite
                                    (uint32_t)drain,
                                    // kernarg "FusedAM" (Signature.py); pass AM as
                                    // the value to keep the client/kernel ABI matched.
-                                   (uint32_t)AM,
-                                   tokenTiles);
+                                   (uint32_t)AM);
                 std::cout << "[fused-a2a] dev " << d
                           << " kernarg: host base(before append)=" << beforeSize
                           << " size(after)=" << gemm.args.size() << "\n";

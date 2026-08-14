@@ -45,8 +45,8 @@ namespace TensileLite
 
         // Expected byte growth of args after appending the fused segment:
         //   (MAX_RANKS peer + 1 counter + 1 FusedSdmaQueues) pointers * 8B
-        //   + 6 scalars * 4B = 104B.
-        constexpr size_t FUSED_A2A_SEGMENT_BYTES = (FUSED_A2A_MAX_RANKS + 2) * 8 + 6 * 4;
+        //   + 5 scalars * 4B = 100B.
+        constexpr size_t FUSED_A2A_SEGMENT_BYTES = (FUSED_A2A_MAX_RANKS + 2) * 8 + 5 * 4;
 
         // Whether worldSize fits the fixed segment above: ranks >=
         // FUSED_A2A_MAX_RANKS have no peer_ptr slot, and worldSize <= 0 would
@@ -70,8 +70,7 @@ namespace TensileLite
             uint32_t                  worldSize,
             uint32_t                  nShard,
             uint32_t                  drain,
-            uint32_t                  am,
-            uint32_t                  tokenTiles)
+            uint32_t                  am)
         {
             size_t before = args.size();
 
@@ -90,7 +89,6 @@ namespace TensileLite
             args.append<uint32_t>("FusedNShard", nShard);
             args.append<uint32_t>("FusedDrain", drain);
             args.append<uint32_t>("FusedAM", am);
-            args.append<uint32_t>("FusedTokenTiles", tokenTiles);
 
             size_t grew = args.size() - before;
             if(grew != FUSED_A2A_SEGMENT_BYTES)

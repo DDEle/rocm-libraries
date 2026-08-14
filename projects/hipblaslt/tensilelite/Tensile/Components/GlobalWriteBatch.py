@@ -123,27 +123,30 @@ def emitFusedA2ATotalWGsLatch(module, sgprName):
 def emitFusedA2ACounter3PtrLatch(module, kw, sgprName):
   """Resolve &counter3 in the PROLOGUE instead of once per work-group at the tally.
 
-  counter_ptr, FusedW and FusedTokenTiles are kernel-invariant, so the address is
+  counter_ptr and FusedW are kernel-invariant, so the address is
   derived once before the main loop, where the SMEM latency disappears under the
   GEMM.  The tally then needs a single register pair.
 
-  FusedW and FusedTokenTiles are deliberately NOT latched: their only readers are
-  the DRAIN mask and the DRAIN poll, which exactly one work-group in the grid ever
-  executes, so latching them would spend two persistent SGPRs on every kernel to
-  save two loads on one work-group.
+  FusedW is deliberately NOT latched: its only readers are the DRAIN mask and the
+  DRAIN poll, which exactly one work-group in the grid ever executes, so latching it
+  would spend a persistent SGPR on every kernel to save one load on one work-group.
   """
   from .Signature import fusedA2AKernArgLayout
   layout    = fusedA2AKernArgLayout()
   fusedBase = kw.states.fusedA2AKernArgBase
+  mt1       = kw.states.kernel["MacroTile1"]
+  log2mt1   = int(log2(mt1))
   wSgpr  = kw.sgprPool.checkOut(1, tag="fusedA2A_latchW", preventOverflow=False)
   ttSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_latchTT", preventOverflow=False)
   module.add(kw.argLoader.loadKernArg(sgprName, "KernArgAddress",
     sgprOffset=hex(fusedBase + layout["counter_ptr"]), dword=2))
   module.add(kw.argLoader.loadKernArg(wSgpr, "KernArgAddress",
     sgprOffset=hex(fusedBase + layout["FusedW"]), dword=1))
-  module.add(kw.argLoader.loadKernArg(ttSgpr, "KernArgAddress",
-    sgprOffset=hex(fusedBase + layout["FusedTokenTiles"]), dword=1))
-  module.add(SWaitCnt(kmcnt=0, comment="wait counter_ptr/FusedW/FusedTokenTiles for the counter3 latch"))
+  module.add(SAddU32(dst=sgpr(ttSgpr), src0=sgpr("SizesFree+1"), src1=mt1 - 1,
+                     comment=f"tokenTiles = ceil(N / MT1={mt1}): N + MT1-1"))
+  module.add(SLShiftRightB32(dst=sgpr(ttSgpr), shiftHex=log2mt1, src=sgpr(ttSgpr),
+                             comment=f">> log2(MT1={mt1})"))
+  module.add(SWaitCnt(kmcnt=0, comment="wait counter_ptr/FusedW for the counter3 latch"))
   # The product lands in ttSgpr, NOT wSgpr: the index is W*tokenTiles + W, so W has
   # to survive the multiply.  Overwriting it and then adding tokenTiles instead
   # computes W*tokenTiles + tokenTiles, which is a valid-looking address one slot
@@ -2841,6 +2844,8 @@ class GlobalWriteBatchWriter:
     fusedBase = kw.states.fusedA2AKernArgBase
     mt0 = self.kernel["MacroTile0"]
     log2mt0 = int(log2(mt0))
+    mt1 = self.kernel["MacroTile1"]
+    log2mt1 = int(log2(mt1))
 
     # --- runtime PUSH gate (same as the store dispatch): PUSH iff WorkGroup0 < AM_tiles,
     #     with AM_tiles = FusedAM >> log2(MacroTile0) read on demand from kernarg. ---
@@ -2879,18 +2884,20 @@ class GlobalWriteBatchWriter:
       sgprOffset=hex(fusedBase + layout["FusedMyRank"]), dword=1))
     argModule.add(kw.argLoader.loadKernArg(nShardSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedNShard"]), dword=1))
-    argModule.add(kw.argLoader.loadKernArg(tokenTilesSgpr, "KernArgAddress",
-      sgprOffset=hex(fusedBase + layout["FusedTokenTiles"]), dword=1))
 
     # counter_ptr (dword=2) into an aligned pair.
     counterPtrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsCounterPtr", preventOverflow=False)
     argModule.add(kw.argLoader.loadKernArg(counterPtrSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["counter_ptr"]), dword=2))
-    argModule.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/NShard/TokenTiles/counter_ptr"))
+    argModule.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/NShard/counter_ptr"))
     # Election target: the feature-tiles of ONE token-tile row in one rank's shard,
     # since the counter is per (dst_rank, token-tile) pair.
     argModule.add(SLShiftRightB32(dst=sgpr(targetSgpr), shiftHex=log2mt0, src=sgpr(nShardSgpr),
                                   comment=f"tilesPerRank = FusedNShard >> log2(MT0={mt0})"))
+    argModule.add(SAddU32(dst=sgpr(tokenTilesSgpr), src0=sgpr("SizesFree+1"), src1=mt1 - 1,
+                          comment=f"tokenTiles = ceil(N / MT1={mt1}): N + MT1-1"))
+    argModule.add(SLShiftRightB32(dst=sgpr(tokenTilesSgpr), shiftHex=log2mt1,
+                                  src=sgpr(tokenTilesSgpr), comment=f">> log2(MT1={mt1})"))
 
     # --- switch-load peer_ptr[dst_rank] + numeric dst_rank. ---
     flagBaseSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsFlagBase", preventOverflow=False)
@@ -3035,7 +3042,7 @@ class GlobalWriteBatchWriter:
     module.add(VReadfirstlaneB32(dst=sgpr(tmpSgpr2), src=vgpr(vOld), comment="old2 -> sgpr"))
     module.add(SAddU32(dst=sgpr(tmpSgpr2), src0=sgpr(tmpSgpr2), src1=1, comment="old2 + 1"))
     module.add(SCmpEQU32(src0=sgpr(tmpSgpr2), src1=sgpr(tokenTilesSgpr),
-                         comment="old2+1 == FusedTokenTiles? (this card's last packet to dst_rank)"))
+                         comment="old2+1 == tokenTiles? (this card's last packet to dst_rank)"))
     module.add(SCBranchSCC0(labelName=skipReleaseLabel.getLabelName(),
                             comment="not the last submitter for dst_rank -> skip ahead "
                                     "(inert: counter3 elects the DRAIN owner)"))
@@ -3100,7 +3107,7 @@ class GlobalWriteBatchWriter:
 
     # --- (i) DRAIN barrier: make kernel-exit == this card has
     # received all its incoming data.  The globally last WG waits until every one of
-    # THIS card's W flag slots has reached FusedTokenTiles.
+    # THIS card's W flag slots has reached tokenTiles.
     #
     # All W slots, not one: the owner is elected grid-wide and stands in for every
     # peer, so a per-peer predicate would release it as soon as one peer finished.
@@ -3134,7 +3141,7 @@ class GlobalWriteBatchWriter:
     # Second runtime gate: AM_tiles == 0 -> nothing to wait for.  No work-group
     # passes the PUSH gate on any card, so not one SDMA packet is submitted, every
     # flag slot stays 0, and the owner would spin forever on the poll's
-    # `flag == FusedTokenTiles`.  This is the grid-wide form of the PUSH gate's own
+    # `flag == tokenTiles`.  This is the grid-wide form of the PUSH gate's own
     # predicate, reusing the value it already computed: WorkGroup0 has minimum 0,
     # so "some WG satisfies AM_tiles > WorkGroup0" is exactly "AM_tiles > 0".
     module.add(SCmpEQU32(src0=sgpr(amTilesSgpr), src1=0,
@@ -3149,18 +3156,20 @@ class GlobalWriteBatchWriter:
     drainRankSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_drainMyRank", preventOverflow=False)
     drainFlagBase = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_drainFlagBase", preventOverflow=False)
     drainTmp      = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_drainTmp", preventOverflow=False)
-    # W and tokenTiles are read HERE, past both the election and the FusedDrain gate,
-    # because the mask below and the poll predicate are their only remaining readers
-    # and exactly one work-group in the grid reaches them.
+    # W is read HERE, past both the election and the FusedDrain gate, because the
+    # mask below and the poll predicate are its only remaining readers and exactly
+    # one work-group in the grid reaches them.
     c3WSgpr  = kw.sgprPool.checkOut(1, tag="fusedA2A_c3W", preventOverflow=False)
     c3TTSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_c3TT", preventOverflow=False)
     module.add(kw.argLoader.loadKernArg(drainRankSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedMyRank"]), dword=1))
     module.add(kw.argLoader.loadKernArg(c3WSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedW"]), dword=1))
-    module.add(kw.argLoader.loadKernArg(c3TTSgpr, "KernArgAddress",
-      sgprOffset=hex(fusedBase + layout["FusedTokenTiles"]), dword=1))
-    module.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/FusedW/FusedTokenTiles"))
+    module.add(SAddU32(dst=sgpr(c3TTSgpr), src0=sgpr("SizesFree+1"), src1=mt1 - 1,
+                       comment=f"tokenTiles = ceil(N / MT1={mt1}): N + MT1-1"))
+    module.add(SLShiftRightB32(dst=sgpr(c3TTSgpr), shiftHex=log2mt1, src=sgpr(c3TTSgpr),
+                               comment=f">> log2(MT1={mt1})"))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/FusedW"))
     self._fusedA2ALoadFlagBaseByRank(module, drainFlagBase, drainRankSgpr, drainTmp)
     kw.sgprPool.checkIn(drainRankSgpr)
 
@@ -3195,7 +3204,7 @@ class GlobalWriteBatchWriter:
       comment="poll self flag[lane] low dword (system scope, sc0 sc1)"))
     module.add(SWaitCnt(vlcnt=0, comment="fused-A2A: wait poll load"))
     module.add(VCmpNeU32(VCC(), vgpr(vOld), sgpr(c3TTSgpr),
-                         comment="any lane's flag != FusedTokenTiles? (peer still sending)"))
+                         comment="any lane's flag != tokenTiles? (peer still sending)"))
     module.add(SCBranchVCCNZ(labelName=drainPollLabel.getLabelName(),
                              comment="some peer incomplete -> spin (poll again)"))
 

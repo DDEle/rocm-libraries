@@ -993,11 +993,7 @@ class Solution(collections.abc.Mapping):
     if state["UseSubtileImpl"]:
       state["VectorWidthA"] = 1
       state["VectorWidthB"] = 1
-      # FusedGemmA2A needs SourceSwap=True so the subtile store's 4 accumulators lie
-      # along N, aligning with the row-major out/recv contiguous axis for wide stores.
-      # Non-fused subtile keeps the historical SourceSwap=False (regular store path).
-      if not state["FusedGemmA2A"]:
-        state["SourceSwap"] = False
+      state["SourceSwap"] = False
       # Force BufferStore=True: UseSubtileImpl optimized storeD path is only implemented
       # for buffer stores for now.
       state["BufferStore"] = True

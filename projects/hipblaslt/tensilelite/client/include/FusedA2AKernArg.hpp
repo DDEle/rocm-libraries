@@ -5,9 +5,7 @@
 
 // Host side of the fused GEMM.A2A kernarg segment ABI. Must stay
 // byte-identical with the kernel side (Tensile/Components/Signature.py
-// fusedA2AKernArgLayout + addArg). Declared in a header rather than inside
-// FusedA2AClient.cpp so tests/FusedA2AKernArg_test.cpp can drive the real
-// append sequence.
+// fusedA2AKernArgLayout + addArg).
 
 #include <cstdint>
 #include <iostream>
@@ -72,7 +70,7 @@ namespace TensileLite
             uint32_t                  worldSize,
             uint32_t                  nShard,
             uint32_t                  drain,
-            uint32_t                  an,
+            uint32_t                  am,
             uint32_t                  tilesPerRank,
             uint32_t                  tokenTiles)
         {
@@ -92,8 +90,7 @@ namespace TensileLite
             args.append<uint32_t>("FusedW", worldSize);
             args.append<uint32_t>("FusedNShard", nShard);
             args.append<uint32_t>("FusedDrain", drain);
-            // FusedAM: `an` carries AM (A2A width along FEATURE) from the swapped client.
-            args.append<uint32_t>("FusedAM", an);
+            args.append<uint32_t>("FusedAM", am);
             args.append<uint32_t>("FusedTilesPerRank", tilesPerRank);
             args.append<uint32_t>("FusedTokenTiles", tokenTiles);
 

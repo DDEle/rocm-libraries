@@ -199,9 +199,9 @@ class SdmaRingEmitter:
                                 comment="hi != 0 -> full (result already defaulted to 0)"))
         module.add(SCmpLtU32(src0=sgpr(tmpPairS + 0), src1=self.queueSize, comment="diff < queueSize?"))
         module.add(SCBranchSCC1(labelName=canLabel.getLabelName(), comment="room after refresh"))
-        # fall through to done with result=0 set below.
-        module.add(SMovB32(dst=sgpr(resultS), src=0, comment="CanWriteUpto = false (full)"))
-        module.add(SBranch(labelName=doneLabel.getLabelName(), comment="-> done"))
+        # Still full: resultS is already 0 from the default above and nothing on
+        # the way here writes it, so this path only has to skip canLabel's store.
+        module.add(SBranch(labelName=doneLabel.getLabelName(), comment="full -> done (result still 0)"))
         module.add(canLabel)
         module.add(SMovB32(dst=sgpr(resultS), src=1, comment="CanWriteUpto = true (room)"))
         module.add(doneLabel)

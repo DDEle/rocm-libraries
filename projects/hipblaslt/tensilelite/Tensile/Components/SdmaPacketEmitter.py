@@ -258,9 +258,14 @@ class SdmaPacketEmitter:
         return module
 
     def _packPitchMinus1(self, module, dstV, pitchS, tmpS, comment):
-        """dword = ((pitch - 1) & 0x7FFFF) << 13, z field ([10:0]) left 0.
-        Minus-one is the hardware pitch convention (it adds one back). The pitch
-        arrives in bf16 elements and is scaled to packet elements first."""
+        """dword = (pitch - 1) << 13 -- the 19-bit pitch field at [31:13]; the z
+        field [10:0] is left 0. Minus-one is the hardware pitch convention (it
+        adds one back). The pitch arrives in bf16 elements and is scaled to
+        packet elements first.
+
+        NOT masked to 19 bits: an over-range pitch ORs into the neighbouring
+        field. The bound is a launch-time precondition (FusedA2AClient.cpp,
+        mirrored by checkA2AFieldsFit)."""
         if ELEMENT_SHIFT:
             self._toPacketElements(module, tmpS, pitchS, comment)
             src = tmpS
@@ -274,8 +279,12 @@ class SdmaPacketEmitter:
         return module
 
     def _packSliceMinus1(self, module, dstV, sliceS, tmpS, comment):
-        """dword = (slice_pitch - 1) & 0x0FFFFFFF, at bit 0 (28-bit field).
-        Scaled to packet elements like the pitches."""
+        """dword = slice_pitch - 1 -- the 28-bit slice field at [27:0]. Scaled to
+        packet elements like the pitches.
+
+        NOT masked to 28 bits, and unlike the pitch and rect fields it is not
+        bounds-checked anywhere either: both slice pitches are don't-cares at
+        rect_z = 0 (one plane), which is what DW12 encodes."""
         if ELEMENT_SHIFT:
             self._toPacketElements(module, tmpS, sliceS, comment)
             src = tmpS
@@ -287,7 +296,11 @@ class SdmaPacketEmitter:
         return module
 
     def _packRectMinus1(self, module, dstV, rectXS, rectYS, tmpS, comment):
-        """dword = ((rectX - 1) & 0x3FFF) | (((rectY - 1) & 0x3FFF) << 16).
+        """dword = (rectX - 1) | ((rectY - 1) << 16) -- two 14-bit extents at
+        [13:0] and [29:16], NEITHER masked: an over-range rect_x ORs straight
+        into rect_y. Both bounds are launch-time preconditions
+        (FusedA2AClient.cpp, mirrored by checkA2AFieldsFit).
+
         BOTH extents are runtime SGPRs: rectY cannot be the compile-time MT1
         because the last token-tile is partial when N % MT1 != 0, and an
         unclamped MT1 would read past the end of D (emitComputeCopyFields clamps

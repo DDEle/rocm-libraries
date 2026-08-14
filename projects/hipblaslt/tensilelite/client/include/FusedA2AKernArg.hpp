@@ -8,7 +8,7 @@
 // fusedA2AKernArgLayout + addArg).
 
 #include <cstdint>
-#include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -97,10 +97,10 @@ namespace TensileLite
             size_t grew = args.size() - before;
             if(grew != FUSED_A2A_SEGMENT_BYTES)
             {
-                std::cerr << "[fused-a2a] WARNING: fused segment grew args by " << grew
-                          << " bytes, expected " << FUSED_A2A_SEGMENT_BYTES
-                          << " (alignment/padding mismatch — epilogue will read wrong offsets)"
-                          << std::endl;
+                throw std::runtime_error(
+                    "[fused-a2a] fused segment grew args by " + std::to_string(grew)
+                    + " bytes, expected " + std::to_string(FUSED_A2A_SEGMENT_BYTES)
+                    + " (alignment/padding mismatch; the epilogue would read wrong offsets)");
             }
         }
     } // namespace Client

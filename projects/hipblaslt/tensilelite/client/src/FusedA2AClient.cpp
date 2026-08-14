@@ -370,9 +370,9 @@ namespace TensileLite
                     HIP_CHECK_EXC(hipDeviceCanAccessPeer(&canAccess, s, t));
                     if(!canAccess)
                     {
-                        std::cerr << "[fused-a2a] WARNING: device " << s << " cannot P2P device "
+                        std::cerr << "[fused-a2a] ERROR: device " << s << " cannot P2P device "
                                   << t << std::endl;
-                        continue;
+                        return 1;
                     }
                     hipError_t pe = hipDeviceEnablePeerAccess(t, 0);
                     if(pe != hipSuccess && pe != hipErrorPeerAccessAlreadyEnabled)
@@ -413,17 +413,14 @@ namespace TensileLite
             {
                 HIP_CHECK_EXC(hipSetDevice(d));
                 HIP_CHECK_EXC(hipStreamCreate(&streams[d]));
-                adapters[d]    = std::make_shared<hip::SolutionAdapter>();
-                bool loadedAny = false;
+                adapters[d] = std::make_shared<hip::SolutionAdapter>();
                 for(auto const& co : codeObjectFiles)
                 {
-                    if(adapters[d]->loadCodeObjectFile(co) == hipSuccess)
-                        loadedAny = true;
+                    (void)adapters[d]->loadCodeObjectFile(co);
                 }
                 // Lazy loading discovers the fused .co by kernel name from the
                 // TensileLibrary directory (same mechanism as main()).
                 (void)adapters[d]->initializeLazyLoading(hardware->archName(), libraryDirectory);
-                (void)loadedAny;
             }
 
             // Repeat loop: race detection + p50/p90 latency. Each iteration re-zeroes

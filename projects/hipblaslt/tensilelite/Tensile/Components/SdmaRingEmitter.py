@@ -9,10 +9,10 @@
 # packet is. SdmaPacketEmitter builds the packet dwords and calls placePacket.
 # The caller is GlobalWriteBatch._emitFusedA2ASdmaIssue, which invokes
 # emitReserveQueueSpace, then emitPlacePacket twice (COPY then ATOMIC), then
-# emitSubmitPacket. Pinned by Tensile/Tests/unit/test_sdma_ring_emitter.py.
+# emitSubmitPacket.
 #
 # The device handle it consumes is the W-element SdmaQueueDeviceHandle array
-# (client/src/SdmaQueue.hpp) passed in via the FusedSdmaQueues kernarg
+# (client/include/SdmaQueue.hpp) passed in via the FusedSdmaQueues kernarg
 # (intra-segment offset 160). The 7x8-byte field layout below is the byte
 # contract locked by the static_asserts in that header; do not reorder.
 #
@@ -39,13 +39,13 @@ from rocisa.instruction import (
 )
 
 
-# 256 KB SDMA ring, matching client/src/SdmaQueue.hpp SDMA_QUEUE_SIZE. Power of
+# 256 KB SDMA ring, matching client/include/SdmaQueue.hpp SDMA_QUEUE_SIZE. Power of
 # two => WrapIntoRing is an AND mask, never a divide.
 SDMA_QUEUE_SIZE = 256 * 1024
 assert (SDMA_QUEUE_SIZE & (SDMA_QUEUE_SIZE - 1)) == 0, "ring size must be a power of two"
 
 # Byte offsets of every SdmaQueueDeviceHandle field (contract: the static_asserts
-# in client/src/SdmaQueue.hpp lock these). Pointers are 8 bytes; the last field
+# in client/include/SdmaQueue.hpp lock these). Pointers are 8 bytes; the last field
 # is a VALUE seed, not a pointer.
 OFF_queueBuf         = 0    # ring base (uint32_t*, dword-addressed)
 OFF_rptr             = 8    # hardware read pointer  (SYSTEM-scope read)
@@ -68,7 +68,7 @@ class SdmaRingEmitter:
       * cachedHwReadIdx (2 SGPRs): the private CanWriteUpto cache. The caller
         seeds it ONCE from handle+48 at setup; this emitter reads and refreshes
         it in-register and NEVER stores it back to memory (see the note in
-        client/src/SdmaQueue.hpp).
+        client/include/SdmaQueue.hpp).
 
     Field pointers (queueBuf/rptr/wptr/doorbell/cachedWptr/committedWptr) are
     loaded on demand with s_load_dwordx2 from handleBase+offset, matching the

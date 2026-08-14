@@ -2792,10 +2792,12 @@ class GlobalWriteBatchWriter:
     packedC1     = self.kernel["PackedC1IndicesX"]
     srcPitchName = "StrideD%s" % kw.states.indexChars[packedC1[0]]
     # src_x and dst_y are folded into the bases below rather than packet fields:
-    # they are computed through tmpSgpr and consumed immediately.  srcYS survives
-    # because j*MT1 is read three times (src fold, dst row, rect_y clamp).
+    # they are computed through tmpSgpr and consumed immediately.  tokenRowS gets
+    # its own register rather than sharing tmpSgpr because j*MT1 stays live across
+    # the whole callee (src fold, dst row, rect_y clamp); it is scratch, not an
+    # output, so nothing reads it here.
     fldSgpr = kw.sgprPool.checkOut(4, tag="fusedA2A_sdmaFields", preventOverflow=False)
-    srcYS, srcSliceS, dstSliceS, rectYS = (fldSgpr + i for i in range(4))
+    tokenRowS, srcSliceS, dstSliceS, rectYS = (fldSgpr + i for i in range(4))
     # Both must be 2-ALIGNED: they feed s_lshl_b64 / the 64-bit add, which need
     # SReg_64 operands.  tmpSgpr is a plain checkOut(2) and is NOT usable there.
     # srcBaseSgpr holds the folded copy of AddressD (which is persistent and must
@@ -2806,8 +2808,8 @@ class GlobalWriteBatchWriter:
                               dstRankSgpr, "WorkGroup1", myRankSgpr,
                               "SizesFree+0", "SizesFree+1", nShardSgpr,
                               kw.sgprs["AddressD"], srcPitchName, recvBaseSgpr,
-                              srcBaseSgpr, srcYS, srcSliceS, dstSliceS, rectYS,
-                              tmpSgpr, tmp64Sgpr)
+                              srcBaseSgpr, srcSliceS, dstSliceS, rectYS,
+                              tmpSgpr, tokenRowS, tmp64Sgpr)
     kw.sgprPool.checkIn(tmp64Sgpr)  # dead once the two bases are folded
 
     # --- build the 21 packet dwords: COPY in [0:13], ATOMIC in [13:21]. ---

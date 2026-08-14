@@ -2877,12 +2877,6 @@ class GlobalWriteBatchWriter:
     tokenTilesSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsTokenTiles", preventOverflow=False)
     argModule.add(kw.argLoader.loadKernArg(myRankSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedMyRank"]), dword=1))
-    # Election target is FusedTilesPerRank (feature-tiles in one rank's shard), NOT the
-    # legacy FusedTarget (= tilesPerRank*tokenTiles): the counter is now per (dst_rank,
-    # token-tile) pair, so only the tilesPerRank feature-tiles of one token-tile row
-    # contribute to a given slot.  FusedTarget was deleted, not merely deprecated.
-    argModule.add(kw.argLoader.loadKernArg(targetSgpr, "KernArgAddress",
-      sgprOffset=hex(fusedBase + layout["FusedTilesPerRank"]), dword=1))
     argModule.add(kw.argLoader.loadKernArg(nShardSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedNShard"]), dword=1))
     argModule.add(kw.argLoader.loadKernArg(tokenTilesSgpr, "KernArgAddress",
@@ -2892,7 +2886,11 @@ class GlobalWriteBatchWriter:
     counterPtrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsCounterPtr", preventOverflow=False)
     argModule.add(kw.argLoader.loadKernArg(counterPtrSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["counter_ptr"]), dword=2))
-    argModule.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/TilesPerRank/NShard/TokenTiles/counter_ptr"))
+    argModule.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/NShard/TokenTiles/counter_ptr"))
+    # Election target: the feature-tiles of ONE token-tile row in one rank's shard,
+    # since the counter is per (dst_rank, token-tile) pair.
+    argModule.add(SLShiftRightB32(dst=sgpr(targetSgpr), shiftHex=log2mt0, src=sgpr(nShardSgpr),
+                                  comment=f"tilesPerRank = FusedNShard >> log2(MT0={mt0})"))
 
     # --- switch-load peer_ptr[dst_rank] + numeric dst_rank. ---
     flagBaseSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsFlagBase", preventOverflow=False)
@@ -2981,11 +2979,11 @@ class GlobalWriteBatchWriter:
       comment="old = atomic_add(counter[dst_rank][j], 1) device scope, return pre-op (sc0)"))
     module.add(SWaitCnt(vlcnt=0, comment="fused-A2A: wait counter atomic return (load counter)"))
 
-    # (4) last WG for (dst_rank, j) iff old+1 == FusedTilesPerRank; else skip the release.
+    # (4) last WG for (dst_rank, j) iff old+1 == tilesPerRank; else skip the release.
     module.add(VReadfirstlaneB32(dst=sgpr(tmpSgpr2), src=vgpr(vOld), comment="old -> sgpr"))
     module.add(SAddU32(dst=sgpr(tmpSgpr2), src0=sgpr(tmpSgpr2), src1=1, comment="old + 1"))
     module.add(SCmpEQU32(src0=sgpr(tmpSgpr2), src1=sgpr(targetSgpr),
-                         comment="old+1 == FusedTilesPerRank? (last WG for (dst_rank, j))"))
+                         comment="old+1 == tilesPerRank? (last WG for (dst_rank, j))"))
     module.add(SCBranchSCC0(labelName=skipReleaseLabel.getLabelName(),
                             comment="not the last WG -> skip the SDMA submit"))
 

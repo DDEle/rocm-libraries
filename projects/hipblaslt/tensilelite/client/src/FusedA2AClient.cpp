@@ -521,7 +521,6 @@ namespace TensileLite
                                    // kernarg "FusedAM" (Signature.py); pass AM as
                                    // the value to keep the client/kernel ABI matched.
                                    (uint32_t)AM,
-                                   tilesPerRank,
                                    tokenTiles);
                 std::cout << "[fused-a2a] dev " << d
                           << " kernarg: host base(before append)=" << beforeSize

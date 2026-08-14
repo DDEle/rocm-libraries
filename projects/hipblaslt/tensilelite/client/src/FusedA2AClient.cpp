@@ -383,8 +383,8 @@ namespace TensileLite
                     HIP_CHECK_EXC(hipDeviceCanAccessPeer(&canAccess, s, t));
                     if(!canAccess)
                     {
-                        std::cerr << "[fused-a2a] ERROR: device " << s << " cannot P2P device "
-                                  << t << std::endl;
+                        std::cerr << "[fused-a2a] ERROR: device " << s << " cannot P2P device " << t
+                                  << std::endl;
                         return 1;
                     }
                     hipError_t pe = hipDeviceEnablePeerAccess(t, 0);

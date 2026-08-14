@@ -481,10 +481,10 @@ namespace TensileLite
                 HIP_CHECK_EXC(hipEventCreate(&stopEv[d]));
             }
 
-            std::vector<double> latMeasUs; // post-warmup only (for percentiles)
-
-            // Fed only when all W cards reported: a partial row would misalign the
-            // per-card percentiles against each other and against the spread.
+            // Both fed only when all W cards reported. A partial row would misalign
+            // the per-card percentiles against each other and against the spread, and
+            // would make maxCardUs a max over the survivors -- 0.0 if none reported.
+            std::vector<double>              latMeasUs; // post-warmup only (percentiles)
             std::vector<std::vector<double>> perCardUs(W);
             std::vector<int>                 slowestCount(W, 0);
             int                              perCardSkipped = 0;
@@ -735,14 +735,14 @@ namespace TensileLite
 
                 if(it >= warmup)
                 {
-                    latMeasUs.push_back(maxCardUs);
-
                     bool rowComplete = true;
                     for(int d = 0; d < W; d++)
                         if(cardUs[d] < 0.0)
                             rowComplete = false;
                     if(rowComplete)
                     {
+                        latMeasUs.push_back(maxCardUs);
+
                         int slowest = 0;
                         for(int d = 1; d < W; d++)
                             if(cardUs[d] > cardUs[slowest])
@@ -800,6 +800,14 @@ namespace TensileLite
                 std::cout << "[fused-a2a] latency: no post-warmup samples collected\n";
             }
 
+            // Outside both blocks below: when EVERY post-warmup row was incomplete,
+            // both are empty and this is the only line that says why.
+            if(perCardSkipped)
+                std::cout << "[fused-a2a] timing: " << perCardSkipped
+                          << " post-warmup iteration(s) excluded from both the latency and "
+                             "per-card stats (not all "
+                          << W << " cards reported)\n";
+
             // Per-card breakdown. The slowest-card histogram separates the three
             // sources of the max-vs-mean gap: concentrated on the first-enqueued id
             // means enqueue-order skew, concentrated elsewhere means one slow card,
@@ -843,11 +851,6 @@ namespace TensileLite
                           << " cards): p50=" << pctOf(spread, 0.5)
                           << " us p90=" << pctOf(spread, 0.9) << " us max=" << pctOf(spread, 1.0)
                           << " us\n";
-
-                if(perCardSkipped)
-                    std::cout << "[fused-a2a] per-card: " << perCardSkipped
-                              << " post-warmup iteration(s) excluded (not all " << W
-                              << " cards reported)\n";
             }
 
             // Cleanup.

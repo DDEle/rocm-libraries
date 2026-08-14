@@ -25,9 +25,9 @@
 ################################################################################
 
 from rocisa.container import vgpr, sgpr, VCC, GLOBALModifiers
-from rocisa.code import Module, Label, TextBlock
+from rocisa.code import Module, Label
 from rocisa.instruction import (
-    SMovB32, VMovB32,
+    SMovB32, VMovB32, SLoadB64,
     SAddU32, SAddCU32, SSubU32, SSubBU32,
     SAndB32, SLShiftRightB32,
     SCmpEQU32, SCmpLtU32,
@@ -104,13 +104,13 @@ class SdmaRingEmitter:
 
     def _loadFieldPtr(self, module, w, dstPairS, handleBaseS, byteOff):
         """Load an 8-byte handle field (pointer) at handleBase+byteOff into an
-        aligned SGPR pair via s_load_dwordx2. Used for queueBuf/rptr/wptr/
-        doorbell/cachedWptr/committedWptr. handleBase is a raw SGPR pointer pair
-        and byteOff is a compile-time immediate, so this is a plain s_load with
-        no argLoader dependency (keeps the emitter reusable outside a full
-        KernelWriter). Caller waits (kmcnt) before use."""
-        module.add(TextBlock("  s_load_dwordx2 s[%d:%d], s[%d:%d], 0x%x\n"
-                             % (dstPairS, dstPairS + 1, handleBaseS, handleBaseS + 1, byteOff)))
+        aligned SGPR pair. Used for queueBuf/rptr/wptr/doorbell/cachedWptr/
+        committedWptr. handleBase is a raw SGPR pointer pair and byteOff is a
+        compile-time immediate, so this needs no argLoader and the emitter stays
+        usable outside a full KernelWriter. Caller waits (kmcnt) before use."""
+        module.add(SLoadB64(dst=sgpr(dstPairS, 2), base=sgpr(handleBaseS, 2),
+                            soffset=hex(byteOff),
+                            comment="load handle field at +0x%x" % byteOff))
         return module
 
     def _wrapIntoRing(self, module, dstS, srcS, comment=""):

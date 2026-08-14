@@ -94,6 +94,11 @@ ELEMENT_SHIFT = PACKET_ELEMENT_SIZE_LOG2 - D_DATA_ELEMENT_LOG2   # 3
 
 # Compile-time header dwords: op/sub_op/elementsize are all immediates, so DW0
 # of each packet is folded here rather than built at runtime.
+#
+# COPY_HEADER_DW0 is 0x80000401, i.e. ABOVE INT32_MAX, so it must reach VMovB32
+# as a hex STRING. rocisa's InstructionInput has no 64-bit integer variant: an
+# int that does not fit a C++ 32-bit int falls through to the double branch and
+# renders as "2147484673.0". Every immediate below therefore goes through hex().
 COPY_HEADER_DW0 = ((SDMA_OP_COPY_SUBWIN & 0xFF)
                    | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8)
                    | ((PACKET_ELEMENT_SIZE_LOG2 & 0x7) << 29))
@@ -205,15 +210,6 @@ class SdmaPacketEmitter:
         module.add(VMovB32(dst=vgpr(dstV), src=sgpr(tmpS), comment=comment))
         return module
 
-    def _movImm(self, module, dstV, imm, comment):
-        # Hex string, not int: rocisa renders an int above INT32_MAX as a float.
-        module.add(VMovB32(dst=vgpr(dstV), src=hex(imm), comment=comment))
-        return module
-
-    def _movSgpr(self, module, dstV, srcS, comment):
-        module.add(VMovB32(dst=vgpr(dstV), src=sgpr(srcS), comment=comment))
-        return module
-
     # ---- COPY_SUBWIN builder -----------------------------------------------
 
     def emitBuildCopyPacket(self, module, pktV,
@@ -235,22 +231,29 @@ class SdmaPacketEmitter:
           DW5 srcSlice-1, DW6/7 dstBase, DW8 0, DW9 dstPitch-1,
           DW10 dstSlice-1, DW11 (rectX-1|rectY-1), DW12 0.
         """
-        self._movImm(module, pktV + 0, COPY_HEADER_DW0,
-                     "SUBWIN DW0: op=COPY sub_op=RECT elementsize=log2(%dB)"
-                     % (1 << PACKET_ELEMENT_SIZE_LOG2))
-        self._movSgpr(module, pktV + 1, srcBaseS + 0, "SUBWIN DW1: srcBase lo")
-        self._movSgpr(module, pktV + 2, srcBaseS + 1, "SUBWIN DW2: srcBase hi")
-        self._movImm(module, pktV + 3, 0, "SUBWIN DW3: src_x=0|src_y=0 (folded into srcBase)")
+        module.add(VMovB32(dst=vgpr(pktV + 0), src=hex(COPY_HEADER_DW0),
+                           comment="SUBWIN DW0: op=COPY sub_op=RECT elementsize=log2(%dB)"
+                                   % (1 << PACKET_ELEMENT_SIZE_LOG2)))
+        module.add(VMovB32(dst=vgpr(pktV + 1), src=sgpr(srcBaseS + 0),
+                           comment="SUBWIN DW1: srcBase lo"))
+        module.add(VMovB32(dst=vgpr(pktV + 2), src=sgpr(srcBaseS + 1),
+                           comment="SUBWIN DW2: srcBase hi"))
+        module.add(VMovB32(dst=vgpr(pktV + 3), src=hex(0),
+                           comment="SUBWIN DW3: src_x=0|src_y=0 (folded into srcBase)"))
         self._packPitchMinus1(module, pktV + 4, srcPitchS, tmpS, "SUBWIN DW4: src_pitch-1")
         self._packSliceMinus1(module, pktV + 5, srcSliceS, tmpS, "SUBWIN DW5: src_slice-1")
-        self._movSgpr(module, pktV + 6, dstBaseS + 0, "SUBWIN DW6: dstBase lo")
-        self._movSgpr(module, pktV + 7, dstBaseS + 1, "SUBWIN DW7: dstBase hi")
-        self._movImm(module, pktV + 8, 0, "SUBWIN DW8: dst_x=0|dst_y=0 (folded into dstBase)")
+        module.add(VMovB32(dst=vgpr(pktV + 6), src=sgpr(dstBaseS + 0),
+                           comment="SUBWIN DW6: dstBase lo"))
+        module.add(VMovB32(dst=vgpr(pktV + 7), src=sgpr(dstBaseS + 1),
+                           comment="SUBWIN DW7: dstBase hi"))
+        module.add(VMovB32(dst=vgpr(pktV + 8), src=hex(0),
+                           comment="SUBWIN DW8: dst_x=0|dst_y=0 (folded into dstBase)"))
         self._packPitchMinus1(module, pktV + 9, dstPitchS, tmpS, "SUBWIN DW9: dst_pitch-1")
         self._packSliceMinus1(module, pktV + 10, dstSliceS, tmpS, "SUBWIN DW10: dst_slice-1")
         self._packRectMinus1(module, pktV + 11, rectXS, rectYS, tmpS,
                              "SUBWIN DW11: rect_x-1|rect_y-1")
-        self._movImm(module, pktV + 12, 0, "SUBWIN DW12: rect_z=0, default cache/swizzle")
+        module.add(VMovB32(dst=vgpr(pktV + 12), src=hex(0),
+                           comment="SUBWIN DW12: rect_z=0, default cache/swizzle"))
         return module
 
     # ---- ATOMIC ADD_RTN_32 builder ------------------------------------------
@@ -261,15 +264,22 @@ class SdmaPacketEmitter:
         slot (caller computes peer_ptr[p] + myRank*4 -- see emitComputeFlagAddr;
         the stride is 4 because this ADD_RTN_32 writes 4 bytes). addend is a
         compile-time immediate (1)."""
-        self._movImm(module, pktV + 0, ATOMIC_HEADER_DW0,
-                     "ATOMIC DW0: op=ATOMIC operation=ADD_RTN_32")
-        self._movSgpr(module, pktV + 1, dstAddrS + 0, "ATOMIC DW1: addr lo")
-        self._movSgpr(module, pktV + 2, dstAddrS + 1, "ATOMIC DW2: addr hi")
-        self._movImm(module, pktV + 3, addend & 0xFFFFFFFF, "ATOMIC DW3: src_data lo (addend)")
-        self._movImm(module, pktV + 4, 0, "ATOMIC DW4: src_data hi (unused by ADD_RTN_32)")
-        self._movImm(module, pktV + 5, 0, "ATOMIC DW5: cmp_data lo (unused)")
-        self._movImm(module, pktV + 6, 0, "ATOMIC DW6: cmp_data hi (unused)")
-        self._movImm(module, pktV + 7, 0, "ATOMIC DW7: loop_interval=0")
+        module.add(VMovB32(dst=vgpr(pktV + 0), src=hex(ATOMIC_HEADER_DW0),
+                           comment="ATOMIC DW0: op=ATOMIC operation=ADD_RTN_32"))
+        module.add(VMovB32(dst=vgpr(pktV + 1), src=sgpr(dstAddrS + 0),
+                           comment="ATOMIC DW1: addr lo"))
+        module.add(VMovB32(dst=vgpr(pktV + 2), src=sgpr(dstAddrS + 1),
+                           comment="ATOMIC DW2: addr hi"))
+        module.add(VMovB32(dst=vgpr(pktV + 3), src=hex(addend & 0xFFFFFFFF),
+                           comment="ATOMIC DW3: src_data lo (addend)"))
+        module.add(VMovB32(dst=vgpr(pktV + 4), src=hex(0),
+                           comment="ATOMIC DW4: src_data hi (unused by ADD_RTN_32)"))
+        module.add(VMovB32(dst=vgpr(pktV + 5), src=hex(0),
+                           comment="ATOMIC DW5: cmp_data lo (unused)"))
+        module.add(VMovB32(dst=vgpr(pktV + 6), src=hex(0),
+                           comment="ATOMIC DW6: cmp_data hi (unused)"))
+        module.add(VMovB32(dst=vgpr(pktV + 7), src=hex(0),
+                           comment="ATOMIC DW7: loop_interval=0"))
         return module
 
     # ---- field arithmetic (runtime geometry -> the SGPR inputs above) --

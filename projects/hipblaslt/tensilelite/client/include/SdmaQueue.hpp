@@ -197,9 +197,9 @@ namespace TensileLite
             return 0; // fall back to a general engine if KFD reports no mask
         }
 
-        // One SDMA queue: owns a 256KB Uncached ring, the KFD queue resource,
-        // the two software cursors (uncached device memory), and a device copy
-        // of its SdmaQueueDeviceHandle. Non-copyable (owns HW resources).
+        // One SDMA queue: owns a 256KB Uncached ring, the KFD queue resource, and
+        // the two software cursors (uncached device memory). Non-copyable (owns
+        // HW resources).
         //
         // localNode / engineId are KFD topology ids; use sdmaNodeIdForDevice()
         // and sdmaSelectEngine() above to derive them from a HIP device id.
@@ -239,7 +239,6 @@ namespace TensileLite
                                                  &queue_));
 
                     // Software cursors in uncached device memory (shared producer state).
-                    CHK_HIP(hipMalloc(&deviceHandle_, sizeof(SdmaQueueDeviceHandle)));
                     CHK_HIP(hipExtMallocWithFlags(
                         (void**)&cachedWptr_, sizeof(uint64_t), hipDeviceMallocUncached));
                     CHK_HIP(hipExtMallocWithFlags(
@@ -250,7 +249,6 @@ namespace TensileLite
                     // created at.
                     const uint64_t hwWptr = (uint64_t) * (queue_.Queue_write_ptr_aql);
                     const uint64_t hwRptr = (uint64_t) * (queue_.Queue_read_ptr_aql);
-                    hostWptr_             = hwWptr;
 
                     hostHandle_ = SdmaQueueDeviceHandle{
                         /*queueBuf*/ static_cast<uint32_t*>(queueBuffer_),
@@ -263,10 +261,6 @@ namespace TensileLite
                         /*cachedHwReadIndex*/ hwRptr,
                     };
 
-                    CHK_HIP(hipMemcpy(deviceHandle_,
-                                      &hostHandle_,
-                                      sizeof(SdmaQueueDeviceHandle),
-                                      hipMemcpyHostToDevice));
                     CHK_HIP(
                         hipMemcpy(cachedWptr_, &hwWptr, sizeof(uint64_t), hipMemcpyHostToDevice));
                     CHK_HIP(hipMemcpy(
@@ -287,85 +281,23 @@ namespace TensileLite
             SdmaQueue(const SdmaQueue&)            = delete;
             SdmaQueue& operator=(const SdmaQueue&) = delete;
 
-            // Device pointer to this queue's handle (for single-queue device use).
-            SdmaQueueDeviceHandle* deviceHandle() const
-            {
-                return deviceHandle_;
-            }
-            // Host-visible copy of the same handle (for host-side driving/packing).
+            // Host-visible copy of this queue's device handle. SdmaQueueSet packs
+            // these into the contiguous device array the kernel indexes by rank;
+            // the GPU is the only consumer, so no per-queue device copy is kept.
             const SdmaQueueDeviceHandle& hostHandle() const
             {
                 return hostHandle_;
             }
 
-            // ---- Host-side driving (smoke / bring-up only) -----------------
-            // The production producer is the GPU kernel. These helpers let the
-            // host enqueue a packet and drive the doorbell so a queue can be
-            // exercised end-to-end without any device code.
-            //
-            // Copies `bytes` of `pkt` into the ring at the current write
-            // cursor, advances wptr, and rings the doorbell. `bytes` must be a
-            // multiple of 4 and fit without wrapping. Returns the submitted
-            // (post-increment) wptr byte count.
-            uint64_t submitPacketHost(const void* pkt, size_t bytes)
-            {
-                if(bytes == 0 || (bytes % sizeof(uint32_t)) != 0)
-                    throw std::runtime_error(
-                        "submitPacketHost: bytes must be a nonzero multiple of 4");
-                if(bytes > SDMA_QUEUE_SIZE)
-                    throw std::runtime_error("submitPacketHost: packet larger than ring");
-
-                // Byte offset into the ring for the current write cursor.
-                const uint64_t offset = hostWptr_ % SDMA_QUEUE_SIZE;
-                if(offset + bytes > SDMA_QUEUE_SIZE)
-                    throw std::runtime_error("submitPacketHost: packet would wrap the ring "
-                                             "(host smoke path does not implement wrap)");
-
-                // Ring is Uncached, so this is visible to the engine with no flush.
-                std::memcpy(static_cast<uint8_t*>(queueBuffer_) + offset, pkt, bytes);
-
-                hostWptr_ += bytes;
-
-                // Publish the new write pointer, then ring the doorbell.
-                *(queue_.Queue_write_ptr_aql) = hostWptr_;
-                // Ensure the wptr store lands before the doorbell store.
-                __atomic_thread_fence(__ATOMIC_SEQ_CST);
-                *(queue_.Queue_DoorBell_aql) = hostWptr_;
-
-                return hostWptr_;
-            }
-
-            // Spin until the engine's read pointer catches up to the last
-            // submitted write pointer (queue fully drained). Returns false on
-            // timeout.
-            bool waitIdleHost(uint64_t timeoutSpins = (1ull << 34))
-            {
-                for(uint64_t i = 0; i < timeoutSpins; ++i)
-                {
-                    const uint64_t rp
-                        = (uint64_t) * (volatile HSAuint64*)(queue_.Queue_read_ptr_aql);
-                    if(rp >= hostWptr_)
-                        return true;
-                }
-                return false;
-            }
-
         private:
-            // Best-effort release, shared by the destructor and the ctor's
-            // failure path (a throw mid-ctor means ~SdmaQueue never runs).
+            // Best-effort release, shared by the destructor and the ctor's failure
+            // path, so it must stay safe after a partial construction.
             void teardown() noexcept
             {
-                // Best-effort release, shared by the destructor and the ctor's
-                // failure path; safe to call after a partial construction.
                 if(queue_.QueueId)
                 {
                     (void)hsaKmtDestroyQueue(queue_.QueueId);
                     queue_.QueueId = 0;
-                }
-                if(deviceHandle_)
-                {
-                    (void)hipFree(deviceHandle_);
-                    deviceHandle_ = nullptr;
                 }
                 if(cachedWptr_)
                 {
@@ -388,11 +320,9 @@ namespace TensileLite
             void*            queueBuffer_ = nullptr; // ring (Uncached)
             HsaQueueResource queue_{}; // KFD queue resource
 
-            uint64_t*              cachedWptr_    = nullptr; // uncached device mem
-            uint64_t*              committedWptr_ = nullptr; // uncached device mem
-            SdmaQueueDeviceHandle* deviceHandle_  = nullptr; // device copy
-            SdmaQueueDeviceHandle  hostHandle_{}; // host copy
-            uint64_t               hostWptr_ = 0; // host-side write cursor
+            uint64_t*             cachedWptr_    = nullptr; // uncached device mem
+            uint64_t*             committedWptr_ = nullptr; // uncached device mem
+            SdmaQueueDeviceHandle hostHandle_{}; // host copy
         };
 
         // A set of W queues for one local device -- one queue per peer. The W
@@ -419,45 +349,37 @@ namespace TensileLite
 
                 const size_t bytes = handles.size() * sizeof(SdmaQueueDeviceHandle);
 
-                // Hold the allocation in a local owner until the copy succeeds, so a
-                // failing hipMemcpy doesn't leak it (CHK_HIP throws, and a throw here
-                // means ~SdmaQueueSet never runs).
+                // Adopt before the copy, not after: dHandles_ is a member, so a
+                // throwing CHK_HIP below unwinds through its destructor.
                 SdmaQueueDeviceHandle* raw = nullptr;
                 CHK_HIP(hipMalloc(&raw, bytes));
-                auto hipFreeDeleter = [](SdmaQueueDeviceHandle* p) { (void)hipFree(p); };
-                std::unique_ptr<SdmaQueueDeviceHandle, decltype(hipFreeDeleter)> owned(
-                    raw, hipFreeDeleter);
-                CHK_HIP(hipMemcpy(owned.get(), handles.data(), bytes, hipMemcpyHostToDevice));
-                dHandles_ = owned.release();
-            }
-
-            ~SdmaQueueSet()
-            {
-                if(dHandles_)
-                    (void)hipFree(dHandles_);
+                dHandles_.reset(raw);
+                CHK_HIP(hipMemcpy(dHandles_.get(), handles.data(), bytes, hipMemcpyHostToDevice));
             }
 
             SdmaQueueSet(const SdmaQueueSet&)            = delete;
             SdmaQueueSet& operator=(const SdmaQueueSet&) = delete;
 
-            size_t size() const
-            {
-                return queues_.size();
-            }
-            SdmaQueue& queue(size_t i)
-            {
-                return *queues_[i];
-            }
-
             // Device pointer to the W-element SdmaQueueDeviceHandle array.
             SdmaQueueDeviceHandle* deviceHandles() const
             {
-                return dHandles_;
+                return dHandles_.get();
             }
 
         private:
-            std::vector<std::unique_ptr<SdmaQueue>> queues_;
-            SdmaQueueDeviceHandle*                  dHandles_ = nullptr;
+            struct HipFreeDeleter
+            {
+                void operator()(SdmaQueueDeviceHandle* p) const
+                {
+                    (void)hipFree(p);
+                }
+            };
+
+            // Owner-only: nothing reads this after the constructor, but every
+            // pointer in dHandles_ aims at a resource these queues free on
+            // destruction. Localizing it would hand the GPU a dangling array.
+            std::vector<std::unique_ptr<SdmaQueue>>                queues_;
+            std::unique_ptr<SdmaQueueDeviceHandle, HipFreeDeleter> dHandles_;
         };
 
     } // namespace Client

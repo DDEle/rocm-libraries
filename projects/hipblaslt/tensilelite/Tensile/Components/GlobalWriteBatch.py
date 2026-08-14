@@ -2802,7 +2802,7 @@ class GlobalWriteBatchWriter:
     # not be clobbered); recvBaseSgpr is a temp and is folded in place.
     srcBaseSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaSrcBase", preventOverflow=False)
     tmp64Sgpr   = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaOffset64", preventOverflow=False)
-    pkt.emitComputeCopyFields(module, kw,
+    pkt.emitComputeCopyFields(module,
                               dstRankSgpr, "WorkGroup1", myRankSgpr,
                               "SizesFree+0", "SizesFree+1", nShardSgpr,
                               kw.sgprs["AddressD"], srcPitchName, recvBaseSgpr,
@@ -2812,13 +2812,13 @@ class GlobalWriteBatchWriter:
 
     # --- build the 21 packet dwords: COPY in [0:13], ATOMIC in [13:21]. ---
     pktVgpr = kw.vgprPool.checkOut(totalDwords, tag="fusedA2A_sdmaPacket")
-    pkt.emitBuildCopyPacket(module, kw, pktVgpr,
+    pkt.emitBuildCopyPacket(module, pktVgpr,
                             srcBaseSgpr, srcPitchName, srcSliceS,
                             recvBaseSgpr, nShardSgpr, dstSliceS,
                             nShardSgpr, rectYS, tmpSgpr)
     flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaFlagAddr", preventOverflow=False)
-    pkt.emitComputeFlagAddr(module, kw, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
-    pkt.emitBuildAtomicPacket(module, kw, pktVgpr + COPY_PACKET_DWORDS, flagAddrSgpr, addend=1)
+    pkt.emitComputeFlagAddr(module, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
+    pkt.emitBuildAtomicPacket(module, pktVgpr + COPY_PACKET_DWORDS, flagAddrSgpr, addend=1)
     kw.sgprPool.checkIn(flagAddrSgpr)
     kw.sgprPool.checkIn(fldSgpr)
     kw.sgprPool.checkIn(srcBaseSgpr)

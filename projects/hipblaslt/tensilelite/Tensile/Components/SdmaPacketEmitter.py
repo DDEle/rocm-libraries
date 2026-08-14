@@ -105,11 +105,11 @@ class SdmaPacketEmitter:
     """Builds the COPY_SUBWIN + ATOMIC packet dword arrays in VGPRs from runtime
     inputs, in the layout documented at the top of this file.
 
-    Stateless like SdmaRingEmitter: every method takes the registers it uses
-    (caller owns the pools) plus a `w` context exposing `.sgprPool`/`.vgprPool`.
-    The dword VGPR block it fills is what SdmaRingEmitter.emitPlacePacket writes
-    to the ring, so the two emitters compose without either knowing the other's
-    internals. The three encoding conventions (minus-one extents/pitches,
+    Every method takes the registers it uses and allocates none: unlike
+    SdmaRingEmitter, which checks scratch in and out of `w`'s pools, this class
+    never touches a pool and so takes no `w` at all. The dword VGPR block it
+    fills is what SdmaRingEmitter.emitPlacePacket writes to the ring, so the two
+    emitters compose without either knowing the other's internals. The three encoding conventions (minus-one extents/pitches,
     element units, field bit positions) are isolated in the `_pack*` helpers.
     """
 
@@ -216,7 +216,7 @@ class SdmaPacketEmitter:
 
     # ---- COPY_SUBWIN builder -----------------------------------------------
 
-    def emitBuildCopyPacket(self, module, w, pktV,
+    def emitBuildCopyPacket(self, module, pktV,
                             srcBaseS, srcPitchS, srcSliceS,
                             dstBaseS, dstPitchS, dstSliceS,
                             rectXS, rectYS, tmpS):
@@ -255,7 +255,7 @@ class SdmaPacketEmitter:
 
     # ---- ATOMIC ADD_RTN_32 builder ------------------------------------------
 
-    def emitBuildAtomicPacket(self, module, w, pktV, dstAddrS, addend=1):
+    def emitBuildAtomicPacket(self, module, pktV, dstAddrS, addend=1):
         """Build the 8 ATOMIC ADD_RTN_32 dwords into pktV[0:8]: raise peer_ptr[p]
         [myRank] by `addend` (== 1). dstAddrS is a 2-SGPR pointer to the flag
         slot (caller computes peer_ptr[p] + myRank*4 -- see emitComputeFlagAddr;
@@ -274,7 +274,7 @@ class SdmaPacketEmitter:
 
     # ---- field arithmetic (runtime geometry -> the SGPR inputs above) --
 
-    def emitComputeCopyFields(self, module, w,
+    def emitComputeCopyFields(self, module,
                               pS, jS, myRankS, mS, nS, nShardS,
                               addressDS, srcPitchS, recvBaseS,
                               outSrcBaseS, outSrcYS, outSrcSliceS,
@@ -354,7 +354,7 @@ class SdmaPacketEmitter:
                            comment="rect_y = min(MT1, N - j*MT1) (clamp tail tile)"))
         return module
 
-    def emitComputeFlagAddr(self, module, w, flagBaseS, myRankS, outAddrS, tmpS):
+    def emitComputeFlagAddr(self, module, flagBaseS, myRankS, outAddrS, tmpS):
         """Compute the ATOMIC target peer_ptr[p] + myRank*4 into outAddrS (2
         SGPRs), a 64-bit add. flagBaseS is peer_ptr[p] (already selected by the
         caller via _fusedA2ALoadFlagBaseByRank). tmpS is one scratch SGPR.

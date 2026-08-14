@@ -169,8 +169,11 @@ class SdmaPacketEmitter:
         packet elements like the pitches.
 
         NOT masked to 28 bits, and unlike the pitch and rect fields it is not
-        bounds-checked anywhere either: both slice pitches are don't-cares at
-        rect_z = 0 (one plane), which is what DW12 encodes."""
+        bounds-checked at launch either -- but it is NOT a free field. The
+        reference implementation asserts RECT_X * RECT_Y <= SRC_SLICE_PITCH (and
+        the same for DST), which holds here by construction rather than by a
+        guard; see emitComputeCopyFields for the two values and why each
+        satisfies it."""
         if ELEMENT_SHIFT:
             self._toPacketElements(module, tmpS, sliceS, comment)
             src = tmpS
@@ -294,12 +297,22 @@ class SdmaPacketEmitter:
 
           outSrcBase = AddressD + (j*MT1*ldd    + p*nShard) * sizeof(bf16)
           recvBase  += (myRank*N + j*MT1) * nShard          * sizeof(bf16)
-          src_slice  = M * N                 (single-plane slice pitch, don't-care)
+          src_slice  = M * N                 (whole D plane)
           dst_slice  = MT1 * nShard          (one band's plane)
           rect_y     = min(MT1, N - j*MT1)   (clamped: last token-tile is partial)
 
         src_pitch = ldd and dst_pitch = nShard are passed straight through by the
         caller, as is rect_x = nShard. MT1 is the compile-time token extent.
+
+        NEITHER SLICE PITCH IS A DON'T-CARE, despite the copy being a single
+        plane (rect_z = 0). The reference implementation asserts
+        RECT_X * RECT_Y <= SLICE_PITCH for both sides, and nothing at launch
+        checks it, so the values above are what make it hold:
+          dst is EXACTLY TIGHT -- (nShard>>3)*rect_y <= (MT1*nShard)>>3 reduces
+            to rect_y <= MT1, which the clamp below guarantees with no slack.
+          src has margin -- (nShard>>3)*rect_y <= (M*N)>>3 reduces to
+            nShard*rect_y <= M*N, and nShard = AM/W <= M with rect_y <= N.
+        Shrinking either one to a constant would break the assertion.
 
         BOTH folds are 64-BIT and must stay that way: neither product is bounded
         by anything now that the coordinates are folded in. Each widening
@@ -320,7 +333,7 @@ class SdmaPacketEmitter:
         module.add(SMulI32(dst=sgpr(tokenRowS), src0=sgpr(jS), src1=self.mt1,
                            comment="token row of tile j = j * MT1 (folded into the bases)"))
         module.add(SMulI32(dst=sgpr(outSrcSliceS), src0=sgpr(mS), src1=sgpr(nS),
-                           comment="src_slice = M * N (single-plane, don't-care)"))
+                           comment="src_slice = M * N (whole D plane; bounds RECT_X*RECT_Y)"))
 
         # --- src fold: AddressD + (j*MT1*ldd + p*nShard) * sizeof(bf16) ---
         module.add(SMulI32(dst=sgpr(tmpS), src0=sgpr(pS), src1=sgpr(nShardS),

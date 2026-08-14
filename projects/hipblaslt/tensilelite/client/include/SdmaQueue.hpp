@@ -105,10 +105,16 @@ namespace TensileLite
                 }
             }
 
-            // HSA + KFD are process-global; initialize once. GPU agents are
-            // captured in HIP-device order via the iterate-agents callback.
+            // HSA + KFD are process-global; initialize once.
+            //
+            // Indexed by HIP DEVICE ORDINAL, which is what every caller has and
+            // is not what hsa_iterate_agents hands back: HSA enumerates in its
+            // own order and ignores HIP_VISIBLE_DEVICES, so under it the two
+            // orderings name different cards. ensureHsaKfd() reindexes once, at
+            // the only place the vector is built, rather than leaving raw
+            // enumeration order around for callers to get right.
             inline std::once_flag           gHsaInitFlag;
-            inline std::vector<hsa_agent_t> gGpuAgents;
+            inline std::vector<hsa_agent_t> gGpuAgentsByHipDevice;
 
             inline hsa_status_t gpuAgentCb(hsa_agent_t agent, void* data)
             {
@@ -135,28 +141,69 @@ namespace TensileLite
             {
                 std::call_once(gHsaInitFlag, [] {
                     CHK_HSA(hsa_init());
-                    CHK_HSA(hsa_iterate_agents(&gpuAgentCb, &gGpuAgents));
+                    std::vector<hsa_agent_t> hsaOrder;
+                    CHK_HSA(hsa_iterate_agents(&gpuAgentCb, &hsaOrder));
                     CHK_KMT(hsaKmtOpenKFD());
                     HsaSystemProperties props{};
                     CHK_KMT(hsaKmtAcquireSystemProperties(&props));
+
+                    // Reindex HSA's enumeration into HIP device order, keyed on
+                    // PCI domain+bus+device so the result does not depend on how
+                    // either runtime filters. Agents HIP cannot see are dropped.
+                    int hipCount = 0;
+                    CHK_HIP(hipGetDeviceCount(&hipCount));
+                    gGpuAgentsByHipDevice.reserve(hipCount);
+                    for(int d = 0; d < hipCount; ++d)
+                    {
+                        hipDeviceProp_t prop{};
+                        CHK_HIP(hipGetDeviceProperties(&prop, d));
+
+                        const hsa_agent_t* match = nullptr;
+                        for(const hsa_agent_t& agent : hsaOrder)
+                        {
+                            uint32_t bdfid = 0, domain = 0;
+                            CHK_HSA(hsa_agent_get_info(
+                                agent, (hsa_agent_info_t)HSA_AMD_AGENT_INFO_BDFID, &bdfid));
+                            CHK_HSA(hsa_agent_get_info(
+                                agent, (hsa_agent_info_t)HSA_AMD_AGENT_INFO_DOMAIN, &domain));
+                            // BDFID packs bus into [15:8] and device into [7:3].
+                            if((int)domain == prop.pciDomainID
+                               && (int)((bdfid >> 8) & 0xFF) == prop.pciBusID
+                               && (int)((bdfid >> 3) & 0x1F) == prop.pciDeviceID)
+                            {
+                                match = &agent;
+                                break;
+                            }
+                        }
+                        if(!match)
+                            throw std::runtime_error(
+                                "ensureHsaKfd: no HSA GPU agent matches HIP device "
+                                + std::to_string(d) + " at PCI domain "
+                                + std::to_string(prop.pciDomainID) + " bus "
+                                + std::to_string(prop.pciBusID) + " device "
+                                + std::to_string(prop.pciDeviceID) + " ("
+                                + std::to_string(hsaOrder.size()) + " GPU agents visible to HSA)");
+                        gGpuAgentsByHipDevice.push_back(*match);
+                    }
                 });
             }
         } // namespace detail
 
         // ---- Topology helpers ---------------------------------------------
         // KFD topology node id for a HIP device ordinal (via the HSA agent's
-        // NODE info). Initializes HSA + KFD on first call.
+        // NODE info). Initializes HSA + KFD on first call, which is also what
+        // puts the agent vector into HIP device order.
         inline uint32_t sdmaNodeIdForDevice(int hipDeviceId)
         {
             detail::ensureHsaKfd();
-            if(hipDeviceId < 0 || hipDeviceId >= (int)detail::gGpuAgents.size())
+            if(hipDeviceId < 0 || hipDeviceId >= (int)detail::gGpuAgentsByHipDevice.size())
                 throw std::runtime_error("sdmaNodeIdForDevice: HIP device "
                                          + std::to_string(hipDeviceId) + " out of range ("
-                                         + std::to_string(detail::gGpuAgents.size())
+                                         + std::to_string(detail::gGpuAgentsByHipDevice.size())
                                          + " GPU agents)");
             uint32_t node = 0;
-            CHK_HSA(
-                hsa_agent_get_info(detail::gGpuAgents[hipDeviceId], HSA_AGENT_INFO_NODE, &node));
+            CHK_HSA(hsa_agent_get_info(
+                detail::gGpuAgentsByHipDevice[hipDeviceId], HSA_AGENT_INFO_NODE, &node));
             return node;
         }
 

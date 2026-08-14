@@ -2749,7 +2749,7 @@ class GlobalWriteBatchWriter:
     pkt       = SdmaPacketEmitter(macroTile1=self.kernel["MacroTile1"])
     ring      = SdmaRingEmitter()
     # sizeof(SdmaQueueDeviceHandle) == 7 * 8 (locked by static_asserts in
-    # client/src/SdmaQueue.hpp; SdmaRingEmitter's OFF_* mirror the same layout).
+    # client/include/SdmaQueue.hpp; SdmaRingEmitter's OFF_* mirror the same layout).
     handleBytes = 7 * 8
     totalDwords = COPY_PACKET_DWORDS + ATOMIC_PACKET_DWORDS
 

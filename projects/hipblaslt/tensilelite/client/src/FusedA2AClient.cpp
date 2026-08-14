@@ -516,7 +516,6 @@ namespace TensileLite
                                    sdmaHandles[d],
                                    (uint32_t)d, // my_rank
                                    (uint32_t)W,
-                                   nShard,
                                    (uint32_t)drain,
                                    // kernarg "FusedAM" (Signature.py); pass AM as
                                    // the value to keep the client/kernel ABI matched.

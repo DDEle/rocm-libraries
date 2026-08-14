@@ -45,8 +45,8 @@ namespace TensileLite
 
         // Expected byte growth of args after appending the fused segment:
         //   (MAX_RANKS peer + 1 counter + 1 FusedSdmaQueues) pointers * 8B
-        //   + 5 scalars * 4B = 100B.
-        constexpr size_t FUSED_A2A_SEGMENT_BYTES = (FUSED_A2A_MAX_RANKS + 2) * 8 + 5 * 4;
+        //   + 4 scalars * 4B = 96B.
+        constexpr size_t FUSED_A2A_SEGMENT_BYTES = (FUSED_A2A_MAX_RANKS + 2) * 8 + 4 * 4;
 
         // Whether worldSize fits the fixed segment above: ranks >=
         // FUSED_A2A_MAX_RANKS have no peer_ptr slot, and worldSize <= 0 would
@@ -68,7 +68,6 @@ namespace TensileLite
             void*                     sdmaQueues, // W-element SdmaQueueDeviceHandle array
             uint32_t                  myRank,
             uint32_t                  worldSize,
-            uint32_t                  nShard,
             uint32_t                  drain,
             uint32_t                  am)
         {
@@ -86,7 +85,6 @@ namespace TensileLite
             args.append<void*>("FusedSdmaQueues", sdmaQueues);
             args.append<uint32_t>("FusedMyRank", myRank);
             args.append<uint32_t>("FusedW", worldSize);
-            args.append<uint32_t>("FusedNShard", nShard);
             args.append<uint32_t>("FusedDrain", drain);
             args.append<uint32_t>("FusedAM", am);
 

@@ -3438,10 +3438,11 @@ class KernelWriterAssembly(KernelWriter):
     # the only order that does not require an argument.
     if kernel["FusedGemmA2A"]:
       from .Components.GlobalWriteBatch import emitFusedA2ATotalWGsLatch, \
-        emitFusedA2ACounter3PtrLatch
+        emitFusedA2ACounter3PtrLatch, emitFusedA2ANShardLatch
       module.add(FusedA2AWgRemap(self, kernel))
       emitFusedA2ATotalWGsLatch(module, "FusedTotalWGs")
       emitFusedA2ACounter3PtrLatch(module, self, "FusedCounter3Ptr")
+      emitFusedA2ANShardLatch(module, self, "FusedNShard")
 
     return module
 

@@ -235,6 +235,19 @@ namespace TensileLite
                       << " boundStride=" << bBoundStride << ") D(mStride=" << dMStride
                       << " nStride=" << dNStride << ")\n";
 
+            // rect_x above is n_shard CONTIGUOUS bf16 features per token row, so the
+            // feature axis has to be unit-stride for the copy to mean anything.
+            if(dMStride != 1)
+            {
+                std::cerr << "[fused-a2a] ERROR: D's feature axis is not contiguous.\n"
+                          << "  D mStride=" << dMStride << " must be 1.\n"
+                          << "  Refusing to launch (the packet copies rect_x=" << maxRectX
+                          << " 16-byte elements as one contiguous run, so a strided "
+                             "feature axis would ship unrelated data to every peer)."
+                          << std::endl;
+                return -1;
+            }
+
             // dNStride is the packet's src_pitch (StrideD1J), a 19-bit field, and is
             // only knowable once the descriptors are read. dst_pitch is n_shard,
             // already bounded by the rect_x check above.
@@ -670,75 +683,39 @@ namespace TensileLite
                             recvPass = false;
                     }
 
-                    // Local: card d's local tail out[m in [AM,M)] against its OWN golden.
-                    // Two independent reads, both must pass: (a) via the descriptor
-                    // strides the kernel was told to write with, and (b) via a
-                    // hardcoded col-major off=n*M+m. (a) alone cannot tell the intended
-                    // layout from any other the descriptor also describes.
-                    const bool descColMajor = (dMStride == 1 && dNStride == M);
-                    if(verbose)
-                        std::cout << "[fused-a2a] D descriptor layout: dMStride=" << dMStride
-                                  << " dNStride=" << dNStride << " -> "
-                                  << (descColMajor ? "COL-MAJOR [M,N] (M/feature contiguous)"
-                                                   : "NOT col-major (row-major or padded)")
-                                  << "  (raw-bytes check uses hardcoded off=n*M+m"
-                                     " regardless)\n";
+                    // Local: card d's local tail out[m in [AM,M)] against its OWN
+                    // golden, read through the descriptor strides the kernel was told
+                    // to write with. The layout itself is pinned by the dMStride and
+                    // dNStride guards at launch, not re-derived here.
                     for(int d = 0; d < W && localPass; d++)
                     {
                         HIP_CHECK_EXC(hipSetDevice(d));
                         HIP_CHECK_EXC(
                             hipMemcpy(hOut.data(), outD[d], dBytes, hipMemcpyDeviceToHost));
-                        size_t mismDesc = 0; // (a) descriptor-driven
-                        size_t mismRaw  = 0; // (b) raw-bytes col-major (off=n*M+m)
+                        size_t mism = 0;
                         for(size_t m = AM; m < M; m++) // feature-local tail beyond A2A slice
                         {
                             for(size_t n = 0; n < N; n++) // all tokens
                             {
-                                float want = (float)Dgold[(size_t)d * goldStride + m * N + n];
-
-                                // (a) descriptor-driven read.
+                                float    want = (float)Dgold[(size_t)d * goldStride + m * N + n];
+                                BFloat16 g;
+                                g.data    = hOut[m * dMStride + n * dNStride];
+                                float got = (float)g;
+                                if(!closeBf16(got, want))
                                 {
-                                    size_t   off = m * dMStride + n * dNStride;
-                                    BFloat16 g;
-                                    g.data    = hOut[off];
-                                    float got = (float)g;
-                                    if(!closeBf16(got, want))
-                                    {
-                                        if(mismDesc < 5)
-                                            std::cerr
-                                                << "[fused-a2a] LOCAL(desc) MISMATCH iter=" << it
-                                                << " card=" << d << " m=" << m << " n=" << n
-                                                << " got=" << got << " want=" << want << "\n";
-                                        mismDesc++;
-                                    }
-                                }
-
-                                // (b) raw-bytes col-major read.
-                                {
-                                    size_t   off = n * M + m;
-                                    BFloat16 g;
-                                    g.data    = hOut[off];
-                                    float got = (float)g;
-                                    if(!closeBf16(got, want))
-                                    {
-                                        if(mismRaw < 5)
-                                            std::cerr << "[fused-a2a] LOCAL(raw col-major n*M+m) "
-                                                         "MISMATCH iter="
-                                                      << it << " card=" << d << " m=" << m
-                                                      << " n=" << n << " got=" << got
-                                                      << " want=" << want << "\n";
-                                        mismRaw++;
-                                    }
+                                    if(mism < 5)
+                                        std::cerr << "[fused-a2a] LOCAL MISMATCH iter=" << it
+                                                  << " card=" << d << " m=" << m << " n=" << n
+                                                  << " got=" << got << " want=" << want << "\n";
+                                    mism++;
                                 }
                             }
                         }
-                        if(verbose || mismDesc || mismRaw)
-                            std::cout << "[fused-a2a] LOCAL card " << d
-                                      << ": desc=" << (mismDesc == 0 ? "PASS" : "FAIL") << "("
-                                      << mismDesc
-                                      << ") rawColMajor=" << (mismRaw == 0 ? "PASS" : "FAIL") << "("
-                                      << mismRaw << ")\n";
-                        if(mismDesc || mismRaw)
+                        if(verbose || mism)
+                            std::cout << "[fused-a2a] LOCAL card " << d << ": "
+                                      << (mism == 0 ? "PASS" : "FAIL") << " (mismatches=" << mism
+                                      << ")\n";
+                        if(mism)
                             localPass = false;
                     }
                 }

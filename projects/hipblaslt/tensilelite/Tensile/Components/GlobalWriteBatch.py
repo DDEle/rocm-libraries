@@ -2728,8 +2728,8 @@ class GlobalWriteBatchWriter:
     The four packet coordinates are FOLDED into the 64-bit base addresses by
     emitComputeCopyFields and emitted as literal 0, which leaves N unconstrained.
     What still has to fit -- rect_x, rect_y, src_pitch -- is packed unmasked, so
-    an over-range value corrupts a neighbouring field; see
-    SdmaPacketEmitter.checkA2AFieldsFit for the bounds.
+    an over-range value corrupts a neighbouring field. The bounds are enforced
+    at launch time by client/src/FusedA2AClient.cpp::runFusedA2A.
 
     Args:
       dstRankSgpr:  1 SGPR, the peer rank p (== this WG's dst_rank).

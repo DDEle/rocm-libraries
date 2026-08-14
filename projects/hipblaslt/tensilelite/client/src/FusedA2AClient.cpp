@@ -158,9 +158,9 @@ namespace TensileLite
             }
 
             // SDMA COPY_SUBWIN rect_x/rect_y are 14-bit; rect_x = n_shard scaled into
-            // 16-byte packet elements, rect_y <= MT1. Mirrors
-            // SdmaPacketEmitter.py:checkA2AFieldsFit. `>=` is one tighter than the
-            // hardware because the extents are minus-one encoded.
+            // 16-byte packet elements, rect_y <= MT1. These are the only guard
+            // for the fields SdmaPacketEmitter.py packs unmasked. `>=` is one
+            // tighter than the hardware: the extents are minus-one encoded.
             const size_t elemShift    = 3; // log2(16B packet elem / 2B bf16)
             const size_t elemMultiple = (size_t)1 << elemShift;
             if(nShard % elemMultiple != 0)

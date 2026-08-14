@@ -9,22 +9,26 @@
 # dword arrays, laid out in VGPRs; SdmaRingEmitter.emitPlacePacket then writes
 # those dwords into the ring.
 #
-# The C++ structs / byte layout / minus-one + element-scaling conventions are
-# the SAME ones frozen in client/src/SdmaPktSubwin.hpp and its golden-vector
-# gtest (SdmaPktSubwin_test.cpp), validated byte-for-byte on MI355X.
+# The live caller is GlobalWriteBatch._emitFusedA2ASdmaIssue, via
+# emitBuildCopyPacket / emitBuildAtomicPacket.
 #
-# TWO surfaces, cross-checked against each other and against the golden vectors:
-#   * encodeCopyDwords / encodeAtomicDwords -- pure-Python integer encoders that
-#     reproduce the exact 13/8 dword vectors; the source of truth for what the
-#     assembly must build.
-#   * emitBuildCopyPacket / emitBuildAtomicPacket -- rocisa emitters that build
-#     the same dwords at runtime in VGPRs from the runtime inputs (p, j, myRank,
-#     M, N, nShard), mirroring the pure-Python encoders field for field.
+# PROVENANCE of the dword layout. Bit positions are transcribed from AMD OSS 4.4
+# sdma.pkt field positions, cross-checked against ROCR's sdma_registers.h and
+# the kernel's vega10_sdma_pkt_open.h -- all three agree. The layout was then
+# validated byte-for-byte on MI355X (24 packets, every dword bit-accurate) and
+# end-to-end at MED/W=4 (recv byte-exact).
 #
-# The live caller is GlobalWriteBatch._emitFusedA2ASdmaIssue.
+# Two conventions the route depends on, neither derivable from the field names:
+# every extent and pitch is stored MINUS ONE (the hardware adds it back), and
+# coords/extents/pitches are in ELEMENTS of the size named in the header, not in
+# bytes. Do not "clean up" the reserved gaps or the <<13 pitch placement -- they
+# look arbitrary because they are hardware-mandated. GFX12+ uses a DIFFERENT
+# layout of the same size: this encoding is gfx9xx / gfx95x ONLY.
 #
-# Packet geometry, per (peer p, token-tile j), with this card == myRank:
-#   COPY_SUBWIN (bf16 elements, elementsize header = log2(2) = 1):
+# Packet geometry, per (peer p, token-tile j), with this card == myRank. The
+# geometry below is in bf16 elements; the packet's own addressing granularity is
+# PACKET_ELEMENT_SIZE_LOG2 (see the two-element-sizes note further down):
+#   COPY_SUBWIN:
 #     src  = D + (j*MT1)*ldd + p*nShard
 #     dst  = peer_ptr[p] + recvOffset + (myRank*N + j*MT1)*nShard
 #     src pitch = ldd  ;  dst pitch = nShard
@@ -33,8 +37,10 @@
 #
 # COORDINATES ARE FOLDED INTO THE BASE ADDRESSES: src_x/src_y/dst_x/dst_y are
 # emitted as a literal 0 and the offset added into the 64-bit base instead
-# (addr(x, y) = base + y*pitch*elem + x*elem). checkA2AFieldsFit states what
-# remains field-encoded and its bounds.
+# (addr(x, y) = base + y*pitch*elem + x*elem). What stays field-encoded is the
+# pitches, the slice pitches and the rect extents; the emitter packs them
+# unmasked, and their bounds are enforced at launch time by the guards in
+# client/src/FusedA2AClient.cpp::runFusedA2A.
 ################################################################################
 
 from rocisa.container import vgpr, sgpr
@@ -46,12 +52,12 @@ from rocisa.instruction import (
 )
 
 
-# ---- COPY_SUBWIN header op/sub_op (mirror SdmaPktSubwin.hpp) ----------------
+# ---- COPY_SUBWIN header op/sub_op -------------------------------------------
 SDMA_OP_COPY_SUBWIN         = 1
 SDMA_SUBOP_COPY_LINEAR_RECT = 4
 COPY_PACKET_DWORDS          = 13
 
-# ---- ATOMIC header op/operation (mirror SdmaPktSubwin.hpp) ------------------
+# ---- ATOMIC header op/operation ---------------------------------------------
 # operation is a 7-bit index into the TC atomic op table (ADD_RTN_32 = 15,
 # ADD_RTN_64 = 47); RTN means the op returns the pre-op value, which SDMA drops.
 SDMA_OP_ATOMIC         = 10
@@ -76,152 +82,28 @@ PACKET_ELEMENT_SIZE_LOG2 = 4
 
 # How far to shift a bf16-element count down into packet-element units. Derived,
 # never hardcoded: if either constant moves, every scaled field follows.
-ELEMENT_SHIFT      = PACKET_ELEMENT_SIZE_LOG2 - D_DATA_ELEMENT_LOG2   # 3
-ELEMENT_MULTIPLE   = 1 << ELEMENT_SHIFT                               # 8
+ELEMENT_SHIFT = PACKET_ELEMENT_SIZE_LOG2 - D_DATA_ELEMENT_LOG2   # 3
 
-# Back-compat alias: the pure-Python encoder's default and the hardware-backed
-# golden vectors are bf16-granular, and stay that way (see encodeCopyDwords).
-BF16_ELEMENT_SIZE_LOG2 = D_DATA_ELEMENT_LOG2
-
-# Field widths (bits) shared by src/dst coordinate + rect dwords. These match
-# the bit-fields declared in client/src/SdmaPktSubwin.hpp; kept here so the
-# pure-Python encoder and the rocisa masks share one definition.
-_XY_BITS    = 14   # src_x/src_y, dst_x/dst_y, rect_x/rect_y
-_Z_BITS     = 11   # src_z/dst_z/rect_z
-_PITCH_BITS = 19   # src_pitch/dst_pitch (start at bit 13, after z)
-_SLICE_BITS = 28   # src/dst slice pitch
+# Field widths (bits) of the dwords the _pack* helpers build. Stated here for
+# the reader only -- the helpers do NOT mask, so these are the bounds the
+# launch-time guards in FusedA2AClient.cpp must keep the geometry inside:
+#   rect_x / rect_y      14 bits, at [13:0] and [29:16]
+#   src_pitch/dst_pitch  19 bits, at [31:13] (above the 11-bit z field)
+#   src/dst slice pitch  28 bits, at [27:0]
 
 
-def _mask(bits):
-    return (1 << bits) - 1
-
-
-XY_FIELD_LIMIT    = 1 << _XY_BITS      # 16384; rect_x/rect_y (x/y are folded to 0)
-PITCH_FIELD_LIMIT = 1 << _PITCH_BITS   # 524288; src_pitch/dst_pitch
-
-
-def checkA2AFieldsFit(numRanks, nShard, macroTile1, srcPitch):
-    """Raise ValueError if a fused-A2A geometry cannot be encoded safely.
-
-    Python mirror of the field-fit guards in
-    client/src/FusedA2AClient.cpp::runFusedA2A. Not called from codegen (W,
-    nShard and ldd are runtime kernargs, unknown at codegen time); used only by
-    this module's unit tests. THE TWO CAN DRIFT SILENTLY -- nothing links them,
-    so keep them in sync by hand.
-
-    The coordinates are folded into the base addresses (see
-    emitComputeCopyFields), so N is unconstrained and only rect_x, rect_y,
-    src_pitch, dst_pitch and the ELEMENT_SHIFT divisibility are checked. Each
-    raise() below states its own bound.
-    """
-    from .Signature import FUSED_A2A_MAX_RANKS
-    if numRanks < 1 or numRanks > FUSED_A2A_MAX_RANKS:
-        raise ValueError(
-            "fused-A2A world size W=%d is out of range: the kernarg segment "
-            "reserves exactly FUSED_A2A_MAX_RANKS=%d peer_ptr slots, so "
-            "ranks >= %d have no pointer and a PUSH to them reads garbage."
-            % (numRanks, FUSED_A2A_MAX_RANKS, FUSED_A2A_MAX_RANKS))
-    if ELEMENT_SHIFT and (nShard % ELEMENT_MULTIPLE or srcPitch % ELEMENT_MULTIPLE):
-        raise ValueError(
-            "fused-A2A geometry is not addressable at the packet's %d-byte "
-            "element: nShard=%d and ldd=%d must both be multiples of %d. The "
-            "emitter scales them by >>%d, which would TRUNCATE a non-multiple "
-            "and silently copy a short band."
-            % (1 << PACKET_ELEMENT_SIZE_LOG2, nShard, srcPitch,
-               ELEMENT_MULTIPLE, ELEMENT_SHIFT))
-    # `>=` deliberately: the rect extents are minus-one encoded so a field value
-    # of exactly 16384 would in fact encode, but one lost value is worth keeping
-    # the terms uniform and identical to the C++ guard.
-    rectXField = nShard >> ELEMENT_SHIFT
-    if max(rectXField, macroTile1) >= XY_FIELD_LIMIT:
-        raise ValueError(
-            "fused-A2A geometry overflows the SDMA packet's %d-bit rect fields: "
-            "W=%d nShard=%d MT1=%d -> rect_x=nShard>>%d=%d, max rect_y=%d; both "
-            "must be < %d. The emitter packs these unmasked, so the copy would "
-            "silently move the wrong band. rect_x is the X extent (AM/W) -- it "
-            "cannot be folded into the base address the way the coordinates "
-            "were; reduce AM or raise W (the bound is AM < %d*W)."
-            % (_XY_BITS, numRanks, nShard, macroTile1, ELEMENT_SHIFT,
-               rectXField, macroTile1, XY_FIELD_LIMIT,
-               XY_FIELD_LIMIT << ELEMENT_SHIFT))
-    pitchField = srcPitch >> ELEMENT_SHIFT
-    if pitchField >= PITCH_FIELD_LIMIT:
-        raise ValueError(
-            "fused-A2A src_pitch overflows the SDMA packet's %d-bit pitch "
-            "field: ldd=%d -> ldd>>%d=%d must be < %d (i.e. ldd < %d). "
-            "_packPitchMinus1 shifts it left by 13 unmasked, so an over-range "
-            "pitch ORs into the neighbouring field."
-            % (_PITCH_BITS, srcPitch, ELEMENT_SHIFT, pitchField,
-               PITCH_FIELD_LIMIT, PITCH_FIELD_LIMIT << ELEMENT_SHIFT))
-
-
-# ---------------------------------------------------------------------------
-# Pure-Python encoders (golden-vector source of truth; no rocisa).
-# ---------------------------------------------------------------------------
-
-def encodeCopyDwords(srcBase, srcX, srcY, srcPitch, srcSlicePitch,
-                     dstBase, dstX, dstY, dstPitch, dstSlicePitch,
-                     rectX, rectY, elementSizeLog2=BF16_ELEMENT_SIZE_LOG2):
-    """Return the 13 dwords of a COPY_LINEAR_SUBWIN packet, encoding the two
-    conventions the whole route depends on: every extent/pitch is stored MINUS
-    ONE, and all coords/extents/pitches are in ELEMENTS (element size carried in
-    the header). This is the reference the rocisa emitter must reproduce, pinned
-    by test_sdma_packet_emitter.py to golden dwords with MI355X backing.
-
-    Bit positions are transcribed from AMD OSS 4.4 sdma.pkt field positions,
-    cross-checked against ROCR's sdma_registers.h and the kernel's
-    vega10_sdma_pkt_open.h -- all three agree. The layout was then validated
-    byte-for-byte on MI355X (24 packets, every dword bit-accurate).
-
-    GFX12+ uses a DIFFERENT layout of the same size: this encoder is gfx9xx /
-    gfx95x ONLY. Do not reorder fields or "clean up" the reserved gaps -- the
-    minus-one convention and the <<13 pitch placement look arbitrary because
-    they are hardware-mandated, not derivable."""
-    dw = [0] * COPY_PACKET_DWORDS
-    dw[0] = ((SDMA_OP_COPY_SUBWIN & 0xFF)
-             | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8)
-             | ((elementSizeLog2 & 0x7) << 29))
-    dw[1] = srcBase & 0xFFFFFFFF
-    dw[2] = (srcBase >> 32) & 0xFFFFFFFF
-    dw[3] = (srcX & _mask(_XY_BITS)) | ((srcY & _mask(_XY_BITS)) << 16)
-    dw[4] = (0 & _mask(_Z_BITS)) | (((srcPitch - 1) & _mask(_PITCH_BITS)) << 13)
-    dw[5] = (srcSlicePitch - 1) & _mask(_SLICE_BITS)
-    dw[6] = dstBase & 0xFFFFFFFF
-    dw[7] = (dstBase >> 32) & 0xFFFFFFFF
-    dw[8] = (dstX & _mask(_XY_BITS)) | ((dstY & _mask(_XY_BITS)) << 16)
-    dw[9] = (0 & _mask(_Z_BITS)) | (((dstPitch - 1) & _mask(_PITCH_BITS)) << 13)
-    dw[10] = (dstSlicePitch - 1) & _mask(_SLICE_BITS)
-    dw[11] = ((rectX - 1) & _mask(_XY_BITS)) | (((rectY - 1) & _mask(_XY_BITS)) << 16)
-    dw[12] = 0  # rect_z=0 (one plane) + default swizzle/cache policy
-    return dw
-
-
-def encodeAtomicDwords(dstAddr, addend=1):
-    """Return the 8 dwords of an ADD_RTN_32 fetch-add ATOMIC packet: op=ATOMIC,
-    operation=ADD_RTN_32, ADDR=dstAddr, SRC_DATA=addend; compare + loop dwords
-    stay zero. Mirrors makeAtomicAdd32Packet in SdmaPktSubwin.hpp."""
-    dw = [0] * ATOMIC_PACKET_DWORDS
-    dw[0] = ((SDMA_OP_ATOMIC & 0xFF)
-             | ((SDMA_ATOMIC_ADD_RTN_32 & 0x7F) << 25))  # l bit (16) stays 0 (fetch-add)
-    dw[1] = dstAddr & 0xFFFFFFFF
-    dw[2] = (dstAddr >> 32) & 0xFFFFFFFF
-    dw[3] = addend & 0xFFFFFFFF
-    # dw[4] = 0 (src_data hi, 64-bit ops only).
-    # dw[5..7] = 0 (cmp_data lo/hi, loop_interval): unused for a plain fetch-add.
-    return dw
-
-
-# Compile-time header dwords (op/sub_op/elementsize are all immediates), shared
-# by the pure-Python encoder and the rocisa emitter so the two cannot drift.
+# Compile-time header dwords: op/sub_op/elementsize are all immediates, so DW0
+# of each packet is folded here rather than built at runtime.
 COPY_HEADER_DW0 = ((SDMA_OP_COPY_SUBWIN & 0xFF)
                    | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8)
                    | ((PACKET_ELEMENT_SIZE_LOG2 & 0x7) << 29))
+# The l bit (16) is left 0, which selects a plain fetch-add.
 ATOMIC_HEADER_DW0 = ((SDMA_OP_ATOMIC & 0xFF) | ((SDMA_ATOMIC_ADD_RTN_32 & 0x7F) << 25))
 
 
 class SdmaPacketEmitter:
     """Builds the COPY_SUBWIN + ATOMIC packet dword arrays in VGPRs from runtime
-    inputs, matching client/src/SdmaPktSubwin.hpp field for field.
+    inputs, in the layout documented at the top of this file.
 
     Stateless like SdmaRingEmitter: every method takes the registers it uses
     (caller owns the pools) plus a `w` context exposing `.sgprPool`/`.vgprPool`.
@@ -250,8 +132,8 @@ class SdmaPacketEmitter:
         addresses, which are byte offsets.
 
         Callers skip this helper entirely when the shift is 0. Divisibility is a
-        launch-time precondition (FusedA2AClient.cpp, mirrored by
-        checkA2AFieldsFit); a non-multiple would truncate here."""
+        launch-time precondition (FusedA2AClient.cpp); a non-multiple would
+        truncate here."""
         module.add(SLShiftRightB32(dst=sgpr(dstS), src=sgpr(srcS),
                                    shiftHex=ELEMENT_SHIFT,
                                    comment=comment + " (bf16 elems -> packet elems)"))
@@ -264,8 +146,7 @@ class SdmaPacketEmitter:
         packet elements first.
 
         NOT masked to 19 bits: an over-range pitch ORs into the neighbouring
-        field. The bound is a launch-time precondition (FusedA2AClient.cpp,
-        mirrored by checkA2AFieldsFit)."""
+        field. The bound is a launch-time precondition (FusedA2AClient.cpp)."""
         if ELEMENT_SHIFT:
             self._toPacketElements(module, tmpS, pitchS, comment)
             src = tmpS
@@ -299,7 +180,7 @@ class SdmaPacketEmitter:
         """dword = (rectX - 1) | ((rectY - 1) << 16) -- two 14-bit extents at
         [13:0] and [29:16], NEITHER masked: an over-range rect_x ORs straight
         into rect_y. Both bounds are launch-time preconditions
-        (FusedA2AClient.cpp, mirrored by checkA2AFieldsFit).
+        (FusedA2AClient.cpp).
 
         BOTH extents are runtime SGPRs: rectY cannot be the compile-time MT1
         because the last token-tile is partial when N % MT1 != 0, and an
@@ -349,7 +230,7 @@ class SdmaPacketEmitter:
         field packing. They are still written (the ring copies a fixed 13-dword
         block, and a stale VGPR would be read as a coordinate).
 
-        Field -> dword map (mirrors encodeCopyDwords / SdmaPktSubwin.hpp):
+        Field -> dword map:
           DW0 header (immediate), DW1/2 srcBase, DW3 0, DW4 srcPitch-1,
           DW5 srcSlice-1, DW6/7 dstBase, DW8 0, DW9 dstPitch-1,
           DW10 dstSlice-1, DW11 (rectX-1|rectY-1), DW12 0.
@@ -378,9 +259,8 @@ class SdmaPacketEmitter:
         """Build the 8 ATOMIC ADD_RTN_32 dwords into pktV[0:8]: raise peer_ptr[p]
         [myRank] by `addend` (== 1). dstAddrS is a 2-SGPR pointer to the flag
         slot (caller computes peer_ptr[p] + myRank*4 -- see emitComputeFlagAddr;
-        the stride is 4 because this ADD_RTN_32 writes 4 bytes). Mirrors
-        encodeAtomicDwords / makeAtomicAdd32Packet. addend is a compile-time
-        immediate (1)."""
+        the stride is 4 because this ADD_RTN_32 writes 4 bytes). addend is a
+        compile-time immediate (1)."""
         self._movImm(module, pktV + 0, ATOMIC_HEADER_DW0,
                      "ATOMIC DW0: op=ATOMIC operation=ADD_RTN_32")
         self._movSgpr(module, pktV + 1, dstAddrS + 0, "ATOMIC DW1: addr lo")

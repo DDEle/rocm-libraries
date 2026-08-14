@@ -83,8 +83,6 @@ def fusedA2AKernArgLayout():
       FusedNShard      : 4B (u32)
       FusedDrain       : 4B (u32)  runtime drain flag (NOT a compile-time gate)
       FusedAM          : 4B (u32)  A2A feature-row count (first AM rows PUSH, rest local)
-      FusedTilesPerRank: 4B (u32)  feature-tiles per rank shard (nShard/MT0), == the
-                                   SDMA counter target
       FusedTokenTiles  : 4B (u32)  token-tiles across N (N/MT1), == the SDMA flag target
     """
     layout = {}
@@ -96,13 +94,13 @@ def fusedA2AKernArgLayout():
         layout[name] = off
         off += 8
     for name in ("FusedMyRank", "FusedW", "FusedNShard", "FusedDrain", "FusedAM",
-                 "FusedTilesPerRank", "FusedTokenTiles"):
+                 "FusedTokenTiles"):
         layout[name] = off
         off += 4
     return layout
 
-# (MAX_RANKS peer_ptr + counter_ptr + FusedSdmaQueues) * 8B + 7 scalars * 4B.
-FUSED_A2A_SEGMENT_BYTES = (FUSED_A2A_MAX_RANKS + 2) * 8 + 7 * 4
+# (MAX_RANKS peer_ptr + counter_ptr + FusedSdmaQueues) * 8B + 6 scalars * 4B.
+FUSED_A2A_SEGMENT_BYTES = (FUSED_A2A_MAX_RANKS + 2) * 8 + 6 * 4
 
 def _currentKernArgOffset(signature) -> int:
     """Byte offset the NEXT addArg() would receive (== accumulated kernarg size).
@@ -453,7 +451,6 @@ class SignatureDefault(Signature):
             signature.addArg("FusedNShard",       SVK.SIG_VALUE, "u32")
             signature.addArg("FusedDrain",        SVK.SIG_VALUE, "u32")
             signature.addArg("FusedAM",           SVK.SIG_VALUE, "u32")
-            signature.addArg("FusedTilesPerRank", SVK.SIG_VALUE, "u32")
             signature.addArg("FusedTokenTiles",   SVK.SIG_VALUE, "u32")
             # Publish the segment base. The prologue has already advanced
             # sgprKernArgAddress past the common-args header by commonArgsSize

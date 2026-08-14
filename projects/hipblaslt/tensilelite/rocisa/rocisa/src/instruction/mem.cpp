@@ -1324,7 +1324,7 @@ void mem_inst(nb::module_ m_mem)
             return new rocisa::FlatAtomicDecU32(self);
         });
 
-    nb::class_<rocisa::GlobalAtomicAddU32, rocisa::GlobalWriteInstruction>(m_mem,
+    nb::class_<rocisa::GlobalAtomicAddU32, rocisa::GLOBALStoreInstruction>(m_mem,
                                                                            "GlobalAtomicAddU32")
         .def(nb::init<const std::shared_ptr<rocisa::RegisterContainer>&,
                       const std::shared_ptr<rocisa::RegisterContainer>&,
@@ -1343,7 +1343,7 @@ void mem_inst(nb::module_ m_mem)
             return new rocisa::GlobalAtomicAddU32(self);
         });
 
-    nb::class_<rocisa::GlobalAtomicCmpswapB64, rocisa::GlobalWriteInstruction>(
+    nb::class_<rocisa::GlobalAtomicCmpswapB64, rocisa::GLOBALStoreInstruction>(
         m_mem, "GlobalAtomicCmpswapB64")
         .def(nb::init<const std::shared_ptr<rocisa::RegisterContainer>&,
                       const std::shared_ptr<rocisa::RegisterContainer>&,

@@ -520,10 +520,16 @@ class SdmaRingEmitter:
         w.sgprPool.checkIn(commPtrS)
         return module
 
-    # ---- utility: 64-bit sub + readfirstlane (no direct rocisa 64-bit sub) --
+    # ---- utility: 64-bit sub + readfirstlane --------------------------------
 
     def _emitU64Sub(self, module, dstPairS, aPairS, bPairS, comment):
-        """dst = a - b (64-bit) via s_sub_u32 / s_subb_u32."""
+        """dst = a - b (64-bit) via s_sub_u32 / s_subb_u32.
+
+        Not rocisa's SSubU64: that is a plain CommonInstruction with no
+        capability fallback, so it emits s_sub_u64 unconditionally and gfx950
+        rejects the mnemonic. SAddU64 is NOT the same shape -- it is a
+        CompositeInstruction and does lower to s_add_u32/s_addc_u32 here, which
+        is why the sibling addition elsewhere can use it and this cannot."""
         module.add(SSubU32(dst=sgpr(dstPairS + 0), src0=sgpr(aPairS + 0), src1=sgpr(bPairS + 0),
                            comment=comment + " (lo)"))
         module.add(SSubBU32(dst=sgpr(dstPairS + 1), src0=sgpr(aPairS + 1), src1=sgpr(bPairS + 1),

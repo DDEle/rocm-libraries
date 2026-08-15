@@ -514,6 +514,80 @@ namespace rocisa
         }
     };
 
+    // Scalar compare-and-swap. `dst` is ONE register group that is both the
+    // data source and the return: DATA[63:0] is the swap value, DATA[127:64]
+    // the compare value, and the pre-op memory value is written back over
+    // DATA[63:0] (CDNA4 ISA, S_ATOMIC_CMPSWAP_X2). It is therefore listed as
+    // both a dst and a src param, unlike the inc/dec forms whose dst is purely
+    // a return.
+    //
+    // GLC means something different here than on a scalar store: on a store it
+    // forces the write past the K$ and L2, on an atomic it selects return of
+    // the pre-op value (ISA 8.2.2). An atomic has no bit left with which to ask
+    // for a coherence scope, so whether it serializes against other
+    // workgroups is not answerable from the encoding -- measured separately on
+    // gfx950 before this was used.
+    struct SMemAtomicCmpswapInstruction : public AtomicReadWriteInstruction
+    {
+        std::shared_ptr<Container>   base;
+        InstructionInput             soffset;
+        std::optional<SMEMModifiers> smem;
+
+        SMemAtomicCmpswapInstruction(InstType                          instType,
+                                     const std::shared_ptr<Container>& dst,
+                                     const std::shared_ptr<Container>& base,
+                                     const InstructionInput&           soffset,
+                                     std::optional<SMEMModifiers>      smem    = std::nullopt,
+                                     const std::string&                comment = "")
+            : AtomicReadWriteInstruction(instType, dst, nullptr, comment)
+            , base(base)
+            , soffset(soffset)
+            , smem(smem)
+        {
+            instStr = "s_atomic_cmpswap";
+        }
+
+        SMemAtomicCmpswapInstruction(const SMemAtomicCmpswapInstruction& other)
+            : AtomicReadWriteInstruction(other)
+            , base(other.base ? other.base->clone() : nullptr)
+            , soffset(copyInstructionInput(other.soffset))
+            , smem(other.smem)
+        {
+        }
+
+        std::vector<InstructionInput> getParams() const override
+        {
+            return {dst, base, soffset};
+        }
+
+        std::vector<InstructionInput> getDstParams() const override
+        {
+            return {dst};
+        }
+
+        std::vector<InstructionInput> getSrcParams() const override
+        {
+            return {dst, base, soffset};
+        }
+
+        std::string getArgStr() const
+        {
+            return dst->toString() + ", " + base->toString() + ", "
+                   + InstructionInputToString(soffset);
+        }
+
+        std::string toString() const override
+        {
+            auto        newInstStr = preStr();
+            std::string kStr       = newInstStr + " " + getArgStr();
+            if(smem)
+            {
+                kStr += smem->toString();
+            }
+            return formatWithComment(kStr);
+        }
+    };
+
     struct SMemLoadInstruction : public GlobalReadInstruction
     {
         std::shared_ptr<Container>   base;
@@ -3714,6 +3788,33 @@ namespace rocisa
         std::shared_ptr<Item> clone() const override
         {
             return std::make_shared<SAtomicInc>(*this);
+        }
+    };
+
+    // 64-bit scalar CAS. SDATA is FOUR dwords and must be 4-aligned (ISA 8.4,
+    // "a multiple of four for larger fetches"); the assembler rejects an
+    // unaligned group outright. The mnemonic carries its own _x2 -- preStr()
+    // emits instStr verbatim, so instType only feeds register-width accounting.
+    struct SAtomicCmpswapX2 : public SMemAtomicCmpswapInstruction
+    {
+        SAtomicCmpswapX2(const std::shared_ptr<Container>& dst,
+                         const std::shared_ptr<Container>& base,
+                         const InstructionInput&           soffset,
+                         std::optional<SMEMModifiers>      smem    = std::nullopt,
+                         const std::string&                comment = "")
+            : SMemAtomicCmpswapInstruction(InstType::INST_B128, dst, base, soffset, smem, comment)
+        {
+            instStr = "s_atomic_cmpswap_x2";
+        }
+
+        SAtomicCmpswapX2(const SAtomicCmpswapX2& other)
+            : SMemAtomicCmpswapInstruction(other)
+        {
+        }
+
+        std::shared_ptr<Item> clone() const override
+        {
+            return std::make_shared<SAtomicCmpswapX2>(*this);
         }
     };
 

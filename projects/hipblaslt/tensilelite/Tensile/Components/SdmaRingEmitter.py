@@ -16,15 +16,38 @@
 # (intra-segment offset 160). The 7x8-byte field layout below is the byte
 # contract locked by the static_asserts in that header; do not reorder.
 #
-# gfx950 (CDNA4) scope -> instruction-bit mapping (SC[1:0]+NT, NOT gfx1250
-# scope:/th:), encoded through GLOBALModifiers(glc, slc):
-#   AGENT  (ring/wptr/cachedWptr/committedWptr): glc=False slc=True  -> "sc1"
-#   SYSTEM (doorbell store, rptr load)         : glc=True  slc=True  -> "sc0 sc1"
-#   CAS    (cachedWptr reserve, device+return) : glc=True  slc=False -> "sc0"
-# sc1 also bypasses L2, which gfx950 needs because its L2 is XCD-local only.
+# EVERY STORE ON THIS PATH IS SCALAR; every load and the CAS are still vector.
+# The split is not stylistic -- it is exactly how far the hardware evidence
+# reaches. The store direction was measured on gfx950/MI355X: an SDMA engine
+# executed a ring packet written by s_store...glc and a doorbell rung by
+# s_store_dwordx2...glc, with a "doorbell not rung" control proving the engine
+# does not merely poll wptr. The load direction has documentation but no
+# measurement, so it was left alone.
+#
+# The two paths therefore carry cache policy in two DIFFERENT encodings:
+#
+#   VECTOR (loads, CAS) -- gfx950 SC[1:0]+NT, NOT gfx1250 scope:/th:, via
+#   GLOBALModifiers(glc, slc):
+#     AGENT  (cachedWptr / committedWptr load) : glc=False slc=True  -> "sc1"
+#     SYSTEM (rptr load)                       : glc=True  slc=True  -> "sc0 sc1"
+#     CAS    (cachedWptr reserve, dev+return)  : glc=True  slc=False -> "sc0"
+#   sc1 also bypasses L2, which gfx950 needs because its L2 is XCD-local only.
+#
+#   SCALAR (all stores) -- SMEM has NO scope field at all, just the legacy GLC
+#   bit (CDNA4 ISA Table 75). sc0/sc1/nt/slc are rejected outright by the
+#   assembler on SMEM. GLC=1 on a scalar store is write-through past BOTH the
+#   K$ and L2, which is what makes one bit enough to cover every scope the
+#   vector side needed three combinations for.
+#
+# ⚠ A scalar store WITHOUT glc is never visible to anyone -- not to the SDMA
+# engine, not to the host, not even after the kernel ends, because the
+# end-of-kernel release flushes L2 and the vector caches but not the K$. No
+# fault, no diagnostic, just a line sitting dirty forever. That is why glc is
+# hard-coded in the emitters below and is NOT a parameter: there is no caller
+# for whom omitting it would be correct.
 ################################################################################
 
-from rocisa.container import vgpr, sgpr, VCC, GLOBALModifiers
+from rocisa.container import vgpr, sgpr, GLOBALModifiers, SMEMModifiers
 from rocisa.code import Module, Label
 from rocisa.instruction import (
     SMovB32, VMovB32, SLoadB64,
@@ -33,10 +56,18 @@ from rocisa.instruction import (
     SCmpEQU32, SCmpLtU32,
     SCBranchSCC0, SCBranchSCC1, SBranch,
     SWaitCnt, SSleep,
-    VReadfirstlaneB32, VAddCOU32, VAddCCOU32,
-    GlobalStoreB32, GlobalStoreB64, GlobalStoreB128, GlobalLoadB64,
-    GlobalAtomicCmpswapB64,
+    VReadfirstlaneB32,
+    SStoreB32, SStoreB64, SStoreB128,
+    GlobalLoadB64, GlobalAtomicCmpswapB64,
 )
+
+
+def _smemStore(glc: bool = True):
+    """SMEMModifiers for a ring store. glc is not optional in practice -- see the
+    hazard note in the file header -- so this exists to make every store site
+    read the same and to keep `isStore` from being forgotten."""
+    assert glc, "a scalar ring store without glc is never visible to anyone"
+    return SMEMModifiers(glc=True, isStore=True)
 
 
 # 256 KB SDMA ring, matching client/include/SdmaQueue.hpp SDMA_QUEUE_SIZE. Power of
@@ -74,25 +105,29 @@ class SdmaRingEmitter:
     loaded on demand with s_load_dwordx2 from handleBase+offset, matching the
     on-demand kernarg loads in _fusedA2ALoadRecvBase.
 
-    REGISTER SIDE EFFECTS / CALLER CONTRACT. Two of these are invisible in the
-    method signatures, and both fail SILENTLY when violated, so they are spelled
-    out here rather than left to the reader of the emitted assembly:
+    REGISTER SIDE EFFECTS / CALLER CONTRACT. This is invisible in the method
+    signatures and fails SILENTLY when violated, so it is spelled out here
+    rather than left to the reader of the emitted assembly:
 
-      * VCC IS CLOBBERED by any call reaching _emitRingByteAddr -- in practice
-        every emitPlacePacket, which forms the 64-bit ring address with
-        v_add_co_u32 / v_addc_co_u32. Nothing saves or restores it. An ACCEPTED
-        DEBT, not a hardware constraint: VOP3 allows an arbitrary SGPR pair as
-        the carry destination (CDNA4 ISA, V_ADD_CO_U32 "Notes"), so a caller
-        needing VCC live can be given a scratch pair instead.
+      * EXEC MUST BE NONZERO wherever a value is READ back from memory -- the
+        rptr refresh in emitCanWriteUpto, the cachedWptr load and CAS in
+        emitReserveQueueSpace, and the committedWptr spin in emitSubmitPacket.
+        Those still go through v_readfirstlane_b32, which on CDNA4 "overrides
+        the EXEC mask for the VGPR read": at EXEC == 0 it is NOT skipped but
+        forced to lane 0, reading whatever that lane holds (CDNA4 ISA,
+        V_READFIRSTLANE_B32). So entry with EXEC == 0 neither faults nor hangs
+        -- the CAS and the submit spin compare against garbage and the ring is
+        corrupted with no diagnostic. UNENFORCED: electing an active lane is
+        the caller's job (GlobalWriteBatch._emitFusedA2ASdmaIssue).
 
-      * EXEC MUST BE NONZERO on entry and for the whole reserve/place/submit
-        sequence. Each memory-to-SGPR step goes through v_readfirstlane_b32,
-        which on CDNA4 "overrides the EXEC mask for the VGPR read": at EXEC == 0
-        it is NOT skipped but forced to lane 0, reading whatever that lane holds
-        (CDNA4 ISA, V_READFIRSTLANE_B32). So entry with EXEC == 0 neither faults
-        nor hangs -- the CAS and the submit spin compare against garbage and the
-        ring is corrupted with no diagnostic. UNENFORCED: electing an active
-        lane is the caller's job (GlobalWriteBatch._emitFusedA2ASdmaIssue).
+        emitPlacePacket is no longer covered by this: it is pure scalar now.
+        The contract narrowed with the store conversion rather than
+        disappearing, because the load side stayed on the vector path.
+
+    VCC is NOT touched. It used to be clobbered by the v_add_co_u32 pair that
+    formed the ring address; the scalar address math (s_add_u32 / s_addc_u32)
+    has no carry register, so that debt is retired rather than merely
+    documented. Do not reintroduce a VOP2 carry form here.
     """
 
     def __init__(self, queueSize: int = SDMA_QUEUE_SIZE):
@@ -330,22 +365,40 @@ class SdmaRingEmitter:
 
     # ---- placePacket -------------------------------------------------------
 
-    def emitPlacePacket(self, module, w, handleBaseS, packetDwordsV, numDwords,
+    def emitPlacePacket(self, module, w, handleBaseS, packetDwordsS, numDwords,
                         pendingWptrS, offsetS):
         """Write `offsetS` bytes of zero-padding (NOPs) then `numDwords` packet
-        dwords into the ring, all at AGENT scope (sc1). Advances pendingWptrS
-        (2 SGPRs) by offset then by the packet size. `packetDwordsV` is the base
-        VGPR of the already-built packet (SdmaPacketEmitter fills it);
+        dwords into the ring, all with s_store...glc. Advances pendingWptrS
+        (2 SGPRs) by offset then by the packet size. `packetDwordsS` is the base
+        SGPR of the already-built packet (SdmaPacketEmitter fills it);
         `numDwords` is compile-time.
 
         Ring addressing is per-dword: base_dword = WrapIntoRing(pending)/4, and
         each store targets queueBuf[base_dword + i]. queueBuf is a uint32_t*, so
         the byte address is queueBuf + WrapIntoRing(pending) (already a dword-
-        aligned byte offset). Wrap padding is emitted as an unrolled run of
-        zero stores when offset is a compile-time constant; when it is runtime
-        (the general reserve result) a small loop covers it.
+        aligned byte offset). That fold happens once per placement, in
+        _emitRingByteAddr; the individual dwords then ride immediate offsets.
+        Wrap padding is a small runtime loop, since the offset is the general
+        reserve result rather than a compile-time constant.
 
-        CLOBBERS VCC and requires EXEC != 0 (see the class docstring).
+        Pure scalar: no EXEC requirement, no VCC (see the class docstring).
+
+        BLOCK REUSE. The caller may pass the SAME packetDwordsS block for a
+        later packet -- the ATOMIC is 8 dwords where the COPY is 13 -- but only
+        AFTER this call has emitted the COPY's stores. Rebuilding the block
+        first would overwrite dwords this placement has not stored yet, and
+        nothing here would notice.
+
+        What makes the reuse safe once the stores ARE emitted is that a scalar
+        store's source registers only have to survive its CLAUSE, not its
+        completion. The ISA ties the restriction to ATC XNACK replay and scopes
+        it accordingly: "instructions in scalar memory clauses must not
+        overwrite the sources of any of the instructions in the clause... A
+        clause is broken by any non-memory instruction" (CDNA4 ISA 8.2). The
+        rebuild starts with s_mov, which breaks the clause, so the replay window
+        of these stores is closed before their registers change. NO s_waitcnt is
+        needed for this and adding one would only serialize the submit -- the
+        ISA never asks for completion here, only for the clause boundary.
         """
         queueBufPtrS = w.sgprPool.checkOutAligned(2, 2, tag="sdma_pp_qbuf", preventOverflow=False)
         self._loadFieldPtr(module, w, queueBufPtrS, handleBaseS, OFF_queueBuf)
@@ -353,10 +406,11 @@ class SdmaRingEmitter:
 
         wrapS   = w.sgprPool.checkOut(1, tag="sdma_pp_wrap", preventOverflow=False)
         cntS    = w.sgprPool.checkOut(1, tag="sdma_pp_cnt", preventOverflow=False)
-        vAddr   = w.vgprPool.checkOutAligned(2, 2, tag="sdma_pp_addr")
-        vZero   = w.vgprPool.checkOut(1, tag="sdma_pp_zero")
-        off     = vgpr("off", 1, False, False, True)
-        module.add(VMovB32(dst=vgpr(vZero), src=0, comment="padding NOP value = 0"))
+        # 2-ALIGNED: this pair is the SBASE of every store below, and SMEM
+        # rejects an odd SBASE.
+        addrS   = w.sgprPool.checkOutAligned(2, 2, tag="sdma_pp_addr", preventOverflow=False)
+        zeroS   = w.sgprPool.checkOut(1, tag="sdma_pp_zero", preventOverflow=False)
+        module.add(SMovB32(dst=sgpr(zeroS), src=0, comment="padding NOP value = 0"))
 
         # ---- padding: store `offset` bytes of zero at WrapIntoRing(pending). ----
         padLoop = Label(w.labels.getNameInc("sdma_pp_padloop"), "placePacket: zero-pad ring tail")
@@ -368,11 +422,10 @@ class SdmaRingEmitter:
         module.add(SCBranchSCC1(labelName=padDone.getLabelName(), comment="offset==0 -> skip pad"))
         module.add(padLoop)
         self._wrapIntoRing(module, wrapS, pendingWptrS + 0, "WrapIntoRing(pending) (pad)")
-        self._emitRingByteAddr(module, vAddr, queueBufPtrS, wrapS)
-        module.add(GlobalStoreB32(
-            vaddr=vgpr(vAddr, 2), src=vgpr(vZero), saddr=off,
-            modifier=GLOBALModifiers(glc=False, slc=True, isStore=True),
-            comment="ring[wrap] = 0 padding NOP (AGENT scope, sc1)"))
+        self._emitRingByteAddr(module, addrS, queueBufPtrS, wrapS)
+        module.add(SStoreB32(
+            src=sgpr(zeroS), base=sgpr(addrS, 2), soffset=hex(0), smem=_smemStore(),
+            comment="ring[wrap] = 0 padding NOP"))
         module.add(SAddU32(dst=sgpr(pendingWptrS + 0), src0=sgpr(pendingWptrS + 0), src1=4,
                            comment="pending += 4 (one padded dword)"))
         module.add(SAddCU32(dst=sgpr(pendingWptrS + 1), src0=sgpr(pendingWptrS + 1), src1=0, comment="pending hi carry"))
@@ -385,69 +438,90 @@ class SdmaRingEmitter:
         # Recompute base after padding advanced pending. numDwords is compile-time,
         # so unroll (one warp writes <=64).
         self._wrapIntoRing(module, wrapS, pendingWptrS + 0, "WrapIntoRing(pending) (packet base)")
-        self._emitRingByteAddr(module, vAddr, queueBufPtrS, wrapS)
-        for i, width in self._packetStoreWidths(packetDwordsV, numDwords):
-            op = {1: GlobalStoreB32, 2: GlobalStoreB64, 4: GlobalStoreB128}[width]
-            src = vgpr(packetDwordsV + i) if width == 1 else vgpr(packetDwordsV + i, width)
+        self._emitRingByteAddr(module, addrS, queueBufPtrS, wrapS)
+        for i, width in self._packetStoreWidths(packetDwordsS, numDwords):
+            op = {1: SStoreB32, 2: SStoreB64, 4: SStoreB128}[width]
+            src = sgpr(packetDwordsS + i) if width == 1 else sgpr(packetDwordsS + i, width)
             module.add(op(
-                vaddr=vgpr(vAddr, 2), src=src, saddr=off,
-                modifier=GLOBALModifiers(offset=i * 4, glc=False, slc=True, isStore=True),
-                comment="ring[base + %d] = packet dword%s (AGENT scope, sc1)"
+                src=src, base=sgpr(addrS, 2), soffset=hex(i * 4), smem=_smemStore(),
+                comment="ring[base + %d] = packet dword%s"
                         % (i, "" if width == 1 else "s %d..%d" % (i, i + width - 1))))
         # pending += numDwords*4 (packet size).
         module.add(SAddU32(dst=sgpr(pendingWptrS + 0), src0=sgpr(pendingWptrS + 0), src1=numDwords * 4,
                            comment="pending += packet size"))
         module.add(SAddCU32(dst=sgpr(pendingWptrS + 1), src0=sgpr(pendingWptrS + 1), src1=0, comment="pending hi carry"))
 
-        w.vgprPool.checkIn(vAddr)
-        w.vgprPool.checkIn(vZero)
+        w.sgprPool.checkIn(addrS)
+        w.sgprPool.checkIn(zeroS)
         w.sgprPool.checkIn(wrapS)
         w.sgprPool.checkIn(cntS)
         w.sgprPool.checkIn(queueBufPtrS)
         return module
 
     @staticmethod
-    def _packetStoreWidths(baseV, numDwords):
-        """Split a run of `numDwords` consecutive VGPRs starting at `baseV` into
-        the widest global stores gfx950 will take. Returns [(dwordIndex, width)].
+    def _packetStoreWidths(baseS, numDwords):
+        """Split a run of `numDwords` consecutive SGPRs starting at `baseS` into
+        the widest scalar stores gfx950 will take. Returns [(dwordIndex, width)].
 
-        The only constraint is VGPR PARITY, measured at the assembler on gfx950:
-        a multi-dword global store needs an EVEN first register --
-        global_store_dwordx4 v[6:9] assembles, v[5:8] does not. Four-alignment is
-        NOT required. So an odd baseV costs exactly one leading b32, after which
-        every step of 2 or 4 keeps the parity.
+        SDATA ALIGNMENT IS STRICTER THAN THE VECTOR RULE THIS REPLACES. A global
+        store only needed an EVEN first register, so any odd base cost one
+        leading b32 and everything after it widened. SMEM wants the real thing:
+        "SDST must be even for two Dwords, or a multiple of four for larger"
+        (CDNA4 ISA 8.4), confirmed at the assembler -- s_store_dwordx4 s[9:12]
+        and s_store_dwordx2 s[9:10] are both rejected for register alignment.
+        So the width is re-decided at every step from the CURRENT register's
+        alignment; a run cannot simply widen once and stay wide.
 
-        Ring ADDRESS alignment is not a constraint here: for Dword or larger
-        accesses the two LSBs of the byte address are ignored (CDNA4 ISA, "Buffer
-        Alignment"), and packets start at arbitrary dword offsets in the ring.
-        The ISA does note that mis-aligned multi-dword access is slower, which is
-        why this is a throughput change to be measured, not assumed."""
+        x4 IS THE CEILING: SMEM stores write 1-4 Dwords (loads read up to 16),
+        and gfx950 has no s_store_dwordx8 -- the assembler answers "did you mean
+        s_store_dword, s_store_dwordx2, s_store_dwordx4?". rocisa DOES expose
+        SStoreB256 / SStoreB512 bindings; they are load-shaped leftovers and
+        must not be reached for here.
+
+        Ring ADDRESS alignment is not a constraint: SMEM ignores the two LSBs of
+        the byte address (CDNA4 ISA 8.2, "the two LSBs are ignored and treated as
+        if they were zero") and 8.4 states OFFSET has no alignment restriction,
+        so a Dword-aligned packet start is enough. Note this is the ISA answering
+        by omission -- there is no positive statement that an x4 store may cross
+        a 16-byte boundary -- and the 84-byte reservation stride guarantees
+        packets do land at every 4-byte phase, so the end-to-end run is what
+        actually confirms it."""
         out, i = [], 0
-        while i < numDwords and (baseV + i) % 2:
-            out.append((i, 1)); i += 1
-        while i + 4 <= numDwords:
-            out.append((i, 4)); i += 4
-        while i + 2 <= numDwords:
-            out.append((i, 2)); i += 2
         while i < numDwords:
-            out.append((i, 1)); i += 1
+            reg, left = baseS + i, numDwords - i
+            if reg % 4 == 0 and left >= 4:
+                width = 4
+            elif reg % 2 == 0 and left >= 2:
+                width = 2
+            else:
+                width = 1
+            out.append((i, width)); i += width
         return out
 
-    def _emitRingByteAddr(self, module, vAddrV, queueBufPtrS, wrapS):
-        """Compute the 64-bit VGPR byte address queueBuf + WrapIntoRing(pending)
-        into vAddrV[0:1]. queueBuf is a byte-addressable base; the wrapped index
-        is already a byte offset (<4 GiB, so it adds only into the low dword with
-        carry).
+    def _emitRingByteAddr(self, module, dstPairS, queueBufPtrS, wrapS):
+        """Compute the 64-bit byte address queueBuf + WrapIntoRing(pending) into
+        the 2-ALIGNED SGPR pair dstPairS. queueBuf is a byte-addressable base;
+        the wrapped index is already a byte offset (<4 GiB, so it adds only into
+        the low dword with carry).
 
-        CLOBBERS VCC: the low add writes its carry-out there and the high add
-        consumes it, neither saved nor restored. The only VCC use in the file
-        (see the class docstring)."""
-        module.add(VMovB32(dst=vgpr(vAddrV + 0), src=sgpr(queueBufPtrS + 0), comment="queueBuf lo"))
-        module.add(VMovB32(dst=vgpr(vAddrV + 1), src=sgpr(queueBufPtrS + 1), comment="queueBuf hi"))
-        module.add(VAddCOU32(dst=vgpr(vAddrV + 0), dst1=VCC(), src0=sgpr(wrapS), src1=vgpr(vAddrV + 0),
-                             comment="addr lo = queueBuf + WrapIntoRing(pending)"))
-        module.add(VAddCCOU32(dst=vgpr(vAddrV + 1), dst1=VCC(), src0=vgpr(vAddrV + 1), src1=0, src2=VCC(),
-                              comment="addr hi (carry)"))
+        dstPairS becomes the SBASE of every store in the placement, and SMEM
+        requires an even SBASE (measured at the assembler: s_store with s[3:4]
+        is rejected for register alignment), hence 2-aligned rather than merely
+        consecutive.
+
+        Folding the wrap into the base here, once per placement, is what lets
+        the stores address their dwords with plain IMMEDIATE offsets. The
+        alternative -- leaving the base at queueBuf and passing the wrap as
+        SOFFSET -- reads better but is a trap: rocisa's SMEMModifiers omits the
+        `offset:` text entirely when the offset is 0, so the FIRST store of each
+        packet would silently drop from the IMM=1/SOE=1 encoding to IMM=0/SOE=0
+        and put the runtime SGPR in the OFFSET field, which Table 39 documents
+        as immediate-or-M0 only for stores. One store per packet encoded
+        differently from its neighbours is not a bug anyone finds by reading."""
+        module.add(SAddU32(dst=sgpr(dstPairS + 0), src0=sgpr(queueBufPtrS + 0), src1=sgpr(wrapS),
+                           comment="addr lo = queueBuf + WrapIntoRing(pending)"))
+        module.add(SAddCU32(dst=sgpr(dstPairS + 1), src0=sgpr(queueBufPtrS + 1), src1=0,
+                            comment="addr hi (carry)"))
         return module
 
     # ---- submitPacket ------------------------------------------------------
@@ -457,16 +531,25 @@ class SdmaRingEmitter:
         publish the packet.
 
         (1) spin until committedWptr == base (this producer's turn; earlier
-            reservations commit in order). Read committedWptr at AGENT scope.
+            reservations commit in order). Read committedWptr at AGENT scope --
+            still a vector load, so this is where the EXEC != 0 contract bites.
         (2) Publish sequence (any bit wrong => timing hang):
-              store wptr = pending        AGENT  (sc1)
-              s_waitcnt vmcnt(0)
-              store doorbell = pending    SYSTEM (sc0 sc1)   <-- rings the engine
-              store committedWptr = pend  AGENT  (sc1)       <-- unblocks next producer
+              store wptr = pending        s_store_dwordx2 glc
+              s_waitcnt lgkmcnt(0)
+              store doorbell = pending    s_store_dwordx2 glc   <-- rings the engine
+              store committedWptr = pend  s_store_dwordx2 glc   <-- unblocks next producer
             The value written to wptr/doorbell/committedWptr is the new absolute
-            byte wptr (pending), NOT an increment. A vmcnt(0) precedes the
-            doorbell so the wptr store is globally ordered before the engine is
-            told to read up to it.
+            byte wptr (pending), NOT an increment. A wait precedes the doorbell
+            so the wptr store is globally ordered before the engine is told to
+            read up to it.
+
+            All three are scalar, so the ordering waits are lgkmcnt rather than
+            vmcnt -- and pending is written straight from its SGPR pair, which
+            is why the two v_mov relays that used to stage it are gone. The
+            doorbell is an MMIO/BAR write and needs no wider modifier than the
+            others: SMEM has one cache bit, and glc already carries it past the
+            K$ and L2. That a scalar store can reach the doorbell aperture at
+            all is measured, not assumed.
 
         baseS / pendingWptrS are 2-SGPR byte indices from the reserve+place pair.
         Emitted by a single elected lane, so NO s_barrier here: in single-lane
@@ -504,45 +587,43 @@ class SdmaRingEmitter:
         module.add(SCmpEQU32(src0=sgpr(tmpS), src1=sgpr(baseS + 1), comment="committedWptr hi == base hi?"))
         module.add(SCBranchSCC0(labelName=spinLabel.getLabelName(), comment="not our turn -> spin"))
         module.add(spinDone)
-        module.add(SWaitCnt(vlcnt=0, vscnt=0, comment="ensure our packet stores are globally visible before wptr"))
+        # The packet stores are scalar, so what has to drain here is lgkmcnt,
+        # not vmcnt. Getting this counter wrong is a timing-only failure: the
+        # doorbell would reach the engine ahead of the packet it announces.
+        module.add(SWaitCnt(kmcnt=0, comment="ensure our packet stores are globally visible before wptr"))
 
-        # value written to wptr / doorbell / committedWptr = pending (absolute byte wptr).
-        module.add(VMovB32(dst=vgpr(vVal + 0), src=sgpr(pendingWptrS + 0), comment="publish value = pending lo"))
-        module.add(VMovB32(dst=vgpr(vVal + 1), src=sgpr(pendingWptrS + 1), comment="publish value = pending hi"))
+        # The published value is pending (absolute byte wptr, NOT an increment).
+        # A scalar store takes it straight from the SGPR pair -- no staging.
+        # pendingWptrS must be 2-ALIGNED for the x2 SDATA; the caller allocates
+        # it that way.
 
-        # --- (2a) store wptr = pending  (AGENT, sc1) ---
+        # --- (2a) store wptr = pending ---
         wptrPtrS = w.sgprPool.checkOutAligned(2, 2, tag="sdma_sp_wptrPtr", preventOverflow=False)
         self._loadFieldPtr(module, w, wptrPtrS, handleBaseS, OFF_wptr)
         module.add(SWaitCnt(kmcnt=0, comment="wait wptr pointer load"))
-        self._ptrToVgpr(module, vAddr, wptrPtrS, "wptr addr")
-        module.add(GlobalStoreB64(
-            vaddr=vgpr(vAddr, 2), src=vgpr(vVal, 2), saddr=off,
-            modifier=GLOBALModifiers(glc=False, slc=True, isStore=True),
-            comment="store wptr = pending (AGENT scope, sc1)"))
+        module.add(SStoreB64(
+            src=sgpr(pendingWptrS, 2), base=sgpr(wptrPtrS, 2), soffset=hex(0), smem=_smemStore(),
+            comment="store wptr = pending"))
         w.sgprPool.checkIn(wptrPtrS)
 
-        # --- vmcnt(0): order the wptr store before the doorbell ---
-        module.add(SWaitCnt(vscnt=0, comment="s_waitcnt vmcnt(0): wptr store visible before doorbell"))
+        # --- order the wptr store before the doorbell ---
+        module.add(SWaitCnt(kmcnt=0, comment="s_waitcnt lgkmcnt(0): wptr store visible before doorbell"))
 
-        # --- (2b) store doorbell = pending  (SYSTEM, sc0 sc1) -> rings the engine ---
+        # --- (2b) store doorbell = pending -> rings the engine ---
         dbPtrS = w.sgprPool.checkOutAligned(2, 2, tag="sdma_sp_dbPtr", preventOverflow=False)
         self._loadFieldPtr(module, w, dbPtrS, handleBaseS, OFF_doorbell)
         module.add(SWaitCnt(kmcnt=0, comment="wait doorbell pointer load"))
-        self._ptrToVgpr(module, vAddr, dbPtrS, "doorbell addr")
-        module.add(GlobalStoreB64(
-            vaddr=vgpr(vAddr, 2), src=vgpr(vVal, 2), saddr=off,
-            modifier=GLOBALModifiers(glc=True, slc=True, isStore=True),
-            comment="ring doorbell = pending (SYSTEM scope, sc0 sc1)"))
+        module.add(SStoreB64(
+            src=sgpr(pendingWptrS, 2), base=sgpr(dbPtrS, 2), soffset=hex(0), smem=_smemStore(),
+            comment="ring doorbell = pending"))
         w.sgprPool.checkIn(dbPtrS)
-        module.add(SWaitCnt(vscnt=0, comment="wait doorbell store issued"))
+        module.add(SWaitCnt(kmcnt=0, comment="wait doorbell store issued"))
 
-        # --- (2c) store committedWptr = pending  (AGENT, sc1) -> unblocks next producer ---
-        self._ptrToVgpr(module, vAddr, commPtrS, "committedWptr addr")
-        module.add(GlobalStoreB64(
-            vaddr=vgpr(vAddr, 2), src=vgpr(vVal, 2), saddr=off,
-            modifier=GLOBALModifiers(glc=False, slc=True, isStore=True),
-            comment="store committedWptr = pending (AGENT scope, sc1)"))
-        module.add(SWaitCnt(vscnt=0, comment="wait committedWptr store issued"))
+        # --- (2c) store committedWptr = pending -> unblocks next producer ---
+        module.add(SStoreB64(
+            src=sgpr(pendingWptrS, 2), base=sgpr(commPtrS, 2), soffset=hex(0), smem=_smemStore(),
+            comment="store committedWptr = pending"))
+        module.add(SWaitCnt(kmcnt=0, comment="wait committedWptr store issued"))
 
         w.vgprPool.checkIn(vAddr)
         w.vgprPool.checkIn(vVal)

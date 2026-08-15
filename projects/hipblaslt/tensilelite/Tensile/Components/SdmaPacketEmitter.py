@@ -6,8 +6,13 @@
 # Packet-DEPENDENT counterpart to SdmaRingEmitter (which is packet-INDEPENDENT
 # ring plumbing): this module turns the all-to-all geometry (kernarg values +
 # WG ids) into the 13-dword COPY_SUBWIN and 8-dword ATOMIC ADD_RTN_32 packet
-# dword arrays, laid out in VGPRs; SdmaRingEmitter.emitPlacePacket then writes
-# those dwords into the ring.
+# dword arrays, laid out in SGPRs; SdmaRingEmitter.emitPlacePacket then writes
+# those dwords into the ring with s_store.
+#
+# The dwords live in SGPRs because every input is wave-uniform: the geometry
+# comes from kernarg values and WG ids, so nothing here is per-lane. The ring
+# stores are scalar for the same reason, which is what lets the whole submit
+# path avoid v_readfirstlane and VCC (see SdmaRingEmitter).
 #
 # The live caller is GlobalWriteBatch._emitFusedA2ASdmaIssue, via
 # emitBuildCopyPacket / emitBuildAtomicPacket.
@@ -43,10 +48,10 @@
 # client/src/FusedA2AClient.cpp::runFusedA2A.
 ################################################################################
 
-from rocisa.container import vgpr, sgpr
+from rocisa.container import sgpr
 from rocisa.code import Module
 from rocisa.instruction import (
-    VMovB32,
+    SMovB32,
     SMulI32, SMulHIU32, SAddU32, SAddCU32, SAddU64, SSubU32, SMinU32,
     SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SOrB32,
 )
@@ -95,10 +100,12 @@ ELEMENT_SHIFT = PACKET_ELEMENT_SIZE_LOG2 - D_DATA_ELEMENT_LOG2   # 3
 # Compile-time header dwords: op/sub_op/elementsize are all immediates, so DW0
 # of each packet is folded here rather than built at runtime.
 #
-# COPY_HEADER_DW0 is 0x80000401, i.e. ABOVE INT32_MAX, so it must reach VMovB32
+# COPY_HEADER_DW0 is 0x80000401, i.e. ABOVE INT32_MAX, so it must reach SMovB32
 # as a hex STRING. rocisa's InstructionInput has no 64-bit integer variant: an
 # int that does not fit a C++ 32-bit int falls through to the double branch and
 # renders as "2147484673.0". Every immediate below therefore goes through hex().
+# (s_mov_b32 itself takes the value fine -- a 32-bit literal constant; only the
+# Python-side rendering is the hazard.)
 COPY_HEADER_DW0 = ((SDMA_OP_COPY_SUBWIN & 0xFF)
                    | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8)
                    | ((PACKET_ELEMENT_SIZE_LOG2 & 0x7) << 29))
@@ -107,15 +114,28 @@ ATOMIC_HEADER_DW0 = ((SDMA_OP_ATOMIC & 0xFF) | ((SDMA_ATOMIC_ADD_RTN_32 & 0x7F) 
 
 
 class SdmaPacketEmitter:
-    """Builds the COPY_SUBWIN + ATOMIC packet dword arrays in VGPRs from runtime
+    """Builds the COPY_SUBWIN + ATOMIC packet dword arrays in SGPRs from runtime
     inputs, in the layout documented at the top of this file.
 
     Every method takes the registers it uses and allocates none: unlike
     SdmaRingEmitter, which checks scratch in and out of `w`'s pools, this class
-    never touches a pool and so takes no `w` at all. The dword VGPR block it
+    never touches a pool and so takes no `w` at all. The dword SGPR block it
     fills is what SdmaRingEmitter.emitPlacePacket writes to the ring, so the two
     emitters compose without either knowing the other's internals. The three encoding conventions (minus-one extents/pitches,
     element units, field bit positions) are isolated in the `_pack*` helpers.
+
+    The `_pack*` helpers build each field IN PLACE in its packet slot rather
+    than through a scratch register: the destination is a plain SGPR like their
+    inputs, so the "compute, then relay into the packet" step the VGPR layout
+    forced has no reason to exist. Only the rect dword still needs one scratch,
+    to hold the second extent while it is shifted.
+
+    ALIASING CONTRACT: the packet block must be disjoint from every input SGPR
+    and from `tmpS`. In-place packing writes the slot before reading some of its
+    inputs, so an aliasing caller loses the input rather than merely the output.
+    The block is also written in field order and never re-read here, so an
+    overlapping second packet (see emitPlacePacket's reuse note) must not be
+    built until the first one's stores have been emitted.
     """
 
     def __init__(self, macroTile1: int):
@@ -144,29 +164,31 @@ class SdmaPacketEmitter:
                                    comment=comment + " (bf16 elems -> packet elems)"))
         return module
 
-    def _packPitchMinus1(self, module, dstV, pitchS, tmpS, comment):
+    def _packPitchMinus1(self, module, dstS, pitchS, comment):
         """dword = (pitch - 1) << 13 -- the 19-bit pitch field at [31:13]; the z
         field [10:0] is left 0. Minus-one is the hardware pitch convention (it
         adds one back). The pitch arrives in bf16 elements and is scaled to
         packet elements first.
 
+        Built in place in the packet slot; needs no scratch. dstS must not alias
+        pitchS -- the scaling step writes dstS before the subtract reads it.
+
         NOT masked to 19 bits: an over-range pitch ORs into the neighbouring
         field. The bound is a launch-time precondition (FusedA2AClient.cpp)."""
         if ELEMENT_SHIFT:
-            self._toPacketElements(module, tmpS, pitchS, comment)
-            src = tmpS
+            self._toPacketElements(module, dstS, pitchS, comment)
+            src = dstS
         else:
             src = pitchS
-        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(src), src1=1,
+        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(src), src1=1,
                            comment=comment + " (pitch - 1)"))
-        module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(tmpS), shiftHex=13,
+        module.add(SLShiftLeftB32(dst=sgpr(dstS), src=sgpr(dstS), shiftHex=13,
                                   comment=comment + " (<< 13)"))
-        module.add(VMovB32(dst=vgpr(dstV), src=sgpr(tmpS), comment=comment))
         return module
 
-    def _packSliceMinus1(self, module, dstV, sliceS, tmpS, comment):
+    def _packSliceMinus1(self, module, dstS, sliceS, comment):
         """dword = slice_pitch - 1 -- the 28-bit slice field at [27:0]. Scaled to
-        packet elements like the pitches.
+        packet elements like the pitches. Built in place; needs no scratch.
 
         NOT masked to 28 bits, and unlike the pitch and rect fields it is not
         bounds-checked at launch either -- but it is NOT a free field. The
@@ -175,16 +197,15 @@ class SdmaPacketEmitter:
         guard; see emitComputeCopyFields for the two values and why each
         satisfies it."""
         if ELEMENT_SHIFT:
-            self._toPacketElements(module, tmpS, sliceS, comment)
-            src = tmpS
+            self._toPacketElements(module, dstS, sliceS, comment)
+            src = dstS
         else:
             src = sliceS
-        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(src), src1=1,
+        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(src), src1=1,
                            comment=comment + " (slice - 1)"))
-        module.add(VMovB32(dst=vgpr(dstV), src=sgpr(tmpS), comment=comment))
         return module
 
-    def _packRectMinus1(self, module, dstV, rectXS, rectYS, tmpS, comment):
+    def _packRectMinus1(self, module, dstS, rectXS, rectYS, tmpS, comment):
         """dword = (rectX - 1) | ((rectY - 1) << 16) -- two 14-bit extents at
         [13:0] and [29:16], NEITHER masked: an over-range rect_x ORs straight
         into rect_y. Both bounds are launch-time preconditions
@@ -193,95 +214,104 @@ class SdmaPacketEmitter:
         BOTH extents are runtime SGPRs: rectY cannot be the compile-time MT1
         because the last token-tile is partial when N % MT1 != 0, and an
         unclamped MT1 would read past the end of D (emitComputeCopyFields clamps
-        it). tmpS is TWO consecutive scratch SGPRs (tmpS, tmpS+1).
+        it). tmpS is ONE scratch SGPR -- the only `_pack*` helper still needing
+        any, because the two extents have to exist at once to be OR-ed.
 
         rect_x IS scaled to packet elements; rect_y is NOT -- it counts ROWS,
         and ELEMENTSIZE scales only the X direction."""
         if ELEMENT_SHIFT:
-            self._toPacketElements(module, tmpS, rectXS, comment + " (rectX)")
-            rectXsrc = tmpS
+            self._toPacketElements(module, dstS, rectXS, comment + " (rectX)")
+            rectXsrc = dstS
         else:
             rectXsrc = rectXS
-        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(rectXsrc), src1=1,
+        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(rectXsrc), src1=1,
                            comment=comment + " (rectX - 1)"))
-        module.add(SSubU32(dst=sgpr(tmpS + 1), src0=sgpr(rectYS), src1=1,
+        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(rectYS), src1=1,
                            comment=comment + " (rectY - 1, rows: NOT scaled)"))
-        module.add(SLShiftLeftB32(dst=sgpr(tmpS + 1), src=sgpr(tmpS + 1), shiftHex=16,
+        module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(tmpS), shiftHex=16,
                                   comment=comment + " ((rectY-1) << 16)"))
-        module.add(SOrB32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(tmpS + 1),
+        module.add(SOrB32(dst=sgpr(dstS), src0=sgpr(dstS), src1=sgpr(tmpS),
                           comment=comment + " | (rectY-1) << 16"))
-        module.add(VMovB32(dst=vgpr(dstV), src=sgpr(tmpS), comment=comment))
         return module
 
     # ---- COPY_SUBWIN builder -----------------------------------------------
 
-    def emitBuildCopyPacket(self, module, pktV,
+    def emitBuildCopyPacket(self, module, pktS,
                             srcBaseS, srcPitchS, srcSliceS,
                             dstBaseS, dstPitchS, dstSliceS,
                             rectXS, rectYS, tmpS):
-        """Build the 13 COPY_SUBWIN dwords into pktV[0:13] from runtime SGPR
+        """Build the 13 COPY_SUBWIN dwords into pktS[0:13] from runtime SGPR
         inputs (pitches and extents in element units; caller does the
-        arithmetic that produces them -- see emitComputeCopyFields). tmpS is TWO
-        consecutive scratch SGPRs (the rect dword packs two runtime extents).
+        arithmetic that produces them -- see emitComputeCopyFields). tmpS is ONE
+        scratch SGPR, used only by the rect dword.
 
         All four coordinates are ZERO: emitComputeCopyFields folded them into
         srcBaseS / dstBaseS, so DW3 and DW8 are literal-0 moves rather than
         field packing. They are still written (the ring copies a fixed 13-dword
-        block, and a stale VGPR would be read as a coordinate).
+        block, and a stale register would be read as a coordinate).
+
+        The two 64-bit bases are the one place a relay survives: DW1/DW2 and
+        DW6/DW7 land on odd packet slots, and the 64-bit ops that produce the
+        bases need a 2-aligned SReg_64 pair, so they cannot be computed in
+        place. Two s_mov each is the whole cost.
 
         Field -> dword map:
           DW0 header (immediate), DW1/2 srcBase, DW3 0, DW4 srcPitch-1,
           DW5 srcSlice-1, DW6/7 dstBase, DW8 0, DW9 dstPitch-1,
           DW10 dstSlice-1, DW11 (rectX-1|rectY-1), DW12 0.
         """
-        module.add(VMovB32(dst=vgpr(pktV + 0), src=hex(COPY_HEADER_DW0),
+        module.add(SMovB32(dst=sgpr(pktS + 0), src=hex(COPY_HEADER_DW0),
                            comment="SUBWIN DW0: op=COPY sub_op=RECT elementsize=log2(%dB)"
                                    % (1 << PACKET_ELEMENT_SIZE_LOG2)))
-        module.add(VMovB32(dst=vgpr(pktV + 1), src=sgpr(srcBaseS + 0),
+        module.add(SMovB32(dst=sgpr(pktS + 1), src=sgpr(srcBaseS + 0),
                            comment="SUBWIN DW1: srcBase lo"))
-        module.add(VMovB32(dst=vgpr(pktV + 2), src=sgpr(srcBaseS + 1),
+        module.add(SMovB32(dst=sgpr(pktS + 2), src=sgpr(srcBaseS + 1),
                            comment="SUBWIN DW2: srcBase hi"))
-        module.add(VMovB32(dst=vgpr(pktV + 3), src=hex(0),
+        module.add(SMovB32(dst=sgpr(pktS + 3), src=hex(0),
                            comment="SUBWIN DW3: src_x=0|src_y=0 (folded into srcBase)"))
-        self._packPitchMinus1(module, pktV + 4, srcPitchS, tmpS, "SUBWIN DW4: src_pitch-1")
-        self._packSliceMinus1(module, pktV + 5, srcSliceS, tmpS, "SUBWIN DW5: src_slice-1")
-        module.add(VMovB32(dst=vgpr(pktV + 6), src=sgpr(dstBaseS + 0),
+        self._packPitchMinus1(module, pktS + 4, srcPitchS, "SUBWIN DW4: src_pitch-1")
+        self._packSliceMinus1(module, pktS + 5, srcSliceS, "SUBWIN DW5: src_slice-1")
+        module.add(SMovB32(dst=sgpr(pktS + 6), src=sgpr(dstBaseS + 0),
                            comment="SUBWIN DW6: dstBase lo"))
-        module.add(VMovB32(dst=vgpr(pktV + 7), src=sgpr(dstBaseS + 1),
+        module.add(SMovB32(dst=sgpr(pktS + 7), src=sgpr(dstBaseS + 1),
                            comment="SUBWIN DW7: dstBase hi"))
-        module.add(VMovB32(dst=vgpr(pktV + 8), src=hex(0),
+        module.add(SMovB32(dst=sgpr(pktS + 8), src=hex(0),
                            comment="SUBWIN DW8: dst_x=0|dst_y=0 (folded into dstBase)"))
-        self._packPitchMinus1(module, pktV + 9, dstPitchS, tmpS, "SUBWIN DW9: dst_pitch-1")
-        self._packSliceMinus1(module, pktV + 10, dstSliceS, tmpS, "SUBWIN DW10: dst_slice-1")
-        self._packRectMinus1(module, pktV + 11, rectXS, rectYS, tmpS,
+        self._packPitchMinus1(module, pktS + 9, dstPitchS, "SUBWIN DW9: dst_pitch-1")
+        self._packSliceMinus1(module, pktS + 10, dstSliceS, "SUBWIN DW10: dst_slice-1")
+        self._packRectMinus1(module, pktS + 11, rectXS, rectYS, tmpS,
                              "SUBWIN DW11: rect_x-1|rect_y-1")
-        module.add(VMovB32(dst=vgpr(pktV + 12), src=hex(0),
+        module.add(SMovB32(dst=sgpr(pktS + 12), src=hex(0),
                            comment="SUBWIN DW12: rect_z=0, default cache/swizzle"))
         return module
 
     # ---- ATOMIC ADD_RTN_32 builder ------------------------------------------
 
-    def emitBuildAtomicPacket(self, module, pktV, dstAddrS, addend=1):
-        """Build the 8 ATOMIC ADD_RTN_32 dwords into pktV[0:8]: raise peer_ptr[p]
+    def emitBuildAtomicPacket(self, module, pktS, dstAddrS, addend=1):
+        """Build the 8 ATOMIC ADD_RTN_32 dwords into pktS[0:8]: raise peer_ptr[p]
         [myRank] by `addend` (== 1). dstAddrS is a 2-SGPR pointer to the flag
         slot (caller computes peer_ptr[p] + myRank*4 -- see emitComputeFlagAddr;
         the stride is 4 because this ADD_RTN_32 writes 4 bytes). addend is a
-        compile-time immediate (1)."""
-        module.add(VMovB32(dst=vgpr(pktV + 0), src=hex(ATOMIC_HEADER_DW0),
+        compile-time immediate (1).
+
+        The caller may hand this the SAME block it used for the COPY packet --
+        it is 8 dwords against the COPY's 13. See emitPlacePacket's reuse note
+        for why that is safe and what ordering it requires."""
+        module.add(SMovB32(dst=sgpr(pktS + 0), src=hex(ATOMIC_HEADER_DW0),
                            comment="ATOMIC DW0: op=ATOMIC operation=ADD_RTN_32"))
-        module.add(VMovB32(dst=vgpr(pktV + 1), src=sgpr(dstAddrS + 0),
+        module.add(SMovB32(dst=sgpr(pktS + 1), src=sgpr(dstAddrS + 0),
                            comment="ATOMIC DW1: addr lo"))
-        module.add(VMovB32(dst=vgpr(pktV + 2), src=sgpr(dstAddrS + 1),
+        module.add(SMovB32(dst=sgpr(pktS + 2), src=sgpr(dstAddrS + 1),
                            comment="ATOMIC DW2: addr hi"))
-        module.add(VMovB32(dst=vgpr(pktV + 3), src=hex(addend & 0xFFFFFFFF),
+        module.add(SMovB32(dst=sgpr(pktS + 3), src=hex(addend & 0xFFFFFFFF),
                            comment="ATOMIC DW3: src_data lo (addend)"))
-        module.add(VMovB32(dst=vgpr(pktV + 4), src=hex(0),
+        module.add(SMovB32(dst=sgpr(pktS + 4), src=hex(0),
                            comment="ATOMIC DW4: src_data hi (unused by ADD_RTN_32)"))
-        module.add(VMovB32(dst=vgpr(pktV + 5), src=hex(0),
+        module.add(SMovB32(dst=sgpr(pktS + 5), src=hex(0),
                            comment="ATOMIC DW5: cmp_data lo (unused)"))
-        module.add(VMovB32(dst=vgpr(pktV + 6), src=hex(0),
+        module.add(SMovB32(dst=sgpr(pktS + 6), src=hex(0),
                            comment="ATOMIC DW6: cmp_data hi (unused)"))
-        module.add(VMovB32(dst=vgpr(pktV + 7), src=hex(0),
+        module.add(SMovB32(dst=sgpr(pktS + 7), src=hex(0),
                            comment="ATOMIC DW7: loop_interval=0"))
         return module
 

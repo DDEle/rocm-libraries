@@ -2812,20 +2812,22 @@ class GlobalWriteBatchWriter:
                               tmpSgpr, tokenRowS, tmp64Sgpr)
     kw.sgprPool.checkIn(tmp64Sgpr)  # dead once the two bases are folded
 
-    # --- build the 21 packet dwords: COPY in [0:13], ATOMIC in [13:21]. ---
-    # 2-ALIGNED: emitPlacePacket widens the ring stores to dwordx2/x4, which
-    # gfx950 accepts only from an EVEN first VGPR. An odd base still works --
-    # the split pays one leading b32 -- but the COPY packet is the bigger of
-    # the two, so give it the aligned start.
-    pktVgpr = kw.vgprPool.checkOutAligned(totalDwords, 2, tag="fusedA2A_sdmaPacket")
-    pkt.emitBuildCopyPacket(module, pktVgpr,
+    # --- packet dwords: ONE block, built and placed once per packet. ---
+    # The block is SGPRs because the ring stores are scalar, and it is sized for
+    # the COPY packet (13 dwords) alone: the ATOMIC is 8 and REUSES the same
+    # registers further down, once the COPY's stores have been emitted. That
+    # ordering is the whole safety argument -- see emitPlacePacket's reuse note.
+    #
+    # 4-ALIGNED, which is stricter than the 2-alignment the VGPR layout needed.
+    # SMEM requires SDATA to be a multiple of four for stores wider than two
+    # Dwords, so a 4-aligned start is what lets 13 dwords go out as x4/x4/x4/x1
+    # instead of degrading into narrower pieces.
+    pktSgpr = kw.sgprPool.checkOutAligned(COPY_PACKET_DWORDS, 4,
+                                          tag="fusedA2A_sdmaPacket", preventOverflow=False)
+    pkt.emitBuildCopyPacket(module, pktSgpr,
                             srcBaseSgpr, srcPitchName, srcSliceS,
                             recvBaseSgpr, nShardSgpr, dstSliceS,
                             nShardSgpr, rectYS, tmpSgpr)
-    flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaFlagAddr", preventOverflow=False)
-    pkt.emitComputeFlagAddr(module, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
-    pkt.emitBuildAtomicPacket(module, pktVgpr + COPY_PACKET_DWORDS, flagAddrSgpr, addend=1)
-    kw.sgprPool.checkIn(flagAddrSgpr)
     kw.sgprPool.checkIn(fldSgpr)
     kw.sgprPool.checkIn(srcBaseSgpr)
     kw.sgprPool.checkIn(recvBaseSgpr)
@@ -2838,16 +2840,26 @@ class GlobalWriteBatchWriter:
                                totalDwords * 4, curSgpr, offSgpr)
     module.add(SMovB32(dst=sgpr(pendSgpr + 0), src=sgpr(curSgpr + 0), comment="pending = reserved base lo"))
     module.add(SMovB32(dst=sgpr(pendSgpr + 1), src=sgpr(curSgpr + 1), comment="pending = reserved base hi"))
-    ring.emitPlacePacket(module, kw, handleBaseSgpr, pktVgpr, COPY_PACKET_DWORDS,
+    ring.emitPlacePacket(module, kw, handleBaseSgpr, pktSgpr, COPY_PACKET_DWORDS,
                          pendSgpr, offSgpr)
-    # Second packet of the SAME reservation: the wrap padding was already emitted
-    # by the placement above, so its offset is 0.
+
+    # Second packet of the SAME reservation, into the SAME register block. The
+    # build MUST stay below the placement above: it overwrites dwords 0..7 of
+    # the COPY packet, and those stores have to have been emitted already. What
+    # it does NOT need is a wait -- a scalar store's sources only have to
+    # outlive its clause, and the s_mov that starts this build breaks the
+    # clause. The wrap padding was emitted by the placement above, so the
+    # offset is 0.
     module.add(SMovB32(dst=sgpr(offSgpr), src=0, comment="ATOMIC follows the COPY: no further padding"))
-    ring.emitPlacePacket(module, kw, handleBaseSgpr, pktVgpr + COPY_PACKET_DWORDS,
+    flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaFlagAddr", preventOverflow=False)
+    pkt.emitComputeFlagAddr(module, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
+    pkt.emitBuildAtomicPacket(module, pktSgpr, flagAddrSgpr, addend=1)
+    kw.sgprPool.checkIn(flagAddrSgpr)
+    ring.emitPlacePacket(module, kw, handleBaseSgpr, pktSgpr,
                          ATOMIC_PACKET_DWORDS, pendSgpr, offSgpr)
     ring.emitSubmitPacket(module, kw, handleBaseSgpr, curSgpr, pendSgpr)
 
-    kw.vgprPool.checkIn(pktVgpr)
+    kw.sgprPool.checkIn(pktSgpr)
     kw.sgprPool.checkIn(offSgpr)
     kw.sgprPool.checkIn(pendSgpr)
     kw.sgprPool.checkIn(curSgpr)

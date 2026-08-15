@@ -16,28 +16,36 @@
 # (intra-segment offset 160). The 7x8-byte field layout below is the byte
 # contract locked by the static_asserts in that header; do not reorder.
 #
-# EVERY STORE ON THIS PATH IS SCALAR; every load and the CAS are still vector.
+# EVERY STORE AND THE CAS ARE SCALAR; the two remaining LOADS are still vector.
 # The split is not stylistic -- it is exactly how far the hardware evidence
-# reaches. The store direction was measured on gfx950/MI355X: an SDMA engine
-# executed a ring packet written by s_store...glc and a doorbell rung by
-# s_store_dwordx2...glc, with a "doorbell not rung" control proving the engine
-# does not merely poll wptr. The load direction has documentation but no
-# measurement, so it was left alone.
+# reaches, and each half was measured on gfx950/MI355X before being adopted:
+#
+#   stores  an SDMA engine executed a ring packet written by s_store...glc and
+#           a doorbell rung by s_store_dwordx2...glc, with a "doorbell not
+#           rung" control proving the engine does not merely poll wptr.
+#   CAS     512 workgroups spanning all 8 XCDs incremented one 64-bit counter
+#           through s_atomic_cmpswap_x2...glc with zero lost updates, against a
+#           non-atomic control of the same shape that lost 99.5% of them.
+#   loads   documented but NOT measured -- so rptr and the committedWptr spin
+#           were left on the vector path.
 #
 # The two paths therefore carry cache policy in two DIFFERENT encodings:
 #
-#   VECTOR (loads, CAS) -- gfx950 SC[1:0]+NT, NOT gfx1250 scope:/th:, via
+#   VECTOR (the two loads) -- gfx950 SC[1:0]+NT, NOT gfx1250 scope:/th:, via
 #   GLOBALModifiers(glc, slc):
-#     AGENT  (cachedWptr / committedWptr load) : glc=False slc=True  -> "sc1"
-#     SYSTEM (rptr load)                       : glc=True  slc=True  -> "sc0 sc1"
-#     CAS    (cachedWptr reserve, dev+return)  : glc=True  slc=False -> "sc0"
+#     AGENT  (committedWptr spin) : glc=False slc=True  -> "sc1"
+#     SYSTEM (rptr load)          : glc=True  slc=True  -> "sc0 sc1"
 #   sc1 also bypasses L2, which gfx950 needs because its L2 is XCD-local only.
 #
-#   SCALAR (all stores) -- SMEM has NO scope field at all, just the legacy GLC
-#   bit (CDNA4 ISA Table 75). sc0/sc1/nt/slc are rejected outright by the
-#   assembler on SMEM. GLC=1 on a scalar store is write-through past BOTH the
-#   K$ and L2, which is what makes one bit enough to cover every scope the
-#   vector side needed three combinations for.
+#   SCALAR -- SMEM has NO scope field at all, just the legacy GLC bit (CDNA4
+#   ISA Table 75). sc0/sc1/nt/slc are rejected outright by the assembler on
+#   SMEM. ⚠ AND GLC MEANS TWO DIFFERENT THINGS depending on the opcode:
+#     on a STORE  it forces the write past BOTH the K$ and L2, which is what
+#                 makes one bit cover every scope the vector side needed three
+#                 combinations for;
+#     on an ATOMIC it selects return-of-pre-op (ISA 8.2.2) and says nothing
+#                 about caches -- there is no bit left to ask for a scope,
+#                 which is why the CAS needed measuring rather than reasoning.
 #
 # ⚠ A scalar store WITHOUT glc is never visible to anyone -- not to the SDMA
 # engine, not to the host, not even after the kernel ends, because the
@@ -57,8 +65,8 @@ from rocisa.instruction import (
     SCBranchSCC0, SCBranchSCC1, SBranch,
     SWaitCnt, SSleep,
     VReadfirstlaneB32,
-    SStoreB32, SStoreB64, SStoreB128,
-    GlobalLoadB64, GlobalAtomicCmpswapB64,
+    SStoreB32, SStoreB64, SStoreB128, SAtomicCmpswapX2,
+    GlobalLoadB64,
 )
 
 
@@ -109,9 +117,9 @@ class SdmaRingEmitter:
     signatures and fails SILENTLY when violated, so it is spelled out here
     rather than left to the reader of the emitted assembly:
 
-      * EXEC MUST BE NONZERO wherever a value is READ back from memory -- the
-        rptr refresh in emitCanWriteUpto, the cachedWptr load and CAS in
-        emitReserveQueueSpace, and the committedWptr spin in emitSubmitPacket.
+      * EXEC MUST BE NONZERO at the two remaining vector loads -- the rptr
+        refresh in emitCanWriteUpto (reached from emitReserveQueueSpace) and
+        the committedWptr spin in emitSubmitPacket.
         Those still go through v_readfirstlane_b32, which on CDNA4 "overrides
         the EXEC mask for the VGPR read": at EXEC == 0 it is NOT skipped but
         forced to lane 0, reading whatever that lane holds (CDNA4 ISA,
@@ -120,9 +128,9 @@ class SdmaRingEmitter:
         corrupted with no diagnostic. UNENFORCED: electing an active lane is
         the caller's job (GlobalWriteBatch._emitFusedA2ASdmaIssue).
 
-        emitPlacePacket is no longer covered by this: it is pure scalar now.
-        The contract narrowed with the store conversion rather than
-        disappearing, because the load side stayed on the vector path.
+        emitPlacePacket and the reserve CAS are no longer covered by this: both
+        are pure scalar. The contract keeps narrowing as pieces convert rather
+        than disappearing, because the load side stayed on the vector path.
 
     VCC is NOT touched. It used to be clobbered by the v_add_co_u32 pair that
     formed the ring address; the scalar address math (s_add_u32 / s_addc_u32)
@@ -255,16 +263,32 @@ class SdmaRingEmitter:
         must be one atomic step. A fetch_add would let two producers compute
         different padding yet both believe they claimed the slot.
 
-        Per iteration:
-          cur   = load cachedWptr (AGENT)
+        Seeded once, then:
           off   = (WrapIntoRing(cur) + size > queueSize) ? queueSize-WrapIntoRing(cur) : 0
           new   = cur + size + off
           if CanWriteUpto(new) and CAS(cachedWptr, cur -> new) succeeds: break
+          else cur = the CAS's pre-op return, and retry
         Outputs: outCurS (2 SGPRs) = reserved base index; outOffsetS (1 SGPR) =
         pad bytes. sizeInBytes is a compile-time packet size (immediate).
+
+        cur IS NOT RE-READ PER ITERATION. A failing CAS already returns the
+        current memory value, so re-loading would be asking for something the
+        previous instruction just handed over. Only the seed is a load.
+
+        WHY THE SEED MAY BE A SCALAR LOAD even though the load direction is
+        otherwise left on the vector path: it is a HINT, not a correctness
+        input. The CAS self-corrects -- a wrong seed just loses the first race
+        and comes back with the truth. The one failure it could cause is a
+        livelock, if a bogus seed made CanWriteUpto say "full" forever and the
+        CAS that would fix it were never reached. That cannot happen here:
+        cachedWptr only ever increases, so a stale seed is SMALLER than the
+        truth, which makes `new` smaller and the gap to rptr smaller, i.e.
+        strictly more likely to pass the room check. Staleness can cost an
+        extra CAS round; it cannot wedge the loop.
         """
         loopLabel  = Label(w.labels.getNameInc("sdma_reserve_loop"), "ReserveQueueSpace: CAS retry loop")
         noPadLabel = Label(w.labels.getNameInc("sdma_reserve_nopad"), "ReserveQueueSpace: no wrap padding")
+        retryLabel = Label(w.labels.getNameInc("sdma_reserve_retry"), "ReserveQueueSpace: lost the race")
         doneLabel  = Label(w.labels.getNameInc("sdma_reserve_done"),  "ReserveQueueSpace: reserved")
 
         cachedWptrPtrS = w.sgprPool.checkOutAligned(2, 2, tag="sdma_rsv_cwPtr", preventOverflow=False)
@@ -276,21 +300,21 @@ class SdmaRingEmitter:
         canS    = w.sgprPool.checkOut(1, tag="sdma_rsv_can", preventOverflow=False)
         tmpPair = w.sgprPool.checkOutAligned(2, 2, tag="sdma_rsv_tmp", preventOverflow=False)
 
-        # VGPRs for the CAS: address + a 4-dword data reg [0:1]=swap(new), [2:3]=compare(cur).
-        vCasAddr = w.vgprPool.checkOutAligned(2, 2, tag="sdma_rsv_casAddr")
-        vCasData = w.vgprPool.checkOutAligned(4, 4, tag="sdma_rsv_casData")
+        # CAS data block: [0:1]=swap(new) and the pre-op return, [2:3]=compare(cur).
+        # 4-ALIGNED -- SMEM requires a multiple of four for a 4-dword SDATA and
+        # the assembler rejects anything else outright.
+        casDataS = w.sgprPool.checkOutAligned(4, 4, tag="sdma_rsv_casData", preventOverflow=False)
+
+        # Seed the compare slot with the current value (see the docstring on why
+        # a possibly-stale seed is safe here).
+        module.add(SLoadB64(dst=sgpr(casDataS + 2, 2), base=sgpr(cachedWptrPtrS, 2),
+                            soffset=hex(0), smem=SMEMModifiers(glc=True),
+                            comment="seed cur = cachedWptr (hint; the CAS self-corrects)"))
+        module.add(SWaitCnt(kmcnt=0, comment="wait cachedWptr seed"))
 
         module.add(loopLabel)
-        # cur = load cachedWptr (AGENT scope).
-        self._ptrToVgpr(module, vCasAddr, cachedWptrPtrS, "cachedWptr addr")
-        off = vgpr("off", 1, False, False, True)
-        module.add(GlobalLoadB64(
-            dst=vgpr(vCasData + 2, 2), vaddr=vgpr(vCasAddr, 2), saddr=off,
-            modifier=GLOBALModifiers(glc=False, slc=True),
-            comment="cur = load cachedWptr (AGENT scope, sc1)"))
-        module.add(SWaitCnt(vlcnt=0, comment="wait cachedWptr load"))
-        module.add(self._vReadfirstlane(outCurS + 0, vCasData + 2, "cur lo -> sgpr"))
-        module.add(self._vReadfirstlane(outCurS + 1, vCasData + 3, "cur hi -> sgpr"))
+        module.add(SMovB32(dst=sgpr(outCurS + 0), src=sgpr(casDataS + 2), comment="cur lo = compare slot"))
+        module.add(SMovB32(dst=sgpr(outCurS + 1), src=sgpr(casDataS + 3), comment="cur hi = compare slot"))
 
         # off = 0 by default; if WrapIntoRing(cur)+size > queueSize -> pad tail.
         module.add(SMovB32(dst=sgpr(outOffsetS), src=0, comment="offset = 0 (no pad)"))
@@ -318,24 +342,30 @@ class SdmaRingEmitter:
         module.add(SCBranchSCC1(labelName=loopLabel.getLabelName(), comment="full -> retry"))
 
         # CAS(cachedWptr, cur -> new): data[0:1]=new(swap), data[2:3]=cur(compare).
-        module.add(VMovB32(dst=vgpr(vCasData + 0), src=sgpr(newIdxS + 0), comment="swap lo = new"))
-        module.add(VMovB32(dst=vgpr(vCasData + 1), src=sgpr(newIdxS + 1), comment="swap hi = new"))
-        # (vCasData+2/3 already hold cur from the load above = the compare value.)
-        self._emitReserveCas(module, w, cachedWptrPtrS, vCasAddr, vCasData)
-        module.add(SWaitCnt(vlcnt=0, vscnt=0, comment="wait CAS return"))
-        # CAS returns the pre-op memory value in vCasData[0:1]; success iff it == cur.
-        module.add(self._vReadfirstlane(tmpPair + 0, vCasData + 0, "CAS pre-op lo"))
-        module.add(SCmpEQU32(src0=sgpr(tmpPair + 0), src1=sgpr(outCurS + 0),
+        module.add(SMovB32(dst=sgpr(casDataS + 0), src=sgpr(newIdxS + 0), comment="swap lo = new"))
+        module.add(SMovB32(dst=sgpr(casDataS + 1), src=sgpr(newIdxS + 1), comment="swap hi = new"))
+        # (casDataS+2/3 already hold cur = the compare value.)
+        self._emitReserveCas(module, w, cachedWptrPtrS, casDataS)
+        module.add(SWaitCnt(kmcnt=0, comment="wait CAS return"))
+        # The pre-op memory value comes back in casDataS[0:1]; we won iff it == cur.
+        module.add(SCmpEQU32(src0=sgpr(casDataS + 0), src1=sgpr(outCurS + 0),
                              comment="CAS pre-op lo == cur lo? (won the slot)"))
-        module.add(SCBranchSCC0(labelName=loopLabel.getLabelName(), comment="lost race -> retry"))
-        module.add(self._vReadfirstlane(tmpPair + 1, vCasData + 1, "CAS pre-op hi"))
-        module.add(SCmpEQU32(src0=sgpr(tmpPair + 1), src1=sgpr(outCurS + 1), comment="pre-op hi == cur hi?"))
-        module.add(SCBranchSCC0(labelName=loopLabel.getLabelName(), comment="lost race -> retry"))
+        module.add(SCBranchSCC0(labelName=retryLabel.getLabelName(), comment="lost race -> retry"))
+        module.add(SCmpEQU32(src0=sgpr(casDataS + 1), src1=sgpr(outCurS + 1), comment="pre-op hi == cur hi?"))
+        module.add(SCBranchSCC0(labelName=retryLabel.getLabelName(), comment="lost race -> retry"))
         module.add(SBranch(labelName=doneLabel.getLabelName(), comment="won -> reserved"))
+
+        # Lost the race: the pre-op value IS the current cur, so move it into the
+        # compare slot and go round again. This is the only path that updates
+        # cur, which is why the loop body itself never reloads it.
+        module.add(retryLabel)
+        module.add(SMovB32(dst=sgpr(casDataS + 2), src=sgpr(casDataS + 0),
+                           comment="cur lo = CAS pre-op (refresh from the failed swap)"))
+        module.add(SMovB32(dst=sgpr(casDataS + 3), src=sgpr(casDataS + 1), comment="cur hi = CAS pre-op"))
+        module.add(SBranch(labelName=loopLabel.getLabelName(), comment="retry with the refreshed cur"))
         module.add(doneLabel)
 
-        w.vgprPool.checkIn(vCasAddr)
-        w.vgprPool.checkIn(vCasData)
+        w.sgprPool.checkIn(casDataS)
         w.sgprPool.checkIn(cachedWptrPtrS)
         w.sgprPool.checkIn(newIdxS)
         w.sgprPool.checkIn(wrapS)
@@ -343,24 +373,39 @@ class SdmaRingEmitter:
         w.sgprPool.checkIn(tmpPair)
         return module
 
-    def _emitReserveCas(self, module, w, cachedWptrPtrS, vCasAddr, vCasData):
-        """64-bit compare-exchange of cachedWptr, device scope + return (sc0).
+    def _emitReserveCas(self, module, w, cachedWptrPtrS, casDataS):
+        """64-bit compare-exchange of cachedWptr, returning the pre-op value.
 
-        Isolated so the CAS primitive can be swapped without touching the reserve
-        logic. Uses global_atomic_cmpswap_x2 (the GlobalAtomicCmpswapB64 opcode,
-        rendered "_x2" on gfx9 / "_b64" on gfx11+), taking the raw cachedWptr
-        pointer in VGPRs directly -- the same bare-pointer atomic idiom the fused-
-        A2A handshake uses (GlobalWriteBatch._emitFusedA2AHandshake). vCasData is
-        4 dwords: [0:1]=swap(new), [2:3]=compare(cur); the pre-op value returns in
-        [0:1]. glc=True selects return-of-pre-op (the assembler REQUIRES sc0 on
-        this op: "instruction must use sc0"); slc=False selects device scope.
+        Isolated so the CAS primitive can be swapped without touching the
+        reserve logic. casDataS is a 4-ALIGNED run of 4 SGPRs:
+        [0:1]=swap(new), [2:3]=compare(cur), and the pre-op value comes back
+        over [0:1] -- the operand layout is the same one the vector form used
+        (CDNA4 ISA, S_ATOMIC_CMPSWAP_X2).
+
+        glc HAS A DIFFERENT JOB HERE than on the stores in this file. On a
+        scalar store it forces the write past the K$ and L2; on a scalar atomic
+        it selects return-of-pre-op (ISA 8.2.2). That leaves SMEM with no bit at
+        all to request a coherence scope, and the ISA never says what scope you
+        get -- which matters because this CAS is the multi-producer mutual
+        exclusion for the whole ring. Measured on gfx950 before adopting it: 512
+        workgroups across all 8 XCDs incrementing one 64-bit counter through
+        this instruction lost zero updates, against a non-atomic control on the
+        same shape that lost 99.5% of them.
+
+        TWO CLAUSE RULES APPLY, both currently satisfied by the surrounding code
+        rather than by anything that would complain if they stopped being:
+          * "Atomics ... must be in a single-instruction clause" (ISA 8.2). The
+            s_mov before and the s_waitcnt after keep this one alone; do not let
+            another SMEM op become adjacent to it.
+          * The retry path overwrites the compare half from the pre-op half,
+            i.e. it rewrites this instruction's own source registers. That is
+            explicitly blessed: "an atomic that returns the pre-op value
+            overwrites its data source, which is acceptable" (same section).
         """
-        self._ptrToVgpr(module, vCasAddr, cachedWptrPtrS, "cachedWptr addr")
-        off = vgpr("off", 1, False, False, True)
-        module.add(GlobalAtomicCmpswapB64(
-            dst=vgpr(vCasData, 2), vaddr=vgpr(vCasAddr, 2), data=vgpr(vCasData, 4), saddr=off,
-            modifier=GLOBALModifiers(glc=True, slc=False),
-            comment="CAS cachedWptr cur->new (device scope, return pre-op: sc0)"))
+        module.add(SAtomicCmpswapX2(
+            dst=sgpr(casDataS, 4), base=sgpr(cachedWptrPtrS, 2), soffset=hex(0),
+            smem=SMEMModifiers(glc=True),
+            comment="CAS cachedWptr cur->new (glc = return pre-op)"))
         return module
 
     # ---- placePacket -------------------------------------------------------

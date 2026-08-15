@@ -16,9 +16,9 @@
 # (intra-segment offset 160). The 7x8-byte field layout below is the byte
 # contract locked by the static_asserts in that header; do not reorder.
 #
-# EVERY STORE AND THE CAS ARE SCALAR; the two remaining LOADS are still vector.
-# The split is not stylistic -- it is exactly how far the hardware evidence
-# reaches, and each half was measured on gfx950/MI355X before being adopted:
+# THIS WHOLE PATH IS SCALAR -- every store, every load, and the CAS. Nothing
+# here touches a VGPR, EXEC or VCC. That was arrived at one piece at a time,
+# each measured on gfx950/MI355X first, because the ISA cannot answer any of it:
 #
 #   stores  an SDMA engine executed a ring packet written by s_store...glc and
 #           a doorbell rung by s_store_dwordx2...glc, with a "doorbell not
@@ -26,26 +26,23 @@
 #   CAS     512 workgroups spanning all 8 XCDs incremented one 64-bit counter
 #           through s_atomic_cmpswap_x2...glc with zero lost updates, against a
 #           non-atomic control of the same shape that lost 99.5% of them.
-#   loads   documented but NOT measured -- so rptr and the committedWptr spin
-#           were left on the vector path.
+#   loads   a spin on s_load...glc observed a value published by a peer
+#           workgroup, and separately one published by the host, in tens of
+#           thousands of iterations each -- i.e. it really re-reads. The same
+#           spin WITHOUT glc never observed either one in 20 million iterations.
+#           A load in a spin is a different question from a one-shot load, and
+#           the failure mode is a hang rather than a wrong value.
 #
-# The two paths therefore carry cache policy in two DIFFERENT encodings:
-#
-#   VECTOR (the two loads) -- gfx950 SC[1:0]+NT, NOT gfx1250 scope:/th:, via
-#   GLOBALModifiers(glc, slc):
-#     AGENT  (committedWptr spin) : glc=False slc=True  -> "sc1"
-#     SYSTEM (rptr load)          : glc=True  slc=True  -> "sc0 sc1"
-#   sc1 also bypasses L2, which gfx950 needs because its L2 is XCD-local only.
-#
-#   SCALAR -- SMEM has NO scope field at all, just the legacy GLC bit (CDNA4
-#   ISA Table 75). sc0/sc1/nt/slc are rejected outright by the assembler on
-#   SMEM. ⚠ AND GLC MEANS TWO DIFFERENT THINGS depending on the opcode:
-#     on a STORE  it forces the write past BOTH the K$ and L2, which is what
-#                 makes one bit cover every scope the vector side needed three
-#                 combinations for;
-#     on an ATOMIC it selects return-of-pre-op (ISA 8.2.2) and says nothing
-#                 about caches -- there is no bit left to ask for a scope,
-#                 which is why the CAS needed measuring rather than reasoning.
+# SMEM has NO scope field, just the legacy GLC bit (CDNA4 ISA Table 75);
+# sc0/sc1/nt/slc are rejected outright by the assembler on SMEM.
+# ⚠ AND GLC MEANS THREE DIFFERENT THINGS depending on the opcode:
+#     STORE   forces the write past BOTH the K$ and L2 -- one bit covering
+#             every scope the vector side needed three combinations for.
+#     LOAD    forces the read past both, which is what turns a repeated load
+#             into an actual poll instead of one value read many times.
+#     ATOMIC  selects return-of-pre-op (ISA 8.2.2) and says nothing about
+#             caches -- there is no bit left to ask for a scope, which is why
+#             the CAS had to be measured rather than reasoned about.
 #
 # ⚠ A scalar store WITHOUT glc is never visible to anyone -- not to the SDMA
 # engine, not to the host, not even after the kernel ends, because the
@@ -55,18 +52,16 @@
 # for whom omitting it would be correct.
 ################################################################################
 
-from rocisa.container import vgpr, sgpr, GLOBALModifiers, SMEMModifiers
+from rocisa.container import sgpr, SMEMModifiers
 from rocisa.code import Module, Label
 from rocisa.instruction import (
-    SMovB32, VMovB32, SLoadB64,
+    SMovB32, SLoadB64,
     SAddU32, SAddCU32, SSubU32, SSubBU32,
     SAndB32, SLShiftRightB32,
     SCmpEQU32, SCmpLtU32,
     SCBranchSCC0, SCBranchSCC1, SBranch,
     SWaitCnt, SSleep,
-    VReadfirstlaneB32,
     SStoreB32, SStoreB64, SStoreB128, SAtomicCmpswapX2,
-    GlobalLoadB64,
 )
 
 
@@ -100,7 +95,7 @@ class SdmaRingEmitter:
 
     One instance is stateless; every method takes the registers it operates on
     (the caller -- KernelWriterAssembly -- owns the pools) plus a
-    `w` context exposing `.sgprPool` / `.vgprPool` / `.labels`, mirroring the
+    `w` context exposing `.sgprPool` and `.labels`, mirroring the
     GL2PrefetchLoad component. Persistent per-producer state lives in caller-
     owned SGPRs:
       * handleBase (2 SGPRs): pointer to this peer's SdmaQueueDeviceHandle.
@@ -113,29 +108,25 @@ class SdmaRingEmitter:
     loaded on demand with s_load_dwordx2 from handleBase+offset, matching the
     on-demand kernarg loads in _fusedA2ALoadRecvBase.
 
-    REGISTER SIDE EFFECTS / CALLER CONTRACT. This is invisible in the method
-    signatures and fails SILENTLY when violated, so it is spelled out here
-    rather than left to the reader of the emitted assembly:
+    NO EXEC OR VCC CONTRACT. Two debts used to live here and both are now gone
+    with their causes rather than merely documented:
 
-      * EXEC MUST BE NONZERO at the two remaining vector loads -- the rptr
-        refresh in emitCanWriteUpto (reached from emitReserveQueueSpace) and
-        the committedWptr spin in emitSubmitPacket.
-        Those still go through v_readfirstlane_b32, which on CDNA4 "overrides
-        the EXEC mask for the VGPR read": at EXEC == 0 it is NOT skipped but
-        forced to lane 0, reading whatever that lane holds (CDNA4 ISA,
-        V_READFIRSTLANE_B32). So entry with EXEC == 0 neither faults nor hangs
-        -- the CAS and the submit spin compare against garbage and the ring is
-        corrupted with no diagnostic. UNENFORCED: electing an active lane is
-        the caller's job (GlobalWriteBatch._emitFusedA2ASdmaIssue).
+      * EXEC != 0 was required because every memory-to-SGPR step went through
+        v_readfirstlane_b32, which on CDNA4 "overrides the EXEC mask for the
+        VGPR read" -- at EXEC == 0 it is not skipped but forced to lane 0,
+        so an all-inactive entry silently compared against a never-loaded
+        register instead of faulting. There is no readfirstlane left.
+      * VCC was clobbered by the v_add_co_u32 pair that formed the ring
+        address. The scalar address math (s_add_u32 / s_addc_u32) has no carry
+        register.
 
-        emitPlacePacket and the reserve CAS are no longer covered by this: both
-        are pure scalar. The contract keeps narrowing as pieces convert rather
-        than disappearing, because the load side stayed on the vector path.
+    Both were "ACCEPTED DEBT, fails silently when violated" for as long as any
+    part of this path was vector. Do not reintroduce a readfirstlane or a VOP2
+    carry form to save an instruction; the value here is that a caller cannot
+    get it wrong, not the instruction count.
 
-    VCC is NOT touched. It used to be clobbered by the v_add_co_u32 pair that
-    formed the ring address; the scalar address math (s_add_u32 / s_addc_u32)
-    has no carry register, so that debt is retired rather than merely
-    documented. Do not reintroduce a VOP2 carry form here.
+    The emitter still takes `w` for `.sgprPool` and `.labels`. It no longer
+    touches `.vgprPool`.
     """
 
     def __init__(self, queueSize: int = SDMA_QUEUE_SIZE):
@@ -164,14 +155,6 @@ class SdmaRingEmitter:
                            comment=comment or "WrapIntoRing: idx & (SDMA_QUEUE_SIZE-1)"))
         return module
 
-    def _ptrToVgpr(self, module, vPairV, sPairS, comment=""):
-        """Copy a 64-bit pointer from an SGPR pair to a VGPR pair (global_* on
-        gfx950 take the address in VGPRs with a null saddr, per the fused-A2A
-        idiom)."""
-        module.add(VMovB32(dst=vgpr(vPairV + 0), src=sgpr(sPairS + 0), comment=comment + " lo"))
-        module.add(VMovB32(dst=vgpr(vPairV + 1), src=sgpr(sPairS + 1), comment=comment + " hi"))
-        return module
-
     # ---- CanWriteUpto ------------------------------------------------------
 
     def emitCanWriteUpto(self, module, w, handleBaseS, cachedHwReadIdxS,
@@ -180,10 +163,10 @@ class SdmaRingEmitter:
 
         Fast path uses the private cache only (no memory traffic):
             if (upto - cachedHwReadIndex) < queueSize: return true
-        Slow path (cache says full) reads the hardware rptr at SYSTEM scope,
-        refreshes the cache, and re-tests. Emits the SYSTEM-scope rptr load
-        (glc/slc => sc0 sc1). `resultS` is set to 1 (can write) or 0 (full);
-        the caller branches on it. All index math is 64-bit (idx pair = S:S+1).
+        Slow path (cache says full) reads the hardware rptr with s_load...glc,
+        refreshes the cache, and re-tests. `resultS` is set to 1 (can write) or
+        0 (full); the caller branches on it. All index math is 64-bit
+        (idx pair = S:S+1).
 
         CALLER CONTRACT: `resultS` MUST be disjoint from `uptoIdxS`,
         `cachedHwReadIdxS` and `tmpPairS`. It is defaulted to 0 as the very first
@@ -212,27 +195,24 @@ class SdmaRingEmitter:
                              comment="diff < queueSize? (fast-path room check)"))
         module.add(SCBranchSCC1(labelName=canLabel.getLabelName(), comment="room via cached index"))
 
-        # Slow path: SYSTEM-scope read of the hardware rptr, refresh cache, retest.
+        # Slow path: read the hardware rptr, refresh the cache, retest. The read
+        # lands STRAIGHT IN the caller's private pair -- it is the refresh, so
+        # there is nothing to relay. cachedHwReadIdxS must be 2-ALIGNED, which
+        # the caller already guarantees for its own 64-bit arithmetic.
+        #
+        # ⚠ THIS PATH IS ALMOST NEVER EXERCISED end to end: it runs only when
+        # the room check fails, i.e. when the SDMA engine has fallen a whole
+        # ring behind. A passing validation run is therefore NOT evidence about
+        # these instructions. What they rest on is the direct measurement of
+        # s_load...glc under a spin (see the file header).
         module.add(fullLabel)
         rptrPtrS = w.sgprPool.checkOutAligned(2, 2, tag="sdma_cw_rptrPtr", preventOverflow=False)
         self._loadFieldPtr(module, w, rptrPtrS, handleBaseS, OFF_rptr)
         module.add(SWaitCnt(kmcnt=0, comment="wait rptr pointer load"))
-        vRptrAddr = w.vgprPool.checkOutAligned(2, 2, tag="sdma_cw_rptrAddr")
-        vRptrVal  = w.vgprPool.checkOutAligned(2, 2, tag="sdma_cw_rptrVal")
-        self._ptrToVgpr(module, vRptrAddr, rptrPtrS, "rptr addr")
-        off = vgpr("off", 1, False, False, True)
-        module.add(GlobalLoadB64(
-            dst=vgpr(vRptrVal, 2), vaddr=vgpr(vRptrAddr, 2), saddr=off,
-            modifier=GLOBALModifiers(glc=True, slc=True),
-            comment="load hardware rptr (SYSTEM scope, sc0 sc1)"))
-        module.add(SWaitCnt(vlcnt=0, comment="wait rptr load"))
-        # refresh cachedHwReadIndex = rptr (into the caller's private SGPR pair).
-        module.add(VReadfirstlaneB32(dst=sgpr(cachedHwReadIdxS + 0), src=vgpr(vRptrVal + 0),
-                                     comment="cachedHwReadIndex lo = rptr"))
-        module.add(VReadfirstlaneB32(dst=sgpr(cachedHwReadIdxS + 1), src=vgpr(vRptrVal + 1),
-                                     comment="cachedHwReadIndex hi = rptr"))
-        w.vgprPool.checkIn(vRptrAddr)
-        w.vgprPool.checkIn(vRptrVal)
+        module.add(SLoadB64(dst=sgpr(cachedHwReadIdxS, 2), base=sgpr(rptrPtrS, 2),
+                            soffset=hex(0), smem=SMEMModifiers(glc=True),
+                            comment="cachedHwReadIndex = hardware rptr"))
+        module.add(SWaitCnt(kmcnt=0, comment="wait rptr load"))
         w.sgprPool.checkIn(rptrPtrS)
         # retest with refreshed cache.
         self._emitU64Sub(module, tmpPairS, uptoIdxS, cachedHwReadIdxS,
@@ -275,9 +255,9 @@ class SdmaRingEmitter:
         current memory value, so re-loading would be asking for something the
         previous instruction just handed over. Only the seed is a load.
 
-        WHY THE SEED MAY BE A SCALAR LOAD even though the load direction is
-        otherwise left on the vector path: it is a HINT, not a correctness
-        input. The CAS self-corrects -- a wrong seed just loses the first race
+        THE SEED IS A HINT, not a correctness input, which is worth knowing
+        because it is the one read here whose freshness nothing depends on.
+        The CAS self-corrects -- a wrong seed just loses the first race
         and comes back with the truth. The one failure it could cause is a
         livelock, if a bogus seed made CanWriteUpto say "full" forever and the
         CAS that would fix it were never reached. That cannot happen here:
@@ -576,8 +556,7 @@ class SdmaRingEmitter:
         publish the packet.
 
         (1) spin until committedWptr == base (this producer's turn; earlier
-            reservations commit in order). Read committedWptr at AGENT scope --
-            still a vector load, so this is where the EXEC != 0 contract bites.
+            reservations commit in order), polling with s_load...glc.
         (2) Publish sequence (any bit wrong => timing hang):
               store wptr = pending        s_store_dwordx2 glc
               s_waitcnt lgkmcnt(0)
@@ -610,26 +589,25 @@ class SdmaRingEmitter:
         self._loadFieldPtr(module, w, commPtrS, handleBaseS, OFF_committedWptr)
         module.add(SWaitCnt(kmcnt=0, comment="wait committedWptr pointer load"))
 
-        vAddr = w.vgprPool.checkOutAligned(2, 2, tag="sdma_sp_addr")
-        vVal  = w.vgprPool.checkOutAligned(2, 2, tag="sdma_sp_val")
-        tmpS  = w.sgprPool.checkOut(1, tag="sdma_sp_tmp", preventOverflow=False)
-        off   = vgpr("off", 1, False, False, True)
-        self._ptrToVgpr(module, vAddr, commPtrS, "committedWptr addr")
+        # 2-ALIGNED: this pair is the x2 destination of the poll below.
+        pollS = w.sgprPool.checkOutAligned(2, 2, tag="sdma_sp_poll", preventOverflow=False)
 
         spinLabel = Label(w.labels.getNameInc("sdma_submit_spin"), "submitPacket: wait committedWptr == base")
         spinDone  = Label(w.labels.getNameInc("sdma_submit_ready"), "submitPacket: our turn")
         module.add(spinLabel)
         module.add(SSleep(simm16=1, comment="submitPacket: backoff between polls (must stay INSIDE the spin body)"))
-        module.add(GlobalLoadB64(
-            dst=vgpr(vVal, 2), vaddr=vgpr(vAddr, 2), saddr=off,
-            modifier=GLOBALModifiers(glc=False, slc=True),
-            comment="load committedWptr (AGENT scope, sc1)"))
-        module.add(SWaitCnt(vlcnt=0, comment="wait committedWptr load"))
-        module.add(self._vReadfirstlane(tmpS, vVal + 0, "committedWptr lo"))
-        module.add(SCmpEQU32(src0=sgpr(tmpS), src1=sgpr(baseS + 0), comment="committedWptr lo == base lo?"))
+        # glc is what makes this a POLL rather than one read repeated: it forces
+        # the load past the K$ and L2 every pass. Measured, because a one-shot
+        # load and a load in a spin are different questions -- a scalar load
+        # without glc was still returning its first value after 20 million
+        # iterations, which here would be a hang rather than a wrong answer.
+        module.add(SLoadB64(dst=sgpr(pollS, 2), base=sgpr(commPtrS, 2),
+                            soffset=hex(0), smem=SMEMModifiers(glc=True),
+                            comment="poll committedWptr"))
+        module.add(SWaitCnt(kmcnt=0, comment="wait committedWptr load"))
+        module.add(SCmpEQU32(src0=sgpr(pollS + 0), src1=sgpr(baseS + 0), comment="committedWptr lo == base lo?"))
         module.add(SCBranchSCC0(labelName=spinLabel.getLabelName(), comment="not our turn -> spin"))
-        module.add(self._vReadfirstlane(tmpS, vVal + 1, "committedWptr hi"))
-        module.add(SCmpEQU32(src0=sgpr(tmpS), src1=sgpr(baseS + 1), comment="committedWptr hi == base hi?"))
+        module.add(SCmpEQU32(src0=sgpr(pollS + 1), src1=sgpr(baseS + 1), comment="committedWptr hi == base hi?"))
         module.add(SCBranchSCC0(labelName=spinLabel.getLabelName(), comment="not our turn -> spin"))
         module.add(spinDone)
         # The packet stores are scalar, so what has to drain here is lgkmcnt,
@@ -670,13 +648,11 @@ class SdmaRingEmitter:
             comment="store committedWptr = pending"))
         module.add(SWaitCnt(kmcnt=0, comment="wait committedWptr store issued"))
 
-        w.vgprPool.checkIn(vAddr)
-        w.vgprPool.checkIn(vVal)
-        w.sgprPool.checkIn(tmpS)
+        w.sgprPool.checkIn(pollS)
         w.sgprPool.checkIn(commPtrS)
         return module
 
-    # ---- utility: 64-bit sub + readfirstlane --------------------------------
+    # ---- utility: 64-bit sub -------------------------------------------------
 
     def _emitU64Sub(self, module, dstPairS, aPairS, bPairS, comment):
         """dst = a - b (64-bit) via s_sub_u32 / s_subb_u32.
@@ -691,13 +667,3 @@ class SdmaRingEmitter:
         module.add(SSubBU32(dst=sgpr(dstPairS + 1), src0=sgpr(aPairS + 1), src1=sgpr(bPairS + 1),
                             comment=comment + " (hi, borrow)"))
         return module
-
-    def _vReadfirstlane(self, dstS, srcV, comment):
-        """v_readfirstlane_b32: move a lane-uniform VGPR value to an SGPR (the
-        reserve/submit math is uniform, so the lowest active lane is
-        representative).
-
-        REQUIRES EXEC != 0: the instruction overrides the EXEC mask for its VGPR
-        read, so EXEC == 0 yields a never-loaded register rather than a skip
-        (see the class docstring)."""
-        return VReadfirstlaneB32(dst=sgpr(dstS), src=vgpr(srcV), comment=comment)

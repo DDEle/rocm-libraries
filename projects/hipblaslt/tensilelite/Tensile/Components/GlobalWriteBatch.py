@@ -2853,7 +2853,7 @@ class GlobalWriteBatchWriter:
     module.add(SMovB32(dst=sgpr(offSgpr), src=0, comment="ATOMIC follows the COPY: no further padding"))
     flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaFlagAddr", preventOverflow=False)
     pkt.emitComputeFlagAddr(module, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
-    pkt.emitBuildAtomicPacket(module, pktSgpr, flagAddrSgpr, addend=1)
+    pkt.emitBuildAtomicPacket(module, pktSgpr, flagAddrSgpr)
     kw.sgprPool.checkIn(flagAddrSgpr)
     ring.emitPlacePacket(module, kw, handleBaseSgpr, pktSgpr,
                          ATOMIC_PACKET_DWORDS, pendSgpr, offSgpr)

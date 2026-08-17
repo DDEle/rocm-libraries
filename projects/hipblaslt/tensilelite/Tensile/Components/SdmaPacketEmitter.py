@@ -145,20 +145,13 @@ class SdmaPacketEmitter:
                                   comment="SUBWIN DW9: dst_pitch-1 (<< 13)"))
         module.add(SSubU32(dst=sgpr(pktS + 10), src0=sgpr(dstSliceS), src1=1,
                            comment="SUBWIN DW10: dst_slice-1 (slice - 1)"))
-        # DW11: two 14-bit extents at [13:0] and [29:16].  Both extents are
-        # assembled RAW and the pair of minus-ones taken by one subtract of
-        # 0x00010001, which is exact as long as rect_x >= 1: the low borrow
-        # stops inside [13:0] and never reaches bit 16.  rect_x = 0 is a
-        # degenerate rect that already produced a corrupt dword, so this costs
-        # no new precondition -- and it needs neither a scratch register nor a
-        # second subtract.  rect_y is NOT scaled to packet elements: it counts
-        # rows.
+        # DW11: two 14-bit extents at [13:0] and [29:16].
         module.add(SLShiftLeftB32(dst=sgpr(pktS + 11), src=sgpr(rectYS), shiftHex=16,
                                   comment="SUBWIN DW11: rect_x|rect_y (rectY << 16, rows: NOT scaled)"))
         module.add(SOrB32(dst=sgpr(pktS + 11), src0=sgpr(pktS + 11), src1=sgpr(rectXS),
                           comment="SUBWIN DW11: rect_x|rect_y (| rectX)"))
         module.add(SSubU32(dst=sgpr(pktS + 11), src0=sgpr(pktS + 11), src1=hex(0x00010001),
-                           comment="SUBWIN DW11: rect_x-1|rect_y-1 (both extents minus one)"))
+                           comment="SUBWIN DW11: rect_x-1|rect_y-1 (both minus one; exact for rect_x >= 1)"))
         module.add(SMovB32(dst=sgpr(pktS + 12), src=hex(0),
                            comment="SUBWIN DW12: rect_z=0, default cache/swizzle"))
 

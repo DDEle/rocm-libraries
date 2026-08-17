@@ -99,25 +99,6 @@ def fusedA2AKernArgLayout():
 # (MAX_RANKS peer_ptr + counter_ptr + FusedSdmaQueues) * 8B + 4 scalars * 4B.
 FUSED_A2A_SEGMENT_BYTES = (FUSED_A2A_MAX_RANKS + 2) * 8 + 4 * 4
 
-def _currentKernArgOffset(signature) -> int:
-    """Byte offset the NEXT addArg() would receive (== accumulated kernarg size).
-
-    SignatureCodeMeta tracks this internally but does not expose it to Python,
-    so it is recovered from the emitted metadata: last ``.offset:`` + ``.size:``.
-    """
-    text = str(signature)
-    lastSize = None
-    lastOffset = None
-    for line in text.splitlines():
-        s = line.strip()
-        if s.startswith(".size:"):
-            lastSize = int(s.split(":", 1)[1].strip())
-        elif s.startswith(".offset:"):
-            lastOffset = int(s.split(":", 1)[1].strip())
-    if lastOffset is None or lastSize is None:
-        return 0
-    return lastOffset + lastSize
-
 @dataclass
 class UserArgumentsInfo:
     # Common args
@@ -438,7 +419,7 @@ class SignatureDefault(Signature):
         # Fused GEMM.A2A kernarg metadata; registered LAST so it lands at the
         # tail. See fusedA2AKernArgLayout() for the offset contract.
         if kernel["FusedGemmA2A"]:
-            fusedBase = _currentKernArgOffset(signature)
+            fusedBase = signature.offset
             for j in range(FUSED_A2A_MAX_RANKS):
                 signature.addArg("peer_ptr_%u" % j, SVK.SIG_GLOBALBUFFER, "void", "generic")
             signature.addArg("counter_ptr",     SVK.SIG_GLOBALBUFFER, "void", "generic")

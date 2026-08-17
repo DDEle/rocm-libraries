@@ -54,25 +54,11 @@ SDMA_OP_ATOMIC         = 10
 SDMA_ATOMIC_ADD_RTN_32 = 15
 ATOMIC_PACKET_DWORDS   = 8
 
-# TWO DIFFERENT "ELEMENT SIZES".  Conflating them is a silent 8x address error.
-#   D_DATA_ELEMENT_LOG2 is sizeof(bf16) in BYTES, and converts element-unit
-#     geometry into the byte offset folded into a base address -- so it never
-#     changes with the one below.
-#   PACKET_ELEMENT_SIZE_LOG2 is the packet's ADDRESSING GRANULARITY (header
-#     field [31:29]): the unit for x, the pitches, the slice pitches and
-#     rect_x, but NOT for y or rect_y, which are row indices the hardware does
-#     not scale.  Only the 16-byte encoding is hardware-validated; the field
-#     being 3 bits wide is not evidence every encoding works.
-D_DATA_ELEMENT_LOG2      = 1
-PACKET_ELEMENT_SIZE_LOG2 = 4
+# Two different element sizes; conflating them is a silent 8x address error.
+D_DATA_ELEMENT_LOG2      = 1   # sizeof(bf16) in BYTES: element geometry -> byte offset
+PACKET_ELEMENT_SIZE_LOG2 = 4   # packet addressing granularity (header [31:29]); only 16B is validated
 ELEMENT_SHIFT = PACKET_ELEMENT_SIZE_LOG2 - D_DATA_ELEMENT_LOG2   # 3
 
-# Header dwords are all immediates, so DW0 is folded at import rather than
-# built at runtime.  COPY_HEADER_DW0 is ABOVE INT32_MAX and so must reach
-# SMovB32 as a hex STRING: rocisa's InstructionInput has no 64-bit integer
-# variant, and an int that does not fit a C++ 32-bit int falls through to the
-# double branch and renders as "2147484673.0".  Hence hex() on every immediate
-# below.  (s_mov_b32 itself takes the value fine.)
 COPY_HEADER_DW0 = ((SDMA_OP_COPY_SUBWIN & 0xFF)
                    | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8)
                    | ((PACKET_ELEMENT_SIZE_LOG2 & 0x7) << 29))

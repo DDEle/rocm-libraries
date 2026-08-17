@@ -2598,33 +2598,18 @@ class GlobalWriteBatchWriter:
     The four packet COORDINATES are folded into the two 64-bit bases here,
     which is what leaves N unconstrained by the 14-bit coordinate fields.
 
-    UNIT CONVERSION IS THIS FUNCTION'S JOB, not the emitter's: it emits every
-    X-direction field ALREADY IN PACKET ELEMENTS (outSrcPitchS, outNShardPkS
-    and both slices), while outRectYS stays in ROWS because the hardware does
-    not scale y.  Divisibility by the packet element is a launch-time
+    Unit conversion happens here, not in the emitter: every X-direction field
+    leaves ALREADY IN PACKET ELEMENTS while outRectYS stays in ROWS, the
+    hardware not scaling y.  outNShardPkS is both dst_pitch and rect_x, the
+    same nShard.  Divisibility by the packet element is a launch-time
     precondition (FusedA2AClient.cpp); a non-multiple truncates here.
-    outNShardPkS serves as BOTH dst_pitch and rect_x -- they are the same
-    nShard, so one register and one shift cover both.
 
-    TWO ELEMENT SIZES ARE IN PLAY and conflating them is a silent 8x address
-    error.  The elements->bytes shift below uses D_ELEMENT_LOG2, the size of a
-    D element; the elements->packet-elements shift uses the difference between
-    packetElementLog2 and that.  A byte offset does not scale with the packet's
-    addressing granularity.
+    The two shifts use different amounts: elements->bytes uses D_ELEMENT_LOG2,
+    elements->packet-elements uses packetElementLog2 minus it.  Conflating them
+    is a silent 8x address error.
 
-    NEITHER SLICE PITCH IS A DON'T-CARE, despite the copy being a single
-    plane.  The values above are what make the reference implementation's
-    RECT_X * RECT_Y <= SLICE_PITCH assertion hold:
-      dst is EXACTLY TIGHT -- (nShard>>3)*rect_y <= (MT1*nShard)>>3 reduces to
-        rect_y <= MT1, which the clamp below guarantees with no slack.
-      src has margin -- (nShard>>3)*rect_y <= (M*N)>>3 reduces to
-        nShard*rect_y <= M*N, and nShard = AM/W <= M with rect_y <= N.
-    Shrinking either one to a constant would break the assertion.  Both sides
-    are shifted by the same amount, so scaling does not disturb it.
-
-    BOTH folds are 64-BIT and must stay that way: neither product is bounded
-    now that the coordinates are folded in.  Each widening multiply writes its
-    high half first, so tmp64S+1 must not alias either source.
+    Both folds are 64-bit: neither product is bounded once the coordinates are
+    folded in.
 
     recvBaseS is updated IN PLACE; addressDS is read-only.  All three scratch
     registers are dead on return: tmpS is reused between uses, tokenRowS must
@@ -2665,9 +2650,9 @@ class GlobalWriteBatchWriter:
     module.add(SAddU32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(tokenRowS),
                        comment="dst row = myRank*N + j*MT1 (folded, not a field)"))
     module.add(SMulHIU32(dst=sgpr(tmp64S + 1), src0=sgpr(tmpS), src1=sgpr(nShardS),
-                         comment="dst row offset = dst row * nShard (64-bit: unbounded in W and N) (hi)"))
+                         comment="dst row offset = dst row * nShard (64-bit product) (hi)"))
     module.add(SMulI32(dst=sgpr(tmp64S + 0), src0=sgpr(tmpS), src1=sgpr(nShardS),
-                       comment="dst row offset = dst row * nShard (64-bit: unbounded in W and N) (lo)"))
+                       comment="dst row offset = dst row * nShard (64-bit product) (lo)"))
     module.add(SLShiftLeftB64(dst=sgpr(tmp64S, 2), src=sgpr(tmp64S, 2),
                               shiftHex=D_ELEMENT_LOG2,
                               comment="dst offset: elements -> bytes (sizeof(bf16))"))
@@ -2696,8 +2681,7 @@ class GlobalWriteBatchWriter:
 
   def _fusedA2AComputeFlagAddr(self, module, flagBaseS, myRankS, outAddrS, tmpS):
     """Compute the ATOMIC target peer_ptr[p] + myRank*4 into outAddrS (2
-    SGPRs), a 64-bit add.  flagBaseS is peer_ptr[p], already selected by
-    _fusedA2ALoadFlagBaseByRank.  tmpS is one scratch SGPR.
+    SGPRs), a 64-bit add.  flagBaseS is peer_ptr[p]; tmpS is one scratch SGPR.
 
     The flag is indexed by SOURCE rank only -- source j's tokenTiles ATOMICs
     accumulate into one slot, matching the "== tokenTiles" drain predicate.
@@ -3092,24 +3076,17 @@ class GlobalWriteBatchWriter:
     # times per launch -- 1152 times at the champion N=4096 shape.
     module.add(counter3Label)
     c3Tmp = kw.sgprPool.checkOut(1, tag="fusedA2A_c3Tmp", preventOverflow=False)
-    # The tally is a SCALAR atomic: S_ATOMIC_INC keeps address, data and result
-    # in SGPRs.
+    # S_ATOMIC_INC:  MEM[addr] = (tmp >= DATA) ? 0 : tmp + 1 ;  RETURN_DATA = tmp
     #
-    #   MEM[addr] = (tmp >= DATA) ? 0 : tmp + 1 ;   RETURN_DATA = tmp
+    # SDATA is both operands -- the wrap limit goes in, the pre-op value comes back
+    # out of the same register.  A limit of FusedTotalWGs-1 makes the globally last
+    # WG read back FusedTotalWGs-1 and leaves the counter at 0 behind it.
     #
-    # SDATA is BOTH operands -- the wrap limit goes in, the pre-op value comes back
-    # out of the same register.  Setting the limit to FusedTotalWGs-1 makes the
-    # globally last WG read back FusedTotalWGs-1, equivalent to testing
-    # `old+1 == FusedTotalWGs`, and leaves the counter at 0 behind it.
-    #
-    # GLC is not decoration and not a scope bit: on SMEM it bypasses L1/L2 *and* is
-    # what makes an atomic return its pre-op value at all (CDNA4 ISA Table 75, SMEM
-    # Fields).  Drop it and this silently becomes a fire-and-forget increment whose
+    # On SMEM, GLC is also what makes an atomic return its pre-op value at all
+    # (CDNA4 ISA Table 75); without it this is a fire-and-forget increment whose
     # "pre-op value" is whatever the register already held.
     #
-    # SMEM ignores EXEC entirely, so only the wave-0 gate is load-bearing for
-    # once-per-WG semantics here; the single-lane EXEC narrowing above is only the
-    # PUSH path's business.
+    # SMEM ignores EXEC, so the wave-0 gate alone is what keeps this once per WG.
     c3Limit = kw.sgprPool.checkOut(1, tag="fusedA2A_c3Limit", preventOverflow=False)
     module.add(SSubU32(dst=sgpr(c3Limit), src0=sgpr("FusedTotalWGs"), src1=1,
                        comment="wrap limit = FusedTotalWGs - 1 (what the last WG reads back)"))
@@ -3118,9 +3095,6 @@ class GlobalWriteBatchWriter:
     module.add(SAtomicInc(dst=sgpr(c3Tmp), base=sgpr("FusedCounter3Ptr", 2), soffset=0,
                           smem=SMEMModifiers(glc=True),
                           comment="old3 = atomic_inc(counter3), wrap at FusedTotalWGs-1, return pre-op"))
-    # SMEM retires on lgkmcnt, not vmcnt.  It is also the one class that returns
-    # OUT OF ORDER (CDNA4 ISA 4.4), so a partial lgkmcnt is never legitimate here --
-    # only 0.
     module.add(SWaitCnt(kmcnt=0, comment="fused-A2A: wait counter3 atomic return (SMEM -> lgkmcnt)"))
     module.add(SCmpEQU32(src0=sgpr(c3Tmp), src1=sgpr(c3Limit),
                          comment="pre-op == FusedTotalWGs-1? (globally last WG)"))
@@ -3231,7 +3205,6 @@ class GlobalWriteBatchWriter:
     # afterLabel then restores full EXEC for the vector code that follows.
     module.add(self.getEdgeMovInstType()(EXEC(), 1, "fused-A2A: back to lane 0 after the DRAIN poll"))
     module.add(skipDrainLabel)
-    # No buffer_inv here: this kernel does not read recv; acquire is the recv-reader's job.
     kw.sgprPool.checkIn(drainTmp)
     kw.sgprPool.checkIn(drainFlagBase)
 
@@ -3244,15 +3217,11 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(counterPtrSgpr)
     kw.sgprPool.checkIn(targetSgpr)
     kw.sgprPool.checkIn(myRankSgpr)
-    # Restore full EXEC: wave 0 narrowed EXEC to a single lane for the counter
-    # atomic + flag store, but the CLS look-ahead emitted after the handshake
-    # (emit(): emitCoord1Advance) issues a VECTOR VAddCOU32 on coord1 that needs all
-    # lanes active.
-    #
-    # The restore sits AFTER afterLabel, and that placement is load-bearing: the
-    # counter3 tally branches there with EXEC already narrowed to lane 0, so the
-    # restore has to be on that edge too.  Putting it after the label covers every
-    # path, and re-restoring on the wave-0 edge (already all-ones) is a no-op.
+    # Restore full EXEC for the CLS look-ahead after the handshake (emit():
+    # emitCoord1Advance issues a vector VAddCOU32 on coord1).  It sits AFTER
+    # afterLabel because the counter3 tally branches there with EXEC already
+    # narrowed to lane 0, so that edge needs the restore too; the wave-0 edge
+    # arrives all-ones and re-restoring is a no-op.
     module.add(afterLabel)
     module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: restore full exec after single-lane handshake"))
 

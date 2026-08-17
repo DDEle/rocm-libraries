@@ -62,7 +62,6 @@ ELEMENT_SHIFT = PACKET_ELEMENT_SIZE_LOG2 - D_DATA_ELEMENT_LOG2   # 3
 COPY_HEADER_DW0 = ((SDMA_OP_COPY_SUBWIN & 0xFF)
                    | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8)
                    | ((PACKET_ELEMENT_SIZE_LOG2 & 0x7) << 29))
-# The l bit (16) is left 0, which selects a plain fetch-add.
 ATOMIC_HEADER_DW0 = ((SDMA_OP_ATOMIC & 0xFF) | ((SDMA_ATOMIC_ADD_RTN_32 & 0x7F) << 25))
 
 

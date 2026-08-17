@@ -3436,12 +3436,18 @@ class KernelWriterAssembly(KernelWriter):
     # Not for correctness: both orders compose bijections and the latch's product is
     # order-independent. Reading the grid dims before anything reorders them is just
     # the only order that does not require an argument.
+    #
+    # The product counts SURVIVING work-groups: ClusterDim != [1,1] rounds the grid
+    # up host-side, but those padded work-groups s_endpgm in the prologue
+    # (clusterPadEarlyExit).
     if kernel["FusedGemmA2A"]:
-      from .Components.GlobalWriteBatch import emitFusedA2ATotalWGsLatch, \
-        emitFusedA2ACounter3PtrLatch, emitFusedA2ANShardLatch
+      from .Components.GlobalWriteBatch import emitFusedA2ACounter3PtrLatch, \
+        emitFusedA2ANShardLatch
       module.add(FusedA2AWgRemap(self, kernel))
-      emitFusedA2ATotalWGsLatch(module, "FusedTotalWGs")
-      emitFusedA2ACounter3PtrLatch(module, self, "FusedCounter3Ptr")
+      module.add(SMulI32(dst=sgpr("FusedTotalWGs"), src0=sgpr("NumWorkGroups0"),
+                         src1=sgpr("NumWorkGroups1"),
+                         comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
+      emitFusedA2ACounter3PtrLatch(module, self, "FusedCounter3Ptr", "FusedTokenTiles")
       emitFusedA2ANShardLatch(module, self, "FusedNShard")
 
     return module
@@ -16611,9 +16617,7 @@ class KernelWriterAssembly(KernelWriter):
                              "fused-A2A hoisted: WG>=AM_tiles -> local")
           afterLabel = Label(self.labels.getNameInc("fusedA2A_hoist_after"),
                              "fused-A2A hoisted: after PUSH/local")
-          emitFusedA2AGate(actLoopModule, self.argLoader, self.sgprPool,
-                           self.states.fusedA2AKernArgBase, kernel["MacroTile0"],
-                           localLabel.getLabelName())
+          emitFusedA2AGate(actLoopModule, self, localLabel.getLabelName())
           # try/finally guarantees the dispatch mode is restored to "BOTH" even if
           # codegen raises mid-pass, so the flag never leaks "PUSH"/"LOCAL" into a
           # subsequent kernel.

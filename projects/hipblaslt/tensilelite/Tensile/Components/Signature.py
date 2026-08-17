@@ -67,37 +67,36 @@ if FUSED_A2A_MAX_RANKS > 31:
         "client/include/FusedA2AKernArg.hpp to match."
         % (FUSED_A2A_MAX_RANKS, 31))
 
+# (argName, byteSize) in addArg() order. Both the offset map and the segment
+# size derive from this one list, so an arg added to the segment cannot reach
+# only one of them:
+#   peer_ptr_j       per-peer block base, incl. self; flag at offset 0, recv at
+#                    FUSED_A2A_PEER_RECV_OFFSET
+#   counter_ptr      this device's counter base
+#   FusedSdmaQueues  device pointer to the W-element SdmaQueueDeviceHandle array
+#                    (SdmaQueueSet::deviceHandles), consumed by the SDMA
+#                    ring/packet emitters
+#   FusedDrain       runtime drain flag (NOT a compile-time gate)
+#   FusedAM          A2A feature-row count (first AM rows PUSH, rest local)
+_FUSED_A2A_SEGMENT_ARGS = (
+    [("peer_ptr_%u" % j, 8) for j in range(FUSED_A2A_MAX_RANKS)]
+    + [("counter_ptr", 8), ("FusedSdmaQueues", 8),
+       ("FusedMyRank", 4), ("FusedW", 4), ("FusedDrain", 4), ("FusedAM", 4)])
+
 def fusedA2AKernArgLayout():
     """Return {argName: intra-segment byte offset} for the fused-A2A segment.
 
     The offsets are relative to the segment base (peer_ptr_0 == 0). Order and
-    sizes MUST match the addArg() sequence in SignatureDefault.__call__:
-      peer_ptr_0..7    : 8B each  (per-peer block base, incl. self; flag at
-                                   offset 0, recv at FUSED_A2A_PEER_RECV_OFFSET)
-      counter_ptr      : 8B       (this device's counter base)
-      FusedSdmaQueues  : 8B        device pointer to the W-element SdmaQueueDeviceHandle
-                                   array (SdmaQueueSet::deviceHandles); consumed by the
-                                   SDMA ring/packet emitters
-      FusedMyRank      : 4B (u32)
-      FusedW           : 4B (u32)  world size
-      FusedDrain       : 4B (u32)  runtime drain flag (NOT a compile-time gate)
-      FusedAM          : 4B (u32)  A2A feature-row count (first AM rows PUSH, rest local)
+    sizes MUST match the addArg() sequence in SignatureDefault.__call__.
     """
     layout = {}
     off = 0
-    for j in range(FUSED_A2A_MAX_RANKS):
-        layout["peer_ptr_%u" % j] = off
-        off += 8
-    for name in ("counter_ptr", "FusedSdmaQueues"):
+    for name, size in _FUSED_A2A_SEGMENT_ARGS:
         layout[name] = off
-        off += 8
-    for name in ("FusedMyRank", "FusedW", "FusedDrain", "FusedAM"):
-        layout[name] = off
-        off += 4
+        off += size
     return layout
 
-# (MAX_RANKS peer_ptr + counter_ptr + FusedSdmaQueues) * 8B + 4 scalars * 4B.
-FUSED_A2A_SEGMENT_BYTES = (FUSED_A2A_MAX_RANKS + 2) * 8 + 4 * 4
+FUSED_A2A_SEGMENT_BYTES = sum(size for _, size in _FUSED_A2A_SEGMENT_ARGS)
 
 @dataclass
 class UserArgumentsInfo:

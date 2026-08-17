@@ -2703,11 +2703,12 @@ class GlobalWriteBatchWriter:
       sgprOffset=sgpr(tmpSgpr), dword=2))
     module.add(SWaitCnt(kmcnt=0, comment="wait peer_ptr[my_rank] load"))
 
-  def _fusedA2AComputeCopyFields(self, module,
+  def _fusedA2AComputeCopyFields(self, module, packetElementLog2,
                                  pS, jS, myRankS, mS, nS, nShardS,
                                  addressDS, srcPitchS, recvBaseS,
-                                 outSrcBaseS, outSrcSliceS, outDstSliceS,
-                                 outRectYS, tmpS, tokenRowS, tmp64S):
+                                 outSrcBaseS, outSrcPitchS, outSrcSliceS,
+                                 outNShardPkS, outDstSliceS, outRectYS,
+                                 tmpS, tokenRowS, tmp64S):
     """Turn the all-to-all geometry into SdmaPacketEmitter's COPY_SUBWIN field
     inputs, per (peer p, token-tile j) with this card == myRank.
 
@@ -2723,9 +2724,22 @@ class GlobalWriteBatchWriter:
       src_slice = M * N                  (whole D plane)
       dst_slice = MT1 * nShard           (one band's plane)
 
-    src_pitch, dst_pitch and rect_x are handed to the emitter unchanged; the
-    four packet COORDINATES are folded into the two 64-bit bases here, which
-    is what leaves N unconstrained by the 14-bit coordinate fields.
+    The four packet COORDINATES are folded into the two 64-bit bases here,
+    which is what leaves N unconstrained by the 14-bit coordinate fields.
+
+    UNIT CONVERSION IS THIS FUNCTION'S JOB, not the emitter's: it emits every
+    X-direction field ALREADY IN PACKET ELEMENTS (outSrcPitchS, outNShardPkS
+    and both slices), while outRectYS stays in ROWS because the hardware does
+    not scale y.  Divisibility by the packet element is a launch-time
+    precondition (FusedA2AClient.cpp); a non-multiple truncates here.
+    outNShardPkS serves as BOTH dst_pitch and rect_x -- they are the same
+    nShard, so one register and one shift cover both.
+
+    TWO ELEMENT SIZES ARE IN PLAY and conflating them is a silent 8x address
+    error.  The elements->bytes shift below uses D_ELEMENT_LOG2, the size of a
+    D element; the elements->packet-elements shift uses the difference between
+    packetElementLog2 and that.  A byte offset does not scale with the packet's
+    addressing granularity.
 
     NEITHER SLICE PITCH IS A DON'T-CARE, despite the copy being a single
     plane.  The values above are what make the reference implementation's
@@ -2734,22 +2748,22 @@ class GlobalWriteBatchWriter:
         rect_y <= MT1, which the clamp below guarantees with no slack.
       src has margin -- (nShard>>3)*rect_y <= (M*N)>>3 reduces to
         nShard*rect_y <= M*N, and nShard = AM/W <= M with rect_y <= N.
-    Shrinking either one to a constant would break the assertion.
+    Shrinking either one to a constant would break the assertion.  Both sides
+    are shifted by the same amount, so scaling does not disturb it.
 
     BOTH folds are 64-BIT and must stay that way: neither product is bounded
     now that the coordinates are folded in.  Each widening multiply writes its
-    high half first, so tmp64S+1 must not alias either source.  The
-    elements->bytes shift uses D_DATA_ELEMENT_LOG2, NOT the packet's
-    PACKET_ELEMENT_SIZE_LOG2: a byte offset does not scale with the packet's
-    addressing granularity.
+    high half first, so tmp64S+1 must not alias either source.
 
     recvBaseS is updated IN PLACE; addressDS is read-only.  All three scratch
     registers are dead on return: tmpS is reused between uses, tokenRowS must
     NOT be (j*MT1 stays live across the whole body), and tmp64S is a 2-ALIGNED
     pair.
     """
-    from .SdmaPacketEmitter import D_DATA_ELEMENT_LOG2
     mt1 = self.kernel["MacroTile1"]
+    # The fused-A2A path is bf16-only; D_ELEMENT_LOG2 is sizeof(bf16) in bytes.
+    D_ELEMENT_LOG2 = 1
+    pkShift = packetElementLog2 - D_ELEMENT_LOG2
 
     module.add(SMulI32(dst=sgpr(tokenRowS), src0=sgpr(jS), src1=mt1,
                        comment="token row of tile j = j * MT1 (folded into the bases)"))
@@ -2768,7 +2782,7 @@ class GlobalWriteBatchWriter:
     module.add(SAddCU32(dst=sgpr(tmp64S + 1), src0=sgpr(tmp64S + 1), src1=0,
                         comment="propagate carry into the high word"))
     module.add(SLShiftLeftB64(dst=sgpr(tmp64S, 2), src=sgpr(tmp64S, 2),
-                              shiftHex=D_DATA_ELEMENT_LOG2,
+                              shiftHex=D_ELEMENT_LOG2,
                               comment="src offset: elements -> bytes (sizeof(bf16))"))
     module.add(SAddU64(dst=sgpr(outSrcBaseS, 2), src0=sgpr(addressDS, 2),
                        src1=sgpr(tmp64S, 2),
@@ -2784,7 +2798,7 @@ class GlobalWriteBatchWriter:
     module.add(SMulI32(dst=sgpr(tmp64S + 0), src0=sgpr(tmpS), src1=sgpr(nShardS),
                        comment="dst row offset = dst row * nShard (64-bit: unbounded in W and N) (lo)"))
     module.add(SLShiftLeftB64(dst=sgpr(tmp64S, 2), src=sgpr(tmp64S, 2),
-                              shiftHex=D_DATA_ELEMENT_LOG2,
+                              shiftHex=D_ELEMENT_LOG2,
                               comment="dst offset: elements -> bytes (sizeof(bf16))"))
     module.add(SAddU64(dst=sgpr(recvBaseS, 2), src0=sgpr(recvBaseS, 2),
                        src1=sgpr(tmp64S, 2),
@@ -2796,6 +2810,18 @@ class GlobalWriteBatchWriter:
                        comment="N - j*MT1 (tokens left in this tile)"))
     module.add(SMinU32(dst=sgpr(outRectYS), src0=sgpr(outRectYS), src1=mt1,
                        comment="rect_y = min(MT1, N - j*MT1) (clamp tail tile)"))
+
+    # --- X-direction fields -> packet elements (rect_y stays in rows). ---
+    # ldd and nShard are persistent SGPRs, so these two land in scratch rather
+    # than being scaled in place.
+    module.add(SLShiftRightB32(dst=sgpr(outSrcPitchS), src=sgpr(srcPitchS), shiftHex=pkShift,
+                               comment="src_pitch = ldd (bf16 elems -> packet elems)"))
+    module.add(SLShiftRightB32(dst=sgpr(outNShardPkS), src=sgpr(nShardS), shiftHex=pkShift,
+                               comment="nShard (bf16 elems -> packet elems; dst_pitch AND rect_x)"))
+    module.add(SLShiftRightB32(dst=sgpr(outSrcSliceS), src=sgpr(outSrcSliceS), shiftHex=pkShift,
+                               comment="src_slice (bf16 elems -> packet elems)"))
+    module.add(SLShiftRightB32(dst=sgpr(outDstSliceS), src=sgpr(outDstSliceS), shiftHex=pkShift,
+                               comment="dst_slice (bf16 elems -> packet elems)"))
 
   def _fusedA2AComputeFlagAddr(self, module, flagBaseS, myRankS, outAddrS, tmpS):
     """Compute the ATOMIC target peer_ptr[p] + myRank*4 into outAddrS (2
@@ -2905,19 +2931,24 @@ class GlobalWriteBatchWriter:
     # its own register rather than sharing tmpSgpr because j*MT1 stays live across
     # the whole callee (src fold, dst row, rect_y clamp); it is scratch, not an
     # output, so nothing reads it here.
-    fldSgpr = kw.sgprPool.checkOut(4, tag="fusedA2A_sdmaFields", preventOverflow=False)
-    tokenRowS, srcSliceS, dstSliceS, rectYS = (fldSgpr + i for i in range(4))
+    # srcPitchPkS and nShardPkS hold the packet-element forms of ldd and nShard:
+    # both sources are persistent SGPRs, so the scaling cannot happen in place.
+    # nShardPkS feeds dst_pitch AND rect_x, which are the same value.
+    fldSgpr = kw.sgprPool.checkOut(6, tag="fusedA2A_sdmaFields", preventOverflow=False)
+    (tokenRowS, srcSliceS, dstSliceS, rectYS,
+     srcPitchPkS, nShardPkS) = (fldSgpr + i for i in range(6))
     # Both must be 2-ALIGNED: they feed s_lshl_b64 / the 64-bit add, which need
     # SReg_64 operands.  tmpSgpr is a plain checkOut(2) and is NOT usable there.
     # srcBaseSgpr holds the folded copy of AddressD (which is persistent and must
     # not be clobbered); recvBaseSgpr is a temp and is folded in place.
     srcBaseSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaSrcBase", preventOverflow=False)
     tmp64Sgpr   = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaOffset64", preventOverflow=False)
-    self._fusedA2AComputeCopyFields(module,
+    self._fusedA2AComputeCopyFields(module, pkt.packetElementLog2,
                                     dstRankSgpr, "WorkGroup1", myRankSgpr,
                                     "SizesFree+0", "SizesFree+1", nShardSgpr,
                                     kw.sgprs["AddressD"], srcPitchName, recvBaseSgpr,
-                                    srcBaseSgpr, srcSliceS, dstSliceS, rectYS,
+                                    srcBaseSgpr, srcPitchPkS, srcSliceS,
+                                    nShardPkS, dstSliceS, rectYS,
                                     tmpSgpr, tokenRowS, tmp64Sgpr)
     kw.sgprPool.checkIn(tmp64Sgpr)  # dead once the two bases are folded
 
@@ -2933,10 +2964,13 @@ class GlobalWriteBatchWriter:
     # instead of degrading into narrower pieces.
     pktSgpr = kw.sgprPool.checkOutAligned(COPY_PACKET_DWORDS, 4,
                                           tag="fusedA2A_sdmaPacket", preventOverflow=False)
+    # Every X-direction argument below is the packet-element form computed
+    # above; nShardPkS appears twice because dst_pitch and rect_x are both
+    # nShard.  rectYS is deliberately NOT scaled -- it counts rows.
     pkt.emitBuildCopyPacket(module, pktSgpr,
-                            srcBaseSgpr, srcPitchName, srcSliceS,
-                            recvBaseSgpr, nShardSgpr, dstSliceS,
-                            nShardSgpr, rectYS, tmpSgpr)
+                            srcBaseSgpr, srcPitchPkS, srcSliceS,
+                            recvBaseSgpr, nShardPkS, dstSliceS,
+                            nShardPkS, rectYS, tmpSgpr)
     kw.sgprPool.checkIn(fldSgpr)
     kw.sgprPool.checkIn(srcBaseSgpr)
     kw.sgprPool.checkIn(recvBaseSgpr)

@@ -11,9 +11,10 @@
 # THIS FILE KNOWS THE PACKET FORMAT AND NOTHING ABOUT WHAT IS BEING COPIED, so
 # a second caller with a different data layout reuses it as-is.  The geometry
 # that turns an all-to-all into these field values lives with its caller, in
-# GlobalWriteBatch's _fusedA2A* helpers.  ⚠ ONE COUPLING REMAINS: the _pack*
-# helpers scale X-direction inputs by ELEMENT_SHIFT, so they assume the caller
-# counts in D_DATA_ELEMENT_LOG2-sized elements.
+# GlobalWriteBatch's _fusedA2A* helpers, and every X-direction input arrives
+# ALREADY IN PACKET ELEMENTS -- the emitter does no unit conversion, so it need
+# not know the caller's data type.  `packetElementLog2` is published for the
+# caller to scale with.
 #
 # Encoding conventions, none of them derivable from the field names: every
 # extent and pitch is stored MINUS ONE (the hardware adds it back); coords,
@@ -36,7 +37,7 @@
 
 from rocisa.container import sgpr
 from rocisa.instruction import (
-    SMovB32, SSubU32, SOrB32, SLShiftLeftB32, SLShiftRightB32,
+    SMovB32, SSubU32, SOrB32, SLShiftLeftB32,
 )
 
 
@@ -50,14 +51,14 @@ SDMA_OP_ATOMIC         = 10
 SDMA_ATOMIC_ADD_RTN_32 = 15
 ATOMIC_PACKET_DWORDS   = 8
 
-# Two different element sizes; conflating them is a silent 8x address error.
-D_DATA_ELEMENT_LOG2      = 1   # sizeof(bf16) in BYTES: element geometry -> byte offset
-PACKET_ELEMENT_SIZE_LOG2 = 4   # packet addressing granularity (header [31:29]); only 16B is validated
-ELEMENT_SHIFT = PACKET_ELEMENT_SIZE_LOG2 - D_DATA_ELEMENT_LOG2   # 3
+# The packet's addressing granularity, header field [31:29].  Only the 16-byte
+# encoding is hardware-validated; the field being 3 bits wide is not evidence
+# that every encoding works, hence the allow-list rather than a range check.
+VALIDATED_PACKET_ELEMENT_BYTES = (16,)
 
-COPY_HEADER_DW0 = ((SDMA_OP_COPY_SUBWIN & 0xFF)
-                   | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8)
-                   | ((PACKET_ELEMENT_SIZE_LOG2 & 0x7) << 29))
+# DW0 minus the element-size field, which __init__ ORs in per instance.
+_COPY_HEADER_DW0_BASE = ((SDMA_OP_COPY_SUBWIN & 0xFF)
+                         | ((SDMA_SUBOP_COPY_LINEAR_RECT & 0xFF) << 8))
 ATOMIC_HEADER_DW0 = ((SDMA_OP_ATOMIC & 0xFF) | ((SDMA_ATOMIC_ADD_RTN_32 & 0x7F) << 25))
 
 
@@ -65,35 +66,40 @@ class SdmaPacketEmitter:
     """Builds the COPY_SUBWIN + ATOMIC packet dword arrays in SGPRs, in the
     layout documented at the top of this file.
 
-    STATELESS and allocation-free: there is no constructor, every method takes
-    the registers it uses, and unlike SdmaRingEmitter this class never touches
-    a pool and takes no `w`.
+    Allocation-free: every method takes the registers it uses, and unlike
+    SdmaRingEmitter this class never touches a pool and takes no `w`.  The only
+    state is the packet element size.
 
-    ALIASING CONTRACT: the packet block must be disjoint from every input SGPR
-    and from `tmpS`.  The `_pack*` helpers build each field IN PLACE in its
-    packet slot, writing the slot before reading some of its inputs, so an
-    aliasing caller loses the input rather than merely the output.  The block
-    is written in field order and never re-read here, so an overlapping second
-    packet must not be built until the first one's stores have been emitted
-    (see emitPlacePacket's reuse note).
+    UNITS: every X-direction input -- the pitches, the slice pitches and rect_x
+    -- must arrive ALREADY IN PACKET ELEMENTS.  rect_y must NOT: it counts
+    ROWS, which the hardware does not scale by ELEMENTSIZE.  Bases are byte
+    addresses.  Nothing here converts, so a caller that hands over its own
+    element counts writes a silently wrong packet; scale with
+    `packetElementLog2`.
+
+    ALIASING CONTRACT: `_packRectMinus1`'s dstS must not alias rectYS, since it
+    writes the slot before reading the second extent.  The other slots are
+    written by a single read-and-write instruction and so tolerate aliasing.
+    The block is written in field order and never re-read here, so an
+    overlapping second packet must not be built until the first one's stores
+    have been emitted (see emitPlacePacket's reuse note).
     """
+
+    def __init__(self, packetElementBytes: int = 16):
+        assert packetElementBytes in VALIDATED_PACKET_ELEMENT_BYTES, (
+            "packet element size %r is not hardware-validated; only %r is"
+            % (packetElementBytes, VALIDATED_PACKET_ELEMENT_BYTES))
+        # Published so the caller can scale its X-direction counts to match.
+        self.packetElementLog2 = packetElementBytes.bit_length() - 1
+        self.copyHeaderDw0 = (_COPY_HEADER_DW0_BASE
+                              | ((self.packetElementLog2 & 0x7) << 29))
 
     # ---- field-packing helpers (isolate the encoding conventions) -----------
 
-    def _toPacketElements(self, module, dstS, srcS, comment):
-        """Convert a bf16-element count into packet-element units.  Applies to
-        X-DIRECTION quantities ONLY.  Divisibility is a launch-time
-        precondition (FusedA2AClient.cpp); a non-multiple would truncate."""
-        module.add(SLShiftRightB32(dst=sgpr(dstS), src=sgpr(srcS),
-                                   shiftHex=ELEMENT_SHIFT,
-                                   comment=comment + " (bf16 elems -> packet elems)"))
-
     def _packPitchMinus1(self, module, dstS, pitchS, comment):
         """dword = (pitch - 1) << 13 -- the 19-bit pitch field at [31:13]; the
-        z field [10:0] is left 0.  Built in place, so dstS must not alias
-        pitchS: the scaling step writes dstS before the subtract reads it."""
-        self._toPacketElements(module, dstS, pitchS, comment)
-        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(dstS), src1=1,
+        z field [10:0] is left 0."""
+        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(pitchS), src1=1,
                            comment=comment + " (pitch - 1)"))
         module.add(SLShiftLeftB32(dst=sgpr(dstS), src=sgpr(dstS), shiftHex=13,
                                   comment=comment + " (<< 13)"))
@@ -103,20 +109,14 @@ class SdmaPacketEmitter:
         free field despite rect_z being 0: the reference implementation asserts
         RECT_X * RECT_Y <= SLICE_PITCH and nothing at launch checks it, so the
         caller has to pick a value that satisfies it."""
-        self._toPacketElements(module, dstS, sliceS, comment)
-        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(dstS), src1=1,
+        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(sliceS), src1=1,
                            comment=comment + " (slice - 1)"))
 
     def _packRectMinus1(self, module, dstS, rectXS, rectYS, tmpS, comment):
         """dword = (rectX - 1) | ((rectY - 1) << 16) -- two 14-bit extents at
-        [13:0] and [29:16].  rect_x IS scaled to packet elements; rect_y is
-        NOT, it counts ROWS.  rectY is a runtime SGPR rather than the
-        compile-time MT1 because the last token-tile is partial when
-        N % MT1 != 0, and an unclamped MT1 would read past the end of D.  tmpS
-        is one scratch SGPR -- the only `_pack*` helper needing any, because
-        both extents have to exist at once to be OR-ed."""
-        self._toPacketElements(module, dstS, rectXS, comment + " (rectX)")
-        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(dstS), src1=1,
+        [13:0] and [29:16].  tmpS is one scratch SGPR, the only `_pack*` helper
+        needing any, because both extents have to exist at once to be OR-ed."""
+        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(rectXS), src1=1,
                            comment=comment + " (rectX - 1)"))
         module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(rectYS), src1=1,
                            comment=comment + " (rectY - 1, rows: NOT scaled)"))
@@ -131,10 +131,10 @@ class SdmaPacketEmitter:
                             srcBaseS, srcPitchS, srcSliceS,
                             dstBaseS, dstPitchS, dstSliceS,
                             rectXS, rectYS, tmpS):
-        """Build the 13 COPY_SUBWIN dwords into pktS[0:13] from runtime SGPR
-        inputs in element units, with the coordinates already folded into the
-        two bases by the caller.  tmpS is one scratch SGPR, used only by the
-        rect dword.
+        """Build the 13 COPY_SUBWIN dwords into pktS[0:13].  Pitches, slice
+        pitches and rect_x arrive in PACKET ELEMENTS and rect_y in rows; the
+        coordinates are already folded into the two bases by the caller.  tmpS
+        is one scratch SGPR, used only by the rect dword.
 
         The literal-0 coordinates are still written: the ring copies a fixed
         13-dword block, and a stale register would be read as a coordinate.
@@ -142,9 +142,9 @@ class SdmaPacketEmitter:
         DW6/DW7 land on odd packet slots while the 64-bit ops that produce the
         bases need a 2-aligned SReg_64 pair.
         """
-        module.add(SMovB32(dst=sgpr(pktS + 0), src=hex(COPY_HEADER_DW0),
+        module.add(SMovB32(dst=sgpr(pktS + 0), src=hex(self.copyHeaderDw0),
                            comment="SUBWIN DW0: op=COPY sub_op=RECT elementsize=log2(%dB)"
-                                   % (1 << PACKET_ELEMENT_SIZE_LOG2)))
+                                   % (1 << self.packetElementLog2)))
         module.add(SMovB32(dst=sgpr(pktS + 1), src=sgpr(srcBaseS + 0),
                            comment="SUBWIN DW1: srcBase lo"))
         module.add(SMovB32(dst=sgpr(pktS + 2), src=sgpr(srcBaseS + 1),

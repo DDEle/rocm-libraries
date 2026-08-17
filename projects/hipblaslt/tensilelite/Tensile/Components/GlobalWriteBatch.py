@@ -2970,7 +2970,7 @@ class GlobalWriteBatchWriter:
     pkt.emitBuildCopyPacket(module, pktSgpr,
                             srcBaseSgpr, srcPitchPkS, srcSliceS,
                             recvBaseSgpr, nShardPkS, dstSliceS,
-                            nShardPkS, rectYS, tmpSgpr)
+                            nShardPkS, rectYS)
     kw.sgprPool.checkIn(fldSgpr)
     kw.sgprPool.checkIn(srcBaseSgpr)
     kw.sgprPool.checkIn(recvBaseSgpr)

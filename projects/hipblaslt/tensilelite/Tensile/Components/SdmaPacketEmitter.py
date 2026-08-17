@@ -74,12 +74,10 @@ class SdmaPacketEmitter:
     `packetElementLog2`.
 
     ALIASING CONTRACT: the packet block must be disjoint from every field
-    argument and from `tmpS`.  Fields are read as the block is written, in
-    field order, so a field register that is also an ALREADY-WRITTEN packet
-    slot is read back as packet data -- dstSliceS == pktS+5 makes DW10 encode
-    (srcSlice-1)-1.  Inside `_packRectMinus1`, tmpS must additionally differ
-    from dstS, or the second extent overwrites the first and rect_x is lost to
-    an `s_or` with itself.  Neither is checked and neither faults.
+    argument.  Fields are read as the block is written, in field order, so a
+    field register that is also an ALREADY-WRITTEN packet slot is read back as
+    packet data -- dstSliceS == pktS+5 makes DW10 encode (srcSlice-1)-1.  It is
+    not checked and does not fault.
 
     The block is written in field order and never re-read here, so an
     overlapping second packet must not be built until the first one's stores
@@ -95,47 +93,16 @@ class SdmaPacketEmitter:
         self.copyHeaderDw0 = (_COPY_HEADER_DW0_BASE
                               | ((self.packetElementLog2 & 0x7) << 29))
 
-    # ---- field-packing helpers (isolate the encoding conventions) -----------
-
-    def _packPitchMinus1(self, module, dstS, pitchS, comment):
-        """dword = (pitch - 1) << 13 -- the 19-bit pitch field at [31:13]; the
-        z field [10:0] is left 0."""
-        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(pitchS), src1=1,
-                           comment=comment + " (pitch - 1)"))
-        module.add(SLShiftLeftB32(dst=sgpr(dstS), src=sgpr(dstS), shiftHex=13,
-                                  comment=comment + " (<< 13)"))
-
-    def _packSliceMinus1(self, module, dstS, sliceS, comment):
-        """dword = slice_pitch - 1 -- the 28-bit slice field at [27:0].  NOT a
-        free field despite rect_z being 0: the reference implementation asserts
-        RECT_X * RECT_Y <= SLICE_PITCH and nothing at launch checks it, so the
-        caller has to pick a value that satisfies it."""
-        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(sliceS), src1=1,
-                           comment=comment + " (slice - 1)"))
-
-    def _packRectMinus1(self, module, dstS, rectXS, rectYS, tmpS, comment):
-        """dword = (rectX - 1) | ((rectY - 1) << 16) -- two 14-bit extents at
-        [13:0] and [29:16].  tmpS is one scratch SGPR, the only `_pack*` helper
-        needing any, because both extents have to exist at once to be OR-ed."""
-        module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(rectXS), src1=1,
-                           comment=comment + " (rectX - 1)"))
-        module.add(SSubU32(dst=sgpr(tmpS), src0=sgpr(rectYS), src1=1,
-                           comment=comment + " (rectY - 1, rows: NOT scaled)"))
-        module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(tmpS), shiftHex=16,
-                                  comment=comment + " ((rectY-1) << 16)"))
-        module.add(SOrB32(dst=sgpr(dstS), src0=sgpr(dstS), src1=sgpr(tmpS),
-                          comment=comment + " | (rectY-1) << 16"))
-
     # ---- COPY_SUBWIN builder -----------------------------------------------
 
     def emitBuildCopyPacket(self, module, pktS,
                             srcBaseS, srcPitchS, srcSliceS,
                             dstBaseS, dstPitchS, dstSliceS,
-                            rectXS, rectYS, tmpS):
+                            rectXS, rectYS):
         """Build the 13 COPY_SUBWIN dwords into pktS[0:13].  Pitches, slice
         pitches and rect_x arrive in PACKET ELEMENTS and rect_y in rows; the
-        coordinates are already folded into the two bases by the caller.  tmpS
-        is one scratch SGPR, used only by the rect dword.
+        coordinates are already folded into the two bases by the caller.  No
+        scratch register is needed -- every dword is built in its own slot.
 
         The literal-0 coordinates are still written: the ring copies a fixed
         13-dword block, and a stale register would be read as a coordinate.
@@ -155,18 +122,43 @@ class SdmaPacketEmitter:
                            comment="SUBWIN DW2: srcBase hi"))
         module.add(SMovB32(dst=sgpr(pktS + 3), src=hex(0),
                            comment="SUBWIN DW3: src_x=0|src_y=0 (folded into srcBase)"))
-        self._packPitchMinus1(module, pktS + 4, srcPitchS, "SUBWIN DW4: src_pitch-1")
-        self._packSliceMinus1(module, pktS + 5, srcSliceS, "SUBWIN DW5: src_slice-1")
+        # DW4: 19-bit pitch field at [31:13]; the z field [10:0] is left 0.
+        module.add(SSubU32(dst=sgpr(pktS + 4), src0=sgpr(srcPitchS), src1=1,
+                           comment="SUBWIN DW4: src_pitch-1 (pitch - 1)"))
+        module.add(SLShiftLeftB32(dst=sgpr(pktS + 4), src=sgpr(pktS + 4), shiftHex=13,
+                                  comment="SUBWIN DW4: src_pitch-1 (<< 13)"))
+        # DW5: 28-bit slice field at [27:0].  Not a free field despite rect_z
+        # being 0 -- the reference implementation asserts
+        # RECT_X * RECT_Y <= SLICE_PITCH and nothing at launch checks it, so the
+        # caller has to hand over a value that satisfies it.
+        module.add(SSubU32(dst=sgpr(pktS + 5), src0=sgpr(srcSliceS), src1=1,
+                           comment="SUBWIN DW5: src_slice-1 (slice - 1)"))
         module.add(SMovB32(dst=sgpr(pktS + 6), src=sgpr(dstBaseS + 0),
                            comment="SUBWIN DW6: dstBase lo"))
         module.add(SMovB32(dst=sgpr(pktS + 7), src=sgpr(dstBaseS + 1),
                            comment="SUBWIN DW7: dstBase hi"))
         module.add(SMovB32(dst=sgpr(pktS + 8), src=hex(0),
                            comment="SUBWIN DW8: dst_x=0|dst_y=0 (folded into dstBase)"))
-        self._packPitchMinus1(module, pktS + 9, dstPitchS, "SUBWIN DW9: dst_pitch-1")
-        self._packSliceMinus1(module, pktS + 10, dstSliceS, "SUBWIN DW10: dst_slice-1")
-        self._packRectMinus1(module, pktS + 11, rectXS, rectYS, tmpS,
-                             "SUBWIN DW11: rect_x-1|rect_y-1")
+        module.add(SSubU32(dst=sgpr(pktS + 9), src0=sgpr(dstPitchS), src1=1,
+                           comment="SUBWIN DW9: dst_pitch-1 (pitch - 1)"))
+        module.add(SLShiftLeftB32(dst=sgpr(pktS + 9), src=sgpr(pktS + 9), shiftHex=13,
+                                  comment="SUBWIN DW9: dst_pitch-1 (<< 13)"))
+        module.add(SSubU32(dst=sgpr(pktS + 10), src0=sgpr(dstSliceS), src1=1,
+                           comment="SUBWIN DW10: dst_slice-1 (slice - 1)"))
+        # DW11: two 14-bit extents at [13:0] and [29:16].  Both extents are
+        # assembled RAW and the pair of minus-ones taken by one subtract of
+        # 0x00010001, which is exact as long as rect_x >= 1: the low borrow
+        # stops inside [13:0] and never reaches bit 16.  rect_x = 0 is a
+        # degenerate rect that already produced a corrupt dword, so this costs
+        # no new precondition -- and it needs neither a scratch register nor a
+        # second subtract.  rect_y is NOT scaled to packet elements: it counts
+        # rows.
+        module.add(SLShiftLeftB32(dst=sgpr(pktS + 11), src=sgpr(rectYS), shiftHex=16,
+                                  comment="SUBWIN DW11: rect_x|rect_y (rectY << 16, rows: NOT scaled)"))
+        module.add(SOrB32(dst=sgpr(pktS + 11), src0=sgpr(pktS + 11), src1=sgpr(rectXS),
+                          comment="SUBWIN DW11: rect_x|rect_y (| rectX)"))
+        module.add(SSubU32(dst=sgpr(pktS + 11), src0=sgpr(pktS + 11), src1=hex(0x00010001),
+                           comment="SUBWIN DW11: rect_x-1|rect_y-1 (both extents minus one)"))
         module.add(SMovB32(dst=sgpr(pktS + 12), src=hex(0),
                            comment="SUBWIN DW12: rect_z=0, default cache/swizzle"))
 

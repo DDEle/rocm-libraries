@@ -39,8 +39,8 @@ namespace TensileLite
         constexpr uint32_t SDMA_QUEUE_SIZE = 256 * 1024;
 
         // Device-visible handle. THE FIELD LAYOUT IS A CONTRACT: the GPU
-        // assembly reads these by fixed offset, so field order/type must not
-        // change (the static_asserts below lock every offset).
+        // assembly reads these by fixed offset (SdmaRingEmitter.py OFF_*, 0
+        // through 48), so field order and type must not change.
         //
         // The first six fields are pointers into producer-SHARED memory. The
         // seventh, cachedHwReadIndex, is a VALUE and a per-producer PRIVATE
@@ -62,10 +62,6 @@ namespace TensileLite
             uint64_t cachedHwReadIndex; // per-producer private cache seed, see above
         };
 
-        // Size only, not per-field offsets. The asm side strides this array by a
-        // hardcoded 7*8 (GlobalWriteBatch.py handleBytes) that nothing links to
-        // this type, so an ADDED field is the failure worth catching -- it moves
-        // the stride while leaving every existing offset intact.
         static_assert(sizeof(SdmaQueueDeviceHandle) == 7 * sizeof(uint64_t),
                       "SdmaQueueDeviceHandle must be exactly 7 x 8 bytes -- "
                       "GlobalWriteBatch.py strides the handle array by that value, "
@@ -207,14 +203,13 @@ namespace TensileLite
             return node;
         }
 
-        // SDMA engine id to use for the srcNode->dstNode link. Prefers the
-        // first engine in KFD's RecSdmaEngIdMask for that io-link; for a
-        // loopback (srcNode==dstNode, no io-link) returns a general engine (0).
+        // SDMA engine id to use for the srcNode->dstNode link: the first engine
+        // in KFD's RecSdmaEngIdMask for that io-link. Everything else -- loopback
+        // (no io-link), an empty mask, or a failed KFD query -- yields the general
+        // engine 0.
         inline uint32_t sdmaSelectEngine(uint32_t srcNode, uint32_t dstNode)
         {
             detail::ensureHsaKfd();
-            // Loopback (self) has no io-link and no recommended engine; use a
-            // general (non-xGMI) SDMA engine.
             if(srcNode == dstNode)
                 return 0;
 
@@ -241,7 +236,7 @@ namespace TensileLite
                     break;
                 }
             }
-            return 0; // fall back to a general engine if KFD reports no mask
+            return 0;
         }
 
         // One SDMA queue: owns a 256KB Uncached ring, the KFD queue resource, and

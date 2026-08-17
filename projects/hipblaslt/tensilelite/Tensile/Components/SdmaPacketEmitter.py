@@ -1,22 +1,19 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
 ################################################################################
-# SDMA packet-construction emitter: turns the all-to-all geometry (kernarg
-# values + WG ids) into the 13-dword COPY_SUBWIN and 8-dword ATOMIC ADD_RTN_32
-# dword arrays.  SdmaRingEmitter -- the packet-INDEPENDENT ring plumbing --
-# then writes them into the ring with s_store.
+# SDMA packet-construction emitter: builds the 13-dword COPY_SUBWIN and
+# 8-dword ATOMIC ADD_RTN_32 dword arrays in SGPRs out of runtime field values.
+# SdmaRingEmitter -- the packet-INDEPENDENT ring plumbing -- then writes them
+# into the ring with s_store.  The dwords live in SGPRs because every input is
+# wave-uniform, which is what lets the whole submit path avoid v_readfirstlane
+# and VCC.
 #
-# The dwords live in SGPRs because every input is wave-uniform, which is what
-# lets the whole submit path avoid v_readfirstlane and VCC.
-#
-# Packet geometry, per (peer p, token-tile j), with this card == myRank, in
-# bf16 elements:
-#   COPY_SUBWIN:
-#     src = D + (j*MT1)*ldd + p*nShard                     src pitch = ldd
-#     dst = peer_ptr[p] + recvOffset + (myRank*N + j*MT1)*nShard
-#                                                          dst pitch = nShard
-#     rect X = nShard (feature, contiguous) ; rect Y = min(MT1, N - j*MT1)
-#   ATOMIC ADD_RTN_32 -> peer_ptr[p] + myRank*4, addend 1 (raise the dest flag).
+# THIS FILE KNOWS THE PACKET FORMAT AND NOTHING ABOUT WHAT IS BEING COPIED, so
+# a second caller with a different data layout reuses it as-is.  The geometry
+# that turns an all-to-all into these field values lives with its caller, in
+# GlobalWriteBatch's _fusedA2A* helpers.  ⚠ ONE COUPLING REMAINS: the _pack*
+# helpers scale X-direction inputs by ELEMENT_SHIFT, so they assume the caller
+# counts in D_DATA_ELEMENT_LOG2-sized elements.
 #
 # Encoding conventions, none of them derivable from the field names: every
 # extent and pitch is stored MINUS ONE (the hardware adds it back); coords,
@@ -25,8 +22,9 @@
 # (addr(x, y) = base + y*pitch*elem + x*elem), so src_x/src_y/dst_x/dst_y are
 # emitted as a literal 0.  The reserved gaps and the <<13 pitch placement look
 # arbitrary because they are hardware-mandated.  Every field is packed
-# UNMASKED, so an over-range value ORs into its neighbour; the bounds are
-# enforced at launch by client/src/FusedA2AClient.cpp::runFusedA2A.
+# UNMASKED, so an over-range value ORs into its neighbour; keeping the geometry
+# in range is the caller's job (for the A2A path, the launch-time guards in
+# client/src/FusedA2AClient.cpp::runFusedA2A).
 #
 # This encoding is gfx9xx / gfx95x ONLY -- GFX12+ uses a different layout of
 # the same size.  Bit positions are transcribed from AMD OSS 4.4 sdma.pkt,
@@ -38,9 +36,7 @@
 
 from rocisa.container import sgpr
 from rocisa.instruction import (
-    SMovB32,
-    SMulI32, SMulHIU32, SAddU32, SAddCU32, SAddU64, SSubU32, SMinU32,
-    SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SOrB32,
+    SMovB32, SSubU32, SOrB32, SLShiftLeftB32, SLShiftRightB32,
 )
 
 
@@ -69,8 +65,9 @@ class SdmaPacketEmitter:
     """Builds the COPY_SUBWIN + ATOMIC packet dword arrays in SGPRs, in the
     layout documented at the top of this file.
 
-    Allocates nothing -- every method takes the registers it uses, so unlike
-    SdmaRingEmitter this class never touches a pool and takes no `w`.
+    STATELESS and allocation-free: there is no constructor, every method takes
+    the registers it uses, and unlike SdmaRingEmitter this class never touches
+    a pool and takes no `w`.
 
     ALIASING CONTRACT: the packet block must be disjoint from every input SGPR
     and from `tmpS`.  The `_pack*` helpers build each field IN PLACE in its
@@ -80,11 +77,6 @@ class SdmaPacketEmitter:
     packet must not be built until the first one's stores have been emitted
     (see emitPlacePacket's reuse note).
     """
-
-    def __init__(self, macroTile1: int):
-        # MT1 (token extent / rect_y) is a compile-time solution constant; the
-        # geometric fields (p, j, myRank, M, N, nShard) are runtime SGPRs.
-        self.mt1 = macroTile1
 
     # ---- field-packing helpers (isolate the encoding conventions) -----------
 
@@ -108,8 +100,9 @@ class SdmaPacketEmitter:
 
     def _packSliceMinus1(self, module, dstS, sliceS, comment):
         """dword = slice_pitch - 1 -- the 28-bit slice field at [27:0].  NOT a
-        free field despite rect_z being 0; see emitComputeCopyFields for the
-        assertion it has to satisfy."""
+        free field despite rect_z being 0: the reference implementation asserts
+        RECT_X * RECT_Y <= SLICE_PITCH and nothing at launch checks it, so the
+        caller has to pick a value that satisfies it."""
         self._toPacketElements(module, dstS, sliceS, comment)
         module.add(SSubU32(dst=sgpr(dstS), src0=sgpr(dstS), src1=1,
                            comment=comment + " (slice - 1)"))
@@ -139,8 +132,9 @@ class SdmaPacketEmitter:
                             dstBaseS, dstPitchS, dstSliceS,
                             rectXS, rectYS, tmpS):
         """Build the 13 COPY_SUBWIN dwords into pktS[0:13] from runtime SGPR
-        inputs in element units (see emitComputeCopyFields).  tmpS is one
-        scratch SGPR, used only by the rect dword.
+        inputs in element units, with the coordinates already folded into the
+        two bases by the caller.  tmpS is one scratch SGPR, used only by the
+        rect dword.
 
         The literal-0 coordinates are still written: the ring copies a fixed
         13-dword block, and a stale register would be read as a coordinate.
@@ -177,8 +171,8 @@ class SdmaPacketEmitter:
     def emitBuildAtomicPacket(self, module, pktS, dstAddrS):
         """Build the 8 ATOMIC ADD_RTN_32 dwords into pktS[0:8]: raise
         peer_ptr[p][myRank] by 1.  dstAddrS is a 2-SGPR pointer to the flag
-        slot (see emitComputeFlagAddr; the stride is 4 because this
-        ADD_RTN_32 writes 4 bytes).
+        slot, which the caller strides by 4 because this ADD_RTN_32 writes
+        4 bytes.
 
         The caller may hand this the SAME block it used for the COPY packet --
         8 dwords against the COPY's 13.  See emitPlacePacket's reuse note for
@@ -199,98 +193,3 @@ class SdmaPacketEmitter:
                            comment="ATOMIC DW6: cmp_data hi (unused)"))
         module.add(SMovB32(dst=sgpr(pktS + 7), src=hex(0),
                            comment="ATOMIC DW7: loop_interval=0"))
-
-    # ---- field arithmetic (runtime geometry -> the SGPR inputs above) --
-
-    def emitComputeCopyFields(self, module,
-                              pS, jS, myRankS, mS, nS, nShardS,
-                              addressDS, srcPitchS, recvBaseS,
-                              outSrcBaseS, outSrcSliceS, outDstSliceS,
-                              outRectYS, tmpS, tokenRowS, tmp64S):
-        """Compute the runtime COPY inputs from (p, j, myRank, M, N, nShard),
-        folding the four coordinates into the two 64-bit base addresses.
-        src_pitch = ldd, dst_pitch = nShard and rect_x = nShard are passed
-        straight through by the caller.
-
-        NEITHER SLICE PITCH IS A DON'T-CARE, despite the copy being a single
-        plane.  The values below are what make the reference implementation's
-        RECT_X * RECT_Y <= SLICE_PITCH assertion hold:
-          dst is EXACTLY TIGHT -- (nShard>>3)*rect_y <= (MT1*nShard)>>3 reduces
-            to rect_y <= MT1, which the clamp below guarantees with no slack.
-          src has margin -- (nShard>>3)*rect_y <= (M*N)>>3 reduces to
-            nShard*rect_y <= M*N, and nShard = AM/W <= M with rect_y <= N.
-        Shrinking either one to a constant would break the assertion.
-
-        BOTH folds are 64-BIT and must stay that way: neither product is
-        bounded now that the coordinates are folded in.  Each widening multiply
-        writes its high half first, so tmp64S+1 must not alias either source.
-        The elements->bytes shift uses D_DATA_ELEMENT_LOG2, NOT
-        PACKET_ELEMENT_SIZE_LOG2: a byte offset does not scale with the
-        packet's addressing granularity.
-
-        recvBaseS is updated IN PLACE; addressDS is read-only.  All three
-        scratch registers are dead on return: tmpS is reused between uses,
-        tokenRowS must NOT be (j*MT1 stays live across the whole body), and
-        tmp64S is a 2-ALIGNED pair.
-        """
-        module.add(SMulI32(dst=sgpr(tokenRowS), src0=sgpr(jS), src1=self.mt1,
-                           comment="token row of tile j = j * MT1 (folded into the bases)"))
-        module.add(SMulI32(dst=sgpr(outSrcSliceS), src0=sgpr(mS), src1=sgpr(nS),
-                           comment="src_slice = M * N (whole D plane; bounds RECT_X*RECT_Y)"))
-
-        # --- src fold: AddressD + (j*MT1*ldd + p*nShard) * sizeof(bf16) ---
-        module.add(SMulI32(dst=sgpr(tmpS), src0=sgpr(pS), src1=sgpr(nShardS),
-                           comment="src_x = p * nShard (folded into the base, not a field)"))
-        module.add(SMulHIU32(dst=sgpr(tmp64S + 1), src0=sgpr(tokenRowS), src1=sgpr(srcPitchS),
-                             comment="src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd) (hi)"))
-        module.add(SMulI32(dst=sgpr(tmp64S + 0), src0=sgpr(tokenRowS), src1=sgpr(srcPitchS),
-                           comment="src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd) (lo)"))
-        module.add(SAddU32(dst=sgpr(tmp64S + 0), src0=sgpr(tmp64S + 0), src1=sgpr(tmpS),
-                           comment="+ p*nShard (feature offset)"))
-        module.add(SAddCU32(dst=sgpr(tmp64S + 1), src0=sgpr(tmp64S + 1), src1=0,
-                            comment="propagate carry into the high word"))
-        module.add(SLShiftLeftB64(dst=sgpr(tmp64S, 2), src=sgpr(tmp64S, 2),
-                                  shiftHex=D_DATA_ELEMENT_LOG2,
-                                  comment="src offset: elements -> bytes (sizeof(bf16))"))
-        module.add(SAddU64(dst=sgpr(outSrcBaseS, 2), src0=sgpr(addressDS, 2),
-                           src1=sgpr(tmp64S, 2),
-                           comment="srcBase = D + src offset (src_x/src_y now 0)"))
-
-        # --- dst fold: recvBase += (myRank*N + j*MT1) * nShard * sizeof(bf16) ---
-        module.add(SMulI32(dst=sgpr(tmpS), src0=sgpr(myRankS), src1=sgpr(nS),
-                           comment="myRank * N"))
-        module.add(SAddU32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(tokenRowS),
-                           comment="dst row = myRank*N + j*MT1 (folded, not a field)"))
-        module.add(SMulHIU32(dst=sgpr(tmp64S + 1), src0=sgpr(tmpS), src1=sgpr(nShardS),
-                             comment="dst row offset = dst row * nShard (64-bit: unbounded in W and N) (hi)"))
-        module.add(SMulI32(dst=sgpr(tmp64S + 0), src0=sgpr(tmpS), src1=sgpr(nShardS),
-                           comment="dst row offset = dst row * nShard (64-bit: unbounded in W and N) (lo)"))
-        module.add(SLShiftLeftB64(dst=sgpr(tmp64S, 2), src=sgpr(tmp64S, 2),
-                                  shiftHex=D_DATA_ELEMENT_LOG2,
-                                  comment="dst offset: elements -> bytes (sizeof(bf16))"))
-        module.add(SAddU64(dst=sgpr(recvBaseS, 2), src0=sgpr(recvBaseS, 2),
-                           src1=sgpr(tmp64S, 2),
-                           comment="dstBase = recv slot + dst offset (dst_x/dst_y now 0)"))
-
-        module.add(SMulI32(dst=sgpr(outDstSliceS), src0=sgpr(nShardS), src1=self.mt1,
-                           comment="dst_slice = MT1 * nShard (one band's plane)"))
-        module.add(SSubU32(dst=sgpr(outRectYS), src0=sgpr(nS), src1=sgpr(tokenRowS),
-                           comment="N - j*MT1 (tokens left in this tile)"))
-        module.add(SMinU32(dst=sgpr(outRectYS), src0=sgpr(outRectYS), src1=self.mt1,
-                           comment="rect_y = min(MT1, N - j*MT1) (clamp tail tile)"))
-
-    def emitComputeFlagAddr(self, module, flagBaseS, myRankS, outAddrS, tmpS):
-        """Compute the ATOMIC target peer_ptr[p] + myRank*4 into outAddrS (2
-        SGPRs), a 64-bit add.  flagBaseS is peer_ptr[p], already selected by
-        the caller.  tmpS is one scratch SGPR.
-
-        The flag is indexed by SOURCE rank only -- source j's tokenTiles
-        ATOMICs accumulate into one slot, matching the "== tokenTiles" drain
-        predicate.
-        """
-        module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(myRankS), shiftHex=2,
-                                  comment="myRank * 4 (u32 flag-slot byte offset: the ATOMIC is an ADD_RTN_32)"))
-        module.add(SAddU32(dst=sgpr(outAddrS + 0), src0=sgpr(flagBaseS + 0), src1=sgpr(tmpS),
-                           comment="flag addr lo = peer_ptr[p] + myRank*4"))
-        module.add(SAddCU32(dst=sgpr(outAddrS + 1), src0=sgpr(flagBaseS + 1), src1=0,
-                            comment="flag addr hi (carry)"))

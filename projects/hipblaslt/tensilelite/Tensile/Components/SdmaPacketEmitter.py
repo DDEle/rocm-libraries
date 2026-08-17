@@ -77,9 +77,14 @@ class SdmaPacketEmitter:
     element counts writes a silently wrong packet; scale with
     `packetElementLog2`.
 
-    ALIASING CONTRACT: `_packRectMinus1`'s dstS must not alias rectYS, since it
-    writes the slot before reading the second extent.  The other slots are
-    written by a single read-and-write instruction and so tolerate aliasing.
+    ALIASING CONTRACT: the packet block must be disjoint from every field
+    argument and from `tmpS`.  Fields are read as the block is written, in
+    field order, so a field register that is also an ALREADY-WRITTEN packet
+    slot is read back as packet data -- dstSliceS == pktS+5 makes DW10 encode
+    (srcSlice-1)-1.  Inside `_packRectMinus1`, tmpS must additionally differ
+    from dstS, or the second extent overwrites the first and rect_x is lost to
+    an `s_or` with itself.  Neither is checked and neither faults.
+
     The block is written in field order and never re-read here, so an
     overlapping second packet must not be built until the first one's stores
     have been emitted (see emitPlacePacket's reuse note).
@@ -138,9 +143,12 @@ class SdmaPacketEmitter:
 
         The literal-0 coordinates are still written: the ring copies a fixed
         13-dword block, and a stale register would be read as a coordinate.
-        The two 64-bit bases are the one place a relay survives -- DW1/DW2 and
-        DW6/DW7 land on odd packet slots while the 64-bit ops that produce the
-        bases need a 2-aligned SReg_64 pair.
+
+        The two 64-bit bases are relayed a dword at a time rather than moved as
+        pairs, because this emitter requires no particular pktS alignment. At
+        the caller's 4-aligned pktS, DW1/DW2 starts odd and cannot form an
+        SReg_64 at all; DW6/DW7 does land 2-aligned there, but pairing it would
+        silently depend on how the caller allocated the block.
         """
         module.add(SMovB32(dst=sgpr(pktS + 0), src=hex(self.copyHeaderDw0),
                            comment="SUBWIN DW0: op=COPY sub_op=RECT elementsize=log2(%dB)"

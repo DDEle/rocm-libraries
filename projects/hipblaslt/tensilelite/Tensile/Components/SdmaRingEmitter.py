@@ -264,7 +264,8 @@ class SdmaRingEmitter:
                            comment="offset = queueSize - WrapIntoRing(cur) (pad ring tail)"))
         module.add(noPadLabel)
 
-        # new = cur + size + offset (64-bit).
+        # new = cur + size + offset (64-bit).  newIdxS and outCurS are both
+        # 2-ALIGNED, which is what keeps this carry chain safe -- see _emitU64Sub.
         module.add(SAddU32(dst=sgpr(newIdxS + 0), src0=sgpr(outCurS + 0), src1=sizeInBytes,
                            comment="new lo = cur + size"))
         module.add(SAddCU32(dst=sgpr(newIdxS + 1), src0=sgpr(outCurS + 1), src1=0, comment="new hi (carry)"))
@@ -469,6 +470,8 @@ class SdmaRingEmitter:
         the 2-ALIGNED SGPR pair dstPairS. dstPairS becomes the SBASE of every
         store in the placement, and SMEM requires an even SBASE (measured at the
         assembler: s_store with s[3:4] is rejected for register alignment).
+        queueBufPtrS must be 2-ALIGNED too, for the separate reason given in
+        _emitU64Sub -- this is the same two-instruction carry chain.
 
         Folding the wrap into the base here, once per placement, is what lets
         the stores address their dwords with plain IMMEDIATE offsets. The
@@ -586,6 +589,18 @@ class SdmaRingEmitter:
 
     def _emitU64Sub(self, module, dstPairS, aPairS, bPairS, comment):
         """dst = a - b (64-bit) via s_sub_u32 / s_subb_u32.
+
+        ★ ALL THREE PAIRS MUST BE 2-ALIGNED, and NOT for the usual reason --
+        both instructions are 32-bit, so nothing here needs an SReg_64 and the
+        alignment looks free to drop. What it actually buys is aliasing safety:
+        the second instruction reads a+1 and b+1 AFTER the first has written
+        dst+0, so the two must never be the same register. At 2-alignment dst+0
+        is even while a+1 and b+1 are odd, which makes that collision
+        impossible for every pair the caller can pass, including dst == a.
+        Unaligned, dst+0 == a+1 renders `s_subb_u32 hi, <the low difference>`
+        and the high word is silently wrong. The same shape recurs in
+        _emitRingByteAddr and in emitReserveQueueSpace's new-index
+        accumulation, with the same reliance on 2-alignment.
 
         Not rocisa's SSubU64: that is a plain CommonInstruction with no
         capability fallback, so it emits s_sub_u64 unconditionally and gfx950

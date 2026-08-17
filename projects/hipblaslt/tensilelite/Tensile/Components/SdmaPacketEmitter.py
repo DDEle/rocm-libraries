@@ -28,11 +28,7 @@
 # client/src/FusedA2AClient.cpp::runFusedA2A).
 #
 # This encoding is gfx9xx / gfx95x ONLY -- GFX12+ uses a different layout of
-# the same size.  Bit positions are transcribed from AMD OSS 4.4 sdma.pkt,
-# cross-checked against ROCR's sdma_registers.h and the kernel's
-# vega10_sdma_pkt_open.h (all three agree), then validated byte-for-byte on
-# MI355X and end-to-end -- recv byte-exact -- at MED / N2000 / N2047 / N2048 /
-# N4096, W=4 and W=8.
+# the same size.
 ################################################################################
 
 from rocisa.container import sgpr

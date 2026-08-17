@@ -28,10 +28,10 @@ from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, \
   GlobalAtomicAddU32, GlobalLoadB32, SLoadB64, \
   BufferAtomicCmpswapB64, BufferStoreB16, BufferStoreB32, BufferStoreB64, BufferStoreB128, \
   DSBPermuteB32, FlatAtomicCmpswapB32, \
-  SAddCU32, SAddU32, SAndB32, \
+  SAddCU32, SAddU32, SAddU64, SAndB32, \
   SAndB64, SAtomicDec, SAtomicInc, SBarrier, SBfmB32, SBfmB64, SBranch, SCBranchExecNZ, SCBranchExecZ, \
   SCBranchSCC0, SCBranchSCC1, SCBranchVCCNZ, SCmpGtU32, SCmpKGtU32, SCSelectB32, SCmpEQI32, SCmpEQU32, SCmpGtI32, SCmpLeI32, SMinU32, SEndpgm, \
-  SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SLShiftRightB64, SMovB32, SMovB64, SMulI32, \
+  SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SLShiftRightB64, SMovB32, SMovB64, SMulHIU32, SMulI32, \
   SNop, SOrB32, SOrB64, SOrSaveExecB32, SOrSaveExecB64, SSleep, SSubI32, SSubU32, \
   SSwapPCB64, SWaitCnt, SWaitAlu, VAShiftRightI32, VAddCCOU32, VAddCOU32, VAddF32, VAddF64, \
   VAddI32, VAddPKF16, VAddPKF32, VAddU32, VBfeI32, VCmpEQU32, VCmpGEI32, VCmpGtU32, \
@@ -2703,6 +2703,115 @@ class GlobalWriteBatchWriter:
       sgprOffset=sgpr(tmpSgpr), dword=2))
     module.add(SWaitCnt(kmcnt=0, comment="wait peer_ptr[my_rank] load"))
 
+  def _fusedA2AComputeCopyFields(self, module,
+                                 pS, jS, myRankS, mS, nS, nShardS,
+                                 addressDS, srcPitchS, recvBaseS,
+                                 outSrcBaseS, outSrcSliceS, outDstSliceS,
+                                 outRectYS, tmpS, tokenRowS, tmp64S):
+    """Turn the all-to-all geometry into SdmaPacketEmitter's COPY_SUBWIN field
+    inputs, per (peer p, token-tile j) with this card == myRank.
+
+    This lives here rather than in the emitter because it is the A2A layout,
+    not the packet format: everything below names D, peer_ptr, recvOffset and
+    the token-tiling.  In bf16 elements:
+
+      src       = D + (j*MT1)*ldd + p*nShard              src_pitch = ldd
+      dst       = peer_ptr[p] + recvOffset + (myRank*N + j*MT1)*nShard
+                                                          dst_pitch = nShard
+      rect_x    = nShard                 (feature, contiguous)
+      rect_y    = min(MT1, N - j*MT1)    (clamped: the tail tile is partial)
+      src_slice = M * N                  (whole D plane)
+      dst_slice = MT1 * nShard           (one band's plane)
+
+    src_pitch, dst_pitch and rect_x are handed to the emitter unchanged; the
+    four packet COORDINATES are folded into the two 64-bit bases here, which
+    is what leaves N unconstrained by the 14-bit coordinate fields.
+
+    NEITHER SLICE PITCH IS A DON'T-CARE, despite the copy being a single
+    plane.  The values above are what make the reference implementation's
+    RECT_X * RECT_Y <= SLICE_PITCH assertion hold:
+      dst is EXACTLY TIGHT -- (nShard>>3)*rect_y <= (MT1*nShard)>>3 reduces to
+        rect_y <= MT1, which the clamp below guarantees with no slack.
+      src has margin -- (nShard>>3)*rect_y <= (M*N)>>3 reduces to
+        nShard*rect_y <= M*N, and nShard = AM/W <= M with rect_y <= N.
+    Shrinking either one to a constant would break the assertion.
+
+    BOTH folds are 64-BIT and must stay that way: neither product is bounded
+    now that the coordinates are folded in.  Each widening multiply writes its
+    high half first, so tmp64S+1 must not alias either source.  The
+    elements->bytes shift uses D_DATA_ELEMENT_LOG2, NOT the packet's
+    PACKET_ELEMENT_SIZE_LOG2: a byte offset does not scale with the packet's
+    addressing granularity.
+
+    recvBaseS is updated IN PLACE; addressDS is read-only.  All three scratch
+    registers are dead on return: tmpS is reused between uses, tokenRowS must
+    NOT be (j*MT1 stays live across the whole body), and tmp64S is a 2-ALIGNED
+    pair.
+    """
+    from .SdmaPacketEmitter import D_DATA_ELEMENT_LOG2
+    mt1 = self.kernel["MacroTile1"]
+
+    module.add(SMulI32(dst=sgpr(tokenRowS), src0=sgpr(jS), src1=mt1,
+                       comment="token row of tile j = j * MT1 (folded into the bases)"))
+    module.add(SMulI32(dst=sgpr(outSrcSliceS), src0=sgpr(mS), src1=sgpr(nS),
+                       comment="src_slice = M * N (whole D plane; bounds RECT_X*RECT_Y)"))
+
+    # --- src fold: AddressD + (j*MT1*ldd + p*nShard) * sizeof(bf16) ---
+    module.add(SMulI32(dst=sgpr(tmpS), src0=sgpr(pS), src1=sgpr(nShardS),
+                       comment="src_x = p * nShard (folded into the base, not a field)"))
+    module.add(SMulHIU32(dst=sgpr(tmp64S + 1), src0=sgpr(tokenRowS), src1=sgpr(srcPitchS),
+                         comment="src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd) (hi)"))
+    module.add(SMulI32(dst=sgpr(tmp64S + 0), src0=sgpr(tokenRowS), src1=sgpr(srcPitchS),
+                       comment="src row offset = j*MT1 * ldd (64-bit: unbounded in N and ldd) (lo)"))
+    module.add(SAddU32(dst=sgpr(tmp64S + 0), src0=sgpr(tmp64S + 0), src1=sgpr(tmpS),
+                       comment="+ p*nShard (feature offset)"))
+    module.add(SAddCU32(dst=sgpr(tmp64S + 1), src0=sgpr(tmp64S + 1), src1=0,
+                        comment="propagate carry into the high word"))
+    module.add(SLShiftLeftB64(dst=sgpr(tmp64S, 2), src=sgpr(tmp64S, 2),
+                              shiftHex=D_DATA_ELEMENT_LOG2,
+                              comment="src offset: elements -> bytes (sizeof(bf16))"))
+    module.add(SAddU64(dst=sgpr(outSrcBaseS, 2), src0=sgpr(addressDS, 2),
+                       src1=sgpr(tmp64S, 2),
+                       comment="srcBase = D + src offset (src_x/src_y now 0)"))
+
+    # --- dst fold: recvBase += (myRank*N + j*MT1) * nShard * sizeof(bf16) ---
+    module.add(SMulI32(dst=sgpr(tmpS), src0=sgpr(myRankS), src1=sgpr(nS),
+                       comment="myRank * N"))
+    module.add(SAddU32(dst=sgpr(tmpS), src0=sgpr(tmpS), src1=sgpr(tokenRowS),
+                       comment="dst row = myRank*N + j*MT1 (folded, not a field)"))
+    module.add(SMulHIU32(dst=sgpr(tmp64S + 1), src0=sgpr(tmpS), src1=sgpr(nShardS),
+                         comment="dst row offset = dst row * nShard (64-bit: unbounded in W and N) (hi)"))
+    module.add(SMulI32(dst=sgpr(tmp64S + 0), src0=sgpr(tmpS), src1=sgpr(nShardS),
+                       comment="dst row offset = dst row * nShard (64-bit: unbounded in W and N) (lo)"))
+    module.add(SLShiftLeftB64(dst=sgpr(tmp64S, 2), src=sgpr(tmp64S, 2),
+                              shiftHex=D_DATA_ELEMENT_LOG2,
+                              comment="dst offset: elements -> bytes (sizeof(bf16))"))
+    module.add(SAddU64(dst=sgpr(recvBaseS, 2), src0=sgpr(recvBaseS, 2),
+                       src1=sgpr(tmp64S, 2),
+                       comment="dstBase = recv slot + dst offset (dst_x/dst_y now 0)"))
+
+    module.add(SMulI32(dst=sgpr(outDstSliceS), src0=sgpr(nShardS), src1=mt1,
+                       comment="dst_slice = MT1 * nShard (one band's plane)"))
+    module.add(SSubU32(dst=sgpr(outRectYS), src0=sgpr(nS), src1=sgpr(tokenRowS),
+                       comment="N - j*MT1 (tokens left in this tile)"))
+    module.add(SMinU32(dst=sgpr(outRectYS), src0=sgpr(outRectYS), src1=mt1,
+                       comment="rect_y = min(MT1, N - j*MT1) (clamp tail tile)"))
+
+  def _fusedA2AComputeFlagAddr(self, module, flagBaseS, myRankS, outAddrS, tmpS):
+    """Compute the ATOMIC target peer_ptr[p] + myRank*4 into outAddrS (2
+    SGPRs), a 64-bit add.  flagBaseS is peer_ptr[p], already selected by
+    _fusedA2ALoadFlagBaseByRank.  tmpS is one scratch SGPR.
+
+    The flag is indexed by SOURCE rank only -- source j's tokenTiles ATOMICs
+    accumulate into one slot, matching the "== tokenTiles" drain predicate.
+    """
+    module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(myRankS), shiftHex=2,
+                              comment="myRank * 4 (u32 flag-slot byte offset: the ATOMIC is an ADD_RTN_32)"))
+    module.add(SAddU32(dst=sgpr(outAddrS + 0), src0=sgpr(flagBaseS + 0), src1=sgpr(tmpS),
+                       comment="flag addr lo = peer_ptr[p] + myRank*4"))
+    module.add(SAddCU32(dst=sgpr(outAddrS + 1), src0=sgpr(flagBaseS + 1), src1=0,
+                        comment="flag addr hi (carry)"))
+
   def _emitFusedA2ASdmaIssue(self, module, dstRankSgpr, myRankSgpr, nShardSgpr,
                              flagBaseSgpr, tmpSgpr):
     """Build and submit this (peer, token-tile)'s SDMA packet pair, from the
@@ -2726,7 +2835,7 @@ class GlobalWriteBatchWriter:
     not merely a different pitch.
 
     The four packet coordinates are FOLDED into the 64-bit base addresses by
-    emitComputeCopyFields and emitted as literal 0, which leaves N unconstrained.
+    _fusedA2AComputeCopyFields and emitted as literal 0, leaving N unconstrained.
     What still has to fit -- rect_x, rect_y, src_pitch -- is packed unmasked, so
     an over-range value corrupts a neighbouring field. The bounds are enforced
     at launch time by client/src/FusedA2AClient.cpp::runFusedA2A.
@@ -2746,7 +2855,7 @@ class GlobalWriteBatchWriter:
     kw        = self.parentWriter
     layout    = fusedA2AKernArgLayout()
     fusedBase = kw.states.fusedA2AKernArgBase
-    pkt       = SdmaPacketEmitter(macroTile1=self.kernel["MacroTile1"])
+    pkt       = SdmaPacketEmitter()
     ring      = SdmaRingEmitter()
     # sizeof(SdmaQueueDeviceHandle) == 7 * 8 (locked by static_asserts in
     # client/include/SdmaQueue.hpp; SdmaRingEmitter's OFF_* mirror the same layout).
@@ -2804,12 +2913,12 @@ class GlobalWriteBatchWriter:
     # not be clobbered); recvBaseSgpr is a temp and is folded in place.
     srcBaseSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaSrcBase", preventOverflow=False)
     tmp64Sgpr   = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaOffset64", preventOverflow=False)
-    pkt.emitComputeCopyFields(module,
-                              dstRankSgpr, "WorkGroup1", myRankSgpr,
-                              "SizesFree+0", "SizesFree+1", nShardSgpr,
-                              kw.sgprs["AddressD"], srcPitchName, recvBaseSgpr,
-                              srcBaseSgpr, srcSliceS, dstSliceS, rectYS,
-                              tmpSgpr, tokenRowS, tmp64Sgpr)
+    self._fusedA2AComputeCopyFields(module,
+                                    dstRankSgpr, "WorkGroup1", myRankSgpr,
+                                    "SizesFree+0", "SizesFree+1", nShardSgpr,
+                                    kw.sgprs["AddressD"], srcPitchName, recvBaseSgpr,
+                                    srcBaseSgpr, srcSliceS, dstSliceS, rectYS,
+                                    tmpSgpr, tokenRowS, tmp64Sgpr)
     kw.sgprPool.checkIn(tmp64Sgpr)  # dead once the two bases are folded
 
     # --- packet dwords: ONE block, built and placed once per packet. ---
@@ -2852,7 +2961,7 @@ class GlobalWriteBatchWriter:
     # offset is 0.
     module.add(SMovB32(dst=sgpr(offSgpr), src=0, comment="ATOMIC follows the COPY: no further padding"))
     flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaFlagAddr", preventOverflow=False)
-    pkt.emitComputeFlagAddr(module, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
+    self._fusedA2AComputeFlagAddr(module, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
     pkt.emitBuildAtomicPacket(module, pktSgpr, flagAddrSgpr)
     kw.sgprPool.checkIn(flagAddrSgpr)
     ring.emitPlacePacket(module, kw, handleBaseSgpr, pktSgpr,

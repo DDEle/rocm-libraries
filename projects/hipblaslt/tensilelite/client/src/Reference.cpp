@@ -1937,9 +1937,9 @@ namespace TensileLite
 
             // gemm
             omp_set_num_threads(MAX_OMP_THREADS);
-#pragma omp parallel for
-            for(size_t dNum = 0; dNum < d.totalLogicalElements(); dNum += validationStrideGemm)
+#pragma omp parallel
             {
+                // Allocate coordinate buffers per-thread.
                 std::vector<int64_t> aCoord(a.dimensions());
                 std::vector<int64_t> bCoord(b.dimensions());
                 std::vector<int64_t> cCoord(c.dimensions());
@@ -1947,6 +1947,10 @@ namespace TensileLite
                 std::vector<int64_t> biasCoord(bias.dimensions());
                 std::vector<int64_t> mxsaCoord(mxsa.dimensions());
                 std::vector<int64_t> mxsbCoord(mxsb.dimensions());
+                std::vector<int64_t> bound(problem.boundIndices().size());
+#pragma omp for
+            for(size_t dNum = 0; dNum < d.totalLogicalElements(); dNum += validationStrideGemm)
+            {
                 CoordNumbered(
                     dNum, dCoord.begin(), dCoord.end(), d.sizes().begin(), d.sizes().end());
 
@@ -1995,7 +1999,6 @@ namespace TensileLite
                 {
                     for(size_t boundNum = 0; boundNum < boundCount; boundNum++)
                     {
-                        std::vector<int64_t> bound(problem.boundIndices().size());
                         CoordNumbered(boundNum,
                                       bound.begin() + 1,
                                       bound.end(),
@@ -2684,6 +2687,7 @@ namespace TensileLite
                     }
                 }
             }
+            } // end #pragma omp parallel
 
             if(problem.outputAmaxD())
             {

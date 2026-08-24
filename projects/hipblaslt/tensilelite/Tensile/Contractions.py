@@ -261,6 +261,7 @@ class ProblemType:
         if 'OutputAmaxD' in d:
             rv.outputAmaxD = d['OutputAmaxD']
 
+        rv.useFusedGemmA2A = bool(d.get('UseFusedGemmA2A', False))
         rv.usePartialRMS = bool(d.get('UsePartialRMS', False))
         rv.partialRMSResidualAdd = bool(d.get('PartialRMSResidualAdd', False))
         rv.partialRMSQuant = bool(d.get('PartialRMSQuant', False))
@@ -445,6 +446,7 @@ class ProblemType:
             predicates.append(ProblemPredicate("MXBlockB", value=self.mxBlockB))
             if self.mxBlockB:
                 predicates.append(ProblemPredicate("DataTypeMXSB", value=self.mxTypeB))
+            predicates.append(ProblemPredicate("UseFusedGemmA2A", value=self.useFusedGemmA2A))
             predicates.append(ProblemPredicate("UsePartialRMS", value=self.usePartialRMS))
             predicates.append(ProblemPredicate("UsePartialRMSResidualAdd", value=self.partialRMSResidualAdd))
             predicates.append(ProblemPredicate("UsePartialRMSQuant", value=self.partialRMSQuant))

@@ -57,7 +57,7 @@
 # ---
 # name: test_problem_type_predicates
   dict({
-    'count': 34,
+    'count': 35,
     'tags': list([
       'Activation',
       'ActivationComputeType',
@@ -85,6 +85,7 @@
       'UseDeepseekScaleA',
       'UseDeepseekScaleB',
       'UseE',
+      'UseFusedGemmA2A',
       'UseGateResidual',
       'UseGradient',
       'UsePartialRMS',

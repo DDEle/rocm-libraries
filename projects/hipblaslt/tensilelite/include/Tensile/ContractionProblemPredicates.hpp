@@ -2120,8 +2120,8 @@ namespace TensileLite
                 }
             };
 
-            struct FusedGemmA2AEqual
-                : public Predicate_CRTP<FusedGemmA2AEqual, ContractionProblemGemm>
+            struct UseFusedGemmA2AEqual
+                : public Predicate_CRTP<UseFusedGemmA2AEqual, ContractionProblemGemm>
             {
                 enum
                 {
@@ -2130,15 +2130,15 @@ namespace TensileLite
                 };
                 bool value;
 
-                FusedGemmA2AEqual() = default;
-                FusedGemmA2AEqual(bool value)
+                UseFusedGemmA2AEqual() = default;
+                UseFusedGemmA2AEqual(bool value)
                     : value(value)
                 {
                 }
 
                 static std::string Type()
                 {
-                    return "FusedGemmA2A";
+                    return "UseFusedGemmA2A";
                 }
 
                 virtual bool operator()(ContractionProblemGemm const& problem) const override

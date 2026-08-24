@@ -818,6 +818,14 @@ namespace TensileLite
         int  partialRMSMT0()         const { return m_partialRMSMT0; }
         int  partialRMSMT1()         const { return m_partialRMSMT1; }
 
+        void setFusedGemmA2A(bool v)        { m_fusedGemmA2A = v; }
+        void setFusedA2AExtent(int64_t v)   { m_fusedA2AExtent = v; }
+        void setFusedA2AWorld(uint32_t v)   { m_fusedA2AWorld = v; }
+
+        bool     fusedGemmA2A()   const { return m_fusedGemmA2A; }
+        int64_t  fusedA2AExtent() const { return m_fusedA2AExtent; }
+        uint32_t fusedA2AWorld()  const { return m_fusedA2AWorld; }
+
         void setDquantType(DQuantType v) { m_dquantType = v; }
         DQuantType dquantType() const    { return m_dquantType; }
         void setDquantSize0(int v) { m_dquantSize0 = v; }
@@ -1628,6 +1636,9 @@ namespace TensileLite
         bool             m_partialRMSQuant         = false;
         int              m_partialRMSMT0            = 0;
         int              m_partialRMSMT1            = 0;
+        bool             m_fusedGemmA2A            = false;
+        int64_t          m_fusedA2AExtent          = 0;
+        uint32_t         m_fusedA2AWorld           = 0;
         DQuantType       m_dquantType              = DQuantType::None;
         int              m_dquantSize0             = 0;
         int              m_dquantSize1             = 0;

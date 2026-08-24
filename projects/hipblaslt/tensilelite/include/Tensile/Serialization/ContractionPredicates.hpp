@@ -110,6 +110,8 @@ namespace TensileLite
                      Base::template Pair<Predicates::Contraction::PredictionMatching>(),
                      Base::template Pair<Predicates::Contraction::GridBasedMatching>(),
                      Base::template Pair<Predicates::Contraction::UsePartialRMSEqual>(),
+                     Base::template Pair<Predicates::Contraction::FusedGemmA2AEqual>(),
+                     Base::template Pair<Predicates::Contraction::FusedA2ATileDivisible>(),
                      Base::template Pair<Predicates::Contraction::DQuantTypeEqual>(),
                      Base::template Pair<Predicates::Contraction::DQuantSize0Equal>(),
                      Base::template Pair<Predicates::Contraction::DQuantSize1Equal>(),
@@ -461,6 +463,18 @@ namespace TensileLite
         template <typename IO>
         struct MappingTraits<Predicates::Contraction::UsePartialRMSEqual, IO>
             : public AutoMappingTraits<Predicates::Contraction::UsePartialRMSEqual, IO>
+        {
+        };
+
+        template <typename IO>
+        struct MappingTraits<Predicates::Contraction::FusedGemmA2AEqual, IO>
+            : public AutoMappingTraits<Predicates::Contraction::FusedGemmA2AEqual, IO>
+        {
+        };
+
+        template <typename IO>
+        struct MappingTraits<Predicates::Contraction::FusedA2ATileDivisible, IO>
+            : public AutoMappingTraits<Predicates::Contraction::FusedA2ATileDivisible, IO>
         {
         };
 

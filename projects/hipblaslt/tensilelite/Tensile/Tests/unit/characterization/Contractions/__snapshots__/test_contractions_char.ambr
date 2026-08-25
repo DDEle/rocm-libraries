@@ -57,7 +57,7 @@
 # ---
 # name: test_problem_type_predicates
   dict({
-    'count': 29,
+    'count': 35,
     'tags': list([
       'Activation',
       'ActivationComputeType',
@@ -66,6 +66,7 @@
       'AmaxDCheck',
       'BiasDataTypeWhiteList',
       'BiasSrcWhiteList',
+      'DQuantType',
       'DataTypeE',
       'F32XdlMathOp',
       'FusedGemmA2A',
@@ -82,9 +83,14 @@
       'SwizzleTensorB',
       'TypesEqual',
       'UseBias',
+      'UseDeepseekScaleA',
+      'UseDeepseekScaleB',
       'UseE',
       'UseGateResidual',
       'UseGradient',
+      'UsePartialRMS',
+      'UsePartialRMSQuant',
+      'UsePartialRMSResidualAdd',
       'UseScaleAB',
       'UseScaleAlphaVec',
       'UseScaleCD',

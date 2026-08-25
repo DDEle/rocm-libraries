@@ -107,14 +107,6 @@ namespace TensileLite
             }
             std::cout << "[fused-a2a] solution: " << solution->name() << std::endl;
 
-            if(!(*solution->problemPredicate)(*problem))
-            {
-                std::cerr << "[fused-a2a] solution predicate does not match the problem:"
-                          << std::endl;
-                solution->problemPredicate->debugEval(*problem, std::cerr);
-                return 1;
-            }
-
             // Tile sizes must come from THIS solution's macro-tile: the kernel
             // epilogue derives dst_rank and the counter index from MT0/MT1.
             const uint32_t macroTileM = (uint32_t)solution->sizeMapping.macroTile.x;
@@ -173,6 +165,14 @@ namespace TensileLite
             problem->setFusedGemmA2A(true);
             problem->setFusedA2AExtent(AM);
             problem->setFusedA2AWorld((uint32_t)W);
+
+            if(!(*solution->problemPredicate)(*problem))
+            {
+                std::cerr << "[fused-a2a] solution predicate does not match the problem:"
+                          << std::endl;
+                solution->problemPredicate->debugEval(*problem, std::cerr);
+                return 1;
+            }
 
             // SDMA COPY_SUBWIN rect_x/rect_y are 14-bit; rect_x = n_shard scaled into
             // 16-byte packet elements, rect_y <= MT1. These are the only guard

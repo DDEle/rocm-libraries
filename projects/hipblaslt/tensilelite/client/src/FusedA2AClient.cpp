@@ -6,6 +6,7 @@
 
 #include <Tensile/ContractionProblem.hpp>
 #include <Tensile/ContractionSolution.hpp>
+#include <Tensile/FusedA2AKernArg.hpp>
 #include <Tensile/MasterSolutionLibrary.hpp>
 #include <Tensile/Tensile.hpp>
 #include <Tensile/hip/HipHardware.hpp>
@@ -16,7 +17,6 @@
 #include <array>
 
 #include "FusedA2ACounterSentinel.hpp"
-#include "FusedA2AKernArg.hpp"
 #include "SolutionIterator.hpp"
 
 // SdmaQueue.hpp is header-only and pulls in hsakmt, which is only on the
@@ -169,6 +169,10 @@ namespace TensileLite
                           << std::endl;
                 return -1;
             }
+
+            problem->setFusedGemmA2A(true);
+            problem->setFusedA2AExtent(AM);
+            problem->setFusedA2AWorld((uint32_t)W);
 
             // SDMA COPY_SUBWIN rect_x/rect_y are 14-bit; rect_x = n_shard scaled into
             // 16-byte packet elements, rect_y <= MT1. These are the only guard
@@ -458,8 +462,7 @@ namespace TensileLite
 
             // Repeat loop: race detection + p50/p90 latency. Each iteration re-zeroes
             // counter/flag/recv (else the DRAIN barrier releases trivially and a
-            // stale-correct recv masks a broken scatter) and rebuilds the
-            // KernelInvocation (else appendFusedSegment appends the tail repeatedly).
+            // stale-correct recv masks a broken scatter).
             const int iters  = std::max(1, args["fused-a2a-iters"].as<int>());
             int       warmup = args["fused-a2a-warmup"].as<int>();
             if(warmup < 0)
@@ -531,7 +534,6 @@ namespace TensileLite
                 }
             }
 
-            // Built once: appendFusedSegment must not run twice on the same args.
             std::vector<std::vector<KernelInvocation>> perDeviceKernels(W);
             for(int d = 0; d < W; d++)
             {
@@ -545,6 +547,20 @@ namespace TensileLite
                 inputs.alpha = static_cast<float>(1);
                 inputs.beta  = static_cast<float>(0);
                 inputs.gpu   = true;
+                // One group per peer, flattened here so the packer needs no hsakmt type.
+                for(size_t j = 0; j < sdmaQueues[d].size(); j++)
+                {
+                    const HsaQueueResource& r = sdmaQueues[d][j]->queueResource();
+                    inputs.fusedA2APeers.push_back({j < flag.size() ? flag[j] : nullptr,
+                                                    j < recv.size() ? recv[j] : nullptr,
+                                                    sdmaQueues[d][j]->ringBase(),
+                                                    (void*)r.Queue_read_ptr_aql,
+                                                    (void*)r.Queue_write_ptr_aql,
+                                                    (void*)r.Queue_DoorBell_aql});
+                }
+                inputs.fusedA2ACounter = counter[d];
+                inputs.fusedA2AMyRank  = (uint32_t)d;
+                inputs.fusedA2ADrain   = drain;
 
                 auto kernels = solution->solve(*problem, inputs, *hardware, nullptr, 0, streams[d]);
                 // Not back(): solve() appends conversion/reduction kernels after the
@@ -556,32 +572,8 @@ namespace TensileLite
                     return 1;
                 }
 
-                KernelInvocation& gemm       = kernels.front();
-                size_t            beforeSize = gemm.args.size();
-                // One group per peer, flattened here so the packer needs no hsakmt type.
-                std::vector<FusedA2APeerFields> peers;
-                for(size_t j = 0; j < sdmaQueues[d].size(); j++)
-                {
-                    const HsaQueueResource& r = sdmaQueues[d][j]->queueResource();
-                    peers.push_back({j < flag.size() ? flag[j] : nullptr,
-                                     j < recv.size() ? recv[j] : nullptr,
-                                     sdmaQueues[d][j]->ringBase(),
-                                     (void*)r.Queue_read_ptr_aql,
-                                     (void*)r.Queue_write_ptr_aql,
-                                     (void*)r.Queue_DoorBell_aql});
-                }
-                appendFusedSegment(gemm.args,
-                                   peers,
-                                   counter[d],
-                                   (uint32_t)d, // my_rank
-                                   (uint32_t)W,
-                                   drain,
-                                   // kernarg "FusedAM" (Signature.py); pass AM as
-                                   // the value to keep the client/kernel ABI matched.
-                                   (uint32_t)AM);
                 std::cout << "[fused-a2a] dev " << d
-                          << " kernarg: host base(before append)=" << beforeSize
-                          << " size(after)=" << gemm.args.size() << "\n";
+                          << " kernarg size=" << kernels.front().args.size() << "\n";
 
                 perDeviceKernels[d] = std::move(kernels);
             }

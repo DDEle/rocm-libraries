@@ -1377,8 +1377,15 @@
     'CompactLoopStore',
     'ConvertAfterDS',
     'CustomKernelName',
+    'DQuantSize0',
+    'DQuantSize1',
+    'DQuantType',
     'DebugPersistentKernelLoopForever',
     'DebugStreamK',
+    'DeepseekScaleAq0',
+    'DeepseekScaleAq1',
+    'DeepseekScaleBq0',
+    'DeepseekScaleBq1',
     'DepthU',
     'DirectToLds',
     'DirectToLdsMetadata',
@@ -1458,6 +1465,11 @@
     'NumLoadsCoalescedA',
     'NumLoadsCoalescedB',
     'OptNoLoadLoop',
+    'PartialRMS',
+    'PartialRMSGammaType',
+    'PartialRMSQuant',
+    'PartialRMSResidualAdd',
+    'PartialRMSResidualType',
     'PrefetchAcrossPersistent',
     'PrefetchGL2',
     'PrefetchGlobalRead',
@@ -1510,6 +1522,8 @@
     'Use64bShadowLimit',
     'Use64bShadowLimitMX',
     'UseCustomMainLoopSchedule',
+    'UseDeepseekScaleA',
+    'UseDeepseekScaleB',
     'UseDualFMAC',
     'UseInstOffsetForGRO',
     'UsePLRPack',
@@ -1684,6 +1698,23 @@
       'type': 'int',
       'value': -1,
     }),
+    'DQuantSize0': dict({
+      'type': 'int',
+      'value': -1,
+    }),
+    'DQuantSize1': dict({
+      'type': 'int',
+      'value': -1,
+    }),
+    'DQuantType': dict({
+      'head': list([
+        'None',
+        'Tile',
+        'MXFP8',
+      ]),
+      'len': 3,
+      'type': 'list',
+    }),
     'DebugPersistentKernelLoopForever': dict({
       'head': list([
         False,
@@ -1699,6 +1730,42 @@
         2,
       ]),
       'len': 4,
+      'type': 'list',
+    }),
+    'DeepseekScaleAq0': dict({
+      'head': list([
+        1,
+        2,
+        3,
+      ]),
+      'len': 1024,
+      'type': 'list',
+    }),
+    'DeepseekScaleAq1': dict({
+      'head': list([
+        1,
+        2,
+        3,
+      ]),
+      'len': 1024,
+      'type': 'list',
+    }),
+    'DeepseekScaleBq0': dict({
+      'head': list([
+        1,
+        2,
+        3,
+      ]),
+      'len': 1024,
+      'type': 'list',
+    }),
+    'DeepseekScaleBq1': dict({
+      'head': list([
+        1,
+        2,
+        3,
+      ]),
+      'len': 1024,
       'type': 'list',
     }),
     'DepthU': dict({
@@ -2402,6 +2469,46 @@
       'len': 3,
       'type': 'list',
     }),
+    'PartialRMS': dict({
+      'head': list([
+        False,
+        True,
+      ]),
+      'len': 2,
+      'type': 'list',
+    }),
+    'PartialRMSGammaType': dict({
+      'head': list([
+        'b',
+        's',
+      ]),
+      'len': 2,
+      'type': 'list',
+    }),
+    'PartialRMSQuant': dict({
+      'head': list([
+        False,
+        True,
+      ]),
+      'len': 2,
+      'type': 'list',
+    }),
+    'PartialRMSResidualAdd': dict({
+      'head': list([
+        False,
+        True,
+      ]),
+      'len': 2,
+      'type': 'list',
+    }),
+    'PartialRMSResidualType': dict({
+      'head': list([
+        'b',
+        's',
+      ]),
+      'len': 2,
+      'type': 'list',
+    }),
     'PrefetchAcrossPersistent': dict({
       'head': list([
         0,
@@ -2849,6 +2956,22 @@
         1,
       ]),
       'len': 3,
+      'type': 'list',
+    }),
+    'UseDeepseekScaleA': dict({
+      'head': list([
+        False,
+        True,
+      ]),
+      'len': 2,
+      'type': 'list',
+    }),
+    'UseDeepseekScaleB': dict({
+      'head': list([
+        False,
+        True,
+      ]),
+      'len': 2,
       'type': 'list',
     }),
     'UseDualFMAC': dict({

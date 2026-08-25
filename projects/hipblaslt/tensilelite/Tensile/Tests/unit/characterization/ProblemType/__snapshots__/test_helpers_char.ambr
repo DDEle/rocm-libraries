@@ -9,6 +9,7 @@
     'ComplexConjugateA',
     'ComplexConjugateB',
     'ComputeDataType',
+    'DQuantType',
     'DataType',
     'DataTypeA',
     'DataTypeAmaxD',
@@ -16,6 +17,10 @@
     'DataTypeE',
     'DataTypeMXSA',
     'DataTypeMXSB',
+    'DeepseekScaleAq0',
+    'DeepseekScaleAq1',
+    'DeepseekScaleBq0',
+    'DeepseekScaleBq1',
     'DestDataType',
     'F32XdlMathOp',
     'FusedGemmA2A',
@@ -39,6 +44,8 @@
     'NumIndicesLD',
     'OperationType',
     'OutputAmaxD',
+    'PartialRMSQuant',
+    'PartialRMSResidualAdd',
     'SetConstStrideA',
     'SetConstStrideB',
     'SetConstStrideBias',
@@ -55,10 +62,13 @@
     'TransposeB',
     'UseBeta',
     'UseBias',
+    'UseDeepseekScaleA',
+    'UseDeepseekScaleB',
     'UseE',
     'UseGateResidual',
     'UseInitialStridesAB',
     'UseInitialStridesCD',
+    'UsePartialRMS',
     'UseScaleAB',
     'UseScaleAlphaVec',
     'UseScaleCD',
@@ -91,6 +101,9 @@
     'ComputeDataType': list([
       'int',
     ]),
+    'DQuantType': list([
+      'str',
+    ]),
     'DataType': list([
       'int',
     ]),
@@ -111,6 +124,18 @@
     ]),
     'DataTypeMXSB': list([
       'str',
+    ]),
+    'DeepseekScaleAq0': list([
+      'int',
+    ]),
+    'DeepseekScaleAq1': list([
+      'int',
+    ]),
+    'DeepseekScaleBq0': list([
+      'int',
+    ]),
+    'DeepseekScaleBq1': list([
+      'int',
     ]),
     'DestDataType': list([
       'int',
@@ -181,6 +206,12 @@
     'OutputAmaxD': list([
       'bool',
     ]),
+    'PartialRMSQuant': list([
+      'bool',
+    ]),
+    'PartialRMSResidualAdd': list([
+      'bool',
+    ]),
     'SetConstStrideA': list([
       'list',
     ]),
@@ -229,6 +260,12 @@
     'UseBias': list([
       'int',
     ]),
+    'UseDeepseekScaleA': list([
+      'bool',
+    ]),
+    'UseDeepseekScaleB': list([
+      'bool',
+    ]),
     'UseE': list([
       'bool',
     ]),
@@ -239,6 +276,9 @@
       'bool',
     ]),
     'UseInitialStridesCD': list([
+      'bool',
+    ]),
+    'UsePartialRMS': list([
       'bool',
     ]),
     'UseScaleAB': list([

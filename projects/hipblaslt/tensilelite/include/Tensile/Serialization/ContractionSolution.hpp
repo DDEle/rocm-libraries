@@ -140,6 +140,7 @@ namespace TensileLite
                 iot::mapOptional(io, "useSubtileImpl", s.useSubtileImpl);
                 iot::mapOptional(io, "PartialRMS",            s.partialRMS);
                 iot::mapOptional(io, "PartialRMSResidualAdd", s.partialRMSResidualAdd);
+                iot::mapOptional(io, "FusedGemmA2A",         s.fusedGemmA2A);
                 iot::mapOptional(io, "dquantType",            s.dquantType);
                 iot::mapOptional(io, "dquantSize0",           s.dquantSize0);
                 iot::mapOptional(io, "dquantSize1",           s.dquantSize1);

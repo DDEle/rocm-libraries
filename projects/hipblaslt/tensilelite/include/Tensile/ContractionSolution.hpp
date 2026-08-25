@@ -184,6 +184,7 @@ namespace TensileLite
 
         bool       partialRMS            = false;
         bool       partialRMSResidualAdd = false;
+        int        fusedGemmA2A          = 0;
         DQuantType dquantType            = DQuantType::None;
         int        dquantSize0           = 0;
         int  dquantSize1           = 0;

@@ -34,6 +34,7 @@
 
 #include <Tensile/ContractionProblem_fwd.hpp>
 #include <Tensile/ContractionSolution_fwd.hpp>
+#include <Tensile/FusedA2AKernArg.hpp>
 
 #include <Tensile/TensorDescriptor.hpp>
 #include <Tensile/TensorOps.hpp>
@@ -1824,6 +1825,12 @@ namespace TensileLite
         ConstantVariant              alpha = static_cast<float>(0);
         ConstantVariant              beta  = static_cast<float>(0);
         std::vector<ConstantVariant> activationArgs;
+
+        // Extent and world size live on the problem, not here.
+        std::vector<FusedA2APeerFields> fusedA2APeers;
+        void*                           fusedA2ACounter = nullptr;
+        uint32_t                        fusedA2AMyRank  = 0;
+        uint32_t                        fusedA2ADrain   = 0;
 
         // Workspace
         void* ws           = nullptr;

@@ -425,6 +425,7 @@ _defaultProblemType = {
     # in:f32, intermediate:xf32, out:f32. f32 = xf32(f32) * xf32(f32)
     "UseBeta": True,  # =True use beta parameter (asm will check for B=0 and optimize the write for that), =False don't use beta parameter
     "UseE": False,  # =True use output E to output gemm results before activation
+    "UseFusedGemmA2A":       False,
     "UsePartialRMS":         False,
     "PartialRMSResidualAdd": False,
     "PartialRMSQuant":       False,

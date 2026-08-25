@@ -38,6 +38,7 @@ BenchmarkProblems:
       TransposeB: False
       UseBeta: True
       Batched: True
+      UseFusedGemmA2A: True
     - # BenchmarkProblemSizeGroup
       InitialSolutionParameters:
       BenchmarkCommonParameters:

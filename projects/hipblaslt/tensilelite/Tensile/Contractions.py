@@ -632,6 +632,9 @@ class ProblemPredicate(Properties.Predicate):
             rv += [cls('DQuantSize0', value=state['_DQuantSize0'])]
             rv += [cls('DQuantSize1', value=state['_DQuantSize1'])]
 
+        if state.get('FusedGemmA2A', 0):
+            rv += [cls('FusedA2ATileDivisible', value=state['MacroTile0'])]
+
         return rv
 
     @classmethod

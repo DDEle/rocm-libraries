@@ -236,7 +236,8 @@ rocblaslt_status rocblaslt_matmul_impl(const rocblaslt_handle       handle,
                                         batch_mode,
                                         matmul_descr->bias_stride,
                                         matmul_descr->streamk_tile_scheduling_ext,
-                                        effective_sm_count_target(handle, matmul_descr, nullptr)};
+                                        effective_sm_count_target(handle, matmul_descr, nullptr),
+                                        effective_uniform_summation_order(handle, matmul_descr)};
 
     // Forward any composable fused-epilogue chain (e.g. fused RMSNorm) attached via
     // HIPBLASLT_MATMUL_DESC_FUSED_EPILOGUE so ConstructTensileProblem can drive the
@@ -437,7 +438,8 @@ rocblaslt_status rocblaslt_gemm_create_cpp_impl(const rocblaslt_handle          
                                         batch_mode,
                                         matmul_descr->bias_stride,
                                         matmul_descr->streamk_tile_scheduling_ext,
-                                        effective_sm_count_target(handle, matmul_descr, nullptr)};
+                                        effective_sm_count_target(handle, matmul_descr, nullptr),
+                                        effective_uniform_summation_order(handle, matmul_descr)};
     // Forward the fused-epilogue chain (ext hipblaslt_ext::Gemm create path) so the cached
     // problem drives PartialRMS solution selection, matching the C-API matmul/heuristic paths.
     problem.fused_epilogue = matmul_descr->fused_epilogue;
@@ -738,7 +740,8 @@ rocblaslt_status
                                         hipblasLtBatchMode_t::HIPBLASLT_BATCH_MODE_STRIDED,
                                         matmul_descr[i]->bias_stride,
                                         matmul_descr[i]->streamk_tile_scheduling_ext,
-                                        effective_sm_count_target(handle, matmul_descr[i], nullptr)});
+                                        effective_sm_count_target(handle, matmul_descr[i], nullptr),
+                                        effective_uniform_summation_order(handle, matmul_descr[i])});
     }
     return groupedGemmCreate(problems, gemmData, gemmCount);
 }
@@ -1086,7 +1089,9 @@ rocblaslt_status rocblaslt_gemm_create_cpp_impl_2(const rocblaslt_handle handle,
         swizzleB,
         HIPBLASLT_BATCH_MODE_STRIDED,
         0,
-        0}; // streamk_tile_scheduling_ext: OFF (matches struct default)
+        0, // streamk_tile_scheduling_ext: OFF (matches struct default)
+        effective_sm_count_target(handle, nullptr, nullptr),
+        effective_uniform_summation_order(handle, nullptr)};
     return gemmCreate(problem, gemmData, gemmCount);
 }
 
@@ -1412,7 +1417,9 @@ rocblaslt_status rocblaslt_groupedgemm_create_cpp_impl_2(const rocblaslt_handle 
                                         swizzleB,
                                         hipblasLtBatchMode_t::HIPBLASLT_BATCH_MODE_STRIDED,
                                         0,
-                                        0}); // streamk_tile_scheduling_ext: OFF (matches struct default)
+                                        0, // streamk_tile_scheduling_ext: OFF (matches struct default)
+                                        effective_sm_count_target(handle, nullptr, nullptr),
+                                        effective_uniform_summation_order(handle, nullptr)});
     }
     return groupedGemmCreate(problems, gemmData, gemmCount);
 }

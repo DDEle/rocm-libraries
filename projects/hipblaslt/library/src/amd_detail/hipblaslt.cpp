@@ -212,6 +212,28 @@ catch(...)
     return exception_to_hipblas_status();
 }
 
+hipblasStatus_t hipblasLtSetDeviceComm(hipblasLtHandle_t              handle,
+                                       uint32_t                       rank,
+                                       uint32_t                       world,
+                                       uint32_t                       nChannels,
+                                       hipblasLtDeviceCommAllgatherFn allgather,
+                                       void*                          userData)
+try
+{
+    rocblaslt::Debug::Instance().markerStart("hipblasLtSetDeviceComm");
+    static_cast<void>(userData);
+    auto status = allgather == nullptr
+                      ? HIPBLAS_STATUS_INVALID_VALUE
+                      : RocBlasLtStatusToHIPStatus(rocblaslt_set_device_comm(
+                            (rocblaslt_handle)handle, rank, world, nChannels));
+    rocblaslt::Debug::Instance().markerStop();
+    return status;
+}
+catch(...)
+{
+    return exception_to_hipblas_status();
+}
+
 hipblasStatus_t hipblasLtGetSmCountTarget(hipblasLtHandle_t handle, int32_t* smCountTarget)
 try
 {
@@ -450,6 +472,13 @@ struct hipblasLtFusedEpilogueDescriptor
     void*       requant_mx_scale       = nullptr;
     int32_t     requant_mx_block_size  = 32;
     hipDataType requant_mx_output_type = HIP_R_8F_E4M3;
+
+    // A2A-prefix parameters. The pointer arrays are non-owning and hold world entries each.
+    const hipblasLtSdmaQueue_t*  a2a_sdma_queues     = nullptr;
+    void* const*                 a2a_recv_ptrs       = nullptr;
+    int64_t                      a2a_extent          = 0;
+    hipblasLtA2ACompletionMode_t a2a_completion_mode = HIPBLASLT_A2A_COMPLETION_IN_KERNEL;
+    uint32_t                     comm_channel        = 0;
 };
 
 namespace
@@ -508,6 +537,70 @@ namespace
         return false;
     }
 
+    // Which builder family a stage belongs to. Families cannot be mixed in one chain, and each
+    // brings its own ordering rules; rmsnorm_chain_rank() orders the RMSNorm family only.
+    enum class ChainFamily
+    {
+        None,
+        RMSNorm,
+        A2A,
+    };
+
+    ChainFamily chain_family_of(hipblasLtFuseableEpilogue_t e)
+    {
+        switch(e)
+        {
+        case HIPBLASLT_FUSEABLE_EPILOGUE_RESIDUAL_ADD:
+        case HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM:
+        case HIPBLASLT_FUSEABLE_EPILOGUE_PARTIAL_RMSNORM_STATS:
+        case HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM_SCALE_APPLY:
+        case HIPBLASLT_FUSEABLE_EPILOGUE_AMAX:
+        case HIPBLASLT_FUSEABLE_EPILOGUE_REQUANT:
+            return ChainFamily::RMSNorm;
+        case HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX:
+            return ChainFamily::A2A;
+        default:
+            return ChainFamily::None;
+        }
+    }
+
+    bool rmsnorm_chain_accepts(const hipblasLtFusedEpilogueDescriptor* d,
+                               hipblasLtFuseableEpilogue_t             e)
+    {
+        // Reject duplicates and out-of-order additions: the accumulated chain must stay an
+        // order-preserving subsequence of the supported RMSNorm chain.
+        const int rank = rmsnorm_chain_rank(e);
+        if(rank < 0)
+            return false;
+        if(!d->stages.empty() && rank <= rmsnorm_chain_rank(d->stages.back()))
+            return false;
+
+        // Reject mixing full and decomposed RMSNorm stages in one chain: a single chain
+        // uses either HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM or the decomposed producer/consumer
+        // stages, never both.
+        if(e == HIPBLASLT_FUSEABLE_EPILOGUE_REQUANT
+           && fused_epilogue_has_stage(d, HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM_SCALE_APPLY))
+            return false;
+
+        const int family = rmsnorm_chain_family(e);
+        if(family != 0)
+        {
+            for(auto s : d->stages)
+            {
+                const int existing = rmsnorm_chain_family(s);
+                if(existing != 0 && existing != family)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    // A legal A2A chain is exactly one A2A stage; it carries no rank.
+    bool a2a_chain_accepts(const hipblasLtFusedEpilogueDescriptor* d)
+    {
+        return d->stages.empty();
+    }
+
     bool requant_compute_mode_valid(hipblasLtRequantScaleComputeMode_t mode)
     {
         return mode == HIPBLASLT_REQUANT_SCALE_STATIC
@@ -552,6 +645,13 @@ extern "C++" bool rocblaslt_resolve_fused_epilogue(const hipblasLtFusedEpilogueD
     out.requantMxScale     = desc->requant_mx_scale;
     out.requantMxBlockSize = desc->requant_mx_block_size;
     out.requantMxOutputType = desc->requant_mx_output_type;
+    out.hasA2APrefix
+        = fused_epilogue_has_stage(desc, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX);
+    out.a2aSdmaQueues     = desc->a2a_sdma_queues;
+    out.a2aRecvPtrs       = desc->a2a_recv_ptrs;
+    out.a2aExtent         = desc->a2a_extent;
+    out.a2aCompletionMode = desc->a2a_completion_mode;
+    out.commChannel       = desc->comm_channel;
     if(desc->rmsnorm_stats != nullptr)
     {
         out.perRowScale       = desc->rmsnorm_stats->per_row_scale;
@@ -606,36 +706,17 @@ try
     if(desc == nullptr)
         return HIPBLAS_STATUS_INVALID_VALUE;
 
-    const int rank = rmsnorm_chain_rank(epilogue);
-    if(rank < 0)
+    const ChainFamily family = chain_family_of(epilogue);
+    if(family == ChainFamily::None)
         return HIPBLAS_STATUS_INVALID_VALUE; // unrecognized or unsupported epilogue
 
-    // Reject duplicates and out-of-order additions: the accumulated chain must stay an
-    // order-preserving subsequence of the supported RMSNorm chain.
-    if(!desc->stages.empty())
-    {
-        const int prev_rank = rmsnorm_chain_rank(desc->stages.back());
-        if(rank <= prev_rank)
-            return HIPBLAS_STATUS_INVALID_VALUE;
-    }
+    if(!desc->stages.empty() && chain_family_of(desc->stages.front()) != family)
+        return HIPBLAS_STATUS_INVALID_VALUE;
 
-    // Reject mixing full and decomposed RMSNorm stages in one chain: a single chain
-    // uses either HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM or the decomposed producer/consumer
-    // stages, never both.
-    if(epilogue == HIPBLASLT_FUSEABLE_EPILOGUE_REQUANT
-       && fused_epilogue_has_stage(desc, HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM_SCALE_APPLY))
-        return HIPBLAS_STATUS_INVALID_VALUE; // requant is producer/full-flow only
-
-    const int family = rmsnorm_chain_family(epilogue);
-    if(family != 0)
-    {
-        for(auto s : desc->stages)
-        {
-            const int existing = rmsnorm_chain_family(s);
-            if(existing != 0 && existing != family)
-                return HIPBLAS_STATUS_INVALID_VALUE;
-        }
-    }
+    const bool accepted = family == ChainFamily::A2A ? a2a_chain_accepts(desc)
+                                                     : rmsnorm_chain_accepts(desc, epilogue);
+    if(!accepted)
+        return HIPBLAS_STATUS_INVALID_VALUE;
 
     desc->stages.push_back(epilogue);
     return HIPBLAS_STATUS_SUCCESS;
@@ -734,6 +815,40 @@ try
         memcpy(&desc->requant_mx_output_type, value, sizeof(hipDataType));
         if(desc->requant_mx_output_type != HIP_R_8F_E4M3)
             return HIPBLAS_STATUS_INVALID_VALUE;
+        break;
+    case HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_SDMA_QUEUES:
+        if(sizeInBytes < sizeof(void*))
+            return HIPBLAS_STATUS_INVALID_VALUE;
+        memcpy(&desc->a2a_sdma_queues, value, sizeof(void*));
+        if(desc->a2a_sdma_queues == nullptr)
+            return HIPBLAS_STATUS_INVALID_VALUE;
+        break;
+    case HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_RECV_PTRS:
+        if(sizeInBytes < sizeof(void*))
+            return HIPBLAS_STATUS_INVALID_VALUE;
+        memcpy(&desc->a2a_recv_ptrs, value, sizeof(void*));
+        if(desc->a2a_recv_ptrs == nullptr)
+            return HIPBLAS_STATUS_INVALID_VALUE;
+        break;
+    case HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_EXTENT:
+        if(sizeInBytes < sizeof(int64_t))
+            return HIPBLAS_STATUS_INVALID_VALUE;
+        memcpy(&desc->a2a_extent, value, sizeof(int64_t));
+        if(desc->a2a_extent <= 0)
+            return HIPBLAS_STATUS_INVALID_VALUE;
+        break;
+    case HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_COMPLETION_MODE:
+        if(sizeInBytes < sizeof(hipblasLtA2ACompletionMode_t))
+            return HIPBLAS_STATUS_INVALID_VALUE;
+        memcpy(&desc->a2a_completion_mode, value, sizeof(hipblasLtA2ACompletionMode_t));
+        if(desc->a2a_completion_mode != HIPBLASLT_A2A_COMPLETION_IN_KERNEL)
+            return HIPBLAS_STATUS_INVALID_VALUE;
+        break;
+    case HIPBLASLT_FUSED_EPILOGUE_COMM_CHANNEL:
+        // Bound is [0, nChannels), checked at problem construction where the handle is in scope.
+        if(sizeInBytes < sizeof(uint32_t))
+            return HIPBLAS_STATUS_INVALID_VALUE;
+        memcpy(&desc->comm_channel, value, sizeof(uint32_t));
         break;
     default:
         return HIPBLAS_STATUS_INVALID_VALUE;

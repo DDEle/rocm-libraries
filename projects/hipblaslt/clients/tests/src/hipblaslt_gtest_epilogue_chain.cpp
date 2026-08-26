@@ -228,6 +228,121 @@ TEST_F(FusedEpilogueTest, swigluRejectedByRmsnormChainValidator)
               HIPBLAS_STATUS_INVALID_VALUE);
 }
 
+TEST_F(FusedEpilogueTest, a2aAloneAccepted)
+{
+    EXPECT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST_F(FusedEpilogueTest, a2aDuplicateRejected)
+{
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+TEST_F(FusedEpilogueTest, a2aAfterRmsnormRejected)
+{
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+TEST_F(FusedEpilogueTest, rmsnormAfterA2ARejected)
+{
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+TEST_F(FusedEpilogueTest, a2aAfterResidualRejected)
+{
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_RESIDUAL_ADD),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+TEST_F(FusedEpilogueTest, a2aAttributesAccepted)
+{
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_SUCCESS);
+
+    void*              recv_storage[4] = {};
+    void* const*       recv            = recv_storage;
+    hipblasLtSdmaQueue_t queue_storage[4] = {};
+    const hipblasLtSdmaQueue_t* queues  = queue_storage;
+    const int64_t      extent          = 2048;
+    const uint32_t     channel         = 0;
+    const auto         mode            = HIPBLASLT_A2A_COMPLETION_IN_KERNEL;
+
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_RECV_PTRS, &recv, sizeof(recv)),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_SDMA_QUEUES, &queues, sizeof(queues)),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_EXTENT, &extent, sizeof(extent)),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_COMPLETION_MODE, &mode, sizeof(mode)),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_COMM_CHANNEL, &channel, sizeof(channel)),
+              HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST_F(FusedEpilogueTest, a2aCompletionModeRejectsDeferred)
+{
+    const int deferred = 1;
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(fused,
+                                                 HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_COMPLETION_MODE,
+                                                 &deferred,
+                                                 sizeof(deferred)),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+TEST_F(FusedEpilogueTest, a2aExtentRejectsNonPositive)
+{
+    const int64_t extent = 0;
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_EXTENT, &extent, sizeof(extent)),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+static hipblasStatus_t noopAllgather(void*, const void*, void*, size_t)
+{
+    return HIPBLAS_STATUS_SUCCESS;
+}
+
+TEST(FusedA2ACommTest, setDeviceCommValidatesArguments)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 0, 1, noopAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 9, 1, noopAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 4, 4, 1, noopAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 0, noopAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 1, nullptr, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 1, noopAllgather, nullptr),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 1, noopAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
 TEST_F(FusedEpilogueTest, rmsnormBeforeResidualRejected)
 {
     ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM),

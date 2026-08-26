@@ -125,6 +125,7 @@ typedef enum {
   HIPBLASLT_FUSEABLE_EPILOGUE_AMAX                  = 4, /**<Capture the result AMax (maximum absolute value) as a side output.*/
   HIPBLASLT_FUSEABLE_EPILOGUE_REQUANT               = 5, /**<Requantize the result to a narrow output type (chosen by D's data type, e.g. FP8). In a decomposed producer chain after partial RMSNorm stats, this writes the dynamic-quantized producer output while the RMSNorm handoff carries the composed consumer scale. Configured by the requant scale, amax, compute-mode, and granularity attributes.*/
   HIPBLASLT_FUSEABLE_EPILOGUE_SWIGLU                = 6, /**<Reserved epilogue family: SwiGLU gated linear unit.*/
+  HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX            = 7, /**<Deliver the result tile to every peer's recv buffer; the transport is chosen by the solution. Only the first ``HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_EXTENT`` features along the M / free0 axis participate, the rest write local D as usual. Its own chain family: a legal chain is exactly one A2A stage, and it cannot be combined with the RMSNorm stages. Requires a communicator registered with \ref hipblasLtSetDeviceComm.*/
 } hipblasLtFuseableEpilogue_t;
 
 /*! \ingroup types_module
@@ -156,6 +157,23 @@ typedef enum {
 } hipblasLtRequantScaleGranularity_t;
 
 /*! \ingroup types_module
+ *  \brief When a rank's recv buffer becomes safe to read.
+ */
+typedef enum {
+  HIPBLASLT_A2A_COMPLETION_IN_KERNEL = 0, /**<The kernel does not retire until every peer's band has landed, so synchronizing this rank's stream covers the collective. Note that a kernel time therefore includes this rank's wait for its peers.*/
+} hipblasLtA2ACompletionMode_t;
+
+/*! \ingroup types_module
+ *  \brief One SDMA queue, flattened by the caller from the values it reads out of KFD.
+ */
+typedef struct {
+  void* queueBuf; /**<SDMA ring base, uncached.*/
+  void* rptr;     /**<Hardware read pointer.*/
+  void* wptr;     /**<Hardware write pointer.*/
+  void* doorbell; /**<Doorbell.*/
+} hipblasLtSdmaQueue_t;
+
+/*! \ingroup types_module
  *  \brief Attributes settable on a fused epilogue descriptor.
  */
 typedef enum {
@@ -171,6 +189,11 @@ typedef enum {
   HIPBLASLT_FUSED_EPILOGUE_REQUANT_MX_SCALE_POINTER = 9,  /**<Device pointer to the UE8M0 MX block-scale OUTPUT tensor; required when granularity is PER_BLOCK_MX; Data type: void* (UE8M0 bytes).*/
   HIPBLASLT_FUSED_EPILOGUE_REQUANT_MX_BLOCK_SIZE    = 10, /**<Elements per MX block along N; default 32; Data type: int32_t.*/
   HIPBLASLT_FUSED_EPILOGUE_REQUANT_MX_OUTPUT_TYPE   = 11, /**<Narrow output element type for MX quant; only HIP_R_8F_E4M3 supported; default HIP_R_8F_E4M3; Data type: hipDataType.*/
+  HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_SDMA_QUEUES = 12, /**<Array of ``world`` SDMA queues; entry j targets rank j, and j equal to this rank is loopback. Read only by solutions that use the SDMA transport, so whether it is needed follows from the selected algo. Two operations that can overlap must be given disjoint queue sets. Data type: ``const hipblasLtSdmaQueue_t*``.*/
+  HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_RECV_PTRS = 13, /**<Array of ``world`` addresses, valid in the calling process; entry j is rank j's recv buffer. Each buffer holds ``world * N * (extent / world)`` elements of D's type, laid out ``[source, token, feature]`` with feature contiguous and the unpadded N as the source stride. Data type: ``void* const*``.*/
+  HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_EXTENT = 14, /**<Total A2A width along the M / free0 axis, in elements. Must be a multiple of ``world`` and no greater than M. Participates in solution selection with the same standing as M/N/K, so it must be set before the heuristic and changing it invalidates a previously obtained algo. Data type: ``int64_t``.*/
+  HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_COMPLETION_MODE = 15, /**<When this rank's recv buffer becomes safe to read. Only ``HIPBLASLT_A2A_COMPLETION_IN_KERNEL`` is accepted; any other value is an error. Data type: ``hipblasLtA2ACompletionMode_t``.*/
+  HIPBLASLT_FUSED_EPILOGUE_COMM_CHANNEL = 16, /**<Which of the communicator's ``nChannels`` flag regions this operation uses; range ``[0, nChannels)``, default 0. Two A2A operations that can overlap must use different channels, and every rank of one launch group must pass the same value. Data type: ``uint32_t``.*/
 } hipblasLtFusedEpilogueAttribute_t;
 
 /*! \ingroup types_module
@@ -190,6 +213,25 @@ typedef struct hipblasLtFusedEpilogueDescriptor* hipblasLtFusedEpilogueDescripto
  *  The full ``HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM`` flow does not use this descriptor.
  */
 typedef struct hipblasLtFusedEpilogueRMSNormDescriptor* hipblasLtFusedEpilogueRMSNormDescriptor_t;
+
+/*! \ingroup types_module
+ *  \brief Caller-supplied allgather used to exchange communicator setup between ranks.
+ *
+ *  \details
+ *  Rank r's \p sendbuf of \p bytesPerRank bytes must land at \p recvbuf + r * \p bytesPerRank on
+ *  every rank, and \p recvbuf must be readable when the callback returns. The payload is opaque and
+ *  must not be interpreted or reordered. \p userData is passed back verbatim and is never
+ *  dereferenced by the library. The callback may be invoked more than once, in the same order on
+ *  every rank, and is used only for the duration of \ref hipblasLtSetDeviceComm.
+ *
+ *  The library performs no rendezvous of its own: it reads no environment variables, opens no
+ *  ports, and links no MPI. torch.distributed, MPI_Allgather, and a plain memcpy in the
+ *  single-process case all adapt directly.
+ */
+typedef hipblasStatus_t (*hipblasLtDeviceCommAllgatherFn)(void*       userData,
+                                                          const void* sendbuf,
+                                                          void*       recvbuf,
+                                                          size_t      bytesPerRank);
 
 /*! \ingroup types_module
  *  \brief Specify the batch mode of the matrices.
@@ -870,6 +912,47 @@ hipblasStatus_t hipblasLtMatmulDescCreate(hipblasLtMatmulDesc_t* matmulDesc,
  */
 HIPBLASLT_EXPORT
 hipblasStatus_t hipblasLtMatmulDescDestroy(const hipblasLtMatmulDesc_t matmulDesc);
+
+/*! \ingroup library_module
+ *  \brief Register this handle in a device communicator.
+ *
+ *  \details
+ *  A communicator consists of \p world handles, each bound to one device and each calling this
+ *  function exactly once. All ranks must call it, and all cross-rank exchange goes through
+ *  \p allgather. Registration is required before a matmul whose fused epilogue chain contains
+ *  \ref HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX; such a matmul on an unregistered handle is an
+ *  error rather than a fallback to a plain GEMM. Plain GEMM is unaffected whether or not this is
+ *  called.
+ *
+ *  \p world becomes an immutable property of the handle. A second call always returns an error,
+ *  whether or not the arguments match the first; to change communicators, destroy the handle and
+ *  create it again. All ranks must be on the same node.
+ *
+ *  @param[in]
+ *  handle  This rank's handle.
+ *  @param[in]
+ *  rank  This rank's index; must be less than \p world.
+ *  @param[in]
+ *  world  Device count in the communicator; must be in [1, 8].
+ *  @param[in]
+ *  nChannels  How many A2A operations this communicator may have in flight at once. Selected per
+ *  operation with \ref HIPBLASLT_FUSED_EPILOGUE_COMM_CHANNEL. Every rank must pass the same value.
+ *  @param[in]
+ *  allgather  Cross-rank exchange callback; must not be NULL.
+ *  @param[in]
+ *  userData  Passed through to \p allgather; may be NULL.
+ *
+ *  \retval HIPBLAS_STATUS_SUCCESS If the handle was registered.
+ *  \retval HIPBLAS_STATUS_INVALID_VALUE If \p handle or \p allgather is NULL, \p rank is not less
+ *  than \p world, \p world is outside [1, 8], or the handle is already registered.
+ */
+HIPBLASLT_EXPORT
+hipblasStatus_t hipblasLtSetDeviceComm(hipblasLtHandle_t              handle,
+                                       uint32_t                       rank,
+                                       uint32_t                       world,
+                                       uint32_t                       nChannels,
+                                       hipblasLtDeviceCommAllgatherFn allgather,
+                                       void*                          userData);
 
 /*! \ingroup library_module
  *  \brief Create a fused (composable) epilogue descriptor.

@@ -52,6 +52,7 @@
 #include "utility.hpp"
 
 #include <Tensile/Debug.hpp>
+#include <Tensile/FusedA2AKernArg.hpp>
 
 #include <hip/hip_runtime_api.h>
 #include <map>
@@ -536,7 +537,8 @@ RocblasltContractionProblem construct_rocblaslt_problem(rocblaslt_handle        
     // (ConstructTensileProblem -> setUsePartialRMS) routes fused-RMSNorm problems to the
     // PartialRMS solution. Without this, hipblasLtMatmulAlgoGetHeuristic would select a normal
     // GEMM solution and the fused epilogue would be silently dropped. Non-owning pointer.
-    problem.fused_epilogue = matmul_descr->fused_epilogue;
+    problem.fused_epilogue  = matmul_descr->fused_epilogue;
+    problem.fused_a2a_world = handle ? handle->comm_world : 0;
 
     return problem;
 }
@@ -622,6 +624,47 @@ rocblaslt_status rocblaslt_set_sm_count_target(rocblaslt_handle handle,
     }
     log_api(__func__, "handle", handle, "sm_count_target", sm_count_target);
     handle->sm_count_target = sm_count_target;
+    return rocblaslt_status_success;
+}
+
+/********************************************************************************
+ * \brief Register the handle in a device communicator.
+ *******************************************************************************/
+rocblaslt_status rocblaslt_set_device_comm(rocblaslt_handle handle,
+                                           uint32_t         rank,
+                                           uint32_t         world,
+                                           uint32_t         n_channels)
+{
+    if(handle == nullptr)
+    {
+        log_error(__func__, "handle", handle);
+        return rocblaslt_status_invalid_handle;
+    }
+    if(handle->comm_registered)
+    {
+        log_error(__func__, "handle already registered", handle);
+        return rocblaslt_status_invalid_value;
+    }
+    if(world < 1 || world > uint32_t(TensileLite::FUSED_A2A_MAX_RANKS))
+    {
+        log_error(__func__, "world", world);
+        return rocblaslt_status_invalid_value;
+    }
+    if(rank >= world)
+    {
+        log_error(__func__, "rank", rank);
+        return rocblaslt_status_invalid_value;
+    }
+    if(n_channels < 1)
+    {
+        log_error(__func__, "n_channels", n_channels);
+        return rocblaslt_status_invalid_value;
+    }
+    log_api(__func__, "handle", handle, "rank", rank, "world", world, "n_channels", n_channels);
+    handle->comm_rank       = rank;
+    handle->comm_world      = world;
+    handle->comm_nchannels  = n_channels;
+    handle->comm_registered = true;
     return rocblaslt_status_success;
 }
 
@@ -2271,6 +2314,9 @@ rocblaslt_status
         }
         auto prob = construct_rocblaslt_problem(
             handle, matmul_desc, matA, matB, matC, matD, &alpha, &beta, pref->max_workspace_bytes);
+
+        if(auto gate = validate_fused_a2a(handle, prob); gate != rocblaslt_status_success)
+            return gate;
 
         OverrideSingleton& override         = OverrideSingleton::getInstance();
         bool               override_success = false;

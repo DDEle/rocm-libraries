@@ -107,6 +107,13 @@ struct _rocblaslt_handle
     // Handle-level uniform-summation-order request. 0 off, 1 on; see hipblaslt.h.
     int32_t uniform_summation_order = 0;
 
+    // Device communicator, registered at most once via hipblasLtSetDeviceComm. A second call is
+    // rejected, so comm_world is immutable for the lifetime of the handle.
+    bool     comm_registered = false;
+    uint32_t comm_rank       = 0;
+    uint32_t comm_world      = 0;
+    uint32_t comm_nchannels  = 0;
+
 #ifdef HIPBLASLT_USE_ROCROLLER
     void* rocroller_handle = nullptr;
     int   useRocRoller     = -1;
@@ -330,6 +337,31 @@ inline int32_t effective_uniform_summation_order(const _rocblaslt_handle*      h
     if(handle && handle->uniform_summation_order)
         return 1;
     return 0;
+}
+
+// Everything about a fused A2A request that is checkable before the heuristic runs. Called from
+// both the matmul path and the heuristic path.
+inline rocblaslt_status validate_fused_a2a(const _rocblaslt_handle*           handle,
+                                           const RocblasltContractionProblem& problem)
+{
+    RocblasltFusedEpilogueInfo info;
+    if(!rocblaslt_resolve_fused_epilogue(problem.fused_epilogue, info) || !info.hasA2APrefix)
+        return rocblaslt_status_success;
+
+    if(handle == nullptr || !handle->comm_registered)
+        return rocblaslt_status_invalid_value;
+    if(problem.epilogue != ROCBLASLT_EPILOGUE_DEFAULT)
+        return rocblaslt_status_invalid_value;
+    if(problem.batch_count != 1)
+        return rocblaslt_status_invalid_value;
+    if(info.a2aExtent > int64_t(problem.m)
+       || info.a2aExtent % int64_t(handle->comm_world) != 0)
+        return rocblaslt_status_invalid_value;
+    if(info.commChannel >= handle->comm_nchannels)
+        return rocblaslt_status_invalid_value;
+    if(info.a2aRecvPtrs == nullptr)
+        return rocblaslt_status_invalid_value;
+    return rocblaslt_status_success;
 }
 
 #endif // HANDLE_H

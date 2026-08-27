@@ -2885,6 +2885,7 @@ namespace
             inputs.fusedA2APeers  = rocblaslt::buildFusedA2APeerFields(prob.fused_a2a_peer_flag,
                                                                       fusedInfo.a2aRecvPtrs,
                                                                       prob.fused_a2a_world,
+                                                                      fusedInfo.commChannel,
                                                                       fusedInfo.a2aSdmaQueues);
             inputs.fusedA2AMyRank = prob.fused_a2a_rank;
             inputs.fusedA2ADrain  = rocblaslt::fusedA2ADrainFor(fusedInfo.a2aCompletionMode);

@@ -60,8 +60,8 @@ namespace
     constexpr int64_t  kExtent          = 1024;
     constexpr uint32_t kWorld           = 4;
     constexpr uint32_t kRanksPerProcess = 2;
-    constexpr uint32_t kChannels        = 1;
-    constexpr uint32_t kChannel         = 0;
+    constexpr uint32_t kChannels        = 2;
+    constexpr uint32_t kChannel         = 1;
 
     constexpr int64_t kShard = kExtent / kWorld;
 

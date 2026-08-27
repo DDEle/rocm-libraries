@@ -30,7 +30,7 @@ namespace
         void* recvs[4] = {fakePointer(0x5000), fakePointer(0x6000), fakePointer(0x7000),
                           fakePointer(0x8000)};
 
-        const auto peers = rocblaslt::buildFusedA2APeerFields(flags, recvs, 4);
+        const auto peers = rocblaslt::buildFusedA2APeerFields(flags, recvs, 4, 0, nullptr);
 
         ASSERT_EQ(peers.size(), 4u);
         for(uint32_t j = 0; j < 4; ++j)
@@ -45,7 +45,7 @@ namespace
         void* flags[2] = {fakePointer(0x1000), fakePointer(0x2000)};
         void* recvs[2] = {fakePointer(0x3000), fakePointer(0x4000)};
 
-        const auto peers = rocblaslt::buildFusedA2APeerFields(flags, recvs, 2);
+        const auto peers = rocblaslt::buildFusedA2APeerFields(flags, recvs, 2, 0, nullptr);
 
         ASSERT_EQ(peers.size(), 2u);
         for(const auto& peer : peers)
@@ -57,7 +57,7 @@ namespace
     {
         void* flags[2] = {fakePointer(0x1000), fakePointer(0x2000)};
 
-        const auto peers = rocblaslt::buildFusedA2APeerFields(flags, nullptr, 2);
+        const auto peers = rocblaslt::buildFusedA2APeerFields(flags, nullptr, 2, 0, nullptr);
 
         ASSERT_EQ(peers.size(), 2u);
         EXPECT_EQ(peers[0][kFlagSlot], flags[0]);
@@ -70,7 +70,7 @@ namespace
     {
         void* recvs[2] = {fakePointer(0x3000), fakePointer(0x4000)};
 
-        const auto peers = rocblaslt::buildFusedA2APeerFields(nullptr, recvs, 2);
+        const auto peers = rocblaslt::buildFusedA2APeerFields(nullptr, recvs, 2, 0, nullptr);
 
         ASSERT_EQ(peers.size(), 2u);
         EXPECT_EQ(peers[0][kFlagSlot], nullptr);
@@ -85,7 +85,7 @@ namespace
             = {{fakePointer(0x100), fakePointer(0x110), fakePointer(0x120), fakePointer(0x130)},
                {fakePointer(0x200), fakePointer(0x210), fakePointer(0x220), fakePointer(0x230)}};
 
-        const auto peers = rocblaslt::buildFusedA2APeerFields(nullptr, nullptr, 2, queues);
+        const auto peers = rocblaslt::buildFusedA2APeerFields(nullptr, nullptr, 2, 0, queues);
 
         ASSERT_EQ(peers.size(), 2u);
         for(uint32_t j = 0; j < 2; ++j)
@@ -104,13 +104,50 @@ namespace
         hipblasLtSdmaQueue_t queues[1] = {
             {fakePointer(0x100), fakePointer(0x110), fakePointer(0x120), fakePointer(0x130)}};
 
-        const auto peers = rocblaslt::buildFusedA2APeerFields(flags, recvs, 1, queues);
+        const auto peers = rocblaslt::buildFusedA2APeerFields(flags, recvs, 1, 0, queues);
 
         ASSERT_EQ(peers.size(), 1u);
         EXPECT_EQ(peers[0][kFlagSlot], flags[0]);
         EXPECT_EQ(peers[0][kRecvSlot], recvs[0]);
         EXPECT_EQ(peers[0][kQueueBufSlot], queues[0].queueBuf);
         EXPECT_EQ(peers[0][kDoorbellSlot], queues[0].doorbell);
+    }
+
+    TEST(FusedA2APeerFields, channelBiasesTheFlagSlotOnly)
+    {
+        void*                flags[2] = {fakePointer(0x10000), fakePointer(0x20000)};
+        void*                recvs[2] = {fakePointer(0x30000), fakePointer(0x40000)};
+        hipblasLtSdmaQueue_t queues[2]
+            = {{fakePointer(0x100), fakePointer(0x110), fakePointer(0x120), fakePointer(0x130)},
+               {fakePointer(0x200), fakePointer(0x210), fakePointer(0x220), fakePointer(0x230)}};
+
+        const auto ch0 = rocblaslt::buildFusedA2APeerFields(flags, recvs, 2, 0, queues);
+        const auto ch1 = rocblaslt::buildFusedA2APeerFields(flags, recvs, 2, 1, queues);
+
+        ASSERT_EQ(ch0.size(), 2u);
+        ASSERT_EQ(ch1.size(), 2u);
+        for(uint32_t j = 0; j < 2; ++j)
+        {
+            EXPECT_EQ(ch0[j][kFlagSlot], flags[j]) << "rank " << j;
+            EXPECT_EQ(static_cast<char*>(ch1[j][kFlagSlot]) - static_cast<char*>(ch0[j][kFlagSlot]),
+                      ptrdiff_t(TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES))
+                << "rank " << j;
+            EXPECT_EQ(ch1[j][kRecvSlot], ch0[j][kRecvSlot]) << "rank " << j;
+            for(size_t slot = kFirstQueueSlot; slot < ch1[j].size(); ++slot)
+                EXPECT_EQ(ch1[j][slot], ch0[j][slot]) << "rank " << j << " slot " << slot;
+        }
+    }
+
+    TEST(FusedA2APeerFields, channelLeavesAbsentFlagsNull)
+    {
+        void* flags[2] = {fakePointer(0x1000), nullptr};
+
+        const auto peers = rocblaslt::buildFusedA2APeerFields(flags, nullptr, 2, 3, nullptr);
+
+        ASSERT_EQ(peers.size(), 2u);
+        EXPECT_EQ(static_cast<char*>(peers[0][kFlagSlot]) - static_cast<char*>(flags[0]),
+                  ptrdiff_t(3 * TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES));
+        EXPECT_EQ(peers[1][kFlagSlot], nullptr);
     }
 
     TEST(FusedA2ADrain, inKernelCompletionAsksForRecvDrain)
@@ -130,11 +167,10 @@ namespace
     {
         void* flags[1] = {fakePointer(0x1000)};
 
-        EXPECT_TRUE(rocblaslt::buildFusedA2APeerFields(flags, nullptr, 0).empty());
-        EXPECT_TRUE(
-            rocblaslt::buildFusedA2APeerFields(
-                flags, nullptr, uint32_t(TensileLite::FUSED_A2A_MAX_RANKS) + 1)
-                .empty());
+        EXPECT_TRUE(rocblaslt::buildFusedA2APeerFields(flags, nullptr, 0, 0, nullptr).empty());
+        EXPECT_TRUE(rocblaslt::buildFusedA2APeerFields(
+                        flags, nullptr, uint32_t(TensileLite::FUSED_A2A_MAX_RANKS) + 1, 0, nullptr)
+                        .empty());
     }
 
     TEST(FusedA2APeerFields, acceptsTheFullSegmentWidth)
@@ -144,7 +180,7 @@ namespace
             flags[j] = fakePointer(0x1000 + uintptr_t(j));
 
         const auto peers = rocblaslt::buildFusedA2APeerFields(
-            flags, nullptr, uint32_t(TensileLite::FUSED_A2A_MAX_RANKS));
+            flags, nullptr, uint32_t(TensileLite::FUSED_A2A_MAX_RANKS), 0, nullptr);
 
         ASSERT_EQ(peers.size(), size_t(TensileLite::FUSED_A2A_MAX_RANKS));
         for(int j = 0; j < TensileLite::FUSED_A2A_MAX_RANKS; ++j)

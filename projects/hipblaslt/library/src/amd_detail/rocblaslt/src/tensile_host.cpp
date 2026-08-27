@@ -2875,11 +2875,13 @@ namespace
             inputs.beta           = static_cast<float>(std::get<hipblasLtHalf>(inputs.beta));
         }
 
-        // Device-side fused-A2A operands. The counter stays at its default.
+        // Device-side fused-A2A operands. The counter block sits at the base of the
+        // Synchronizer the handle already owns, shared with the rest of the library.
         RocblasltFusedEpilogueInfo fusedInfo;
         if(rocblaslt_resolve_fused_epilogue(prob.fused_epilogue, fusedInfo)
            && fusedInfo.hasA2APrefix)
         {
+            inputs.fusedA2ACounter = prob.Synchronizer;
             inputs.fusedA2APeers  = rocblaslt::buildFusedA2APeerFields(prob.fused_a2a_peer_flag,
                                                                       fusedInfo.a2aRecvPtrs,
                                                                       prob.fused_a2a_world,

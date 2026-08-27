@@ -13,8 +13,10 @@
 # solution the timing does not enter selection.
 #
 # Point HIPBLASLT_TENSILE_LIBPATH at <lib>/library/gfx950 to make the heuristic
-# return this solution. Shape and world size match the A2A constants in
-# clients/tests/src/hipblaslt_gtest_epilogue_chain.cpp.
+# return this solution. The two shapes below are the ones the A2A callers ask
+# for: M 1024 from clients/tests/src/hipblaslt_gtest_epilogue_chain.cpp and
+# M 2048 from clients/samples/30_hipblaslt_a2a_sdma. World size is a kernarg,
+# not part of the logic, so one library serves every world.
 #
 # LibraryType Equality fills ExactLogic; Prediction and FreeSize leave it empty
 # (LibraryLogic.py).
@@ -66,8 +68,8 @@ BenchmarkProblems:
       BenchmarkJoinParameters:
       BenchmarkFinalParameters:
         - ProblemSizes:
-          # AM 1024 with W 1: AM%W==0, (AM/W)%MT0==0, AM%MT0==0, AM<=M.
           - Exact: [1024, 1024, 1, 1024]
+          - Exact: [2048, 1024, 1, 1024]
 
 LibraryLogic:
   ScheduleName: "fused_a2a_gfx950"

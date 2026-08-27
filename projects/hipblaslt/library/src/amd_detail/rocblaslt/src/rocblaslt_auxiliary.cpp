@@ -54,6 +54,7 @@
 #include <Tensile/Debug.hpp>
 #include <Tensile/FusedA2AKernArg.hpp>
 
+#include <array>
 #include <hip/hip_runtime_api.h>
 #include <map>
 #include <utility>
@@ -630,10 +631,12 @@ rocblaslt_status rocblaslt_set_sm_count_target(rocblaslt_handle handle,
 /********************************************************************************
  * \brief Register the handle in a device communicator.
  *******************************************************************************/
-rocblaslt_status rocblaslt_set_device_comm(rocblaslt_handle handle,
-                                           uint32_t         rank,
-                                           uint32_t         world,
-                                           uint32_t         n_channels)
+rocblaslt_status rocblaslt_set_device_comm(rocblaslt_handle               handle,
+                                           uint32_t                       rank,
+                                           uint32_t                       world,
+                                           uint32_t                       n_channels,
+                                           hipblasLtDeviceCommAllgatherFn allgather,
+                                           void*                          user_data)
 {
     if(handle == nullptr)
     {
@@ -661,6 +664,94 @@ rocblaslt_status rocblaslt_set_device_comm(rocblaslt_handle handle,
         return rocblaslt_status_invalid_value;
     }
     log_api(__func__, "handle", handle, "rank", rank, "world", world, "n_channels", n_channels);
+
+    const size_t region_bytes
+        = size_t(n_channels) * TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES;
+    if(hipMalloc(&handle->comm_flag_base, region_bytes) != hipSuccess)
+    {
+        log_error(__func__, "hipMalloc", region_bytes);
+        return rocblaslt_status_memory_error;
+    }
+    if(hipMemset(handle->comm_flag_base, 0, region_bytes) != hipSuccess)
+    {
+        log_error(__func__, "hipMemset", region_bytes);
+        return rocblaslt_status_internal_error;
+    }
+
+    RocblasltFusedA2APeerRecord self;
+    self.rank       = rank;
+    self.world      = world;
+    self.n_channels = n_channels;
+    self.device     = handle->device;
+    self.pid        = static_cast<uint64_t>(getpid());
+    self.flag_base  = handle->comm_flag_base;
+    if(hipIpcGetMemHandle(&self.ipc_handle, handle->comm_flag_base) != hipSuccess)
+    {
+        log_error(__func__, "hipIpcGetMemHandle", handle->comm_flag_base);
+        return rocblaslt_status_internal_error;
+    }
+
+    std::array<RocblasltFusedA2APeerRecord, TensileLite::FUSED_A2A_MAX_RANKS> peers{};
+    if(allgather(user_data, &self, peers.data(), sizeof(self)) != HIPBLAS_STATUS_SUCCESS)
+    {
+        log_error(__func__, "allgather", "callback failed");
+        return rocblaslt_status_invalid_value;
+    }
+
+    for(uint32_t j = 0; j < world; ++j)
+    {
+        if(peers[j].rank != j || peers[j].world != world || peers[j].n_channels != n_channels)
+        {
+            log_error(__func__, "peer record mismatch at rank", j);
+            return rocblaslt_status_invalid_value;
+        }
+    }
+
+    int prev_device = -1;
+    static_cast<void>(hipGetDevice(&prev_device));
+    if(prev_device != handle->device)
+        static_cast<void>(hipSetDevice(handle->device));
+
+    rocblaslt_status resolve_status = rocblaslt_status_success;
+    for(uint32_t j = 0; j < world && resolve_status == rocblaslt_status_success; ++j)
+    {
+        if(j == rank)
+        {
+            handle->comm_peer_flag[j] = handle->comm_flag_base;
+            handle->comm_peer_kind[j] = rocblaslt_comm_peer_self;
+        }
+        else if(peers[j].pid == self.pid)
+        {
+            const hipError_t pe = hipDeviceEnablePeerAccess(peers[j].device, 0);
+            if(pe != hipSuccess && pe != hipErrorPeerAccessAlreadyEnabled)
+            {
+                log_error(__func__, "hipDeviceEnablePeerAccess", peers[j].device);
+                resolve_status = rocblaslt_status_internal_error;
+                break;
+            }
+            handle->comm_peer_flag[j] = peers[j].flag_base;
+            handle->comm_peer_kind[j] = rocblaslt_comm_peer_local;
+        }
+        else
+        {
+            void* mapped = nullptr;
+            if(hipIpcOpenMemHandle(&mapped, peers[j].ipc_handle, hipIpcMemLazyEnablePeerAccess)
+               != hipSuccess)
+            {
+                log_error(__func__, "hipIpcOpenMemHandle", j);
+                resolve_status = rocblaslt_status_internal_error;
+                break;
+            }
+            handle->comm_peer_flag[j] = mapped;
+            handle->comm_peer_kind[j] = rocblaslt_comm_peer_ipc;
+        }
+    }
+
+    if(prev_device != handle->device)
+        static_cast<void>(hipSetDevice(prev_device));
+    if(resolve_status != rocblaslt_status_success)
+        return resolve_status;
+
     handle->comm_rank       = rank;
     handle->comm_world      = world;
     handle->comm_nchannels  = n_channels;

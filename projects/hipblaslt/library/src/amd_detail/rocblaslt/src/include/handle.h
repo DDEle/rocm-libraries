@@ -31,6 +31,7 @@
 
 #include "rocblaslt.h"
 //#include "rocblaslt_ostream.hpp"
+#include <Tensile/FusedA2AKernArg.hpp>
 #include <atomic>
 #include <fstream>
 #include <hip/hip_runtime_api.h>
@@ -68,6 +69,29 @@ struct _rocblaslt_attribute
 private:
     void*  _data      = nullptr;
     size_t _data_size = 0;
+};
+
+// How a peer's flag region was resolved, which decides how it is released.
+enum rocblaslt_comm_peer_kind : uint8_t
+{
+    rocblaslt_comm_peer_none = 0,
+    rocblaslt_comm_peer_self,
+    rocblaslt_comm_peer_local,
+    rocblaslt_comm_peer_ipc,
+};
+
+// What one rank contributes to the hipblasLtSetDeviceComm allgather. Carries both a raw
+// pointer and an IPC handle: a peer in this process resolves through flag_base, one in
+// another process through ipc_handle. Fixed size -- this is the callback's bytesPerRank.
+struct RocblasltFusedA2APeerRecord
+{
+    uint32_t          rank       = 0;
+    uint32_t          world      = 0;
+    uint32_t          n_channels = 0;
+    int32_t           device     = 0;
+    uint64_t          pid        = 0;
+    void*             flag_base  = nullptr;
+    hipIpcMemHandle_t ipc_handle = {};
 };
 
 /********************************************************************************
@@ -113,6 +137,13 @@ struct _rocblaslt_handle
     uint32_t comm_rank       = 0;
     uint32_t comm_world      = 0;
     uint32_t comm_nchannels  = 0;
+
+    // PeerSynchronizer. comm_flag_base is this rank's own nChannels x
+    // FUSED_A2A_FLAG_BLOCK_BYTES allocation; comm_peer_flag[j] is peer j's, valid in this
+    // process. comm_peer_kind[j] says how to release it.
+    void*                    comm_flag_base = nullptr;
+    void*                    comm_peer_flag[TensileLite::FUSED_A2A_MAX_RANKS] = {};
+    rocblaslt_comm_peer_kind comm_peer_kind[TensileLite::FUSED_A2A_MAX_RANKS] = {};
 
 #ifdef HIPBLASLT_USE_ROCROLLER
     void* rocroller_handle = nullptr;

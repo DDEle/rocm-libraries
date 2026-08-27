@@ -118,10 +118,12 @@ rocblaslt_status rocblaslt_set_sm_count_target(rocblaslt_handle handle,
  *  \retval rocblaslt_status_invalid_value      \p rank or \p world out of range, or the handle is
  *                                              already registered.
  */
-rocblaslt_status rocblaslt_set_device_comm(rocblaslt_handle handle,
-                                           uint32_t         rank,
-                                           uint32_t         world,
-                                           uint32_t         n_channels);
+rocblaslt_status rocblaslt_set_device_comm(rocblaslt_handle               handle,
+                                           uint32_t                       rank,
+                                           uint32_t                       world,
+                                           uint32_t                       n_channels,
+                                           hipblasLtDeviceCommAllgatherFn allgather,
+                                           void*                          user_data);
 
 /*! \ingroup aux_module
  *  \brief Return the handle-level SM-count-target override.

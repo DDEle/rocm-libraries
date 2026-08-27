@@ -229,6 +229,19 @@ _rocblaslt_handle::_rocblaslt_handle()
 
 _rocblaslt_handle::~_rocblaslt_handle()
 {
+    for(size_t j = 0; j < TensileLite::FUSED_A2A_MAX_RANKS; ++j)
+    {
+        if(comm_peer_kind[j] == rocblaslt_comm_peer_ipc && comm_peer_flag[j])
+            static_cast<void>(hipIpcCloseMemHandle(comm_peer_flag[j]));
+        comm_peer_flag[j] = nullptr;
+        comm_peer_kind[j] = rocblaslt_comm_peer_none;
+    }
+    if(comm_flag_base)
+    {
+        static_cast<void>(hipFree(comm_flag_base));
+        comm_flag_base = nullptr;
+    }
+
     if(!check_numerics_flag)
         return;
 

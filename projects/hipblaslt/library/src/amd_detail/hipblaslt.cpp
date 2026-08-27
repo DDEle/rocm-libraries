@@ -221,11 +221,10 @@ hipblasStatus_t hipblasLtSetDeviceComm(hipblasLtHandle_t              handle,
 try
 {
     rocblaslt::Debug::Instance().markerStart("hipblasLtSetDeviceComm");
-    static_cast<void>(userData);
     auto status = allgather == nullptr
                       ? HIPBLAS_STATUS_INVALID_VALUE
                       : RocBlasLtStatusToHIPStatus(rocblaslt_set_device_comm(
-                            (rocblaslt_handle)handle, rank, world, nChannels));
+                            (rocblaslt_handle)handle, rank, world, nChannels, allgather, userData));
     rocblaslt::Debug::Instance().markerStop();
     return status;
 }

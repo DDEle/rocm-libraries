@@ -314,9 +314,31 @@ TEST_F(FusedEpilogueTest, a2aExtentRejectsNonPositive)
               HIPBLAS_STATUS_INVALID_VALUE);
 }
 
-static hipblasStatus_t noopAllgather(void*, const void*, void*, size_t)
+static hipblasStatus_t memcpyAllgather(void*       userData,
+                                     const void* sendbuf,
+                                     void*       recvbuf,
+                                     size_t      bytesPerRank)
 {
+    static_cast<void>(userData);
+    std::memcpy(recvbuf, sendbuf, bytesPerRank);
     return HIPBLAS_STATUS_SUCCESS;
+}
+
+// Writes this rank's record into every slot, so slot j != rank carries rank's index.
+static hipblasStatus_t duplicatingAllgather(void*       userData,
+                                            const void* sendbuf,
+                                            void*       recvbuf,
+                                            size_t      bytesPerRank)
+{
+    const auto world = *static_cast<const uint32_t*>(userData);
+    for(uint32_t j = 0; j < world; ++j)
+        std::memcpy(static_cast<char*>(recvbuf) + j * bytesPerRank, sendbuf, bytesPerRank);
+    return HIPBLAS_STATUS_SUCCESS;
+}
+
+static hipblasStatus_t failingAllgather(void*, const void*, void*, size_t)
+{
+    return HIPBLAS_STATUS_INTERNAL_ERROR;
 }
 
 TEST(FusedA2ACommTest, setDeviceCommValidatesArguments)
@@ -324,21 +346,80 @@ TEST(FusedA2ACommTest, setDeviceCommValidatesArguments)
     hipblasLtHandle_t handle = nullptr;
     ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
 
-    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 0, 1, noopAllgather, nullptr),
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 0, 1, memcpyAllgather, nullptr),
               HIPBLAS_STATUS_INVALID_VALUE);
-    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 9, 1, noopAllgather, nullptr),
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 9, 1, memcpyAllgather, nullptr),
               HIPBLAS_STATUS_INVALID_VALUE);
-    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 4, 4, 1, noopAllgather, nullptr),
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 4, 4, 1, memcpyAllgather, nullptr),
               HIPBLAS_STATUS_INVALID_VALUE);
-    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 0, noopAllgather, nullptr),
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 0, memcpyAllgather, nullptr),
               HIPBLAS_STATUS_INVALID_VALUE);
     EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 1, nullptr, nullptr),
               HIPBLAS_STATUS_INVALID_VALUE);
 
-    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 1, noopAllgather, nullptr),
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 1, 1, memcpyAllgather, nullptr),
               HIPBLAS_STATUS_SUCCESS);
-    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 1, noopAllgather, nullptr),
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 1, 1, memcpyAllgather, nullptr),
               HIPBLAS_STATUS_INVALID_VALUE);
+
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST(FusedA2ACommTest, setDeviceCommRejectsMisplacedRecords)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+
+    uint32_t world = 2;
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, world, 1, duplicatingAllgather, &world),
+              HIPBLAS_STATUS_INVALID_VALUE);
+
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST(FusedA2ACommTest, setDeviceCommRejectsFailedAllgather)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 1, 1, failingAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
+namespace
+{
+    struct AllgatherSpy
+    {
+        int    calls        = 0;
+        size_t bytesPerRank = 0;
+    };
+}
+
+// A correct allgather for a one-rank communicator: this rank's record is the whole result.
+static hipblasStatus_t spyMemcpyAllgather(void*       userData,
+                                          const void* sendbuf,
+                                          void*       recvbuf,
+                                          size_t      bytesPerRank)
+{
+    auto* spy          = static_cast<AllgatherSpy*>(userData);
+    spy->calls        += 1;
+    spy->bytesPerRank  = bytesPerRank;
+    std::memcpy(recvbuf, sendbuf, bytesPerRank);
+    return HIPBLAS_STATUS_SUCCESS;
+}
+
+TEST(FusedA2ACommTest, setDeviceCommInvokesAllgatherOnce)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+
+    AllgatherSpy spy;
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 1, 1, spyMemcpyAllgather, &spy),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(spy.calls, 1);
+    EXPECT_GT(spy.bytesPerRank, 0u);
 
     EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
 }
@@ -3011,7 +3092,7 @@ namespace
     constexpr int64_t  kA2AM         = 1024;
     constexpr int64_t  kA2AN         = 1024;
     constexpr int64_t  kA2AK         = 1024;
-    constexpr uint32_t kA2AWorld     = 2;
+    constexpr uint32_t kA2AWorld     = 1;
     constexpr uint32_t kA2ANChannels = 1;
 }
 
@@ -3109,7 +3190,7 @@ TEST(FusedA2AGate, a2aWithCommunicatorMatchesNoSolution)
 {
     hipblasLtHandle_t handle = nullptr;
     ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
-    ASSERT_EQ(hipblasLtSetDeviceComm(handle, 0, kA2AWorld, kA2ANChannels, noopAllgather, nullptr),
+    ASSERT_EQ(hipblasLtSetDeviceComm(handle, 0, kA2AWorld, kA2ANChannels, memcpyAllgather, nullptr),
               HIPBLAS_STATUS_SUCCESS);
 
     void*                              recvStorage[kA2AWorld] = {};

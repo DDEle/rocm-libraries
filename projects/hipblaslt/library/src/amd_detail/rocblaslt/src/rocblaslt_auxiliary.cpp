@@ -538,8 +538,10 @@ RocblasltContractionProblem construct_rocblaslt_problem(rocblaslt_handle        
     // (ConstructTensileProblem -> setUsePartialRMS) routes fused-RMSNorm problems to the
     // PartialRMS solution. Without this, hipblasLtMatmulAlgoGetHeuristic would select a normal
     // GEMM solution and the fused epilogue would be silently dropped. Non-owning pointer.
-    problem.fused_epilogue  = matmul_descr->fused_epilogue;
-    problem.fused_a2a_world = handle ? handle->comm_world : 0;
+    problem.fused_epilogue      = matmul_descr->fused_epilogue;
+    problem.fused_a2a_world     = handle ? handle->comm_world : 0;
+    problem.fused_a2a_rank      = handle ? handle->comm_rank : 0;
+    problem.fused_a2a_peer_flag = handle ? handle->comm_peer_flag : nullptr;
 
     return problem;
 }

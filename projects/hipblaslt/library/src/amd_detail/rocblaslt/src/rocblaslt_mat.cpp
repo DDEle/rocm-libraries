@@ -242,8 +242,10 @@ rocblaslt_status rocblaslt_matmul_impl(const rocblaslt_handle       handle,
     // Forward any composable fused-epilogue chain (e.g. fused RMSNorm) attached via
     // HIPBLASLT_MATMUL_DESC_FUSED_EPILOGUE so ConstructTensileProblem can drive the
     // TensileLite PartialRMS problem flags. Non-owning; the descriptor outlives the call.
-    problem.fused_epilogue  = matmul_descr->fused_epilogue;
-    problem.fused_a2a_world = handle->comm_world;
+    problem.fused_epilogue      = matmul_descr->fused_epilogue;
+    problem.fused_a2a_world     = handle->comm_world;
+    problem.fused_a2a_rank      = handle->comm_rank;
+    problem.fused_a2a_peer_flag = handle->comm_peer_flag;
 
     if(auto gate = validate_fused_a2a(handle, problem); gate != rocblaslt_status_success)
         return gate;
@@ -446,8 +448,10 @@ rocblaslt_status rocblaslt_gemm_create_cpp_impl(const rocblaslt_handle          
                                         effective_uniform_summation_order(handle, matmul_descr)};
     // Forward the fused-epilogue chain (ext hipblaslt_ext::Gemm create path) so the cached
     // problem drives PartialRMS solution selection, matching the C-API matmul/heuristic paths.
-    problem.fused_epilogue  = matmul_descr->fused_epilogue;
-    problem.fused_a2a_world = handle->comm_world;
+    problem.fused_epilogue      = matmul_descr->fused_epilogue;
+    problem.fused_a2a_world     = handle->comm_world;
+    problem.fused_a2a_rank      = handle->comm_rank;
+    problem.fused_a2a_peer_flag = handle->comm_peer_flag;
 
     if(auto gate = validate_fused_a2a(handle, problem); gate != rocblaslt_status_success)
         return gate;

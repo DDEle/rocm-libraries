@@ -625,6 +625,15 @@ struct RocblasltContractionProblem
     // together with the A2A prefix extent.
     uint32_t fused_a2a_world = 0;
 
+    // This rank's index in that communicator. Meaningful only when fused_a2a_world is
+    // non-zero. Set and consumed alongside it.
+    uint32_t fused_a2a_rank = 0;
+
+    // The handle's resolved peer flag regions, one per rank, valid in this process.
+    // Aliases _rocblaslt_handle::comm_peer_flag rather than copying it. Null when no
+    // communicator is registered.
+    void* const* fused_a2a_peer_flag = nullptr;
+
     // gemm_ex
     // gemm_strided_batched_ex
     RocblasltContractionProblem(hipblasOperation_t     trans_a,

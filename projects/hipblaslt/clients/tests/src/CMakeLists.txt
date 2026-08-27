@@ -18,6 +18,7 @@ target_sources(hipblaslt-test
         ${CMAKE_CURRENT_SOURCE_DIR}/ulp_gtest.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/hipblaslt_gtest_epilogue_chain.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/fused_a2a_comm_multirank_gtest.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/fused_a2a_peer_fields_gtest.cpp
 )
 
 # Per-source, not target-wide (see the NOTE below): handle.h resolves "rocblaslt.h"

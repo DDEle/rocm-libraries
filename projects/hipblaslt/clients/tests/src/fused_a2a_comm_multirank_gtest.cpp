@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "../../../library/src/amd_detail/rocblaslt/src/include/handle.h"
+#include "../../../library/src/amd_detail/rocblaslt/src/include/rocblaslt_fused_a2a_peers.hpp"
 
 __global__ void fusedA2AStoreWord(uint32_t* dst, uint32_t value)
 {
@@ -170,6 +171,16 @@ namespace
         EXPECT_EQ(rank1->comm_peer_flag[1], rank1->comm_flag_base);
         EXPECT_EQ(int(rank1->comm_peer_kind[0]), int(rocblaslt_comm_peer_local));
         EXPECT_EQ(rank1->comm_peer_flag[0], rank0->comm_flag_base);
+    }
+
+    TEST_F(FusedA2ACommMultiRank, resolvedPeersFeedTheKernargGroups)
+    {
+        const auto peers
+            = rocblaslt::buildFusedA2APeerFields(rank(0)->comm_peer_flag, nullptr, kWorld);
+
+        ASSERT_EQ(peers.size(), size_t(kWorld));
+        EXPECT_EQ(peers[0][rocblaslt::kFusedA2AFlagSlot], rank(0)->comm_flag_base);
+        EXPECT_EQ(peers[1][rocblaslt::kFusedA2AFlagSlot], rank(1)->comm_flag_base);
     }
 
     TEST_F(FusedA2ACommMultiRank, peerFlagIsWritableFromTheResolvingDevice)

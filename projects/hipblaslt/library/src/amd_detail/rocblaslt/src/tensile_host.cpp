@@ -36,6 +36,7 @@
 #include "Debug.hpp"
 #include "include/check_numerics_matrix.hpp"
 #include "rocblaslt-types.h"
+#include "rocblaslt_fused_a2a_peers.hpp"
 #include "rocblaslt_mat_utils.hpp"
 #include "rocblaslt_secure_env.hpp"
 #include "tensile_host.hpp"
@@ -2872,6 +2873,16 @@ namespace
             inputs.activationArgs = {prob.act0, prob.act1};
             inputs.alpha          = static_cast<float>(std::get<hipblasLtHalf>(inputs.alpha));
             inputs.beta           = static_cast<float>(std::get<hipblasLtHalf>(inputs.beta));
+        }
+
+        // Device-side fused-A2A operands. Counter and drain stay at their defaults.
+        RocblasltFusedEpilogueInfo fusedInfo;
+        if(rocblaslt_resolve_fused_epilogue(prob.fused_epilogue, fusedInfo)
+           && fusedInfo.hasA2APrefix)
+        {
+            inputs.fusedA2APeers  = rocblaslt::buildFusedA2APeerFields(
+                prob.fused_a2a_peer_flag, fusedInfo.a2aRecvPtrs, prob.fused_a2a_world);
+            inputs.fusedA2AMyRank = prob.fused_a2a_rank;
         }
 
         return inputs;

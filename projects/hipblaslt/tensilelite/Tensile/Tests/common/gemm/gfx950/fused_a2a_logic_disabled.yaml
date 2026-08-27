@@ -1,0 +1,76 @@
+# Copyright Advanced Micro Devices, Inc., or its affiliates.
+# SPDX-License-Identifier: MIT
+# Fused GEMM+A2A (FusedGemmA2A) config for gfx950 that runs all three phases and
+# emits a LibraryLogic yaml carrying a FusedGemmA2A solution.
+#
+# "disabled" in the filename only makes the pytest config sweep skip this file
+# (Tests/common/config_helpers.py). Build by hand:
+#
+#     Tensile <this file> <out-dir> --cpu-only --gpu-targets gfx950
+#     TensileCreateLibrary --architecture gfx950 <out-dir>/3_LibraryLogic <lib> HIP
+#
+# --cpu-only stubs the client launch with a synthetic results CSV; with one
+# solution the timing does not enter selection.
+#
+# Point HIPBLASLT_TENSILE_LIBPATH at <lib>/library/gfx950 to make the heuristic
+# return this solution. Shape and world size match the A2A constants in
+# clients/tests/src/hipblaslt_gtest_epilogue_chain.cpp.
+#
+# LibraryType Equality fills ExactLogic; Prediction and FreeSize leave it empty
+# (LibraryLogic.py).
+
+GlobalParameters:
+  SyncsPerBenchmark: 0
+  SleepPercent: 0
+  NumElementsToValidate: 0
+  NumWarmups: 0
+  NumBenchmarks: 1
+  EnqueuesPerSync: 1
+  DataInitTypeAlpha: 1
+  DataInitTypeBeta: 2
+  Device: 0
+  PrintSolutionRejectionReason: True
+  Architecture: gfx950
+  ISA: [[9, 5, 0]]
+
+BenchmarkProblems:
+  -
+    - # ProblemType
+      OperationType: GEMM
+      DataType: b
+      DestDataType: b
+      ComputeDataType: s
+      HighPrecisionAccumulate: True
+      TransposeA: True
+      TransposeB: False
+      UseBeta: True
+      Batched: True
+      FusedGemmA2A: True
+    - # BenchmarkProblemSizeGroup
+      InitialSolutionParameters:
+      BenchmarkCommonParameters:
+        - KernelLanguage: ["Assembly"]
+      ForkParameters:
+        - MatrixInstruction:
+          - [16, 16, 32, 1,  1, 8, 8,  2, 2]   # MT 256x256
+        - DepthU: [64]
+        - PrefetchGlobalRead: [2]
+        - PrefetchLocalRead: [0]
+        - ScheduleIterAlg: [3]
+        - DirectToLds: [1]
+        - StaggerU: [0]
+        - StreamK: [0]
+        - WorkGroupMapping: [1]
+        - MIArchVgpr: [False]
+        - UseSubtileImpl: [True]
+      BenchmarkJoinParameters:
+      BenchmarkFinalParameters:
+        - ProblemSizes:
+          # AM 1024 with W 1: AM%W==0, (AM/W)%MT0==0, AM%MT0==0, AM<=M.
+          - Exact: [1024, 1024, 1, 1024]
+
+LibraryLogic:
+  ScheduleName: "fused_a2a_gfx950"
+  DeviceNames: ["Device 75a0", "Device 75b0", "Device 75a2", "Device 75b2", "Device 75a3", "Device 75b3", "Device 75a8", "Device 75b8"]
+  ArchitectureName: "gfx950"
+  LibraryType: "Equality"

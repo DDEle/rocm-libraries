@@ -2875,14 +2875,17 @@ namespace
             inputs.beta           = static_cast<float>(std::get<hipblasLtHalf>(inputs.beta));
         }
 
-        // Device-side fused-A2A operands. Counter and drain stay at their defaults.
+        // Device-side fused-A2A operands. The counter stays at its default.
         RocblasltFusedEpilogueInfo fusedInfo;
         if(rocblaslt_resolve_fused_epilogue(prob.fused_epilogue, fusedInfo)
            && fusedInfo.hasA2APrefix)
         {
-            inputs.fusedA2APeers  = rocblaslt::buildFusedA2APeerFields(
-                prob.fused_a2a_peer_flag, fusedInfo.a2aRecvPtrs, prob.fused_a2a_world);
+            inputs.fusedA2APeers  = rocblaslt::buildFusedA2APeerFields(prob.fused_a2a_peer_flag,
+                                                                      fusedInfo.a2aRecvPtrs,
+                                                                      prob.fused_a2a_world,
+                                                                      fusedInfo.a2aSdmaQueues);
             inputs.fusedA2AMyRank = prob.fused_a2a_rank;
+            inputs.fusedA2ADrain  = rocblaslt::fusedA2ADrainFor(fusedInfo.a2aCompletionMode);
         }
 
         return inputs;

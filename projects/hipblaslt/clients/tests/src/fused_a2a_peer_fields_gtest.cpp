@@ -10,9 +10,13 @@
 
 namespace
 {
-    constexpr size_t kFlagSlot  = 0;
-    constexpr size_t kRecvSlot  = 1;
+    constexpr size_t kFlagSlot       = 0;
+    constexpr size_t kRecvSlot       = 1;
     constexpr size_t kFirstQueueSlot = 2;
+    constexpr size_t kQueueBufSlot   = 2;
+    constexpr size_t kRptrSlot       = 3;
+    constexpr size_t kWptrSlot       = 4;
+    constexpr size_t kDoorbellSlot   = 5;
 
     void* fakePointer(uintptr_t value)
     {
@@ -73,6 +77,53 @@ namespace
         EXPECT_EQ(peers[1][kFlagSlot], nullptr);
         EXPECT_EQ(peers[0][kRecvSlot], recvs[0]);
         EXPECT_EQ(peers[1][kRecvSlot], recvs[1]);
+    }
+
+    TEST(FusedA2APeerFields, placesQueueFieldsPerRank)
+    {
+        hipblasLtSdmaQueue_t queues[2]
+            = {{fakePointer(0x100), fakePointer(0x110), fakePointer(0x120), fakePointer(0x130)},
+               {fakePointer(0x200), fakePointer(0x210), fakePointer(0x220), fakePointer(0x230)}};
+
+        const auto peers = rocblaslt::buildFusedA2APeerFields(nullptr, nullptr, 2, queues);
+
+        ASSERT_EQ(peers.size(), 2u);
+        for(uint32_t j = 0; j < 2; ++j)
+        {
+            EXPECT_EQ(peers[j][kQueueBufSlot], queues[j].queueBuf) << "rank " << j;
+            EXPECT_EQ(peers[j][kRptrSlot], queues[j].rptr) << "rank " << j;
+            EXPECT_EQ(peers[j][kWptrSlot], queues[j].wptr) << "rank " << j;
+            EXPECT_EQ(peers[j][kDoorbellSlot], queues[j].doorbell) << "rank " << j;
+        }
+    }
+
+    TEST(FusedA2APeerFields, allThreeSourcesLandInDisjointSlots)
+    {
+        void*                flags[1]  = {fakePointer(0x1000)};
+        void*                recvs[1]  = {fakePointer(0x2000)};
+        hipblasLtSdmaQueue_t queues[1] = {
+            {fakePointer(0x100), fakePointer(0x110), fakePointer(0x120), fakePointer(0x130)}};
+
+        const auto peers = rocblaslt::buildFusedA2APeerFields(flags, recvs, 1, queues);
+
+        ASSERT_EQ(peers.size(), 1u);
+        EXPECT_EQ(peers[0][kFlagSlot], flags[0]);
+        EXPECT_EQ(peers[0][kRecvSlot], recvs[0]);
+        EXPECT_EQ(peers[0][kQueueBufSlot], queues[0].queueBuf);
+        EXPECT_EQ(peers[0][kDoorbellSlot], queues[0].doorbell);
+    }
+
+    TEST(FusedA2ADrain, inKernelCompletionAsksForRecvDrain)
+    {
+        EXPECT_EQ(rocblaslt::fusedA2ADrainFor(HIPBLASLT_A2A_COMPLETION_IN_KERNEL),
+                  TensileLite::FUSED_A2A_DRAIN_RECV);
+    }
+
+    TEST(FusedA2ADrain, neverAsksForSendDrain)
+    {
+        EXPECT_EQ(rocblaslt::fusedA2ADrainFor(HIPBLASLT_A2A_COMPLETION_IN_KERNEL)
+                      & TensileLite::FUSED_A2A_DRAIN_SEND,
+                  0u);
     }
 
     TEST(FusedA2APeerFields, rejectsWorldOutsideTheSegment)

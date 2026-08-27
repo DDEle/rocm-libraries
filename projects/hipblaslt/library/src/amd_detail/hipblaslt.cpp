@@ -1160,7 +1160,8 @@ try
     // Fused-epilogue guard. Wired for gfx950:
     //   - full RMSNorm (single-call producer K1 + reduce-and-apply row_div),
     //   - the decomposed producer (PARTIAL_RMSNORM_STATS / K1 + row_rstd reduce-and-return), and
-    //   - the decomposed consumer (RMSNORM_SCALE_APPLY / Kernel 3 RstdScale).
+    //   - the decomposed consumer (RMSNORM_SCALE_APPLY / Kernel 3 RstdScale), and
+    //   - the A2A prefix chain family, gated further by validate_fused_a2a.
     // Any other fused chain has no matching kernel yet, so reject with NOT_SUPPORTED before launch.
     if(auto* desc = (rocblaslt_matmul_desc)matmul_descr)
     {
@@ -1178,7 +1179,9 @@ try
             const bool mxRequant
                 = requant
                   && (fused->requant_granularity == HIPBLASLT_REQUANT_SCALE_PER_BLOCK_MX);
-            if(!fullRmsNorm && !scaleApply && !partialStats && !mxRequant)
+            const bool a2aPrefix
+                = fused_epilogue_has_stage(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX);
+            if(!fullRmsNorm && !scaleApply && !partialStats && !mxRequant && !a2aPrefix)
             {
                 rocblaslt::Debug::Instance().markerStop();
                 return HIPBLAS_STATUS_NOT_SUPPORTED;

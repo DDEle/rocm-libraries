@@ -2058,6 +2058,17 @@ namespace
         tensileProblem.setScaleC(compute_type);
         tensileProblem.setScaleD(compute_type);
 
+        {
+            RocblasltFusedEpilogueInfo fusedInfo;
+            if(rocblaslt_resolve_fused_epilogue(prob.fused_epilogue, fusedInfo)
+               && fusedInfo.hasA2APrefix)
+            {
+                tensileProblem.setFusedGemmA2A(true);
+                tensileProblem.setFusedA2AExtent(fusedInfo.a2aExtent);
+                tensileProblem.setFusedA2AWorld(prob.fused_a2a_world);
+            }
+        }
+
         // set Actvation
         tensileProblem.setActivationType(is_act_enabled(prob.epilogue)
                                              ? TensileLite::ActivationType::Hipblaslt_all
@@ -2323,6 +2334,17 @@ namespace
         tensileProblem.setScaleB(compute_type, 1);
         tensileProblem.setScaleC(compute_type);
         tensileProblem.setScaleD(compute_type);
+
+        {
+            RocblasltFusedEpilogueInfo fusedInfo;
+            if(rocblaslt_resolve_fused_epilogue(prob.fused_epilogue, fusedInfo)
+               && fusedInfo.hasA2APrefix)
+            {
+                tensileProblem.setFusedGemmA2A(true);
+                tensileProblem.setFusedA2AExtent(fusedInfo.a2aExtent);
+                tensileProblem.setFusedA2AWorld(prob.fused_a2a_world);
+            }
+        }
 
         // set Actvation
         tensileProblem.setActivationType(is_act_enabled(prob.epilogue)

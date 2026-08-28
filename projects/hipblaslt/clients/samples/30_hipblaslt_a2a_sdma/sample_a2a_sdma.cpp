@@ -268,12 +268,15 @@ namespace
         CHECK_LT(hipblasLtFusedEpilogueCreate(&fused));
         CHECK_LT(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX));
 
-        const void* queuePtr = self.queues;
-        CHECK_LT(hipblasLtFusedEpilogueSetAttribute(
-            fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_SDMA_QUEUES, &queuePtr, sizeof(queuePtr)));
-        void* const* recvArg = self.recvPtrs;
-        CHECK_LT(hipblasLtFusedEpilogueSetAttribute(
-            fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_RECV_PTRS, &recvArg, sizeof(recvArg)));
+        // Both attributes take the per-rank array itself, sized in whole entries.
+        CHECK_LT(hipblasLtFusedEpilogueSetAttribute(fused,
+                                                    HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_SDMA_QUEUES,
+                                                    self.queues,
+                                                    kWorld * sizeof(self.queues[0])));
+        CHECK_LT(hipblasLtFusedEpilogueSetAttribute(fused,
+                                                    HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_RECV_PTRS,
+                                                    self.recvPtrs,
+                                                    kWorld * sizeof(self.recvPtrs[0])));
         const int64_t extent = kExtent;
         CHECK_LT(hipblasLtFusedEpilogueSetAttribute(
             fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_EXTENT, &extent, sizeof(extent)));

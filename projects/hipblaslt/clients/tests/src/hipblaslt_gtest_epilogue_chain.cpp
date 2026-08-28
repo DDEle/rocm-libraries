@@ -228,6 +228,202 @@ TEST_F(FusedEpilogueTest, swigluRejectedByRmsnormChainValidator)
               HIPBLAS_STATUS_INVALID_VALUE);
 }
 
+TEST_F(FusedEpilogueTest, a2aAloneAccepted)
+{
+    EXPECT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST_F(FusedEpilogueTest, a2aDuplicateRejected)
+{
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+TEST_F(FusedEpilogueTest, a2aAfterRmsnormRejected)
+{
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+TEST_F(FusedEpilogueTest, rmsnormAfterA2ARejected)
+{
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+TEST_F(FusedEpilogueTest, a2aAfterResidualRejected)
+{
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_RESIDUAL_ADD),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+TEST_F(FusedEpilogueTest, a2aAttributesAccepted)
+{
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_SUCCESS);
+
+    void*              recv_storage[4] = {};
+    void* const*       recv            = recv_storage;
+    hipblasLtSdmaQueue_t queue_storage[4] = {};
+    const hipblasLtSdmaQueue_t* queues  = queue_storage;
+    const int64_t      extent          = 2048;
+    const uint32_t     channel         = 0;
+    const auto         mode            = HIPBLASLT_A2A_COMPLETION_IN_KERNEL;
+
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_RECV_PTRS, &recv, sizeof(recv)),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_SDMA_QUEUES, &queues, sizeof(queues)),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_EXTENT, &extent, sizeof(extent)),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_COMPLETION_MODE, &mode, sizeof(mode)),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_COMM_CHANNEL, &channel, sizeof(channel)),
+              HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST_F(FusedEpilogueTest, a2aCompletionModeRejectsDeferred)
+{
+    const int deferred = 1;
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(fused,
+                                                 HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_COMPLETION_MODE,
+                                                 &deferred,
+                                                 sizeof(deferred)),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+TEST_F(FusedEpilogueTest, a2aExtentRejectsNonPositive)
+{
+    const int64_t extent = 0;
+    EXPECT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_EXTENT, &extent, sizeof(extent)),
+              HIPBLAS_STATUS_INVALID_VALUE);
+}
+
+static hipblasStatus_t memcpyAllgather(void*       userData,
+                                     const void* sendbuf,
+                                     void*       recvbuf,
+                                     size_t      bytesPerRank)
+{
+    static_cast<void>(userData);
+    std::memcpy(recvbuf, sendbuf, bytesPerRank);
+    return HIPBLAS_STATUS_SUCCESS;
+}
+
+// Writes this rank's record into every slot, so slot j != rank carries rank's index.
+static hipblasStatus_t duplicatingAllgather(void*       userData,
+                                            const void* sendbuf,
+                                            void*       recvbuf,
+                                            size_t      bytesPerRank)
+{
+    const auto world = *static_cast<const uint32_t*>(userData);
+    for(uint32_t j = 0; j < world; ++j)
+        std::memcpy(static_cast<char*>(recvbuf) + j * bytesPerRank, sendbuf, bytesPerRank);
+    return HIPBLAS_STATUS_SUCCESS;
+}
+
+static hipblasStatus_t failingAllgather(void*, const void*, void*, size_t)
+{
+    return HIPBLAS_STATUS_INTERNAL_ERROR;
+}
+
+TEST(FusedA2ACommTest, setDeviceCommValidatesArguments)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 0, 1, memcpyAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 9, 1, memcpyAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 4, 4, 1, memcpyAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 0, memcpyAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 4, 1, nullptr, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 1, 1, memcpyAllgather, nullptr),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 1, 1, memcpyAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST(FusedA2ACommTest, setDeviceCommRejectsMisplacedRecords)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+
+    uint32_t world = 2;
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, world, 1, duplicatingAllgather, &world),
+              HIPBLAS_STATUS_INVALID_VALUE);
+
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST(FusedA2ACommTest, setDeviceCommRejectsFailedAllgather)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 1, 1, failingAllgather, nullptr),
+              HIPBLAS_STATUS_INVALID_VALUE);
+
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
+namespace
+{
+    struct AllgatherSpy
+    {
+        int    calls        = 0;
+        size_t bytesPerRank = 0;
+    };
+}
+
+// A correct allgather for a one-rank communicator: this rank's record is the whole result.
+static hipblasStatus_t spyMemcpyAllgather(void*       userData,
+                                          const void* sendbuf,
+                                          void*       recvbuf,
+                                          size_t      bytesPerRank)
+{
+    auto* spy          = static_cast<AllgatherSpy*>(userData);
+    spy->calls        += 1;
+    spy->bytesPerRank  = bytesPerRank;
+    std::memcpy(recvbuf, sendbuf, bytesPerRank);
+    return HIPBLAS_STATUS_SUCCESS;
+}
+
+TEST(FusedA2ACommTest, setDeviceCommInvokesAllgatherOnce)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+
+    AllgatherSpy spy;
+    EXPECT_EQ(hipblasLtSetDeviceComm(handle, 0, 1, 1, spyMemcpyAllgather, &spy),
+              HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(spy.calls, 1);
+    EXPECT_GT(spy.bytesPerRank, 0u);
+
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
 TEST_F(FusedEpilogueTest, rmsnormBeforeResidualRejected)
 {
     ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_RMSNORM),
@@ -2887,4 +3083,203 @@ TEST(FusedEpilogueE2E, decomposedMxfp8ProducerConsumerBf8MatchesReference)
     if(!deviceIsGfx950())
         GTEST_SKIP() << "decomposed MXfp8 RMSNorm flow is wired for gfx950 only";
     runDecomposedMxfp8ProducerConsumerTyped(HIP_R_8F_E5M2);
+}
+
+// ---- A2A selection-path gate ----
+
+namespace
+{
+    constexpr int64_t  kA2AM         = 1024;
+    constexpr int64_t  kA2AN         = 1024;
+    constexpr int64_t  kA2AK         = 1024;
+    constexpr uint32_t kA2AWorld     = 1;
+    constexpr uint32_t kA2ANChannels = 1;
+}
+
+// Selection only: A/B/C/D carry no device memory and no matmul is launched.
+static hipblasStatus_t a2aRunHeuristic(hipblasLtHandle_t                  handle,
+                                       hipblasLtFusedEpilogueDescriptor_t fused,
+                                       int&                               algoCount)
+{
+    algoCount = 0;
+
+    hipblasLtMatrixLayout_t layA = nullptr, layB = nullptr, layC = nullptr, layD = nullptr;
+    hipblasLtMatrixLayoutCreate(&layA, HIP_R_16BF, kA2AK, kA2AM, kA2AK);
+    hipblasLtMatrixLayoutCreate(&layB, HIP_R_16BF, kA2AK, kA2AN, kA2AK);
+    hipblasLtMatrixLayoutCreate(&layC, HIP_R_16BF, kA2AM, kA2AN, kA2AM);
+    hipblasLtMatrixLayoutCreate(&layD, HIP_R_16BF, kA2AM, kA2AN, kA2AM);
+
+    hipblasLtMatmulDesc_t mm = nullptr;
+    hipblasLtMatmulDescCreate(&mm, HIPBLAS_COMPUTE_32F, HIP_R_32F);
+    const hipblasOperation_t opT = HIPBLAS_OP_T, opN = HIPBLAS_OP_N;
+    hipblasLtMatmulDescSetAttribute(mm, HIPBLASLT_MATMUL_DESC_TRANSA, &opT, sizeof(opT));
+    hipblasLtMatmulDescSetAttribute(mm, HIPBLASLT_MATMUL_DESC_TRANSB, &opN, sizeof(opN));
+    if(fused)
+        hipblasLtMatmulDescSetAttribute(
+            mm, HIPBLASLT_MATMUL_DESC_FUSED_EPILOGUE, &fused, sizeof(fused));
+
+    hipblasLtMatmulPreference_t pref = nullptr;
+    hipblasLtMatmulPreferenceCreate(&pref);
+    const size_t workspaceSize = 32 * 1024 * 1024;
+    hipblasLtMatmulPreferenceSetAttribute(
+        pref, HIPBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspaceSize, sizeof(workspaceSize));
+
+    hipblasLtMatmulHeuristicResult_t heur[1];
+    const hipblasStatus_t            status = hipblasLtMatmulAlgoGetHeuristic(
+        handle, mm, layA, layB, layC, layD, pref, 1, heur, &algoCount);
+
+    hipblasLtMatmulPreferenceDestroy(pref);
+    hipblasLtMatmulDescDestroy(mm);
+    hipblasLtMatrixLayoutDestroy(layA);
+    hipblasLtMatrixLayoutDestroy(layB);
+    hipblasLtMatrixLayoutDestroy(layC);
+    hipblasLtMatrixLayoutDestroy(layD);
+    return status;
+}
+
+// One A2A stage carrying every attribute validate_fused_a2a inspects.
+static void a2aBuildChain(hipblasLtFusedEpilogueDescriptor_t& fused, void* const* recvPtrs)
+{
+    const int64_t  extent  = kA2AM;
+    const uint32_t channel = 0;
+
+    ASSERT_EQ(hipblasLtFusedEpilogueCreate(&fused), HIPBLAS_STATUS_SUCCESS);
+    ASSERT_EQ(hipblasLtFusedEpilogueAdd(fused, HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX),
+              HIPBLAS_STATUS_SUCCESS);
+    ASSERT_EQ(
+        hipblasLtFusedEpilogueSetAttribute(
+            fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_RECV_PTRS, &recvPtrs, sizeof(recvPtrs)),
+        HIPBLAS_STATUS_SUCCESS);
+    ASSERT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_EXTENT, &extent, sizeof(extent)),
+              HIPBLAS_STATUS_SUCCESS);
+    ASSERT_EQ(hipblasLtFusedEpilogueSetAttribute(
+                  fused, HIPBLASLT_FUSED_EPILOGUE_COMM_CHANNEL, &channel, sizeof(channel)),
+              HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST(FusedA2AGate, plainGemmReturnsSolutions)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+
+    int algoCount = -1;
+    EXPECT_EQ(a2aRunHeuristic(handle, nullptr, algoCount), HIPBLAS_STATUS_SUCCESS);
+    EXPECT_GT(algoCount, 0);
+
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST(FusedA2AGate, a2aWithoutCommunicatorRejected)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+
+    void*                              recvStorage[kA2AWorld] = {};
+    hipblasLtFusedEpilogueDescriptor_t fused                  = nullptr;
+    a2aBuildChain(fused, recvStorage);
+
+    int algoCount = -1;
+    EXPECT_EQ(a2aRunHeuristic(handle, fused, algoCount), HIPBLAS_STATUS_INVALID_VALUE);
+
+    hipblasLtFusedEpilogueDestroy(fused);
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
+TEST(FusedA2AGate, a2aWithCommunicatorMatchesNoSolution)
+{
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+    ASSERT_EQ(hipblasLtSetDeviceComm(handle, 0, kA2AWorld, kA2ANChannels, memcpyAllgather, nullptr),
+              HIPBLAS_STATUS_SUCCESS);
+
+    void*                              recvStorage[kA2AWorld] = {};
+    hipblasLtFusedEpilogueDescriptor_t fused                  = nullptr;
+    a2aBuildChain(fused, recvStorage);
+
+    int algoCount = -1;
+    EXPECT_EQ(a2aRunHeuristic(handle, fused, algoCount), HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(algoCount, 0);
+
+    hipblasLtFusedEpilogueDestroy(fused);
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+}
+
+// ---- A2A end-to-end: dispatches the selected solution ----
+//
+// Requires both a device library carrying a fused GEMM+A2A solution and, for
+// SDMA-transport solutions, HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_SDMA_QUEUES;
+// this chain sets no queues, so run it only against a non-SDMA solution:
+//   ./hipblaslt-test --gtest_also_run_disabled_tests \
+//     --gtest_filter="FusedEpilogueE2E.DISABLED_a2aSelfRankLaunches"
+
+TEST(FusedEpilogueE2E, DISABLED_a2aSelfRankLaunches)
+{
+    if(!deviceIsGfx950())
+        GTEST_SKIP() << "fused GEMM+A2A is wired for gfx950 only";
+
+    hipblasLtHandle_t handle = nullptr;
+    ASSERT_EQ(hipblasLtCreate(&handle), HIPBLAS_STATUS_SUCCESS);
+    ASSERT_EQ(hipblasLtSetDeviceComm(handle, 0, kA2AWorld, kA2ANChannels, memcpyAllgather, nullptr),
+              HIPBLAS_STATUS_SUCCESS);
+
+    {
+        void*                              probeStorage[kA2AWorld] = {};
+        hipblasLtFusedEpilogueDescriptor_t probe                   = nullptr;
+        a2aBuildChain(probe, probeStorage);
+
+        int probeCount = 0;
+        ASSERT_EQ(a2aRunHeuristic(handle, probe, probeCount), HIPBLAS_STATUS_SUCCESS);
+        hipblasLtFusedEpilogueDestroy(probe);
+
+        if(probeCount == 0)
+        {
+            EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
+            GTEST_SKIP() << "loaded device library carries no fused GEMM+A2A solution";
+        }
+    }
+
+    constexpr size_t kWorkspaceSize = 32 * 1024 * 1024;
+
+    void *dA = nullptr, *dB = nullptr, *dC = nullptr, *dD = nullptr, *dWorkspace = nullptr;
+    ASSERT_EQ(hipMalloc(&dA, size_t(kA2AK) * kA2AM * sizeof(uint16_t)), hipSuccess);
+    ASSERT_EQ(hipMalloc(&dB, size_t(kA2AK) * kA2AN * sizeof(uint16_t)), hipSuccess);
+    ASSERT_EQ(hipMalloc(&dC, size_t(kA2AM) * kA2AN * sizeof(uint16_t)), hipSuccess);
+    ASSERT_EQ(hipMalloc(&dD, size_t(kA2AM) * kA2AN * sizeof(uint16_t)), hipSuccess);
+    ASSERT_EQ(hipMalloc(&dWorkspace, kWorkspaceSize), hipSuccess);
+    ASSERT_EQ(hipMemset(dA, 0, size_t(kA2AK) * kA2AM * sizeof(uint16_t)), hipSuccess);
+    ASSERT_EQ(hipMemset(dB, 0, size_t(kA2AK) * kA2AN * sizeof(uint16_t)), hipSuccess);
+    ASSERT_EQ(hipMemset(dC, 0, size_t(kA2AM) * kA2AN * sizeof(uint16_t)), hipSuccess);
+    ASSERT_EQ(hipMemset(dD, 0, size_t(kA2AM) * kA2AN * sizeof(uint16_t)), hipSuccess);
+
+    void*                              recvPtrs[kA2AWorld] = {dD};
+    hipblasLtFusedEpilogueDescriptor_t fused               = nullptr;
+    a2aBuildChain(fused, recvPtrs);
+
+    int                   algoCount = 0;
+    const hipblasStatus_t status    = runBf16TnFusedMatmul(handle,
+                                                        kA2AM,
+                                                        kA2AN,
+                                                        kA2AK,
+                                                        dA,
+                                                        kA2AK,
+                                                        dB,
+                                                        dC,
+                                                        dD,
+                                                        fused,
+                                                        dWorkspace,
+                                                        kWorkspaceSize,
+                                                        algoCount);
+
+    EXPECT_GT(algoCount, 0);
+    EXPECT_EQ(status, HIPBLAS_STATUS_SUCCESS);
+    EXPECT_EQ(hipDeviceSynchronize(), hipSuccess);
+
+    hipblasLtFusedEpilogueDestroy(fused);
+    hipFree(dWorkspace);
+    hipFree(dD);
+    hipFree(dC);
+    hipFree(dB);
+    hipFree(dA);
+    EXPECT_EQ(hipblasLtDestroy(handle), HIPBLAS_STATUS_SUCCESS);
 }

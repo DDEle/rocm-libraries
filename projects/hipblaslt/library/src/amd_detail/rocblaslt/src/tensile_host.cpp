@@ -2237,6 +2237,12 @@ namespace
                 tensileProblem.setUseScaleAlphaVec(1);
                 tensileProblem.setScaleAlphaVec(compute_type, d.sizes()[0]);
             }
+            if(fusedInfo.hasA2APrefix)
+            {
+                tensileProblem.setFusedGemmA2A(true);
+                tensileProblem.setFusedA2AExtent(fusedInfo.a2aExtent);
+                tensileProblem.setFusedA2AWorld(prob.fused_a2a_world);
+            }
             // MX block-scale dequant: wire DQuantType::MXFP8 and the scale tensor dimensions.
             // q0=32 blocks along free0 (N_hidden); q1=1 per free1 element (M_tokens).
             // Scale grid: rows=M_tokens (freeTiles, padded×32), cols=N_hidden/32 (kBlockTiles, padded×8).
@@ -2552,6 +2558,12 @@ namespace
                 {
                     tensileProblem.setUseScaleAlphaVec(1);
                     tensileProblem.setScaleAlphaVec(compute_type, d.sizes()[0]);
+                }
+                if(fusedInfo.hasA2APrefix)
+                {
+                    tensileProblem.setFusedGemmA2A(true);
+                    tensileProblem.setFusedA2AExtent(fusedInfo.a2aExtent);
+                    tensileProblem.setFusedA2AWorld(prob.fused_a2a_world);
                 }
                 // MX block-scale dequant: refresh dimensions each call (same logic as
                 // ConstructTensileProblem) so selection sees the correct scale-tensor shape.

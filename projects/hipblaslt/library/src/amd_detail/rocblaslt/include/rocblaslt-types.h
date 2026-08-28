@@ -620,6 +620,11 @@ struct RocblasltContractionProblem
     // problem flags. See docs/design/fused_epilogue_rmsnorm.md.
     const struct hipblasLtFusedEpilogueDescriptor* fused_epilogue = nullptr;
 
+    // World size of the device communicator registered on the handle, 0 when none is. Set
+    // post-construction alongside fused_epilogue, and consumed by ConstructTensileProblem
+    // together with the A2A prefix extent.
+    uint32_t fused_a2a_world = 0;
+
     // gemm_ex
     // gemm_strided_batched_ex
     RocblasltContractionProblem(hipblasOperation_t     trans_a,
@@ -719,6 +724,13 @@ struct RocblasltFusedEpilogueInfo
     const void* requantMxScale       = nullptr;
     int32_t     requantMxBlockSize   = 32;
     hipDataType requantMxOutputType  = HIP_R_8F_E4M3;
+    // A2A prefix: the pointer arrays hold world entries each, indexed by peer rank.
+    bool                         hasA2APrefix      = false;
+    const hipblasLtSdmaQueue_t*  a2aSdmaQueues     = nullptr;
+    void* const*                 a2aRecvPtrs       = nullptr;
+    int64_t                      a2aExtent         = 0;
+    hipblasLtA2ACompletionMode_t a2aCompletionMode = HIPBLASLT_A2A_COMPLETION_IN_KERNEL;
+    uint32_t                     commChannel       = 0;
 };
 
 // Resolve an opaque fused-epilogue handle into the POD above. Returns false when desc is

@@ -31,6 +31,7 @@
 
 #include "rocblaslt.h"
 //#include "rocblaslt_ostream.hpp"
+#include <Tensile/FusedA2AKernArg.hpp>
 #include <atomic>
 #include <fstream>
 #include <hip/hip_runtime_api.h>
@@ -70,6 +71,29 @@ private:
     size_t _data_size = 0;
 };
 
+// How a peer's flag region was resolved, which decides how it is released.
+enum rocblaslt_comm_peer_kind : uint8_t
+{
+    rocblaslt_comm_peer_none = 0,
+    rocblaslt_comm_peer_self,
+    rocblaslt_comm_peer_local,
+    rocblaslt_comm_peer_ipc,
+};
+
+// What one rank contributes to the hipblasLtSetDeviceComm allgather. Carries both a raw
+// pointer and an IPC handle: a peer in this process resolves through flag_base, one in
+// another process through ipc_handle. Fixed size -- this is the callback's bytesPerRank.
+struct RocblasltFusedA2APeerRecord
+{
+    uint32_t          rank       = 0;
+    uint32_t          world      = 0;
+    uint32_t          n_channels = 0;
+    int32_t           device     = 0;
+    uint64_t          pid        = 0;
+    void*             flag_base  = nullptr;
+    hipIpcMemHandle_t ipc_handle = {};
+};
+
 /********************************************************************************
  * \brief rocblaslt_handle is a structure holding the rocblaslt library context.
  * It must be initialized using rocblaslt_create_handle()
@@ -106,6 +130,20 @@ struct _rocblaslt_handle
 
     // Handle-level uniform-summation-order request. 0 off, 1 on; see hipblaslt.h.
     int32_t uniform_summation_order = 0;
+
+    // Device communicator, registered at most once via hipblasLtSetDeviceComm. A second call is
+    // rejected, so comm_world is immutable for the lifetime of the handle.
+    bool     comm_registered = false;
+    uint32_t comm_rank       = 0;
+    uint32_t comm_world      = 0;
+    uint32_t comm_nchannels  = 0;
+
+    // PeerSynchronizer. comm_flag_base is this rank's own nChannels x
+    // FUSED_A2A_FLAG_BLOCK_BYTES allocation; comm_peer_flag[j] is peer j's, valid in this
+    // process. comm_peer_kind[j] says how to release it.
+    void*                    comm_flag_base = nullptr;
+    void*                    comm_peer_flag[TensileLite::FUSED_A2A_MAX_RANKS] = {};
+    rocblaslt_comm_peer_kind comm_peer_kind[TensileLite::FUSED_A2A_MAX_RANKS] = {};
 
 #ifdef HIPBLASLT_USE_ROCROLLER
     void* rocroller_handle = nullptr;
@@ -330,6 +368,31 @@ inline int32_t effective_uniform_summation_order(const _rocblaslt_handle*      h
     if(handle && handle->uniform_summation_order)
         return 1;
     return 0;
+}
+
+// Everything about a fused A2A request that is checkable before the heuristic runs. Called from
+// both the matmul path and the heuristic path.
+inline rocblaslt_status validate_fused_a2a(const _rocblaslt_handle*           handle,
+                                           const RocblasltContractionProblem& problem)
+{
+    RocblasltFusedEpilogueInfo info;
+    if(!rocblaslt_resolve_fused_epilogue(problem.fused_epilogue, info) || !info.hasA2APrefix)
+        return rocblaslt_status_success;
+
+    if(handle == nullptr || !handle->comm_registered)
+        return rocblaslt_status_invalid_value;
+    if(problem.epilogue != ROCBLASLT_EPILOGUE_DEFAULT)
+        return rocblaslt_status_invalid_value;
+    if(problem.batch_count != 1)
+        return rocblaslt_status_invalid_value;
+    if(info.a2aExtent > int64_t(problem.m)
+       || info.a2aExtent % int64_t(handle->comm_world) != 0)
+        return rocblaslt_status_invalid_value;
+    if(info.commChannel >= handle->comm_nchannels)
+        return rocblaslt_status_invalid_value;
+    if(info.a2aRecvPtrs == nullptr)
+        return rocblaslt_status_invalid_value;
+    return rocblaslt_status_success;
 }
 
 #endif // HANDLE_H

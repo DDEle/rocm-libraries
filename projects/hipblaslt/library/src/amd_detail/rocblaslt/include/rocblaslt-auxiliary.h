@@ -99,6 +99,33 @@ rocblaslt_status rocblaslt_set_sm_count_target(rocblaslt_handle handle,
                                                int32_t          sm_count_target);
 
 /*! \ingroup aux_module
+ *  \brief Register the handle in a device communicator.
+ *
+ *  \details
+ *  Stores rank, world and nChannels on the handle. Callable at most once per handle.
+ *
+ *  @param[in]
+ *  handle      the handle to the rocBLASLt library context.
+ *  @param[in]
+ *  rank        this rank's index, less than \p world.
+ *  @param[in]
+ *  world       device count in the communicator, in [1, 8].
+ *  @param[in]
+ *  n_channels  concurrent A2A operations this communicator supports.
+ *
+ *  \retval rocblaslt_status_success            registration stored.
+ *  \retval rocblaslt_status_invalid_handle     \p handle is invalid.
+ *  \retval rocblaslt_status_invalid_value      \p rank or \p world out of range, or the handle is
+ *                                              already registered.
+ */
+rocblaslt_status rocblaslt_set_device_comm(rocblaslt_handle               handle,
+                                           uint32_t                       rank,
+                                           uint32_t                       world,
+                                           uint32_t                       n_channels,
+                                           hipblasLtDeviceCommAllgatherFn allgather,
+                                           void*                          user_data);
+
+/*! \ingroup aux_module
  *  \brief Return the handle-level SM-count-target override.
  *
  *  @param[in]

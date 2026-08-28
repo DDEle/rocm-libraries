@@ -239,6 +239,15 @@ rocblaslt_status rocblaslt_matmul_impl(const rocblaslt_handle       handle,
                                         effective_sm_count_target(handle, matmul_descr, nullptr),
                                         effective_uniform_summation_order(handle, matmul_descr)};
 
+    // Non-owning; the descriptor outlives the call.
+    problem.fused_epilogue      = matmul_descr->fused_epilogue;
+    problem.fused_a2a_world     = handle->device_comm_world;
+    problem.fused_a2a_rank      = handle->device_comm_rank;
+    problem.fused_a2a_peer_flag = handle->device_comm_peer_flags;
+
+    if(auto gate = validate_fused_a2a(handle, problem); gate != rocblaslt_status_success)
+        return gate;
+
     rocblaslt_status st = runContractionProblem(handle, algo, problem, gemmData);
 
     if(st == rocblaslt_status_success)
@@ -435,6 +444,15 @@ rocblaslt_status rocblaslt_gemm_create_cpp_impl(const rocblaslt_handle          
                                         matmul_descr->streamk_tile_scheduling_ext,
                                         effective_sm_count_target(handle, matmul_descr, nullptr),
                                         effective_uniform_summation_order(handle, matmul_descr)};
+    // Non-owning; the descriptor outlives the call.
+    problem.fused_epilogue      = matmul_descr->fused_epilogue;
+    problem.fused_a2a_world     = handle->device_comm_world;
+    problem.fused_a2a_rank      = handle->device_comm_rank;
+    problem.fused_a2a_peer_flag = handle->device_comm_peer_flags;
+
+    if(auto gate = validate_fused_a2a(handle, problem); gate != rocblaslt_status_success)
+        return gate;
+
     return gemmCreate(problem, gemmData, gemmCount);
 }
 

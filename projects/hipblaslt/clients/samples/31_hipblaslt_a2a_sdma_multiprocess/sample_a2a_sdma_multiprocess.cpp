@@ -54,10 +54,10 @@
 
 namespace
 {
-    constexpr int64_t  kFeatures        = 2048; // M / free0
-    constexpr int64_t  kTokens          = 1024; // N / free1
-    constexpr int64_t  kK               = 1024;
-    constexpr int64_t  kExtent          = 1024;
+    constexpr int64_t  kFeatures        = 18432; // M / free0
+    constexpr int64_t  kTokens          = 2048; // N / free1
+    constexpr int64_t  kK               = 8192;
+    constexpr int64_t  kExtent          = 10240;
     constexpr uint32_t kWorld           = 4;
     constexpr uint32_t kRanksPerProcess = 2;
     constexpr uint32_t kChannels        = 2;

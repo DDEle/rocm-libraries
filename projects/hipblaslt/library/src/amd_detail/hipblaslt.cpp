@@ -351,6 +351,7 @@ namespace
         uint32_t          rank;
         uint32_t          world;
         uint32_t          nChannels;
+        int32_t           device;
         uint64_t          pid;
         void*             flags;
         uint32_t          ipcValid;
@@ -936,6 +937,14 @@ try
         return HIPBLAS_STATUS_INVALID_VALUE;
     }
 
+    int myDevice = 0;
+    if(hipGetDevice(&myDevice) != hipSuccess)
+    {
+        log_error(__func__, "could not resolve this rank's device ordinal");
+        rocblaslt::Debug::Instance().markerStop();
+        return HIPBLAS_STATUS_NOT_SUPPORTED;
+    }
+
     void*        flags = nullptr;
     const size_t bytes = (size_t)nChannels * kDeviceCommFlagChannelSize;
     // Fine-grained, because a peer's copy engine updates these lines.
@@ -958,6 +967,7 @@ try
     mine.rank      = rank;
     mine.world     = world;
     mine.nChannels = nChannels;
+    mine.device    = myDevice;
     mine.pid       = (uint64_t)getpid();
     mine.flags     = flags;
     // Only needed by a peer in another process; a failure here is reported when
@@ -990,6 +1000,19 @@ try
 
         if(j == rank || peer.pid == mine.pid)
         {
+            if(j != rank)
+            {
+                const hipError_t peerAccess = hipDeviceEnablePeerAccess(peer.device, 0);
+                if(peerAccess != hipSuccess && peerAccess != hipErrorPeerAccessAlreadyEnabled)
+                {
+                    log_error(__func__,
+                              "cannot reach a peer's flag region from this device; rank",
+                              (int)j);
+                    release_device_comm(h);
+                    rocblaslt::Debug::Instance().markerStop();
+                    return HIPBLAS_STATUS_NOT_SUPPORTED;
+                }
+            }
             h->device_comm_peer_flags[j]        = peer.flags;
             h->device_comm_peer_flags_mapped[j] = false;
             continue;

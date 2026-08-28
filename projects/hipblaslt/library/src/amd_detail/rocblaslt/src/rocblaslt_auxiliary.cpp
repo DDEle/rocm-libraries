@@ -2411,6 +2411,12 @@ rocblaslt_status
         if(auto gate = validate_fused_a2a(handle, prob); gate != rocblaslt_status_success)
             return gate;
 
+        if(fused_a2a_lacks_sdma_queues(prob))
+        {
+            *returnAlgoCount = 0;
+            return rocblaslt_status_success;
+        }
+
         OverrideSingleton& override         = OverrideSingleton::getInstance();
         bool               override_success = false;
         if(override.env_mode)

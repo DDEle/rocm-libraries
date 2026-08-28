@@ -250,6 +250,9 @@ rocblaslt_status rocblaslt_matmul_impl(const rocblaslt_handle       handle,
     if(auto gate = validate_fused_a2a(handle, problem); gate != rocblaslt_status_success)
         return gate;
 
+    if(fused_a2a_lacks_sdma_queues(problem))
+        return rocblaslt_status_invalid_value;
+
     rocblaslt_status st = runContractionProblem(handle, algo, problem, gemmData);
 
     if(st == rocblaslt_status_success)
@@ -455,6 +458,9 @@ rocblaslt_status rocblaslt_gemm_create_cpp_impl(const rocblaslt_handle          
 
     if(auto gate = validate_fused_a2a(handle, problem); gate != rocblaslt_status_success)
         return gate;
+
+    if(fused_a2a_lacks_sdma_queues(problem))
+        return rocblaslt_status_invalid_value;
 
     return gemmCreate(problem, gemmData, gemmCount);
 }

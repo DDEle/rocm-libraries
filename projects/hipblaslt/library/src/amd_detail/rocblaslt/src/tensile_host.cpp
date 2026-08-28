@@ -4218,6 +4218,28 @@ rocblaslt_status runContractionProblem(rocblaslt_handle                   handle
                 }
             }
 
+            if(status == rocblaslt_status_success && prob.fused_a2a_world != 0)
+            {
+                RocblasltFusedEpilogueInfo a2aInfo;
+                if(rocblaslt_resolve_fused_epilogue(prob.fused_epilogue, a2aInfo)
+                   && a2aInfo.hasA2APrefix)
+                {
+                    // Slice 0 of the handle's Synchronizer, which is the whole
+                    // region the A2A counter block sits in.
+                    constexpr size_t kSynchronizerSliceBytes = 409600 * sizeof(int);
+                    status                                   = hip2RocStatus(
+                        hipMemsetAsync(prob.Synchronizer, 0, kSynchronizerSliceBytes, prob.stream));
+                    if(status == rocblaslt_status_success)
+                        status = hip2RocStatus(
+                            hipMemsetAsync(static_cast<char*>(handle->comm_flag_base)
+                                               + size_t(a2aInfo.commChannel)
+                                                     * TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES,
+                                           0,
+                                           TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES,
+                                           prob.stream));
+                }
+            }
+
             if(rocblaslt::Debug::Instance().printLogAsMarker())
                 rocblaslt::Debug::Instance().logMarkerStop();
         }

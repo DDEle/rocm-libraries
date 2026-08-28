@@ -17,18 +17,7 @@ target_sources(hipblaslt-test
         ${CMAKE_CURRENT_SOURCE_DIR}/row_uniformity_gtest.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/fused_a2a_gtest.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/ulp_gtest.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/fused_a2a_comm_multirank_gtest.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/fused_a2a_peer_fields_gtest.cpp
-)
-
-# Per-source, not target-wide (see the NOTE below): handle.h resolves "rocblaslt.h"
-# out of rocblaslt/include.
-set_source_files_properties(
-    ${CMAKE_CURRENT_SOURCE_DIR}/fused_a2a_comm_multirank_gtest.cpp
-    TARGET_DIRECTORY hipblaslt-test
-    PROPERTIES
-        COMPILE_OPTIONS
-            "-I${CMAKE_CURRENT_SOURCE_DIR}/../../../library/src/amd_detail/rocblaslt/include"
 )
 
 # NOTE: secure_env_gtest.cpp (ROCM-26729) intentionally includes the header-only

@@ -32,22 +32,28 @@ namespace rocblaslt
 
     // One group per rank in FUSED_A2A_PEER_FIELDS order. Fills the flag, recv and SDMA
     // queue slots. Any of the three sources may be null, leaving its slots null. Returns
-    // an empty list when world does not fit the segment.
+    // an empty list when world does not fit the segment. The flag slot is biased to the
+    // caller's channel within each peer's region.
     inline std::vector<TensileLite::FusedA2APeerFields>
         buildFusedA2APeerFields(void* const*                peerFlag,
                                 void* const*                recvPtrs,
                                 uint32_t                    world,
-                                const hipblasLtSdmaQueue_t* queues = nullptr)
+                                uint32_t                    channel,
+                                const hipblasLtSdmaQueue_t* queues)
     {
         const bool fits = world <= uint32_t(TensileLite::FUSED_A2A_MAX_RANKS)
                           && TensileLite::fusedA2AWorldSizeValid(static_cast<int>(world));
         if(!fits)
             return {};
 
+        const size_t flagBias = size_t(channel) * TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES;
+
         std::vector<TensileLite::FusedA2APeerFields> peers(world);
         for(uint32_t j = 0; j < world; ++j)
         {
-            peers[j][kFusedA2AFlagSlot] = peerFlag != nullptr ? peerFlag[j] : nullptr;
+            peers[j][kFusedA2AFlagSlot] = peerFlag != nullptr && peerFlag[j] != nullptr
+                                              ? static_cast<char*>(peerFlag[j]) + flagBias
+                                              : nullptr;
             peers[j][kFusedA2ARecvSlot] = recvPtrs != nullptr ? recvPtrs[j] : nullptr;
             if(queues != nullptr)
             {

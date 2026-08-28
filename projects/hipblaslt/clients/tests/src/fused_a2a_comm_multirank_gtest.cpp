@@ -175,8 +175,8 @@ namespace
 
     TEST_F(FusedA2ACommMultiRank, resolvedPeersFeedTheKernargGroups)
     {
-        const auto peers
-            = rocblaslt::buildFusedA2APeerFields(rank(0)->comm_peer_flag, nullptr, kWorld);
+        const auto peers = rocblaslt::buildFusedA2APeerFields(
+            rank(0)->comm_peer_flag, nullptr, kWorld, 0, nullptr);
 
         ASSERT_EQ(peers.size(), size_t(kWorld));
         EXPECT_EQ(peers[0][rocblaslt::kFusedA2AFlagSlot], rank(0)->comm_flag_base);

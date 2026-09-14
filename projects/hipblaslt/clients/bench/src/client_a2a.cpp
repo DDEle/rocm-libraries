@@ -1,0 +1,62 @@
+// Copyright Advanced Micro Devices, Inc., or its affiliates.
+// SPDX-License-Identifier: MIT
+
+#include "a2a_bench.hpp"
+
+using namespace hipblaslt_bench;
+
+int main(int argc, char* argv[])
+{
+    const hipblaslt_bench::LauncherEnv env = hipblaslt_bench::read_launcher_env();
+
+    Arguments arg;
+    arg.init();
+    arg.M[0]       = 18432;
+    arg.N[0]       = 2048;
+    arg.K[0]       = 8192;
+    arg.a2a_extent = 10240;
+
+    // The launcher owns the group size; a command-line value only asserts it.
+    // 0 marks "not given on the command line".
+    arg.a2a_world = 0;
+
+    std::string error;
+    if(!parse_a2a_args(argc, argv, arg, error))
+    {
+        print_usage(argv[0]);
+        return error == "help" ? 0 : 1;
+    }
+    if(arg.a2a_world != 0 && arg.a2a_world != uint8_t(env.world))
+    {
+        std::printf("error: --a2a_world %u disagrees with WORLD_SIZE %u\n",
+                    unsigned(arg.a2a_world),
+                    env.world);
+        return 1;
+    }
+    arg.a2a_world = uint8_t(env.world);
+
+    if(env.world > HIPBLASLT_DEVICE_COMM_MAX_WORLD)
+    {
+        std::printf("skipped: WORLD_SIZE %u exceeds %d\n",
+                    env.world,
+                    HIPBLASLT_DEVICE_COMM_MAX_WORLD);
+        return 0;
+    }
+
+    hipblaslt_bench::TcpRendezvous rendezvous(env, kRendezvousTimeoutSec);
+    if(!rendezvous.same_host_group())
+    {
+        std::printf("skipped: ranks span hosts\n");
+        return 0;
+    }
+
+    if(env.rank == 0)
+        std::printf("a2a_world,a2a_extent,a2a_channels,M,N,K\n%u,%lld,%u,%lld,%lld,%lld\n",
+                    unsigned(arg.a2a_world),
+                    static_cast<long long>(arg.a2a_extent),
+                    unsigned(arg.a2a_channels),
+                    static_cast<long long>(arg.M[0]),
+                    static_cast<long long>(arg.N[0]),
+                    static_cast<long long>(arg.K[0]));
+    return 0;
+}

@@ -1,6 +1,8 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
 
+include_guard(GLOBAL)
+
 # Resolves the SDMA-queue dependency chain shared by the fused-A2A sample and
 # the fused-A2A benchmark. Sets HIPBLASLT_SDMA_QUEUE_INCLUDE_DIR in the caller's
 # scope.

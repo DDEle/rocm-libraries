@@ -177,6 +177,37 @@ namespace hipblaslt_bench
         return true;
     }
 
+    // Rank s hands peer p the feature shard [p*shard, (p+1)*shard) of all its
+    // tokens, landing at recv_p[(s*tokens + t)*shard + fw].
+    inline bool check_recv(const hipblaslt_bench::LauncherEnv& env,
+                           const Arguments&                    arg,
+                           RankResources&                      res,
+                           std::vector<hipblasLtBfloat16>&     host)
+    {
+        const int64_t shard = shard_of(arg);
+        const size_t  count = size_t(arg.a2a_world) * arg.N[0] * shard;
+        host.resize(count);
+        CHECK_HIP_RC(hipMemcpy(host.data(),
+                               res.dRecv,
+                               count * sizeof(hipblasLtBfloat16),
+                               hipMemcpyDeviceToHost));
+
+        size_t mismatches = 0;
+        for(uint32_t s = 0; s < arg.a2a_world; ++s)
+            for(int64_t t = 0; t < arg.N[0]; ++t)
+                for(int64_t fw = 0; fw < shard; ++fw)
+                {
+                    const size_t  at      = (size_t(s) * arg.N[0] + size_t(t)) * shard + fw;
+                    const int64_t feature = int64_t(env.rank) * shard + fw;
+                    if(float(host[at]) != expectedD(s, feature, t))
+                        ++mismatches;
+                }
+
+        if(mismatches != 0)
+            std::printf("error: rank %u recv mismatches=%zu\n", env.rank, mismatches);
+        return mismatches == 0;
+    }
+
     inline bool peers_reachable(const hipblaslt_bench::LauncherEnv& env, const Arguments& arg)
     {
         if(env.world == 1)
@@ -438,15 +469,17 @@ namespace hipblaslt_bench
     }
 
     // Successive launches alternate the communicator's flag regions.
-    inline auto make_launch(const Arguments&                        arg,
+    inline auto make_launch(const LauncherEnv&                      env,
+                            const Arguments&                        arg,
                             RankResources&                          res,
                             const hipblasLtMatmulHeuristicResult_t& heur,
                             uint32_t&                               launchCount,
-                            hipblasStatus_t&                        lastStatus)
+                            hipblasStatus_t&                        lastStatus,
+                            std::vector<hipblasLtBfloat16>&         hostRecv)
     {
         // lastStatus is sticky: once a launch fails it must stay failed, so a later
         // successful launch cannot overwrite the record of an earlier one.
-        return [&arg, &res, &heur, &launchCount, &lastStatus](int64_t) {
+        return [&env, &arg, &res, &heur, &launchCount, &lastStatus, &hostRecv](int64_t) {
             const float    alpha = 1.0f, beta = 0.0f;
             const uint32_t channel = launchCount++ % arg.a2a_channels;
 
@@ -475,7 +508,15 @@ namespace hipblaslt_bench
                                                            kWorkspaceSize,
                                                            res.stream);
             if(status != HIPBLAS_STATUS_SUCCESS)
+            {
                 lastStatus = status;
+                return;
+            }
+
+            if(arg.unit_check
+               && !(hipStreamSynchronize(res.stream) == hipSuccess
+                    && check_recv(env, arg, res, hostRecv)))
+                lastStatus = HIPBLAS_STATUS_INTERNAL_ERROR;
         };
     }
 

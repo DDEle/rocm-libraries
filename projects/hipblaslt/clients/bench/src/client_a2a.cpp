@@ -93,9 +93,10 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    uint32_t        launchCount = 0;
-    hipblasStatus_t lastStatus  = HIPBLAS_STATUS_SUCCESS;
-    auto            launch      = make_launch(arg, res, heur, launchCount, lastStatus);
+    uint32_t                        launchCount = 0;
+    hipblasStatus_t                 lastStatus  = HIPBLAS_STATUS_SUCCESS;
+    std::vector<hipblasLtBfloat16>  hostRecv;
+    auto launch = make_launch(env, arg, res, heur, launchCount, lastStatus, hostRecv);
 
     if(arg.timing)
     {
@@ -127,12 +128,18 @@ int main(int argc, char* argv[])
             groupOk = groupOk && perRank[j].ok != 0;
         if(!groupOk)
         {
-            std::printf("error: matmul -> %d\n", int(lastStatus));
+            if(mine.ok != 0)
+                std::printf("error: peer rank failed\n");
+            else
+                std::printf("error: matmul -> %d\n", int(lastStatus));
             return 1;
         }
 
         if(env.rank == 0)
         {
+            if(arg.unit_check)
+                std::printf("note: --verify inflates us\n");
+
             double slowest = perRank[0].median_us;
             for(uint32_t j = 1; j < env.world; ++j)
                 slowest = std::max(slowest, perRank[j].median_us);

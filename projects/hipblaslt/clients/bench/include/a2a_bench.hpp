@@ -7,6 +7,7 @@
 // process, started by an external launcher; identity and rendezvous come from
 // the environment variables torchrun sets.
 
+#include "benchmark_timing.hpp"
 #include "collective_rendezvous.hpp"
 #include "hipblaslt_arguments.hpp"
 
@@ -15,6 +16,7 @@
 
 #include <SdmaQueue.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -442,31 +444,72 @@ namespace hipblaslt_bench
                             uint32_t&                               launchCount,
                             hipblasStatus_t&                        lastStatus)
     {
+        // lastStatus is sticky: once a launch fails it must stay failed, so a later
+        // successful launch cannot overwrite the record of an earlier one.
         return [&arg, &res, &heur, &launchCount, &lastStatus](int64_t) {
             const float    alpha = 1.0f, beta = 0.0f;
             const uint32_t channel = launchCount++ % arg.a2a_channels;
 
-            lastStatus = hipblasLtFusedEpilogueSetAttribute(
+            const hipblasStatus_t attrStatus = hipblasLtFusedEpilogueSetAttribute(
                 res.fused, HIPBLASLT_FUSED_EPILOGUE_COMM_CHANNEL, &channel, sizeof(channel));
-            if(lastStatus != HIPBLAS_STATUS_SUCCESS)
+            if(attrStatus != HIPBLAS_STATUS_SUCCESS)
+            {
+                lastStatus = attrStatus;
                 return;
+            }
 
-            lastStatus = hipblasLtMatmul(res.handle,
-                                         res.mm,
-                                         &alpha,
-                                         res.dA,
-                                         res.lay[0],
-                                         res.dB,
-                                         res.lay[1],
-                                         &beta,
-                                         res.dC,
-                                         res.lay[2],
-                                         res.dD,
-                                         res.lay[3],
-                                         &heur.algo,
-                                         res.workspace,
-                                         kWorkspaceSize,
-                                         res.stream);
+            const hipblasStatus_t status = hipblasLtMatmul(res.handle,
+                                                           res.mm,
+                                                           &alpha,
+                                                           res.dA,
+                                                           res.lay[0],
+                                                           res.dB,
+                                                           res.lay[1],
+                                                           &beta,
+                                                           res.dC,
+                                                           res.lay[2],
+                                                           res.dD,
+                                                           res.lay[3],
+                                                           &heur.algo,
+                                                           res.workspace,
+                                                           kWorkspaceSize,
+                                                           res.stream);
+            if(status != HIPBLAS_STATUS_SUCCESS)
+                lastStatus = status;
         };
+    }
+
+    // Each call is one allgather.
+    inline hipblaslt_bench::CollectiveAgreement
+        make_agreement(hipblaslt_bench::TcpRendezvous& rendezvous, uint32_t world)
+    {
+        hipblaslt_bench::CollectiveAgreement agreement;
+        if(world == 1)
+            return agreement;
+
+        agreement.value = [&rendezvous, world](double mine, hipblaslt_bench::AgreeOp op) {
+            std::vector<double> all(world);
+            if(rendezvous.allgather(&mine, all.data(), sizeof(mine))
+               != HIPBLAS_STATUS_SUCCESS)
+                return mine;
+            double acc = all[0];
+            for(uint32_t j = 1; j < world; ++j)
+                acc = (op == hipblaslt_bench::AgreeOp::Max) ? std::max(acc, all[j])
+                                                            : std::min(acc, all[j]);
+            return acc;
+        };
+        agreement.flag = [&rendezvous, world](bool mine, hipblaslt_bench::AgreeOp op) {
+            const uint8_t        send = mine ? 1 : 0;
+            std::vector<uint8_t> all(world);
+            if(rendezvous.allgather(&send, all.data(), sizeof(send))
+               != HIPBLAS_STATUS_SUCCESS)
+                return mine;
+            bool acc = all[0] != 0;
+            for(uint32_t j = 1; j < world; ++j)
+                acc = (op == hipblaslt_bench::AgreeOp::All) ? (acc && all[j] != 0)
+                                                            : (acc || all[j] != 0);
+            return acc;
+        };
+        return agreement;
     }
 } // namespace hipblaslt_bench

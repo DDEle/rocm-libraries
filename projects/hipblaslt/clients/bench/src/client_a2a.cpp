@@ -50,15 +50,6 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    if(env.rank == 0)
-        std::printf("a2a_world,a2a_extent,a2a_channels,M,N,K\n%u,%lld,%u,%lld,%lld,%lld\n",
-                    unsigned(arg.a2a_world),
-                    static_cast<long long>(arg.a2a_extent),
-                    unsigned(arg.a2a_channels),
-                    static_cast<long long>(arg.M[0]),
-                    static_cast<long long>(arg.N[0]),
-                    static_cast<long long>(arg.K[0]));
-
     const uint8_t reachable = peers_reachable(env, arg) ? 1 : 0;
 
     // Every rank's peer pre-check is gathered before any rank decides to stop.
@@ -106,12 +97,77 @@ int main(int argc, char* argv[])
     hipblasStatus_t lastStatus  = HIPBLAS_STATUS_SUCCESS;
     auto            launch      = make_launch(arg, res, heur, launchCount, lastStatus);
 
-    launch(0);
-    if(hipStreamSynchronize(res.stream) != hipSuccess
-       || lastStatus != HIPBLAS_STATUS_SUCCESS)
+    if(arg.timing)
     {
-        std::printf("error: matmul -> %d\n", int(lastStatus));
-        return 1;
+        hipblaslt_bench::TimingConfig cfg;
+        cfg.adaptive      = false;
+        cfg.iters         = arg.iters;
+        cfg.use_gpu_timer = false;
+
+        hipblaslt_bench::TimingResult result;
+        const auto agreement = make_agreement(rendezvous, env.world);
+        hipblaslt_bench::run_measurement(
+            launch, cfg, nullptr, nullptr, res.stream, result, {}, agreement);
+
+        // The launch status rides the same allgather as the latency so a failure on
+        // any rank is decided by the whole group before anyone acts on median_us.
+        struct LatencyContribution
+        {
+            uint8_t ok;
+            double  median_us;
+        };
+        LatencyContribution mine{lastStatus == HIPBLAS_STATUS_SUCCESS ? uint8_t(1) : uint8_t(0),
+                                 result.median_us};
+        std::vector<LatencyContribution> perRank(env.world);
+        if(rendezvous.allgather(&mine, perRank.data(), sizeof(mine)) != HIPBLAS_STATUS_SUCCESS)
+            return 1;
+
+        bool groupOk = true;
+        for(uint32_t j = 0; j < env.world; ++j)
+            groupOk = groupOk && perRank[j].ok != 0;
+        if(!groupOk)
+        {
+            std::printf("error: matmul -> %d\n", int(lastStatus));
+            return 1;
+        }
+
+        if(env.rank == 0)
+        {
+            double slowest = perRank[0].median_us;
+            for(uint32_t j = 1; j < env.world; ++j)
+                slowest = std::max(slowest, perRank[j].median_us);
+            const double gflops
+                = 2.0 * double(arg.M[0]) * double(arg.N[0]) * double(arg.K[0]) / 1e9;
+
+            std::printf("a2a_world,a2a_extent,a2a_channels,M,N,K,hipblaslt-Gflops,us\n");
+            std::printf("%u,%lld,%u,%lld,%lld,%lld,%g,%g\n",
+                        unsigned(arg.a2a_world),
+                        static_cast<long long>(arg.a2a_extent),
+                        unsigned(arg.a2a_channels),
+                        static_cast<long long>(arg.M[0]),
+                        static_cast<long long>(arg.N[0]),
+                        static_cast<long long>(arg.K[0]),
+                        gflops / slowest * 1e6,
+                        slowest);
+        }
+    }
+    else
+    {
+        if(env.rank == 0)
+            std::printf("a2a_world,a2a_extent,a2a_channels,M,N,K\n%u,%lld,%u,%lld,%lld,%lld\n",
+                        unsigned(arg.a2a_world),
+                        static_cast<long long>(arg.a2a_extent),
+                        unsigned(arg.a2a_channels),
+                        static_cast<long long>(arg.M[0]),
+                        static_cast<long long>(arg.N[0]),
+                        static_cast<long long>(arg.K[0]));
+
+        launch(0);
+        if(hipStreamSynchronize(res.stream) != hipSuccess || lastStatus != HIPBLAS_STATUS_SUCCESS)
+        {
+            std::printf("error: matmul -> %d\n", int(lastStatus));
+            return 1;
+        }
     }
     return 0;
 }

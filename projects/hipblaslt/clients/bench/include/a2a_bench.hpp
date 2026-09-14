@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <string>
 #include <vector>
@@ -45,6 +46,7 @@ namespace hipblaslt_bench
         void*                recvPtrs[HIPBLASLT_DEVICE_COMM_MAX_WORLD] = {};
         hipblasLtSdmaQueue_t queues[HIPBLASLT_DEVICE_COMM_MAX_WORLD]   = {};
         std::vector<std::unique_ptr<TensileLite::Client::SdmaQueue>> ownedQueues;
+        hipblaslt_bench::TcpRendezvous* rendezvous = nullptr;
     };
 
     inline void print_usage(const char* program)
@@ -114,5 +116,221 @@ namespace hipblaslt_bench
             }
         }
         return true;
+    }
+
+#define CHECK_HIP_RC(expr)                                                        \
+    do                                                                            \
+    {                                                                             \
+        const hipError_t _e = (expr);                                             \
+        if(_e != hipSuccess)                                                      \
+        {                                                                         \
+            std::printf("error: %s -> %s\n", #expr, hipGetErrorString(_e));        \
+            return false;                                                         \
+        }                                                                         \
+    } while(0)
+
+#define CHECK_LT_RC(expr)                                                         \
+    do                                                                            \
+    {                                                                             \
+        const hipblasStatus_t _s = (expr);                                        \
+        if(_s != HIPBLAS_STATUS_SUCCESS)                                          \
+        {                                                                         \
+            std::printf("error: %s -> %d\n", #expr, int(_s));                      \
+            return false;                                                         \
+        }                                                                         \
+    } while(0)
+
+    inline int64_t shard_of(const Arguments& arg)
+    {
+        return arg.a2a_extent / arg.a2a_world;
+    }
+
+    // Mirrors the operands fill_operands writes; the two change together.
+    inline float expectedD(uint32_t rank, int64_t feature, int64_t token)
+    {
+        return float((rank + 1) * ((feature % 7) + 1) * ((token % 5) + 1));
+    }
+
+    inline bool fill_operands(const hipblaslt_bench::LauncherEnv& env,
+                              const Arguments&                    arg,
+                              RankResources&                      res)
+    {
+        std::vector<hipblasLtBfloat16> hostA(size_t(arg.K[0]) * arg.M[0], hipblasLtBfloat16(0.0f));
+        std::vector<hipblasLtBfloat16> hostB(size_t(arg.K[0]) * arg.N[0], hipblasLtBfloat16(0.0f));
+
+        for(int64_t f = 0; f < arg.M[0]; ++f)
+            hostA[size_t(f) * arg.K[0]]
+                = hipblasLtBfloat16(float((env.rank + 1) * ((f % 7) + 1)));
+        for(int64_t t = 0; t < arg.N[0]; ++t)
+            hostB[size_t(t) * arg.K[0]] = hipblasLtBfloat16(float((t % 5) + 1));
+
+        CHECK_HIP_RC(hipMemcpy(res.dA,
+                               hostA.data(),
+                               hostA.size() * sizeof(hipblasLtBfloat16),
+                               hipMemcpyHostToDevice));
+        CHECK_HIP_RC(hipMemcpy(res.dB,
+                               hostB.data(),
+                               hostB.size() * sizeof(hipblasLtBfloat16),
+                               hipMemcpyHostToDevice));
+        return true;
+    }
+
+    inline bool setup_rank(const hipblaslt_bench::LauncherEnv& env,
+                           const Arguments&                    arg,
+                           RankResources&                      res)
+    {
+        CHECK_HIP_RC(hipSetDevice(env.local_rank));
+        CHECK_HIP_RC(hipStreamCreate(&res.stream));
+
+        const size_t bytesA    = size_t(arg.K[0]) * arg.M[0] * sizeof(hipblasLtBfloat16);
+        const size_t bytesB    = size_t(arg.K[0]) * arg.N[0] * sizeof(hipblasLtBfloat16);
+        const size_t bytesD    = size_t(arg.M[0]) * arg.N[0] * sizeof(hipblasLtBfloat16);
+        const size_t bytesRecv = size_t(arg.a2a_world) * arg.N[0] * shard_of(arg)
+                                 * sizeof(hipblasLtBfloat16);
+
+        CHECK_HIP_RC(hipMalloc(&res.dA, bytesA));
+        CHECK_HIP_RC(hipMalloc(&res.dB, bytesB));
+        CHECK_HIP_RC(hipMalloc(&res.dC, bytesD));
+        CHECK_HIP_RC(hipMalloc(&res.dD, bytesD));
+        CHECK_HIP_RC(hipMalloc(&res.dRecv, bytesRecv));
+        CHECK_HIP_RC(hipMalloc(&res.workspace, kWorkspaceSize));
+        CHECK_HIP_RC(hipMemset(res.dRecv, 0, bytesRecv));
+
+        // Every queue loops back to this rank's own device.
+        try
+        {
+            const uint32_t srcNode = TensileLite::Client::sdmaNodeIdForDevice(env.local_rank);
+            for(uint32_t j = 0; j < arg.a2a_world; ++j)
+            {
+                res.ownedQueues.push_back(std::make_unique<TensileLite::Client::SdmaQueue>(
+                    srcNode, TensileLite::Client::sdmaSelectEngine(srcNode, srcNode)));
+                const HsaQueueResource& q = res.ownedQueues.back()->queueResource();
+                res.queues[j] = {res.ownedQueues.back()->ringBase(),
+                                 (void*)q.Queue_read_ptr_aql,
+                                 (void*)q.Queue_write_ptr_aql,
+                                 (void*)q.Queue_DoorBell_aql};
+            }
+        }
+        catch(const std::exception& e)
+        {
+            std::printf("error: cannot create an SDMA queue (%s)\n", e.what());
+            return false;
+        }
+
+        CHECK_LT_RC(hipblasLtCreate(&res.handle));
+        CHECK_LT_RC(hipblasLtSetDeviceComm(res.handle,
+                                           env.rank,
+                                           env.world,
+                                           arg.a2a_channels,
+                                           hipblaslt_bench::rendezvous_allgather_trampoline,
+                                           res.rendezvous));
+
+        for(uint32_t j = 0; j < arg.a2a_world; ++j)
+            res.recvPtrs[j] = res.dRecv;
+
+        CHECK_LT_RC(hipblasLtFusedEpilogueCreate(&res.fused));
+        CHECK_LT_RC(hipblasLtFusedEpilogueAdd(res.fused,
+                                              HIPBLASLT_FUSEABLE_EPILOGUE_A2A_PREFIX));
+        CHECK_LT_RC(
+            hipblasLtFusedEpilogueSetAttribute(res.fused,
+                                               HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_SDMA_QUEUES,
+                                               res.queues,
+                                               arg.a2a_world * sizeof(res.queues[0])));
+        CHECK_LT_RC(
+            hipblasLtFusedEpilogueSetAttribute(res.fused,
+                                               HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_RECV_PTRS,
+                                               res.recvPtrs,
+                                               arg.a2a_world * sizeof(res.recvPtrs[0])));
+        CHECK_LT_RC(hipblasLtFusedEpilogueSetAttribute(
+            res.fused,
+            HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_EXTENT,
+            &arg.a2a_extent,
+            sizeof(arg.a2a_extent)));
+        const hipblasLtA2ACompletionMode_t mode = HIPBLASLT_A2A_COMPLETION_IN_KERNEL_FULL;
+        CHECK_LT_RC(hipblasLtFusedEpilogueSetAttribute(
+            res.fused,
+            HIPBLASLT_FUSED_EPILOGUE_A2A_PREFIX_COMPLETION_MODE,
+            &mode,
+            sizeof(mode)));
+
+        CHECK_LT_RC(hipblasLtMatrixLayoutCreate(
+            &res.lay[0], HIP_R_16BF, arg.K[0], arg.M[0], arg.K[0]));
+        CHECK_LT_RC(hipblasLtMatrixLayoutCreate(
+            &res.lay[1], HIP_R_16BF, arg.K[0], arg.N[0], arg.K[0]));
+        CHECK_LT_RC(hipblasLtMatrixLayoutCreate(
+            &res.lay[2], HIP_R_16BF, arg.M[0], arg.N[0], arg.M[0]));
+        CHECK_LT_RC(hipblasLtMatrixLayoutCreate(
+            &res.lay[3], HIP_R_16BF, arg.M[0], arg.N[0], arg.M[0]));
+
+        CHECK_LT_RC(hipblasLtMatmulDescCreate(&res.mm, HIPBLAS_COMPUTE_32F, HIP_R_32F));
+        const hipblasOperation_t opT = HIPBLAS_OP_T, opN = HIPBLAS_OP_N;
+        CHECK_LT_RC(hipblasLtMatmulDescSetAttribute(
+            res.mm, HIPBLASLT_MATMUL_DESC_TRANSA, &opT, sizeof(opT)));
+        CHECK_LT_RC(hipblasLtMatmulDescSetAttribute(
+            res.mm, HIPBLASLT_MATMUL_DESC_TRANSB, &opN, sizeof(opN)));
+        CHECK_LT_RC(hipblasLtMatmulDescSetAttribute(
+            res.mm, HIPBLASLT_MATMUL_DESC_FUSED_EPILOGUE, &res.fused, sizeof(res.fused)));
+
+        CHECK_LT_RC(hipblasLtMatmulPreferenceCreate(&res.pref));
+        CHECK_LT_RC(hipblasLtMatmulPreferenceSetAttribute(
+            res.pref,
+            HIPBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+            &kWorkspaceSize,
+            sizeof(kWorkspaceSize)));
+
+        return fill_operands(env, arg, res);
+    }
+
+    inline bool select_algo(const Arguments&                  arg,
+                            RankResources&                    res,
+                            hipblasLtMatmulHeuristicResult_t& heur)
+    {
+        int algoCount = 0;
+        CHECK_LT_RC(hipblasLtMatmulAlgoGetHeuristic(res.handle,
+                                                    res.mm,
+                                                    res.lay[0],
+                                                    res.lay[1],
+                                                    res.lay[2],
+                                                    res.lay[3],
+                                                    res.pref,
+                                                    1,
+                                                    &heur,
+                                                    &algoCount));
+        return algoCount > 0;
+    }
+
+    // Successive launches alternate the communicator's flag regions.
+    inline auto make_launch(const Arguments&                        arg,
+                            RankResources&                          res,
+                            const hipblasLtMatmulHeuristicResult_t& heur,
+                            uint32_t&                               launchCount,
+                            hipblasStatus_t&                        lastStatus)
+    {
+        return [&arg, &res, &heur, &launchCount, &lastStatus](int64_t) {
+            const float    alpha = 1.0f, beta = 0.0f;
+            const uint32_t channel = launchCount++ % arg.a2a_channels;
+
+            lastStatus = hipblasLtFusedEpilogueSetAttribute(
+                res.fused, HIPBLASLT_FUSED_EPILOGUE_COMM_CHANNEL, &channel, sizeof(channel));
+            if(lastStatus != HIPBLAS_STATUS_SUCCESS)
+                return;
+
+            lastStatus = hipblasLtMatmul(res.handle,
+                                         res.mm,
+                                         &alpha,
+                                         res.dA,
+                                         res.lay[0],
+                                         res.dB,
+                                         res.lay[1],
+                                         &beta,
+                                         res.dC,
+                                         res.lay[2],
+                                         res.dD,
+                                         res.lay[3],
+                                         &heur.algo,
+                                         res.workspace,
+                                         kWorkspaceSize,
+                                         res.stream);
+        };
     }
 } // namespace hipblaslt_bench

@@ -58,5 +58,41 @@ int main(int argc, char* argv[])
                     static_cast<long long>(arg.M[0]),
                     static_cast<long long>(arg.N[0]),
                     static_cast<long long>(arg.K[0]));
+
+    RankResources res;
+    res.rendezvous = &rendezvous;
+    if(!setup_rank(env, arg, res))
+        return 1;
+
+    hipblasLtMatmulHeuristicResult_t heur{};
+    const uint8_t                    found = select_algo(arg, res, heur) ? 1 : 0;
+
+    // Every rank's result is gathered before any rank branches on it.
+    std::vector<uint8_t> allFound(env.world);
+    if(rendezvous.allgather(&found, allFound.data(), sizeof(found)) != HIPBLAS_STATUS_SUCCESS)
+    {
+        std::printf("error: allgather for algo selection failed\n");
+        return 1;
+    }
+    bool groupFound = true;
+    for(uint32_t j = 0; j < env.world; ++j)
+        groupFound = groupFound && allFound[j] != 0;
+    if(!groupFound)
+    {
+        std::printf("skipped: no fused GEMM+A2A solution in the loaded library\n");
+        return 0;
+    }
+
+    uint32_t        launchCount = 0;
+    hipblasStatus_t lastStatus  = HIPBLAS_STATUS_SUCCESS;
+    auto            launch      = make_launch(arg, res, heur, launchCount, lastStatus);
+
+    launch(0);
+    if(hipStreamSynchronize(res.stream) != hipSuccess
+       || lastStatus != HIPBLAS_STATUS_SUCCESS)
+    {
+        std::printf("error: matmul -> %d\n", int(lastStatus));
+        return 1;
+    }
     return 0;
 }

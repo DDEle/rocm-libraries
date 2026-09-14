@@ -59,6 +59,25 @@ int main(int argc, char* argv[])
                     static_cast<long long>(arg.N[0]),
                     static_cast<long long>(arg.K[0]));
 
+    const uint8_t reachable = peers_reachable(env, arg) ? 1 : 0;
+
+    // Every rank's peer pre-check is gathered before any rank decides to stop.
+    std::vector<uint8_t> allReachable(env.world);
+    if(rendezvous.allgather(&reachable, allReachable.data(), sizeof(reachable))
+       != HIPBLAS_STATUS_SUCCESS)
+    {
+        std::printf("error: allgather for peer pre-check failed\n");
+        return 1;
+    }
+    bool groupReachable = true;
+    for(uint32_t j = 0; j < env.world; ++j)
+        groupReachable = groupReachable && allReachable[j] != 0;
+    if(!groupReachable)
+    {
+        std::printf("skipped: peer access unavailable on at least one rank\n");
+        return 0;
+    }
+
     RankResources res;
     res.rendezvous = &rendezvous;
     if(!setup_rank(env, arg, res))

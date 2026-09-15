@@ -110,8 +110,7 @@ int main(int argc, char* argv[])
         hipblaslt_bench::run_measurement(
             launch, cfg, nullptr, nullptr, res.stream, result, {}, agreement);
 
-        // The launch status rides the same allgather as the latency so a failure on
-        // any rank is decided by the whole group before anyone acts on median_us.
+        // The launch status rides the same allgather as the latency.
         struct LatencyContribution
         {
             uint8_t ok;
@@ -170,9 +169,25 @@ int main(int argc, char* argv[])
                         static_cast<long long>(arg.K[0]));
 
         launch(0);
-        if(hipStreamSynchronize(res.stream) != hipSuccess || lastStatus != HIPBLAS_STATUS_SUCCESS)
+        const uint8_t ok = (hipStreamSynchronize(res.stream) == hipSuccess
+                            && lastStatus == HIPBLAS_STATUS_SUCCESS)
+                               ? 1
+                               : 0;
+
+        // Every rank's launch outcome is gathered before any rank decides to stop.
+        std::vector<uint8_t> allOk(env.world);
+        if(rendezvous.allgather(&ok, allOk.data(), sizeof(ok)) != HIPBLAS_STATUS_SUCCESS)
+            return 1;
+
+        bool groupOk = true;
+        for(uint32_t j = 0; j < env.world; ++j)
+            groupOk = groupOk && allOk[j] != 0;
+        if(!groupOk)
         {
-            std::printf("error: matmul -> %d\n", int(lastStatus));
+            if(ok != 0)
+                std::printf("error: peer rank failed\n");
+            else
+                std::printf("error: matmul -> %d\n", int(lastStatus));
             return 1;
         }
     }

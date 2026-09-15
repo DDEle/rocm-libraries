@@ -478,8 +478,7 @@ namespace hipblaslt_bench
                             hipblasStatus_t&                        lastStatus,
                             std::vector<hipblasLtBfloat16>&         hostRecv)
     {
-        // lastStatus is sticky: once a launch fails it must stay failed, so a later
-        // successful launch cannot overwrite the record of an earlier one.
+        // lastStatus is sticky: once a launch fails it must stay failed.
         return [&env, &arg, &res, &heur, &launchCount, &lastStatus, &hostRecv](int64_t) {
             const float    alpha = 1.0f, beta = 0.0f;
             const uint32_t channel = launchCount++ % arg.a2a_channels;

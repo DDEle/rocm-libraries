@@ -43,6 +43,16 @@ int main(int argc, char* argv[])
         return 0;
     }
 
+    // Evaluated identically on every rank, before the rendezvous is entered.
+    if(arg.timing && env.world > 1 && !arg.unit_check && arg.iters > int32_t(arg.a2a_channels))
+    {
+        std::printf("error: --iters %d > --a2a_channels %u with --verify off: raise "
+                    "--a2a_channels to at least --iters, lower --iters, or leave --verify on\n",
+                    arg.iters,
+                    unsigned(arg.a2a_channels));
+        return 1;
+    }
+
     hipblaslt_bench::TcpRendezvous rendezvous(env, kRendezvousTimeoutSec);
     if(!rendezvous.same_host_group())
     {

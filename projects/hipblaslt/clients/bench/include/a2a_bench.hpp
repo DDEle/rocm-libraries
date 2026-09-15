@@ -10,6 +10,7 @@
 #include "benchmark_timing.hpp"
 #include "collective_rendezvous.hpp"
 #include "hipblaslt_arguments.hpp"
+#include "hipblaslt_ostream.hpp"
 
 #include <hip/hip_runtime.h>
 #include <hipblaslt/hipblaslt.h>
@@ -18,7 +19,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -53,21 +53,20 @@ namespace hipblaslt_bench
 
     inline void print_usage(const char* program)
     {
-        std::printf(
-            "Usage: %s <options>\n"
-            "\t-h, --help\t\tShow this help message\n"
-            "\t-m, --m\t\t\tFeature extent (free0), default 18432\n"
-            "\t-n, --n\t\t\tToken extent (free1), default 2048\n"
-            "\t-k, --k\t\t\tBound extent, default 8192\n"
-            "\t--a2a_extent\t\tFeatures taking the A2A path, default 10240\n"
-            "\t--a2a_channels\t\tFlag regions to alternate over, default 2\n"
-            "\t--a2a_world\t\tChecked against WORLD_SIZE; env wins\n"
-            "\t--timing\t\t1 to measure, default 0\n"
-            "\t--iters\t\t\tEnqueues per sample, default 10\n"
-            "\t--verify\t\t1 to check every iteration against the closed form\n"
-            "Rank identity comes from RANK / WORLD_SIZE / LOCAL_RANK /\n"
-            "MASTER_ADDR / MASTER_PORT. With none set the run is single-rank.\n",
-            program);
+        hipblaslt_cout
+            << "Usage: " << program << " <options>\n"
+               "\t-h, --help\t\tShow this help message\n"
+               "\t-m, --m\t\t\tFeature extent (free0), default 18432\n"
+               "\t-n, --n\t\t\tToken extent (free1), default 2048\n"
+               "\t-k, --k\t\t\tBound extent, default 8192\n"
+               "\t--a2a_extent\t\tFeatures taking the A2A path, default 10240\n"
+               "\t--a2a_channels\t\tFlag regions to alternate over, default 2\n"
+               "\t--a2a_world\t\tChecked against WORLD_SIZE; env wins\n"
+               "\t--timing\t\t1 to measure, default 0\n"
+               "\t--iters\t\t\tEnqueues per sample, default 10\n"
+               "\t--verify\t\t1 to check every iteration against the closed form\n"
+               "Rank identity comes from RANK / WORLD_SIZE / LOCAL_RANK /\n"
+               "MASTER_ADDR / MASTER_PORT. With none set the run is single-rank.\n";
     }
 
     inline bool match(const char* arg, const char* shortName, const char* longName)
@@ -126,7 +125,8 @@ namespace hipblaslt_bench
         const hipError_t _e = (expr);                                             \
         if(_e != hipSuccess)                                                      \
         {                                                                         \
-            std::printf("error: %s -> %s\n", #expr, hipGetErrorString(_e));        \
+            hipblaslt_cerr << "error: " << #expr << " -> " << hipGetErrorString(_e) \
+                           << "\n";                                                \
             return false;                                                         \
         }                                                                         \
     } while(0)
@@ -137,7 +137,7 @@ namespace hipblaslt_bench
         const hipblasStatus_t _s = (expr);                                        \
         if(_s != HIPBLAS_STATUS_SUCCESS)                                          \
         {                                                                         \
-            std::printf("error: %s -> %d\n", #expr, int(_s));                      \
+            hipblaslt_cerr << "error: " << #expr << " -> " << int(_s) << "\n";      \
             return false;                                                         \
         }                                                                         \
     } while(0)
@@ -204,7 +204,8 @@ namespace hipblaslt_bench
                 }
 
         if(mismatches != 0)
-            std::printf("error: rank %u recv mismatches=%zu\n", env.rank, mismatches);
+            hipblaslt_cerr << "error: rank " << env.rank << " recv mismatches=" << mismatches
+                           << "\n";
         return mismatches == 0;
     }
 
@@ -216,7 +217,8 @@ namespace hipblaslt_bench
         int visible = 0;
         if(hipGetDeviceCount(&visible) != hipSuccess || visible < int(env.world))
         {
-            std::printf("error: %d device(s) visible, need %u\n", visible, env.world);
+            hipblaslt_cerr << "error: " << visible << " device(s) visible, need " << env.world
+                           << "\n";
             return false;
         }
 
@@ -224,7 +226,7 @@ namespace hipblaslt_bench
         // not an explicit device id.
         if(hipSetDevice(env.local_rank) != hipSuccess)
         {
-            std::printf("error: hipSetDevice(%d) failed\n", env.local_rank);
+            hipblaslt_cerr << "error: hipSetDevice(" << env.local_rank << ") failed\n";
             return false;
         }
 
@@ -237,17 +239,16 @@ namespace hipblaslt_bench
             if(hipDeviceCanAccessPeer(&canAccess, env.local_rank, int(j)) != hipSuccess
                || canAccess == 0)
             {
-                std::printf("error: device %d cannot peer with %u\n", env.local_rank, j);
+                hipblaslt_cerr << "error: device " << env.local_rank << " cannot peer with " << j
+                               << "\n";
                 return false;
             }
 
             const hipError_t e = hipDeviceEnablePeerAccess(int(j), 0);
             if(e != hipSuccess && e != hipErrorPeerAccessAlreadyEnabled)
             {
-                std::printf("error: hipDeviceEnablePeerAccess(%d -> %u) -> %s\n",
-                            env.local_rank,
-                            j,
-                            hipGetErrorString(e));
+                hipblaslt_cerr << "error: hipDeviceEnablePeerAccess(" << env.local_rank << " -> "
+                               << j << ") -> " << hipGetErrorString(e) << "\n";
                 return false;
             }
         }
@@ -294,7 +295,7 @@ namespace hipblaslt_bench
         }
         catch(const std::exception& e)
         {
-            std::printf("error: cannot create an SDMA queue (%s)\n", e.what());
+            hipblaslt_cerr << "error: cannot create an SDMA queue (" << e.what() << ")\n";
             return false;
         }
 
@@ -325,7 +326,7 @@ namespace hipblaslt_bench
         std::vector<HandleContribution> all(env.world);
         if(rendezvous.allgather(&mine, all.data(), sizeof(mine)) != HIPBLAS_STATUS_SUCCESS)
         {
-            std::printf("error: recv-pointer handle allgather failed\n");
+            hipblaslt_cerr << "error: recv-pointer handle allgather failed\n";
             return false;
         }
         bool gotAllHandles = true;
@@ -333,7 +334,7 @@ namespace hipblaslt_bench
             gotAllHandles = gotAllHandles && all[j].ok != 0;
         if(!gotAllHandles)
         {
-            std::printf("error: hipIpcGetMemHandle failed on at least one rank\n");
+            hipblaslt_cerr << "error: hipIpcGetMemHandle failed on at least one rank\n";
             return false;
         }
 
@@ -353,14 +354,14 @@ namespace hipblaslt_bench
         if(rendezvous.allgather(&openedAll, allOpened.data(), sizeof(openedAll))
            != HIPBLAS_STATUS_SUCCESS)
         {
-            std::printf("error: recv-pointer open-result allgather failed\n");
+            hipblaslt_cerr << "error: recv-pointer open-result allgather failed\n";
             return false;
         }
         bool groupOpened = true;
         for(uint32_t j = 0; j < env.world; ++j)
             groupOpened = groupOpened && allOpened[j] != 0;
         if(!groupOpened)
-            std::printf("error: hipIpcOpenMemHandle failed on at least one rank\n");
+            hipblaslt_cerr << "error: hipIpcOpenMemHandle failed on at least one rank\n";
         return groupOpened;
     }
 
@@ -375,7 +376,7 @@ namespace hipblaslt_bench
         if(res.rendezvous->allgather(&ready, allReady.data(), sizeof(ready))
            != HIPBLAS_STATUS_SUCCESS)
         {
-            std::printf("error: rank-readiness allgather failed\n");
+            hipblaslt_cerr << "error: rank-readiness allgather failed\n";
             return false;
         }
         bool groupReady = true;
@@ -383,7 +384,7 @@ namespace hipblaslt_bench
             groupReady = groupReady && allReady[j] != 0;
         if(!groupReady)
         {
-            std::printf("error: rank-local setup failed on at least one rank\n");
+            hipblaslt_cerr << "error: rank-local setup failed on at least one rank\n";
             return false;
         }
 

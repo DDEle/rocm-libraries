@@ -27,6 +27,7 @@ if(HIPBLASLT_ENABLE_GEMM_A2A_FUSION)
     target_sources(hipblaslt-test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/fused_a2a_gtest.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/fused_a2a_peer_fields_gtest.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/fused_a2a_bench_gtest.cpp
     )
 endif()
 

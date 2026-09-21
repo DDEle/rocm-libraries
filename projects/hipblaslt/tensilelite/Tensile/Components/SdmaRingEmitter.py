@@ -41,7 +41,8 @@ assert OFF_recvPtr == OFF_flagPtr + 8, "the SDMA loader's x4 needs flagPtr then 
 # the block base and its queue's byte offset (FusedA2ACounterSentinel.hpp).
 CUR_cachedWptr    = 0  # producer reservation cursor (CAS target)
 CUR_committedWptr = 8  # commit-serialization cursor
-CURSOR_PAIR_BYTES = 16
+# Per-queue stride, one cache line; the pair itself is 16 bytes.
+CURSOR_PAIR_BYTES = 64
 
 class SdmaRingEmitter:
     """Packet-independent SDMA ring producer, emitted as rocisa Modules.

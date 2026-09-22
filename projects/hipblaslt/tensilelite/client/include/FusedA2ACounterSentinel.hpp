@@ -46,9 +46,16 @@ namespace TensileLite
         // reaches both from one base and never needs W.
         constexpr size_t FUSED_A2A_CURSORS_PER_QUEUE = 2;
 
+        // Per-queue stride, one cache line; the pair itself is 16 bytes.
+        // Twinned with CURSOR_PAIR_BYTES in Tensile/Components/SdmaRingEmitter.py.
+        constexpr size_t FUSED_A2A_CURSOR_PAIR_BYTES = 64;
+        static_assert(FUSED_A2A_CURSOR_PAIR_BYTES
+                          >= FUSED_A2A_CURSORS_PER_QUEUE * sizeof(uint64_t),
+                      "the cursor stride must hold the pair");
+
         // Twinned with FUSED_A2A_COUNTER*_OFFSET in Tensile/Components/Signature.py.
         constexpr size_t FUSED_A2A_CURSOR_REGION_BYTES = fusedA2AAlignLine(
-            (size_t)FUSED_A2A_MAX_RANKS * FUSED_A2A_CURSORS_PER_QUEUE * sizeof(uint64_t));
+            (size_t)FUSED_A2A_MAX_RANKS * FUSED_A2A_CURSOR_PAIR_BYTES);
         constexpr size_t FUSED_A2A_COUNTER2_OFFSET = FUSED_A2A_CURSOR_REGION_BYTES;
         constexpr size_t FUSED_A2A_COUNTER3_OFFSET = fusedA2AAlignLine(
             FUSED_A2A_COUNTER2_OFFSET + (size_t)FUSED_A2A_MAX_RANKS * sizeof(uint32_t));

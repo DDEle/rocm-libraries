@@ -36,6 +36,7 @@
 #include "BenchmarkTimer.hpp"
 #include "ClientProblemFactory.hpp"
 #include "DataInitialization.hpp"
+#include "DeviceContext.hpp"
 #include "HardwareMonitorListener.hpp"
 #include "MetaRunListener.hpp"
 #include "ProgressListener.hpp"
@@ -692,16 +693,6 @@ namespace TensileLite
             return hip::GetCurrentDevice();
         }
 
-        hipStream_t GetStream(po::variables_map const& args)
-        {
-            if(args["use-default-stream"].as<bool>())
-                return 0;
-
-            hipStream_t stream;
-            HIP_CHECK_EXC(hipStreamCreate(&stream));
-            return stream;
-        }
-
         std::shared_ptr<MasterSolutionLibrary<ContractionProblemGemm>>
             LoadSolutionLibrary(po::variables_map const& args)
         {
@@ -1060,12 +1051,13 @@ int main(int argc, const char* argv[])
     initTimingBuffer();
     calibrateTimingOverhead();
 
-    std::shared_ptr<Hardware> hardware;
-    hipStream_t              stream;
+    std::shared_ptr<Hardware>      hardware;
+    std::shared_ptr<DeviceContext> device;
     {
         ScopedTimer timer("hip_initialization");
         hardware = GetHardware(args);
-        stream   = GetStream(args);
+        device   = std::make_shared<DeviceContext>(args["device-idx"].as<int>(),
+                                                 args["use-default-stream"].as<bool>());
     }
 
     std::shared_ptr<MasterSolutionLibrary<ContractionProblemGemm>> library;
@@ -1076,13 +1068,12 @@ int main(int argc, const char* argv[])
             throw std::runtime_error("Failed to load solution library");
     }
 
-    TensileLite::hip::SolutionAdapter adapter;
 #if TENSILELITE_CLIENT_ENABLE_ROCPROFSDK
     RocProfiler::getInstance().start();
 #endif
     {
         ScopedTimer timer("code_object_loading");
-        LoadCodeObjects(args, adapter);
+        LoadCodeObjects(args, *device->adapter);
     }
 
     // I-cache rotation: load N extra independent hipModule_t copies of every
@@ -1096,8 +1087,8 @@ int main(int argc, const char* argv[])
             ScopedTimer timer("icache_rotate_extra_copies_loading");
             auto const& filenames = args["code-object"].as<std::vector<std::string>>();
             for(auto const& filename : filenames)
-                HIP_CHECK_EXC(adapter.loadCodeObjectFileExtraCopies(filename,
-                                                                    icacheRotateCopies));
+                HIP_CHECK_EXC(
+                    device->adapter->loadCodeObjectFileExtraCopies(filename, icacheRotateCopies));
             std::cout << "Loaded " << icacheRotateCopies
                       << " extra rotation copies of each --code-object for I-cache test"
                       << " (total = " << (icacheRotateCopies + 1) << " modules)"
@@ -1119,7 +1110,8 @@ int main(int argc, const char* argv[])
 
     {
         ScopedTimer timer("lazy_loading_init");
-        auto result = adapter.initializeLazyLoading(hardware->archName(), libraryDirectory);
+        auto        result
+            = device->adapter->initializeLazyLoading(hardware->archName(), libraryDirectory);
         if(result != hipSuccess)
         {
             std::string str = "Lazy loading failed. (" + std::to_string(int(result)) + ").";
@@ -1148,12 +1140,11 @@ int main(int argc, const char* argv[])
         exit(1);
     }
 
-    std::shared_ptr<DataInitialization> dataInit;
     {
         // Re-seed before data init: HIP runtime init above may consume rand() non-deterministically
         srand(seed);
         ScopedTimer timer("data_init_setup");
-        dataInit = std::make_shared<DataInitialization>(args, problemFactory);
+        device->dataInit = std::make_shared<DataInitialization>(args, problemFactory);
     }
 
     std::shared_ptr<SolutionIterator> solutionIterator;
@@ -1168,7 +1159,7 @@ int main(int argc, const char* argv[])
 
     {
         ScopedTimer timer("listener_setup");
-        listeners.addListener(dataInit);
+        listeners.addListener(device->dataInit);
         listeners.addListener(solutionIterator);
         listeners.addListener(std::make_shared<ProgressListener>(args));
 
@@ -1176,8 +1167,9 @@ int main(int argc, const char* argv[])
         {
             bool hasIcacheFlush
                 = std::any_of(begin(icacheFlushArgs), end(icacheFlushArgs), [](auto i) { return i; });
-            flushTimeMs = hasIcacheFlush ? estimate_flush_kernel_time(stream, gpuTimer) : 0.f;
-            listeners.addListener(std::make_shared<ReferenceValidator>(args, dataInit));
+            flushTimeMs
+                = hasIcacheFlush ? estimate_flush_kernel_time(device->stream, gpuTimer) : 0.f;
+            listeners.addListener(std::make_shared<ReferenceValidator>(args, device->dataInit));
             benchmarkTimer = std::make_shared<BenchmarkTimer>(args, *hardware, flushTimeMs * 1000);
             listeners.addListener(benchmarkTimer);
             listeners.addListener(std::make_shared<HardwareMonitorListener>(args));
@@ -1266,10 +1258,9 @@ int main(int argc, const char* argv[])
                     ScopedTimer timer("pre_problem");
                     listeners.preProblem(problem);
                 }
-                std::shared_ptr<ProblemInputs> inputs;
                 {
                     ScopedTimer timer("gpu_input_preparation");
-                    inputs = dataInit->prepareGPUInputs(problem);
+                    device->inputs = device->dataInit->prepareGPUInputs(problem);
                 }
 
                 size_t warmupInvocations    = listeners.numWarmupRuns();
@@ -1280,8 +1271,8 @@ int main(int argc, const char* argv[])
                 std::vector<std::shared_ptr<ProblemInputs>> inputArr;
                 {
                     ScopedTimer timer("rotating_buffer_preparation");
-                    inputArr = dataInit->prepareRotatingGPUOutput(
-                        maxRotatingBufferNum, problem, inputs, stream);
+                    inputArr = device->dataInit->prepareRotatingGPUOutput(
+                        maxRotatingBufferNum, problem, device->inputs, device->stream);
                     static_cast<void>(hipDeviceSynchronize());
                 }
 
@@ -1303,7 +1294,7 @@ int main(int argc, const char* argv[])
                 // problems reuse the same N.
                 {
                     int icacheArg = args["icache-rotate-copies"].as<int>();
-                    if(icacheArg == -1 && adapter.numRotationModules() == 1)
+                    if(icacheArg == -1 && device->adapter->numRotationModules() == 1)
                     {
                         auto const& filenames
                             = args["code-object"].as<std::vector<std::string>>();
@@ -1351,7 +1342,7 @@ int main(int argc, const char* argv[])
                         {
                             ScopedTimer timer("icache_rotate_extra_copies_loading");
                             for(auto const& filename : filenames)
-                                HIP_CHECK_EXC(adapter.loadCodeObjectFileExtraCopies(
+                                HIP_CHECK_EXC(device->adapter->loadCodeObjectFileExtraCopies(
                                     filename, extras));
                         }
 #if defined(__linux__)
@@ -1402,7 +1393,7 @@ int main(int argc, const char* argv[])
                                 if(resetInput)
                                 {
                                     ScopedTimer timer("gpu_input_reset");
-                                    auto inputs = dataInit->prepareGPUInputs(problem);
+                                    auto inputs = device->dataInit->prepareGPUInputs(problem);
                                     inputArr[0] = inputs;
                                 }
                                 resetInput = true;
@@ -1412,21 +1403,22 @@ int main(int argc, const char* argv[])
                                     ScopedTimer timer("kernel_solving");
                                     for(size_t r = 0; r < inputArr.size(); r++)
                                     {
-                                        auto kernel = useUserArgs
-                                                          ? solution->solveTensileGPU((*problem),
-                                                                                      *inputArr[r],
-                                                                                      *hardware,
-                                                                                      &dUA,
-                                                                                      &dUAHost,
-                                                                                      nullptr,
-                                                                                      0,
-                                                                                      stream)
-                                                          : solution->solve((*problem),
-                                                                            *inputArr[r],
-                                                                            *hardware,
-                                                                            nullptr,
-                                                                            0,
-                                                                            stream);
+                                        auto kernel
+                                            = useUserArgs
+                                                  ? solution->solveTensileGPU((*problem),
+                                                                              *inputArr[r],
+                                                                              *hardware,
+                                                                              &dUA,
+                                                                              &dUAHost,
+                                                                              nullptr,
+                                                                              0,
+                                                                              device->stream)
+                                                  : solution->solve((*problem),
+                                                                    *inputArr[r],
+                                                                    *hardware,
+                                                                    nullptr,
+                                                                    0,
+                                                                    device->stream);
                                         kernels.push_back(kernel);
                                     }
                                 }
@@ -1439,9 +1431,9 @@ int main(int argc, const char* argv[])
                                 // I-cache rotation counter: increments per launchKernels call
                                 // and selects which hipModule_t copy services the next launch.
                                 // numRotationModules()==1 → no rotation (always copy 0).
-                                int  nRotationModules = adapter.numRotationModules();
+                                int  nRotationModules = device->adapter->numRotationModules();
                                 auto rotateAndSelect  = [&]() {
-                                    adapter.selectRotationCopy(
+                                    device->adapter->selectRotationCopy(
                                         (int)(rotationLaunchIdx++ % (size_t)nRotationModules));
                                 };
 
@@ -1450,16 +1442,17 @@ int main(int argc, const char* argv[])
                                     {
                                         ScopedTimer timer("warmup_runs");
                                         listeners.preWarmup();
-                                        HIP_CHECK_EXC(adapter.launchKernels(kernels[0],
-                                                                            stream,
-                                                                            warmupStartEvents[0],
-                                                                            warmupStopEvents[0]));
+                                        HIP_CHECK_EXC(
+                                            device->adapter->launchKernels(kernels[0],
+                                                                           device->stream,
+                                                                           warmupStartEvents[0],
+                                                                           warmupStopEvents[0]));
                                     }
 
                                     {
                                         ScopedTimer timer("validate_warmups");
                                         listeners.validateWarmups(
-                                            inputs, warmupStartEvents, warmupStopEvents);
+                                            device->inputs, warmupStartEvents, warmupStopEvents);
                                     }
 
                                     {
@@ -1467,13 +1460,14 @@ int main(int argc, const char* argv[])
                                         for(int i = 1; i < warmupInvocations; i++)
                                         {
                                             size_t kIdx = i % kernels.size();
-                                            HIP_CHECK_EXC(adapter.launchKernels(kernels[kIdx],
-                                                                                stream,
-                                                                                warmupStartEvents[i],
-                                                                                warmupStopEvents[i]));
+                                            HIP_CHECK_EXC(device->adapter->launchKernels(
+                                                kernels[kIdx],
+                                                device->stream,
+                                                warmupStartEvents[i],
+                                                warmupStopEvents[i]));
                                         }
                                         listeners.postWarmup(
-                                            warmupStartEvents, warmupStopEvents, stream);
+                                            warmupStartEvents, warmupStopEvents, device->stream);
                                     }
                                 }
 
@@ -1482,10 +1476,11 @@ int main(int argc, const char* argv[])
                                 TimingEvents ProfilerStopEvents(1, warmupEventCount);
                                 listeners.preProfiler();
                                 rotateAndSelect();
-                                HIP_CHECK_EXC(adapter.launchKernels(kernels[warmupInvocations % kernels.size()],
-                                                                    stream,
-                                                                    ProfilerStartEvents[0],
-                                                                    ProfilerStopEvents[0]));
+                                HIP_CHECK_EXC(device->adapter->launchKernels(
+                                    kernels[warmupInvocations % kernels.size()],
+                                    device->stream,
+                                    ProfilerStartEvents[0],
+                                    ProfilerStopEvents[0]));
                                 listeners.postProfiler();
 #endif
 
@@ -1504,25 +1499,33 @@ int main(int argc, const char* argv[])
 
                                             {
                                                 ScopedTimer kernelTimer("gpu_kernel_execution");
-                                                listeners.preEnqueues(stream);
+                                                listeners.preEnqueues(device->stream);
 
                                                 for(int j = 0; j < enq; j++)
                                                 {
                                                     size_t kIdx = ((i * enq) + j) % kernels.size();
                                                     rotateAndSelect();
-                                                    HIP_CHECK_EXC(adapter.launchKernels(
-                                                        kernels[kIdx], stream, nullptr, nullptr));
+                                                    HIP_CHECK_EXC(device->adapter->launchKernels(
+                                                        kernels[kIdx],
+                                                        device->stream,
+                                                        nullptr,
+                                                        nullptr));
 
                                                     if(icacheFlush)
                                                     {
-                                                        hipLaunchKernelGGL(
-                                                            flush_icache, flushGridSize, 64, 0, stream);
+                                                        hipLaunchKernelGGL(flush_icache,
+                                                                           flushGridSize,
+                                                                           64,
+                                                                           0,
+                                                                           device->stream);
                                                     }
                                                 }
 
-                                                listeners.postEnqueues(startEvents, stopEvents, stream);
+                                                listeners.postEnqueues(
+                                                    startEvents, stopEvents, device->stream);
                                             }
-                                            listeners.validateEnqueues(inputs, startEvents, stopEvents);
+                                            listeners.validateEnqueues(
+                                                device->inputs, startEvents, stopEvents);
                                         }
 
                                     listeners.postSyncs();

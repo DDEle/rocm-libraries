@@ -42,8 +42,10 @@ namespace TensileLite
     namespace Client
     {
         ReferenceValidator::ReferenceValidator(po::variables_map const&            args,
-                                               std::shared_ptr<DataInitialization> dataInit)
+                                               std::shared_ptr<DataInitialization> dataInit,
+                                               bool                                validateEveryRun)
             : m_dataInit(dataInit)
+            , m_validateEveryRun(validateEveryRun)
         {
             m_elementsToValidate = args["num-elements-to-validate"].as<int>();
             m_printValids        = args["print-valids"].as<bool>();
@@ -155,7 +157,7 @@ namespace TensileLite
 
         bool ReferenceValidator::needMoreRunsInSolution() const
         {
-            if(m_enabled && !m_validatedSolution)
+            if(m_enabled && !m_validateEveryRun && !m_validatedSolution)
                 return true;
 
             return false;
@@ -163,7 +165,7 @@ namespace TensileLite
 
         size_t ReferenceValidator::numWarmupRuns()
         {
-            if(m_enabled && !m_validatedSolution)
+            if(m_enabled && !m_validateEveryRun && !m_validatedSolution)
                 return 1;
 
             return 0;
@@ -219,10 +221,22 @@ namespace TensileLite
                                                  TimingEvents const&            startEvents,
                                                  TimingEvents const&            stopEvents)
         {
-            if(m_enabled && !m_validatedSolution)
+            if(m_enabled && (m_validateEveryRun || !m_validatedSolution))
             {
                 validateSolution(inputs);
                 m_validatedSolution = true;
+            }
+        }
+
+        void ReferenceValidator::validateEnqueues(std::shared_ptr<ProblemInputs> inputs,
+                                                  TimingEvents const&            startEvents,
+                                                  TimingEvents const&            stopEvents)
+        {
+            if(m_enabled && m_validateEveryRun)
+            {
+                validateSolution(inputs);
+                m_validatedSolution = true;
+                m_executedSolution  = true;
             }
         }
 

@@ -29,6 +29,7 @@ target_sources(tensilelite-tests
         "${CMAKE_CURRENT_SOURCE_DIR}/DataInit_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/DeviceContext_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ExactLogicLibrary_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/FusedA2A_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/HardwareMonitor_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/GEMMKernelTest.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/GEMMKernelTest_impl.hpp"

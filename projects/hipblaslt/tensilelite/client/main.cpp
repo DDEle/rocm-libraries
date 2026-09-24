@@ -37,6 +37,8 @@
 #include "ClientProblemFactory.hpp"
 #include "DataInitialization.hpp"
 #include "DeviceContext.hpp"
+#include "FusedA2AListener.hpp"
+#include "FusedA2ARunner.hpp"
 #include "HardwareMonitorListener.hpp"
 #include "MetaRunListener.hpp"
 #include "ProgressListener.hpp"
@@ -82,15 +84,6 @@ namespace TensileLite
 {
     namespace Client
     {
-        // Single-process multi-GPU fused GEMM.A2A entry point.
-        // Defined in FusedA2AClient.cpp. Dispatched per problem when the
-        // fused-gemm-a2a option is set; returns a process exit code.
-        int runFusedA2A(po::variables_map const&                                       args,
-                        std::shared_ptr<MasterSolutionLibrary<ContractionProblemGemm>> library,
-                        std::shared_ptr<Hardware>                                      hardware,
-                        ContractionProblem*                                            problem,
-                        int                                                            runIdx);
-
         __global__ void flush_icache()
         {
             asm __volatile__("s_icache_inv \n\t"
@@ -1119,6 +1112,22 @@ int main(int argc, const char* argv[])
         }
     }
 
+    bool                                        fusedA2A = args["fused-gemm-a2a"].as<bool>();
+    std::vector<std::shared_ptr<DeviceContext>> devices{device};
+    if(fusedA2A)
+    {
+        int world = FusedA2ARunner::worldSize(args);
+        for(int d = 1; d < world; d++)
+        {
+            devices.push_back(
+                std::make_shared<DeviceContext>(d, args["use-default-stream"].as<bool>()));
+            ScopedDevice guard(d);
+            LoadCodeObjects(args, *devices.back()->adapter);
+            HIP_CHECK_EXC(devices.back()->adapter->initializeLazyLoading(hardware->archName(),
+                                                                         libraryDirectory));
+        }
+    }
+
     auto problems        = problemFactory.problems();
     int  firstProblemIdx = args["problem-start-idx"].as<int>();
     int  numProblems     = args["num-problems"].as<int>();
@@ -1145,6 +1154,11 @@ int main(int argc, const char* argv[])
         srand(seed);
         ScopedTimer timer("data_init_setup");
         device->dataInit = std::make_shared<DataInitialization>(args, problemFactory);
+        for(size_t d = 1; d < devices.size(); d++)
+        {
+            ScopedDevice guard(devices[d]->deviceId);
+            devices[d]->dataInit = std::make_shared<DataInitialization>(args, problemFactory);
+        }
     }
 
     std::shared_ptr<SolutionIterator> solutionIterator;
@@ -1155,6 +1169,7 @@ int main(int argc, const char* argv[])
 
     MetaRunListener listeners;
     std::shared_ptr<BenchmarkTimer> benchmarkTimer;
+    std::shared_ptr<FusedA2AListener> fusedListener;
     float                           flushTimeMs{};
 
     {
@@ -1169,7 +1184,13 @@ int main(int argc, const char* argv[])
                 = std::any_of(begin(icacheFlushArgs), end(icacheFlushArgs), [](auto i) { return i; });
             flushTimeMs
                 = hasIcacheFlush ? estimate_flush_kernel_time(device->stream, gpuTimer) : 0.f;
-            listeners.addListener(std::make_shared<ReferenceValidator>(args, device->dataInit));
+            if(fusedA2A)
+            {
+                fusedListener = std::make_shared<FusedA2AListener>(args, devices);
+                listeners.addListener(fusedListener);
+            }
+            else
+                listeners.addListener(std::make_shared<ReferenceValidator>(args, device->dataInit));
             benchmarkTimer = std::make_shared<BenchmarkTimer>(args, *hardware, flushTimeMs * 1000);
             listeners.addListener(benchmarkTimer);
             listeners.addListener(std::make_shared<HardwareMonitorListener>(args));
@@ -1240,18 +1261,13 @@ int main(int argc, const char* argv[])
                 reporters->report(ResultKey::ProblemProgress,
                                   concatenate(problemIdx, "/", lastProblemIdx));
 
-                // Self-contained setup+launch across W devices; skips the
-                // single-GPU path below.
-                if(args["fused-gemm-a2a"].as<bool>())
+                auto* gemm = dynamic_cast<ContractionProblemGemm*>(problem);
+                if(fusedA2A)
                 {
-                    int rc = runFusedA2A(
-                        args, library, hardware, problem, problemIdx - firstProblemIdx);
-                    if(rc != 0)
-                    {
-                        flushTimingBuffer();
-                        return rc;
-                    }
-                    continue;
+                    if(gemm == nullptr)
+                        throw std::runtime_error("[fused-a2a] problem is not a plain GEMM");
+                    FusedA2ARunner::configureProblem(
+                        args, *gemm, (int)devices.size(), problemIdx - firstProblemIdx);
                 }
 
                 {
@@ -1260,7 +1276,11 @@ int main(int argc, const char* argv[])
                 }
                 {
                     ScopedTimer timer("gpu_input_preparation");
-                    device->inputs = device->dataInit->prepareGPUInputs(problem);
+                    for(auto const& ctx : devices)
+                    {
+                        ScopedDevice guard(ctx->deviceId);
+                        ctx->inputs = ctx->dataInit->prepareGPUInputs(problem);
+                    }
                 }
 
                 size_t warmupInvocations    = listeners.numWarmupRuns();
@@ -1384,11 +1404,15 @@ int main(int argc, const char* argv[])
                         ScopedTimer timer("pre_solution");
                         listeners.preSolution(solution.get());
                     }
+                    std::unique_ptr<FusedA2ARunner> runner;
                     if(solutionIterator->runCurrentSolution() && runKernels)
                     {
                         try
                         {
-                            while(listeners.needMoreRunsInSolution())
+                            if(fusedA2A)
+                                runner = std::make_unique<FusedA2ARunner>(
+                                    args, *hardware, *gemm, *solution, devices);
+                            while(!fusedA2A && listeners.needMoreRunsInSolution())
                             {
                                 if(resetInput)
                                 {
@@ -1542,6 +1566,17 @@ int main(int argc, const char* argv[])
                             reporters->report(ResultKey::Validation, "INVALID");
                             reporters->log(LogLevel::Error,
                                            concatenate("Exception occurred: ", err.what(), "\n"));
+                        }
+                        if(runner)
+                        {
+                            int warmups    = listeners.numWarmupRuns();
+                            int iterations = warmups
+                                             + args["num-enqueues-per-sync"].as<int>()
+                                                   * args["num-syncs-per-benchmark"].as<int>();
+                            for(int it = 0; it < iterations; it++)
+                                fusedListener->postIteration(
+                                    it, it >= warmups, runner->launchIteration(it), runner->recv());
+                            benchmarkTimer->addEnqueueTimesUs(fusedListener->latenciesUs());
                         }
                     }
 

@@ -30,6 +30,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <vector>
 
 #include "ProgramOptions.hpp"
 
@@ -93,6 +94,7 @@ namespace TensileLite
             {
                 m_flushTimeUs = timeUs;
             }
+            void addEnqueueTimesUs(std::vector<double> const& timesUs);
 
         private:
             const int    m_numWarmups;
@@ -128,7 +130,8 @@ namespace TensileLite
             using double_nanos  = std::chrono::duration<double, std::nano>;
             using prob_sol_map  = std::map<int, int>;
 
-            double_millis m_timeInSolution;
+            double_millis       m_timeInSolution;
+            std::vector<double> m_timeSamplesUs;
             double_millis m_totalGPUTime;
             double_millis m_currentBestWarmUpTime;
             float         m_flushTimeUs;

@@ -46,7 +46,8 @@ namespace TensileLite
         {
         public:
             ReferenceValidator(po::variables_map const&            args,
-                               std::shared_ptr<DataInitialization> dataInit);
+                               std::shared_ptr<DataInitialization> dataInit,
+                               bool                                validateEveryRun = false);
 
             virtual bool needMoreBenchmarkRuns() const override;
             virtual void preBenchmarkRun() override;
@@ -91,9 +92,7 @@ namespace TensileLite
             }
             virtual void validateEnqueues(std::shared_ptr<ProblemInputs> inputs,
                                           TimingEvents const&            startEvents,
-                                          TimingEvents const&            stopEvents) override
-            {
-            }
+                                          TimingEvents const&            stopEvents) override;
 
             bool validate(ContractionProblemGemm const& problem,
                           ContractionInputs const&      reference,
@@ -124,6 +123,11 @@ namespace TensileLite
 
             virtual int error() const override;
 
+            std::shared_ptr<ProblemInputs> referenceInputs() const
+            {
+                return m_referenceInputs;
+            }
+
         private:
             void allocateResultBuffer(size_t bytes);
 
@@ -140,6 +144,7 @@ namespace TensileLite
             ContractionProblem* m_problem;
 
             bool m_enabled;
+            bool m_validateEveryRun;
 
             int  m_elementsToValidate;
             bool m_printValids;

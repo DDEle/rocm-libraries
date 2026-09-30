@@ -32,6 +32,7 @@
 #include <Tensile/hip/HipUtils.hpp>
 
 #include "ClientProblemFactory.hpp"
+#include "DeviceContext.hpp"
 #include "Rotating.hpp"
 
 #include <mxDataGen.hpp>
@@ -919,6 +920,7 @@ namespace TensileLite
                    && needsSolutionDependentMXPreswizzle(*m_currentGemmProblem,
                                                          m_currentSolution))
                 {
+                    ScopedDevice device(m_deviceId);
                     initializeMXData(*m_currentGemmProblem);
                     copyValidToGPUBuffer(*m_currentGemmProblem);
                     copyInputs(m_gpuPtrs,
@@ -1181,6 +1183,8 @@ namespace TensileLite
             int64_t                         m_rotatingBuffer = 0;
             std::shared_ptr<RotatingMemory> m_rm;
             int32_t                         m_rotatingMode = 0;
+
+            int m_deviceId = 0;
 
             ContractionSolution const*  m_currentSolution   = nullptr;
             ContractionProblemGemm const* m_currentGemmProblem = nullptr;

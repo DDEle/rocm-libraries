@@ -20,13 +20,16 @@ target_sources(tensilelite-tests
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/AlmostEqual_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/BenchmarkTimer_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/CachingLibrary_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ContractionSelectionLibrary_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/CuCount_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/CustomKernel_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/DataTypes_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/DataInit_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/DeviceContext_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ExactLogicLibrary_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/FusedA2A_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/HardwareMonitor_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/GEMMKernelTest.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/include/GEMMKernelTest_impl.hpp"
@@ -39,6 +42,7 @@ target_sources(tensilelite-tests
         "${CMAKE_CURRENT_SOURCE_DIR}/PciChipId_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Predicates_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/PredictionLibrary_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ReferenceValidator_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ReferenceFastPath_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/RangeLibrary_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ResultComparison_test.cpp"
@@ -62,6 +66,10 @@ if(NOT HIPBLASLT_ENABLE_YAML)
             # msgpack BIN, and mapRawBytes has no YAML implementation.
             "${CMAKE_CURRENT_SOURCE_DIR}/IndexedLibraryLoad_test.cpp"
     )
+endif()
+
+if(TENSILELITE_ENABLE_SDMA AND NOT WIN32)
+    target_compile_definitions(tensilelite-tests PRIVATE TENSILELITE_ENABLE_SDMA)
 endif()
 
 target_include_directories(tensilelite-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")

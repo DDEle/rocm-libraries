@@ -20,13 +20,16 @@ target_sources(tensilelite-tests
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/AlmostEqual_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/BenchmarkTimer_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/CachingLibrary_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ContractionSelectionLibrary_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/CuCount_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/CustomKernel_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/DataTypes_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/DataInit_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/DeviceContext_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ExactLogicLibrary_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/FusedA2A_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/HardwareMonitor_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/HybridAssignmentPolicy_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../clients/common/src/hipblaslt_bench_options.cpp"
@@ -43,6 +46,7 @@ target_sources(tensilelite-tests
         "${CMAKE_CURRENT_SOURCE_DIR}/PersistentExecutionPolicySerialization_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Predicates_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/PredictionLibrary_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ReferenceValidator_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ReferenceFastPath_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/RangeLibrary_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ResultComparison_test.cpp"
@@ -73,6 +77,10 @@ endif()
 if(HIPBLASLT_ENABLE_YAML)
     target_include_directories(tensilelite-tests PRIVATE ${LLVM_INCLUDE_DIRS})
     target_link_libraries(tensilelite-tests PRIVATE LLVMObjectYAML)
+endif()
+
+if(TENSILELITE_ENABLE_SDMA AND NOT WIN32)
+    target_compile_definitions(tensilelite-tests PRIVATE TENSILELITE_ENABLE_SDMA)
 endif()
 
 target_include_directories(tensilelite-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")

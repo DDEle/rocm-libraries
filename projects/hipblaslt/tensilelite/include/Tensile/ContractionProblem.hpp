@@ -370,6 +370,7 @@ namespace TensileLite
             MXSA          = 15,
             MXSB          = 16,
             GATE_RESIDUAL = 17,
+            A2A_RECV      = 18,
             TENSOR_COUNT
         };
 
@@ -1263,6 +1264,19 @@ namespace TensileLite
             m_fusedA2AWorld = world;
         }
 
+        // recv[W][N][AM/W] in D's type.
+        void setA2ARecv()
+        {
+            const size_t world  = m_fusedA2AWorld;
+            const size_t nShard = m_fusedA2AExtent / world;
+            const size_t tokens = freeSizeB(0);
+            m_tensors[ContractionProblemGemm::TENSOR::A2A_RECV]
+                = {"a2aRecv",
+                   m_tensors[ContractionProblemGemm::TENSOR::D].dataType(),
+                   {nShard, tokens, world},
+                   {1, nShard, nShard * tokens}};
+        }
+
         size_t mxBlockA() const
         {
             return m_mxBlockA;
@@ -1705,6 +1719,7 @@ namespace TensileLite
         void*                           fusedA2ACounter = nullptr;
         uint32_t                        fusedA2AMyRank  = 0;
         uint32_t                        fusedA2ADrain   = 0;
+        void*                           a2aRecv         = nullptr;
 
         // Workspace
         void* ws = nullptr;

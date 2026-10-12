@@ -3065,6 +3065,7 @@ namespace TensileLite
             inputs->Synchronizer  = (void*)ptrs[ContractionProblemGemm::TENSOR::Synchronizer];
             inputs->amaxD         = (void*)ptrs[ContractionProblemGemm::TENSOR::AMAXD];
             inputs->compressed    = (void*)ptrs[ContractionProblemGemm::TENSOR::COMPRESSED];
+            inputs->a2aRecv       = (void*)ptrs[ContractionProblemGemm::TENSOR::A2A_RECV];
 
             inputs->batchA    = (void**)batchPtrs[ContractionProblemGemm::TENSOR::A];
             inputs->batchB    = (void**)batchPtrs[ContractionProblemGemm::TENSOR::B];
@@ -3303,6 +3304,11 @@ namespace TensileLite
                 rotatingSize += problem.tensors()[ContractionProblemGemm::TENSOR::METADATA]
                                     .totalAllocatedBytes();
             }
+            if(inputs.a2aRecv != nullptr)
+            {
+                rotatingSize += problem.tensors()[ContractionProblemGemm::TENSOR::A2A_RECV]
+                                    .totalAllocatedBytes();
+            }
             return rotatingSize;
         }
 
@@ -3384,6 +3390,12 @@ namespace TensileLite
                 newInputs.metadata,
                 rotatingPtr,
                 problem.tensors()[ContractionProblemGemm::TENSOR::METADATA].totalAllocatedBytes(),
+                offset,
+                stream);
+            newInputs.a2aRecv = copyRotatingInput(
+                newInputs.a2aRecv,
+                rotatingPtr,
+                problem.tensors()[ContractionProblemGemm::TENSOR::A2A_RECV].totalAllocatedBytes(),
                 offset,
                 stream);
             for(auto t : {ContractionProblemGemm::TENSOR::D,

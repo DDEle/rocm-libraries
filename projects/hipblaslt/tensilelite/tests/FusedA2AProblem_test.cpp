@@ -71,3 +71,14 @@ TEST(FusedA2AProblem, ShapePredicate)
         = ContractionProblemGemm::GEMM(false, true, 3000, 500, 100, 3000, 500, 3000, 0.0, false, 1);
     EXPECT_TRUE(mt256(plain));
 }
+
+TEST(FusedA2AProblem, RecvIsWorldByTokensByShard)
+{
+    auto p = fusedProblem(3072, 511, 3072, 4, 2048);
+    EXPECT_EQ(p.tensors()[ContractionProblemGemm::TENSOR::A2A_RECV].totalAllocatedElements(), 0u);
+    p.setA2ARecv();
+    auto const& recv = p.tensors()[ContractionProblemGemm::TENSOR::A2A_RECV];
+    EXPECT_EQ(recv.getName(), "a2aRecv");
+    EXPECT_EQ(recv.dataType(), rocisa::DataType::BFloat16);
+    EXPECT_EQ(recv.totalAllocatedElements(), size_t(4) * 511 * 512);
+}

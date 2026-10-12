@@ -307,7 +307,7 @@ class TestA2AGemmElection:
         src = self._src()
         tick = re.escape(self._ticket(src))
         assert re.search(
-            r"s_add_u32 s\d+, s\d+, %s[^\n]*// flag slot" % tick, src
+            r"s_lshl_b32 s\d+, %s, 2[^\n]*// i \* 4" % tick, src
         ), "the flag slot is not indexed by the election ticket"
         assert re.search(
             r"s_add_u32 s\d+, %s, 1[^\n]*// gathered segment" % tick, src
@@ -318,9 +318,9 @@ class TestA2AGemmElection:
 
         src = self._src()
         assert re.search(
-            r"s_sub_u32 s(\d+), s(\d+), s\1[^\n]*// queue 0's group start[^\n]*\n"
+            r"s_sub_u32 s(\d+), s(\d+), s\d+[^\n]*// queue 0's group start[^\n]*\n"
             r"s_add_u32 s\1, s\1, %s\b[^\n]*\n"
-            r"s_sub_u32 s(\d+), s\1, s\3[^\n]*\n"
+            r"s_sub_u32 s(\d+), s\1, s\d+[^\n]*\n"
             r"s_cmp_gt_i32 s\1, s\2[^\n]*\n"
             r"s_cselect_b32 s\1, s\3, s\1\b" % re.escape(self._ticket(src)),
             src,
@@ -439,43 +439,44 @@ class TestA2AGemmEnqueueLoops:
         body = self._packing_pass(self._src())
         rsv = re.search(r"^label_sdma_reserve_loop\w*:", body, re.M)
         assert rsv, "no reserve loop inside the packing pass"
-        assert "// reservation = count" in body[: rsv.start()], (
+        assert "// reservation = packets" in body[: rsv.start()], (
             "the reservation size is computed outside the packing pass"
         )
 
-    def test_packet_loop_runs_once_per_block(self):
+    def test_each_store_scans_every_group(self):
         import re
 
         body = self._packing_pass(self._src())
         m = re.search(
-            r"s_mov_b32 s(\d+), s\[sgprA2ABlockCount\][^\n]*\n"
-            r"v_readfirstlane_b32 s\d+, v\d+[^\n]*\n"
+            r"s_sub_u32 s(\d+), s\[sgprA2AShardCounter\], 1[^\n]*// W - 1\n"
+            r"(?:[^\n]*\n)*?"
+            r"label_a2a_store_loop\w*:[^\n]*\n"
+            r"(?:[^\n]*\n)*?"
+            r"s_mov_b32 s(\d+), s\1[^\n]*// W-1 groups\n"
             r"label_a2a_group_loop\w*:",
             body,
         )
-        assert m, "the block counter is not seeded from A2ABlockCount before the group loop"
+        assert m, "the group scan is not seeded with W-1 groups per store"
         assert re.search(
-            r"s_sub_u32 s%s, s%s, 1[^\n]*// one block placed" % (m.group(1), m.group(1)),
+            r"s_sub_u32 s%s, s%s, 1[^\n]*// one group scanned" % (m.group(2), m.group(2)),
             body,
-        ), "the block counter does not count one block at a time"
+        ), "the group scan does not count one group at a time"
 
     def test_reservation_counts_one_atomic_per_group(self):
         import re
 
-        from Tensile.Components.SdmaPacketEmitter import (ATOMIC_PACKET_DWORDS,
-                                                          COPY_PACKET_DWORDS)
+        from Tensile.Components.SdmaPacketEmitter import PADDED_PACKET_DWORDS
 
         body = self._packing_pass(self._src())
         m = re.search(
             r"s_sub_u32 s(\d+), s\[sgprA2AShardCounter\], 1[^\n]*\n"
             r"s_min_u32 s\1, s\1, s\[sgprA2ABlockCount\][^\n]*\n"
-            r"s_mul_i32 s\1, s\1, %d[^\n]*\n"
-            r"s_mul_i32 s(\d+), s\[sgprA2ABlockCount\], %d[^\n]*\n"
-            r"s_add_u32 s\1, s\1, s\2"
-            % (ATOMIC_PACKET_DWORDS * 4, COPY_PACKET_DWORDS * 4),
+            r"s_add_u32 s\1, s\1, s\[sgprA2ABlockCount\][^\n]*\n"
+            r"s_lshl_b32 s\1, s\1, %d\b"
+            % ((PADDED_PACKET_DWORDS * 4).bit_length() - 1),
             body,
         )
-        assert m, "the reservation is not count COPYs + min(W-1, count) ATOMICs"
+        assert m, "the reservation is not count COPYs + min(W-1, count) ATOMICs, one slot each"
 
     def test_the_submit_ends_the_packing_pass(self):
         body = self._packing_pass(self._src())
@@ -505,62 +506,56 @@ class TestA2AGemmRoundGroupOrder:
         assert head and tail, "no a2a packing pass in the emitted kernel"
         return src[head.end() : tail.start()]
 
-    def test_copy_bases_step_a_whole_group(self):
+    def test_copy_blocks_step_a_whole_group(self):
         import re
 
         assert re.search(
-            r"s_sub_u32 s(\d+), s\[sgprA2AShardCounter\], 1[^\n]*\n"
-            r"s_mul_i32 s(\d+), s\2, s\1[^\n]*\n"
-            r"s_sub_u32 s\d+, s\d+, s\2[^\n]*// step back W-1 blocks",
+            r"v_mul_lo_u32 v(\d+), v(\d+), s(\d+)[^\n]*// local \* \(W-1\)\n"
+            r"v_sub_u32 v\1, s\d+, v\1[^\n]*// block = g - local\*\(W-1\)",
             self._packing_pass(self._src()),
-        ), "the copy bases walk consecutive blocks instead of one round's group"
+        ), "a group's blocks are not W-1 apart"
 
-    def test_flag_address_steps_a_whole_group(self):
+    def test_flag_row_is_the_group_s_lowest_block(self):
         import re
 
         assert re.search(
-            r"s_sub_u32 s(\d+), s\[sgprA2AShardCounter\], 1[^\n]*\n"
-            r"s_mul_i32 s\1, s\1, s\1[^\n]*\n"
-            r"s_lshl_b32 s\1, s\1, 2[^\n]*\n"
-            r"s_sub_u32 s\d+, s\d+, s\1[^\n]*// step back W-1 blocks",
+            r"s_sub_u32 s(\d+), s(\d+), 1[^\n]*// n - 1\n"
+            r"s_mul_i32 s\1, s\1, s\d+[^\n]*\n"
+            r"s_sub_u32 s\1, s\d+, s\1[^\n]*// bLast",
             self._packing_pass(self._src()),
-        ), "the flag address walks consecutive blocks instead of one round's group"
+        ), "the ATOMIC does not target the group's last block"
 
-    def test_the_packet_loop_stops_at_the_batch_floor(self):
+    def test_group_length_counts_blocks_down_to_the_batch_floor(self):
         import re
 
         assert re.search(
-            r"s_sub_u32 s(\d+), s\1, s\[sgprA2AShardCounter\][^\n]*\n"
-            r"s_add_u32 s\1, s\1, 1[^\n]*\n"
-            r"s_cmp_ge_i32 s\1, s\[sgprA2ABlockLo\][^\n]*\n"
-            r"s_cbranch_scc1 label_a2a_packet_loop",
+            r"s_sub_u32 s(\d+), s\d+, s\d+[^\n]*// bHi - g\n"
+            r"s_cmp_le_u32 s\1, s\d+[^\n]*\n"
+            r"s_addc_u32 s\1, s\d+, 0[^\n]*// n = a \+ \(bHi - g <= r\)",
             self._packing_pass(self._src()),
-        ), "the group does not end at the batch's first block"
+        ), "the group length is not count // (W-1), plus one for the top r groups"
 
-    def test_empty_groups_are_branched_over(self):
+    def test_empty_groups_place_no_atomic(self):
         import re
 
         assert re.search(
-            r"label_a2a_group_loop\w*:[^\n]*\n"
-            r"s_cmp_lt_i32 s\d+, s\[sgprA2ABlockLo\][^\n]*\n"
-            r"s_cbranch_scc1 label_a2a_group_next",
+            r"s_add_u32 s(\d+), s(\d+), 1[^\n]*// n COPYs \+ the ATOMIC\n"
+            r"s_cmp_eq_u32 s\2, 0[^\n]*\n"
+            r"s_cselect_b32 s\1, 0, s\1",
             self._packing_pass(self._src()),
-        ), "a group holding no block still places packets"
+        ), "a group holding no block still places its ATOMIC"
 
-    def test_the_atomic_is_placed_once_per_group(self):
+    def test_the_atomic_follows_the_group_s_copies(self):
         import re
 
         body = self._packing_pass(self._src())
-        head = re.search(r"^label_a2a_packet_loop\w*:", body, re.M)
-        tail = re.search(r"^s_cbranch_scc1 label_a2a_packet_loop\w*", body, re.M)
-        nxt = re.search(r"^label_a2a_group_next\w*:", body, re.M)
-        assert head and tail and nxt, "no packet loop / group-next in the packing pass"
-        assert body[head.end() : tail.start()].count("(packet base)") == 1, (
-            "the packet loop places more than the block's COPY"
+        m = re.search(
+            r"v_sub_u32 v\d+, s\d+, v\d+[^\n]*// 0 on the ATOMIC\n"
+            r"v_cndmask_b32 v(\d+), v\1, v\d+, vcc",
+            body,
         )
-        assert body[tail.end() : nxt.start()].count("(packet base)") == 1, (
-            "the group's ATOMIC is not placed once after its last block"
-        )
+        assert m, "the packet after the group's n COPYs is not marked as its ATOMIC"
+        assert re.search(r"v_cmp_eq_u32 vcc, 0, v%s[^\n]*// ATOMIC\?" % m.group(1), body)
 
     def test_one_reservation_and_one_doorbell_cover_every_group(self):
         body = self._packing_pass(self._src())
@@ -608,40 +603,56 @@ class TestA2AGemmPacketBody:
         assert head and tail, "no a2a packing pass in the emitted kernel"
         return src[head.end() : tail.start()]
 
-    def _packet_loop_body(self, src):
-        import re
-
-        head = re.search(r"^label_a2a_packet_loop\w*:", src, re.M)
-        tail = re.search(r"^s_cbranch_scc1 label_a2a_packet_loop\w*", src, re.M)
-        assert head and tail, "no a2a packet loop in the emitted kernel"
-        return src[head.end() : tail.start()]
-
-    def test_both_packets_share_one_register_block(self):
-        import re
-
-        body = self._packet_loop_body(self._src())
-        copy = re.search(r"s_mov_b32 s(\d+), 0x\w+[^\n]*SUBWIN DW0", body)
-        atom = re.search(r"s_mov_b32 s(\d+), 0x\w+[^\n]*ATOMIC DW0", body)
-        assert copy and atom, "the COPY + ATOMIC pair is not emitted"
-        assert copy.group(1) == atom.group(1), "the two packets use different blocks"
-
-    def test_tail_block_row_count_is_clamped(self):
+    def test_every_packet_is_one_padded_slot(self):
         import re
 
         body = self._packing_pass(self._src())
-        pkt = re.search(r"^label_a2a_packet_loop\w*:", body, re.M)
-        assert pkt, "no packet loop inside the packing pass"
+        assert body.count("buffer_store_dwordx4") == 1, "the packets are not one vector store"
+        assert "s_store_dwordx4" not in body, "a packet is still written with scalar stores"
+        m = re.search(r"^buffer_store_dwordx4 v\[\d+:\d+\], v(\d+), ", body, re.M)
+        assert m, "no buffer_store_dwordx4 in the packing pass"
         assert re.search(
-            r"s_min_u32 s\d+, s\d+, %d\b" % self._MT_TOKEN, body[: pkt.start()]
-        ), "rect_y is not clamped against the macro tile before the packet loop"
+            r"v_lshlrev_b32 v%s, 4, v\d+[^\n]*// lane's dwordx4 offset" % m.group(1), body
+        ), "each lane does not write its own 16 bytes"
 
-    def test_row_count_saturates_after_the_tail_block(self):
+    def test_each_slot_tail_is_one_burst_nop(self):
+        from Tensile.Components.SdmaPacketEmitter import (ATOMIC_PACKET_DWORDS,
+                                                          COPY_PACKET_DWORDS,
+                                                          PADDED_PACKET_DWORDS)
+
+        body = self._packing_pass(self._src())
+        for n in (COPY_PACKET_DWORDS, ATOMIC_PACKET_DWORDS):
+            header = (PADDED_PACKET_DWORDS - n - 1) << 16
+            assert "v_mov_b32 v" in body and ", 0x%x " % header in body, (
+                "no NOP header skipping the %d-dword packet's tail" % n
+            )
+
+    def test_lanes_past_the_last_packet_fall_outside_the_srd(self):
+        import re
+
+        body = self._packing_pass(self._src())
+        size = re.search(r"s_lshl_b32 (s\d+), \1, \d+[^\n]*// reservation = packets", body)
+        assert size, "no reservation size in the packing pass"
+        assert re.search(
+            r"s_mov_b32 s\d+, %s[^\n]*// num_records = reservation" % size.group(1), body
+        ), "the store SRD's num_records is not the reservation"
+
+    def test_ring_stores_write_through_and_drain_before_the_wptr(self):
+        body = self._packing_pass(self._src())
+        store = body.index("buffer_store_dwordx4")
+        assert "sc0 sc1" in body[store : body.index("\n", store)]
+        wait = body.index("s_waitcnt vmcnt(0)", store)
+        assert wait < body.index("store wptr = pending"), (
+            "the doorbell may reach the engine ahead of the vector-stored packets"
+        )
+
+    def test_row_count_is_clamped_per_block(self):
         import re
 
         assert re.search(
-            r"v_mov_b32 v\d+, %d\b" % self._MT_TOKEN,
-            self._packet_loop_body(self._src()),
-        ), "rect_y never settles at the full macro tile inside the packet loop"
+            r"v_min_i32 v\d+, %d, v\d+[^\n]*// rect_y" % self._MT_TOKEN,
+            self._packing_pass(self._src()),
+        ), "rect_y is not clamped against the macro tile"
 
     def test_copy_source_is_the_peer_input_pointer(self):
         from Tensile.Components.SdmaRingEmitter import OFF_recvPtr

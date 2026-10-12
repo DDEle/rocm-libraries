@@ -292,6 +292,26 @@ class SdmaRingEmitter:
         rebuild starts with an s_mov, which breaks the clause. A wait here would
         only serialize the submit.
         """
+        addrS = self.emitPlacePadding(module, w, peerGroupS, pendingWptrS, offsetS)
+        for i, width in self._packetStoreWidths(packetDwordsS, numDwords):
+            op = {1: SStoreB32, 2: SStoreB64, 4: SStoreB128}[width]
+            src = sgpr(packetDwordsS + i) if width == 1 else sgpr(packetDwordsS + i, width)
+            module.add(op(
+                src=src, base=sgpr(addrS, 2), soffset=hex(i * 4),
+                smem=SMEMModifiers(glc=True, isStore=True),
+                comment="ring[base + %d] = packet dword%s"
+                        % (i, "" if width == 1 else "s %d..%d" % (i, i + width - 1))))
+        # pending += numDwords*4 (packet size).
+        module.add(SAddU32(dst=sgpr(pendingWptrS + 0), src0=sgpr(pendingWptrS + 0), src1=numDwords * 4,
+                           comment="pending += packet size"))
+        module.add(SAddCU32(dst=sgpr(pendingWptrS + 1), src0=sgpr(pendingWptrS + 1), src1=0, comment="pending hi carry"))
+        w.sgprPool.checkIn(addrS)
+
+    def emitPlacePadding(self, module, w, peerGroupS, pendingWptrS, offsetS):
+        """Write `offsetS` bytes of zero-padding (NOPs) into the ring and advance
+        pendingWptrS past them. Returns a checked-out 2-ALIGNED SGPR pair holding
+        queueBuf + WrapIntoRing(pending); the caller checks it in.
+        """
         queueBufPtrS = w.sgprPool.checkOutAligned(2, 2, tag="sdma_pp_qbuf", preventOverflow=False)
         module.add(self._peerLoad(SLoadB64, sgpr(queueBufPtrS, 2), peerGroupS, OFF_queueBuf,
                                   "load queueBuf pointer"))
@@ -329,30 +349,16 @@ class SdmaRingEmitter:
         module.add(SCBranchSCC0(labelName=padLoop.getLabelName(), comment="more padding"))
         module.add(padDone)
 
-        # ---- packet: store numDwords packet dwords at WrapIntoRing(pending). ----
-        # Recompute base after padding advanced pending. numDwords is compile-time,
-        # so unroll (one warp writes <=64).
+        # ---- packet base: WrapIntoRing(pending) after the padding. ----
         module.add(SAndB32(dst=sgpr(wrapS), src0=sgpr(pendingWptrS + 0), src1=self.ringMask,
                            comment="WrapIntoRing(pending) (packet base)"))
         self._emitRingByteAddr(module, addrS, queueBufPtrS, wrapS)
-        for i, width in self._packetStoreWidths(packetDwordsS, numDwords):
-            op = {1: SStoreB32, 2: SStoreB64, 4: SStoreB128}[width]
-            src = sgpr(packetDwordsS + i) if width == 1 else sgpr(packetDwordsS + i, width)
-            module.add(op(
-                src=src, base=sgpr(addrS, 2), soffset=hex(i * 4),
-                smem=SMEMModifiers(glc=True, isStore=True),
-                comment="ring[base + %d] = packet dword%s"
-                        % (i, "" if width == 1 else "s %d..%d" % (i, i + width - 1))))
-        # pending += numDwords*4 (packet size).
-        module.add(SAddU32(dst=sgpr(pendingWptrS + 0), src0=sgpr(pendingWptrS + 0), src1=numDwords * 4,
-                           comment="pending += packet size"))
-        module.add(SAddCU32(dst=sgpr(pendingWptrS + 1), src0=sgpr(pendingWptrS + 1), src1=0, comment="pending hi carry"))
 
-        w.sgprPool.checkIn(addrS)
         w.sgprPool.checkIn(zeroS)
         w.sgprPool.checkIn(wrapS)
         w.sgprPool.checkIn(cntS)
         w.sgprPool.checkIn(queueBufPtrS)
+        return addrS
 
     @staticmethod
     def _packetStoreWidths(baseS, numDwords):

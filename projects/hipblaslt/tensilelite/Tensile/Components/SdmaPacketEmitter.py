@@ -47,6 +47,18 @@ SDMA_OP_ATOMIC         = 10
 SDMA_ATOMIC_ADD_RTN_32 = 15
 ATOMIC_PACKET_DWORDS   = 8
 
+# A packet's ring slot when its tail is one burst NOP.
+PADDED_PACKET_DWORDS = 16
+assert max(COPY_PACKET_DWORDS, ATOMIC_PACKET_DWORDS) < PADDED_PACKET_DWORDS
+
+SDMA_OP_NOP = 0
+
+def burstNopHeader(dwords):
+    """NOP header that, with the `dwords - 1` dwords after it, is skipped as
+    one packet (COUNT field [29:16])."""
+    assert 1 <= dwords <= 0x4000
+    return SDMA_OP_NOP | (((dwords - 1) & 0x3FFF) << 16)
+
 # The packet's addressing granularity, header field [31:29].  Only the 16-byte
 # encoding is hardware-validated; the field being 3 bits wide is not evidence
 # that every encoding works, hence the allow-list rather than a range check.

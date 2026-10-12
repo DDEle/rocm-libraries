@@ -324,6 +324,10 @@ def getBuildClientLibraryScript(buildPath, libraryLogicPath, cxxCompiler, target
   if globalParameters["DisableAsmComments"]:
     callCreateLibraryCmd += " --disable-asm-comments"
 
+  if any((LibraryIO.rawLibraryLogic(LibraryIO.readYAML(f))[4] or {}).get("FusedGemmA2A", False)
+         for f in glob(os.path.join(libraryLogicPath, "*.yaml"))):
+    callCreateLibraryCmd += " --enable-gemm-a2a-fusion"
+
   callCreateLibraryCmd += " --architecture=" + targetGfx
   callCreateLibraryCmd += " --code-object-version=" + globalParameters["CodeObjectVersion"]
   callCreateLibraryCmd += " --cxx-compiler=" + cxxCompiler

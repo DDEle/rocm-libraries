@@ -208,6 +208,44 @@ class TestLibraryLogicWorldKey:
         assert la.exactWinners[keys[0]][0] == 0
         assert la.exactWinners[keys[1]][0] == 1
 
+    def test_extra_column_before_world(self, tmp_path):
+        from Tensile.Common.GlobalParameters import defaultAnalysisParameters
+        from Tensile.LibraryLogic import LogicAnalyzer
+        keys = [(3072, 512, 1, 2048, 2, 2048), (3072, 512, 1, 2048, 4, 2048)]
+        path = tmp_path / "bench.csv"
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["GFlops", "SizeI", "SizeJ", "SizeK", "SizeL", "TotalFlops", "World", "A2AExtent", "S0", "S1"])
+            w.writerow(["GFlops", *keys[0][:4], 1, keys[0][4], keys[0][5], 20.0, 10.0])
+            w.writerow(["GFlops", *keys[1][:4], 1, keys[1][4], keys[1][5], 10.0, 30.0])
+        name = lambda sol, *a, **k: "Sol%d" % sol["SolutionIndex"]
+        with patch("Tensile.LibraryLogic.getSolutionNameMin", name), \
+             patch("Tensile.LibraryLogic.getKernelNameMin", name), \
+             patch("Tensile.LibraryLogic.getSolutionNameFull", name):
+            la = LogicAnalyzer(_FusedMockProblemType(), [_FusedSizes(keys)],
+                               [[_MockSolutionDict(0), _MockSolutionDict(1)]], [str(path)],
+                               dict(defaultAnalysisParameters), splitGSU=False)
+        assert la.exactWinners[keys[0]][0] == 0
+        assert la.exactWinners[keys[1]][0] == 1
+
+    def test_missing_world_header_exits(self, tmp_path):
+        from Tensile.Common.GlobalParameters import defaultAnalysisParameters
+        from Tensile.LibraryLogic import LogicAnalyzer
+        keys = [(3072, 512, 1, 2048, 2, 2048)]
+        path = tmp_path / "bench.csv"
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["GFlops", "SizeI", "SizeJ", "SizeK", "SizeL", "A2AExtent", "TotalFlops", "S0"])
+            w.writerow(["GFlops", 3072, 512, 1, 2048, 2048, 1, 20.0])
+        name = lambda sol, *a, **k: "Sol%d" % sol["SolutionIndex"]
+        with patch("Tensile.LibraryLogic.getSolutionNameMin", name), \
+             patch("Tensile.LibraryLogic.getKernelNameMin", name), \
+             patch("Tensile.LibraryLogic.getSolutionNameFull", name), \
+             pytest.raises(SystemExit):
+            LogicAnalyzer(_FusedMockProblemType(), [_FusedSizes(keys)],
+                          [[_MockSolutionDict(0)]], [str(path)],
+                          dict(defaultAnalysisParameters), splitGSU=False)
+
     def test_missing_world_row_is_skipped(self, tmp_path):
         from Tensile.Common.GlobalParameters import defaultAnalysisParameters
         from Tensile.LibraryLogic import LogicAnalyzer

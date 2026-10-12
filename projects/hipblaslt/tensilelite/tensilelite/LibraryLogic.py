@@ -443,8 +443,11 @@ class LogicAnalyzer:
         perfUnit = row[0]
         if self.fusedGemmA2A:
           header = [col.strip() for col in row]
-          worldIdx = header.index("World") if "World" in header else totalSizeIdx
-          extentIdx = header.index("A2AExtent") if "A2AExtent" in header else totalSizeIdx + 1
+          missing = [name for name in ("World", "A2AExtent") if name not in header]
+          if missing:
+            printExit("\"%s\" has no %s column(s) required for FusedGemmA2A" % (dataFileName, ", ".join(missing)))
+          worldIdx = header.index("World")
+          extentIdx = header.index("A2AExtent")
         if perfUnit == "GFlops":
           self.perfMetric = "DeviceEfficiency"
         elif perfUnit == "GFlopsPerCU":

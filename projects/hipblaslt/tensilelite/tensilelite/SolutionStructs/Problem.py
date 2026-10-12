@@ -196,7 +196,7 @@ class Problem:
     if self.stridesGate:
       rv += ", stridesGate:" + str(list(self.stridesGate))
     if self.world is not None:
-      rv += ", world:%d, a2aExtent:%d" % (self.world, self.a2aExtent)
+      rv += ", world: %d, a2aExtent: %d" % (self.world, self.a2aExtent)
     rv += " }"
     return rv
 

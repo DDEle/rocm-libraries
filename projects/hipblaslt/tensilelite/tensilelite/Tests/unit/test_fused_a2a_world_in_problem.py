@@ -276,3 +276,13 @@ class TestSyntheticCsvWorld:
         _writeSyntheticResultsCSV(str(path), _PS(), "gfx950", 1)
         rows = list(csv.reader(open(path)))
         assert rows[1][1:11] == ["3072", "512", "1", "2048", "3072", "3072", "2048", "2048", "4", "2048"]
+
+
+class TestBenchmarkDataRoundTrip:
+    def test_exact_line_reloads_with_world(self):
+        import yaml
+        pt = _problemType()
+        written = _sizes(pt, {"sizes": [3072, 512, 1, 2048], "world": 4, "a2aExtent": 2048}).exacts[0]
+        loaded = yaml.safe_load("- Exact: {}\n".format(written))
+        ps = ProblemSizes(pt, loaded)
+        assert (ps.exacts[0].world, ps.exacts[0].a2aExtent) == (4, 2048)

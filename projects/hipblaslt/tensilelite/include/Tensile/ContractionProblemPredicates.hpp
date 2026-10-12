@@ -2912,8 +2912,7 @@ namespace TensileLite
                 }
             };
 
-            // value is the solution's MacroTile0. rect_x and src_pitch are 14- and
-            // 19-bit SDMA fields counted in 8-element packets.
+            // value is the solution's MacroTile0.
             struct FusedA2AShape : public Predicate_CRTP<FusedA2AShape, ContractionProblemGemm>
             {
                 enum

@@ -776,13 +776,12 @@ namespace TensileLite
         {
             const int toValidate = args["num-elements-to-validate"].as<int>();
             if(toValidate > 0)
-                throw std::runtime_error(concatenate(
-                    "[fused-a2a] --num-elements-to-validate=",
-                    toValidate,
-                    " is not supported. Use -1 for all, 0 for none."));
-            if(toValidate != 0 && args["print-max"].as<int>() <= 0)
                 throw std::runtime_error(
-                    "[fused-a2a] validation needs --print-max > 0.");
+                    concatenate("[fused-a2a] --num-elements-to-validate=",
+                                toValidate,
+                                " is not supported. Use -1 for all, 0 for none."));
+            if(toValidate != 0 && args["print-max"].as<int>() <= 0)
+                throw std::runtime_error("[fused-a2a] validation needs --print-max > 0.");
             for(auto name : {"init-a", "init-b"})
                 if(args[name].as<InitMode>() != InitMode::Random)
                     throw std::runtime_error(concatenate("[fused-a2a] --",

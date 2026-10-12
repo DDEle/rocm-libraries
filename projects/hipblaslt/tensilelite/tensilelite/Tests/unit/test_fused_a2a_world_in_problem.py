@@ -1,6 +1,9 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
 
+import csv
+from unittest.mock import patch
+
 import pytest
 
 import Tensile.ClientWriter as CW
@@ -146,3 +149,92 @@ class TestProblemSizesMockWorld:
     def test_non_fused_rows_untouched(self):
         mock = ProblemSizesMock([[[128, 128, 1, 64], [0, 1.0]]])
         assert (list(mock.problems[0].sizes), mock.problems[0].world) == ([128, 128, 1, 64], None)
+
+
+class _MockDataType:
+    def flopsPerMac(self):
+        return 2
+
+
+class _FusedMockProblemType(dict):
+    def __init__(self):
+        super().__init__({
+            "Index0": 0, "Index1": 1, "IndexUnroll": 3, "TotalIndices": 4, "NumIndicesLD": 0,
+            "NumIndicesC": 3, "IndexAssignmentsA": [3, 0, 2], "IndexAssignmentsB": [3, 1, 2],
+            "IndexAssignmentsLD": [], "DataType": _MockDataType(), "OperationType": "GEMM",
+            "TileAwareSelection": False, "GroupedGemm": False, "FusedGemmA2A": True,
+        })
+
+    def __hash__(self):
+        return id(self)
+
+
+class _MockSolutionDict(dict):
+    def __init__(self, idx):
+        super().__init__({"MacroTile0": 256, "MacroTile1": 256, "SolutionIndex": idx})
+
+    def __hash__(self):
+        return id(self)
+
+    def __eq__(self, other):
+        return self is other
+
+
+class _FusedSizes:
+    def __init__(self, keys):
+        self.problems = []
+        self.ranges = []
+        self.exacts = [Problem(sizes=k[:4], world=k[4], a2aExtent=k[5]) for k in keys]
+
+
+class TestLibraryLogicWorldKey:
+    def test_winner_per_world(self, tmp_path):
+        from Tensile.Common.GlobalParameters import defaultAnalysisParameters
+        from Tensile.LibraryLogic import LogicAnalyzer
+        keys = [(3072, 512, 1, 2048, 2, 2048), (3072, 512, 1, 2048, 4, 2048)]
+        path = tmp_path / "bench.csv"
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["GFlops", "SizeI", "SizeJ", "SizeK", "SizeL", "World", "A2AExtent", "TotalFlops", "S0", "S1"])
+            w.writerow(["GFlops", *keys[0], 1, 20.0, 10.0])
+            w.writerow(["GFlops", *keys[1], 1, 10.0, 30.0])
+        name = lambda sol, *a, **k: "Sol%d" % sol["SolutionIndex"]
+        with patch("Tensile.LibraryLogic.getSolutionNameMin", name), \
+             patch("Tensile.LibraryLogic.getKernelNameMin", name), \
+             patch("Tensile.LibraryLogic.getSolutionNameFull", name):
+            la = LogicAnalyzer(_FusedMockProblemType(), [_FusedSizes(keys)],
+                               [[_MockSolutionDict(0), _MockSolutionDict(1)]], [str(path)],
+                               dict(defaultAnalysisParameters), splitGSU=False)
+        assert la.exactWinners[keys[0]][0] == 0
+        assert la.exactWinners[keys[1]][0] == 1
+
+    def test_missing_world_row_is_skipped(self, tmp_path):
+        from Tensile.Common.GlobalParameters import defaultAnalysisParameters
+        from Tensile.LibraryLogic import LogicAnalyzer
+        keys = [(3072, 512, 1, 2048, 2, 2048), (3072, 512, 1, 2048, 8, 2048)]
+        path = tmp_path / "bench.csv"
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["GFlops", "SizeI", "SizeJ", "SizeK", "SizeL", "World", "A2AExtent", "TotalFlops", "S0"])
+            w.writerow(["GFlops", *keys[0], 1, 20.0])
+        name = lambda sol, *a, **k: "Sol%d" % sol["SolutionIndex"]
+        with patch("Tensile.LibraryLogic.getSolutionNameMin", name), \
+             patch("Tensile.LibraryLogic.getKernelNameMin", name), \
+             patch("Tensile.LibraryLogic.getSolutionNameFull", name):
+            la = LogicAnalyzer(_FusedMockProblemType(), [_FusedSizes(keys)],
+                               [[_MockSolutionDict(0)]], [str(path)],
+                               dict(defaultAnalysisParameters), splitGSU=False)
+        assert list(la.exactWinners) == [keys[0]]
+
+
+class TestSyntheticCsvWorld:
+    def test_columns(self, tmp_path):
+        from Tensile.BenchmarkProblems import _writeSyntheticResultsCSV
+
+        class _PS:
+            problems = [Problem(sizes=[3072, 512, 1, 2048, 3072, 3072, 2048, 2048], world=4, a2aExtent=2048)]
+
+        path = tmp_path / "s.csv"
+        _writeSyntheticResultsCSV(str(path), _PS(), "gfx950", 1)
+        rows = list(csv.reader(open(path)))
+        assert rows[1][1:11] == ["3072", "512", "1", "2048", "3072", "3072", "2048", "2048", "4", "2048"]

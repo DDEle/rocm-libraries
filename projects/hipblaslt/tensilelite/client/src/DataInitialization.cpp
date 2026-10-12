@@ -1260,7 +1260,8 @@ namespace TensileLite
                         const ContractionProblemGemm& problem = *ptr;
                         for(size_t i = 0; i < problem.tensors().size(); i++)
                         {
-                            if(i > ContractionProblemGemm::TENSOR::METADATA)
+                            if(i > ContractionProblemGemm::TENSOR::METADATA
+                               && i != ContractionProblemGemm::TENSOR::A2A_RECV)
                                 continue;
                             auto dataType = problem.tensors()[i].dataType();
                             auto  it      = m_vdata[i].pristine.find(dataType);
@@ -1294,7 +1295,8 @@ namespace TensileLite
                             std::vector<size_t> tmp_rm;
                             for(size_t i = 0; i < problem.tensors().size(); i++)
                             {
-                                if(i > ContractionProblemGemm::TENSOR::METADATA)
+                                if(i > ContractionProblemGemm::TENSOR::METADATA
+                                   && i != ContractionProblemGemm::TENSOR::A2A_RECV)
                                     continue;
                                 auto dataType = problem.tensors()[i].dataType();
                                 auto  it      = m_vdata[i].pristine.find(dataType);

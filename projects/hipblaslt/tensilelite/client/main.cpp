@@ -779,12 +779,10 @@ namespace TensileLite
                 throw std::runtime_error(concatenate(
                     "[fused-a2a] --num-elements-to-validate=",
                     toValidate,
-                    " is not supported; this path compares every element or none. Use -1 for "
-                    "all, 0 for none."));
+                    " is not supported. Use -1 for all, 0 for none."));
             if(toValidate != 0 && args["print-max"].as<int>() <= 0)
                 throw std::runtime_error(
-                    "[fused-a2a] validation needs --print-max > 0; with print-max <= 0 a "
-                    "mismatch in D is reported as PASSED.");
+                    "[fused-a2a] validation needs --print-max > 0.");
             for(auto name : {"init-a", "init-b"})
                 if(args[name].as<InitMode>() != InitMode::Random)
                     throw std::runtime_error(concatenate("[fused-a2a] --",
@@ -795,8 +793,8 @@ namespace TensileLite
                                                          args[name].as<InitMode>()));
             if(args["device-idx"].as<int>() != 0)
                 throw std::runtime_error(
-                    "[fused-a2a] only --device-idx=0 is supported; rank r runs on device r. Use "
-                    "HIP_VISIBLE_DEVICES to pick the set.");
+                    "[fused-a2a] only --device-idx=0 is supported. Use HIP_VISIBLE_DEVICES to "
+                    "pick the set.");
             auto const& flush = args["icache-flush-args"].as<std::vector<bool>>();
             if(std::find(flush.begin(), flush.end(), true) != flush.end())
                 throw std::runtime_error(

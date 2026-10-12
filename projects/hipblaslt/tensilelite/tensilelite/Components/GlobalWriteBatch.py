@@ -2682,7 +2682,7 @@ class GlobalWriteBatchWriter:
     Unit conversion happens here, not in the emitter: every X-direction field
     leaves ALREADY IN PACKET ELEMENTS while outRectYS stays in ROWS, the
     hardware not scaling y.  outNShardPkS is both dst_pitch and rect_x, the
-    same nShard.  Divisibility by the packet element is a launch-time
+    same nShard.  Divisibility by the packet element is a
     precondition (the FusedA2AShape predicate); a non-multiple truncates here.
 
     The two shifts use different amounts: elements->bytes uses D_ELEMENT_LOG2,

@@ -119,7 +119,7 @@ namespace TensileLite
                                                      "."));
             if(solution.requiredWorkspaceSize(problem, hardware) != 0)
                 throw std::runtime_error(
-                    "[fused-a2a] the solution needs a workspace, which this client does not set.");
+                    "[fused-a2a] solutions that need a workspace are not supported.");
 
             inputs.fusedA2APeers.clear();
 #ifdef TENSILELITE_ENABLE_SDMA

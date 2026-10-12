@@ -184,17 +184,17 @@ class Problem:
     self.a2aExtent = a2aExtent
 
   def __str__(self):
-    rv= "{ sizes:" + str(list(self.sizes))
+    rv= "{ sizes: " + str(list(self.sizes))
     if self.stridesA:
-      rv += ", stridesA:" + str(list(self.stridesA))
+      rv += ", stridesA: " + str(list(self.stridesA))
     if self.stridesB:
-      rv += ", stridesB:" + str(list(self.stridesB))
+      rv += ", stridesB: " + str(list(self.stridesB))
     if self.stridesC:
-      rv += ", stridesC:" + str(list(self.stridesC))
+      rv += ", stridesC: " + str(list(self.stridesC))
     if self.stridesD:
-      rv += ", stridesD:" + str(list(self.stridesD))
+      rv += ", stridesD: " + str(list(self.stridesD))
     if self.stridesGate:
-      rv += ", stridesGate:" + str(list(self.stridesGate))
+      rv += ", stridesGate: " + str(list(self.stridesGate))
     if self.world is not None:
       rv += ", world: %d, a2aExtent: %d" % (self.world, self.a2aExtent)
     rv += " }"

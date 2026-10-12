@@ -283,6 +283,6 @@ class TestBenchmarkDataRoundTrip:
         import yaml
         pt = _problemType()
         written = _sizes(pt, {"sizes": [3072, 512, 1, 2048], "world": 4, "a2aExtent": 2048}).exacts[0]
-        loaded = yaml.safe_load("- Exact: {}\n".format(written))
+        loaded = yaml.load("- Exact: {}\n".format(written), yaml.CSafeLoader)
         ps = ProblemSizes(pt, loaded)
         assert (ps.exacts[0].world, ps.exacts[0].a2aExtent) == (4, 2048)

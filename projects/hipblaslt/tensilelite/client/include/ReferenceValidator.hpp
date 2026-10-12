@@ -133,6 +133,7 @@ namespace TensileLite
                                       bool hasNullPointer,
                                       bool hasZeroElements) const;
 
+            std::vector<std::shared_ptr<DeviceContext>> m_allDevices;
             std::vector<std::shared_ptr<DeviceContext>> m_devices;
             std::vector<std::shared_ptr<ProblemInputs>> m_referenceInputs;
 

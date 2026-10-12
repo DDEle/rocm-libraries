@@ -1131,8 +1131,8 @@ def FusedA2AWgRemap(writer, kernel):
     FusedTotalWGs untouched.  Correctness therefore does not depend on the
     hardware dispatching in t order -- only the benefit does.
 
-    Precondition: A <= N0, enforced host-side by the AM <= M check in
-    client/src/FusedA2ARunner.cpp (with AM % MT0 == 0 and M % MT0 == 0 making
+    Precondition: A <= N0, enforced by the AM <= M check in the FusedA2AShape
+    predicate (with AM % MT0 == 0 and M % MT0 == 0 making
     both quotients exact), so neither this nor the emitted assembly re-checks it.
 
     Placed in graWorkGroup after DefaultWGM, ahead of every consumer of

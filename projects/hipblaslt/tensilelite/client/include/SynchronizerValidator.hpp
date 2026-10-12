@@ -152,6 +152,7 @@ namespace TensileLite
             uint8_t* stagingBuffer(size_t bytes);
 
             bool                m_enabled      = false;
+            std::vector<std::shared_ptr<DeviceContext>> m_allDevices;
             std::vector<std::shared_ptr<DeviceContext>> m_devices;
             // One narrow-alpha warning per run, not one per solution.
             bool                m_narrowAlphaWarned = false;

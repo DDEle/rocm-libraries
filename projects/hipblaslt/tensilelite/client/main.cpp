@@ -38,7 +38,6 @@
 #include "ClientProblemFactory.hpp"
 #include "DataInitialization.hpp"
 #include "DeviceContext.hpp"
-#include "FusedA2ARunner.hpp"
 #include "HardwareMonitorListener.hpp"
 #include "MetaRunListener.hpp"
 #include "ProgressListener.hpp"
@@ -773,6 +772,53 @@ namespace TensileLite
         }
 #endif // defined(__linux__)
 
+        void checkFusedA2AArgs(po::variables_map const& args)
+        {
+            const int toValidate = args["num-elements-to-validate"].as<int>();
+            if(toValidate > 0)
+                throw std::runtime_error(concatenate(
+                    "[fused-a2a] --num-elements-to-validate=",
+                    toValidate,
+                    " is not supported; this path compares every element or none. Use -1 for "
+                    "all, 0 for none."));
+            if(toValidate != 0 && args["print-max"].as<int>() <= 0)
+                throw std::runtime_error(
+                    "[fused-a2a] validation needs --print-max > 0; with print-max <= 0 a "
+                    "mismatch in D is reported as PASSED.");
+            for(auto name : {"init-a", "init-b"})
+                if(args[name].as<InitMode>() != InitMode::Random)
+                    throw std::runtime_error(concatenate("[fused-a2a] --",
+                                                         name,
+                                                         " must be ",
+                                                         InitMode::Random,
+                                                         "; got ",
+                                                         args[name].as<InitMode>()));
+            if(args["device-idx"].as<int>() != 0)
+                throw std::runtime_error(
+                    "[fused-a2a] only --device-idx=0 is supported; rank r runs on device r. Use "
+                    "HIP_VISIBLE_DEVICES to pick the set.");
+            auto const& flush = args["icache-flush-args"].as<std::vector<bool>>();
+            if(std::find(flush.begin(), flush.end(), true) != flush.end())
+                throw std::runtime_error(
+                    "[fused-a2a] --icache-flush-args is not supported; leave it at false.");
+            if(args["fused-a2a-drain-recv"].as<int>() == 0)
+                throw std::runtime_error(
+                    "[fused-a2a] --fused-a2a-drain-recv=0 is not supported; leave it at 1.");
+            if(args["fused-a2a-drain-send"].as<int>() == 0)
+                throw std::runtime_error(
+                    "[fused-a2a] --fused-a2a-drain-send=0 is not supported; leave it at 1.");
+            if(args["use-user-args"].as<bool>())
+                throw std::runtime_error("[fused-a2a] --use-user-args is not supported.");
+            if(args["rotating-buffer-size"].as<int32_t>() > 0
+               && args["rotating-buffer-mode"].as<int32_t>() == 1)
+                throw std::runtime_error(
+                    "[fused-a2a] --rotating-buffer-mode=1 is not supported; use mode 0.");
+            if(!args["world-filter"].as<std::vector<int>>().empty()
+               && !args["prob-sol-map"].as<std::map<int, int>>().empty())
+                throw std::runtime_error(
+                    "[fused-a2a] --world-filter cannot be combined with --prob-sol-map.");
+        }
+
     } // namespace Client
 } // namespace TensileLite
 
@@ -800,14 +846,44 @@ int main(int argc, const char* argv[])
     initTimingBuffer();
     calibrateTimingOverhead();
 
-    bool                                        fusedA2A = args["fused-gemm-a2a"].as<bool>();
+    bool fusedA2A = args["fused-gemm-a2a"].as<bool>();
+    if(fusedA2A)
+        checkFusedA2AArgs(args);
+    auto const& worldFilter = args["world-filter"].as<std::vector<int>>();
+    if(!fusedA2A && !worldFilter.empty())
+        throw std::runtime_error("--world-filter applies only with --fused-gemm-a2a");
+    auto selected = [&](ContractionProblem const& problem) {
+        return worldFilter.empty()
+               || std::count(worldFilter.begin(), worldFilter.end(), (int)problemWorld(problem));
+    };
+
+    auto problems        = problemFactory.problems();
+    int  firstProblemIdx = args["problem-start-idx"].as<int>();
+    int  numProblems     = args["num-problems"].as<int>();
+    if(numProblems < 0)
+        numProblems = problems.size();
+    int lastProblemIdx = firstProblemIdx + numProblems - 1;
+
     std::shared_ptr<Hardware>                   hardware;
     std::vector<std::shared_ptr<DeviceContext>> devices;
     {
         ScopedTimer timer("hip_initialization");
-        hardware         = GetHardware(args);
-        int    world     = fusedA2A ? FusedA2ARunner::worldSize(args) : 1;
-        size_t flagBytes = fusedA2A ? FusedA2ARunner::kFlagAllocBytes : 0;
+        hardware     = GetHardware(args);
+        size_t world = 1;
+        for(int i = firstProblemIdx; i <= lastProblemIdx; i++)
+            if(selected(*problems[i]))
+                world = std::max(world, problemWorld(*problems[i]));
+        if(fusedA2A)
+        {
+            int deviceCount = 0;
+            HIP_CHECK_EXC(hipGetDeviceCount(&deviceCount));
+            if(world > (size_t)deviceCount)
+                throw std::runtime_error(concatenate("[fused-a2a] the selected problems need ",
+                                                     world,
+                                                     " devices, found ",
+                                                     deviceCount,
+                                                     ". Narrow them with --world-filter."));
+        }
 
         std::vector<int> deviceIds(world);
         std::iota(deviceIds.begin(), deviceIds.end(), args["device-idx"].as<int>());
@@ -815,7 +891,7 @@ int main(int argc, const char* argv[])
             devices.push_back(
                 std::make_shared<DeviceContext>(id,
                                                 args["use-default-stream"].as<bool>(),
-                                                flagBytes,
+                                                fusedA2A ? kCommFlagsBytes : 0,
                                                 fusedA2A ? deviceIds : std::vector<int>{}));
     }
     std::shared_ptr<DeviceContext> device0 = devices[0];
@@ -886,13 +962,6 @@ int main(int argc, const char* argv[])
                                          + ").");
         });
     }
-
-    auto problems        = problemFactory.problems();
-    int  firstProblemIdx = args["problem-start-idx"].as<int>();
-    int  numProblems     = args["num-problems"].as<int>();
-    if(numProblems < 0)
-        numProblems = problems.size();
-    int lastProblemIdx = firstProblemIdx + numProblems - 1;
 
     bool        gpuTimer         = args["use-gpu-timer"].as<bool>();
     bool        runKernels       = !args["selection-only"].as<bool>();
@@ -1011,19 +1080,18 @@ int main(int argc, const char* argv[])
             for(int problemIdx = firstProblemIdx; problemIdx <= lastProblemIdx; problemIdx++)
             {
                 auto problem = problems[problemIdx].get();
+                if(!selected(*problem))
+                    continue;
+                std::vector<std::shared_ptr<DeviceContext>> active(
+                    devices.begin(), devices.begin() + problemWorld(*problem));
 
                 reporters->report(ResultKey::ProblemIndex, problemIdx);
                 reporters->report(ResultKey::ProblemProgress,
                                   concatenate(problemIdx, "/", lastProblemIdx));
 
                 auto* gemm = dynamic_cast<ContractionProblemGemm*>(problem);
-                if(fusedA2A)
-                {
-                    if(gemm == nullptr)
-                        throw std::runtime_error("[fused-a2a] problem is not a plain GEMM");
-                    FusedA2ARunner::configureProblem(
-                        args, *gemm, (int)devices.size(), problemIdx - firstProblemIdx);
-                }
+                if(fusedA2A && gemm == nullptr)
+                    throw std::runtime_error("[fused-a2a] problem is not a plain GEMM");
 
                 {
                     ScopedTimer timer("pre_problem");
@@ -1031,7 +1099,7 @@ int main(int argc, const char* argv[])
                 }
                 {
                     ScopedTimer timer("gpu_input_preparation");
-                    forEachDevice(devices, [&](DeviceContext& ctx) {
+                    forEachDevice(active, [&](DeviceContext& ctx) {
                         ctx.inputs = ctx.dataInit->prepareGPUInputs(problem);
                     });
                 }
@@ -1043,7 +1111,7 @@ int main(int argc, const char* argv[])
 
                 {
                     ScopedTimer timer("rotating_buffer_preparation");
-                    forEachDevice(devices, [&](DeviceContext& ctx) {
+                    forEachDevice(active, [&](DeviceContext& ctx) {
                         ctx.inputArr = ctx.dataInit->prepareRotatingGPUOutput(
                             maxRotatingBufferNum, problem, ctx.inputs, ctx.stream);
                         static_cast<void>(hipDeviceSynchronize());
@@ -1165,16 +1233,22 @@ int main(int argc, const char* argv[])
                     {
                         try
                         {
-                            std::unique_ptr<FusedA2ARunner> runner;
                             if(fusedA2A)
-                                runner = std::make_unique<FusedA2ARunner>(
-                                    *hardware, *gemm, *solution, devices);
+                                forEachDevice(active, [&](DeviceContext& ctx) {
+                                    for(auto const& slot : ctx.inputArr)
+                                        HIP_CHECK_EXC(hipMemset(
+                                            dynamic_cast<ContractionInputs const&>(*slot).a2aRecv,
+                                            0,
+                                            gemm->tensors()
+                                                [ContractionProblemGemm::TENSOR::A2A_RECV]
+                                                    .totalAllocatedBytes()));
+                                });
                             while(listeners.needMoreRunsInSolution())
                             {
                                 if(resetInput)
                                 {
                                     ScopedTimer timer("gpu_input_reset");
-                                    forEachDevice(devices, [&](DeviceContext& ctx) {
+                                    forEachDevice(active, [&](DeviceContext& ctx) {
                                         ctx.inputArr[0] = ctx.dataInit->prepareGPUInputs(problem);
                                     });
                                 }
@@ -1182,43 +1256,66 @@ int main(int argc, const char* argv[])
 
                                 std::vector<std::vector<std::vector<KernelInvocation>>> kernels;
                                 {
-                                    ScopedTimer timer("kernel_solving");
-                                    if(runner)
-                                    {
-                                        kernels = runner->solve();
-                                    }
-                                    else
-                                    {
-                                        for(size_t r = 0; r < device0->inputArr.size(); r++)
+                                    ScopedTimer  timer("kernel_solving");
+                                    const size_t slots    = device0->inputArr.size();
+                                    const size_t channels = fusedA2A ? kCommChannels : 1;
+                                    kernels.assign(
+                                        std::lcm(slots, channels),
+                                        std::vector<std::vector<KernelInvocation>>(active.size()));
+                                    for(size_t k = 0; k < kernels.size(); k++)
+                                        for(size_t d = 0; d < active.size(); d++)
                                         {
-                                            auto kernel
+                                            auto&                ctx = *active[d];
+                                            ScopedDevice         device(ctx.deviceId);
+                                            ContractionInputs    fused;
+                                            ProblemInputs const* inputs
+                                                = ctx.inputArr[k % slots].get();
+                                            if(fusedA2A)
+                                            {
+                                                fused = dynamic_cast<ContractionInputs const&>(
+                                                    *inputs);
+                                                fillFusedA2AInputs(fused,
+                                                                   *gemm,
+                                                                   *solution,
+                                                                   *hardware,
+                                                                   active,
+                                                                   d,
+                                                                   k % slots,
+                                                                   k % channels);
+                                                inputs = &fused;
+                                            }
+                                            kernels[k][d]
                                                 = useUserArgs
-                                                      ? solution->solveTensileGPU(
-                                                            (*problem),
-                                                            *device0->inputArr[r],
-                                                            *hardware,
-                                                            &dUA,
-                                                            &dUAHost,
-                                                            nullptr,
-                                                            0,
-                                                            device0->stream)
-                                                      : solution->solve((*problem),
-                                                                        *device0->inputArr[r],
+                                                      ? solution->solveTensileGPU(*problem,
+                                                                                  *inputs,
+                                                                                  *hardware,
+                                                                                  &dUA,
+                                                                                  &dUAHost,
+                                                                                  nullptr,
+                                                                                  0,
+                                                                                  ctx.stream)
+                                                      : solution->solve(*problem,
+                                                                        *inputs,
                                                                         *hardware,
                                                                         nullptr,
                                                                         0,
-                                                                        device0->stream);
-                                            kernels.push_back({kernel});
+                                                                        ctx.stream);
+                                            if(fusedA2A && kernels[k][d].size() != 1)
+                                                throw std::runtime_error(concatenate(
+                                                    "[fused-a2a] expected exactly one kernel on "
+                                                    "device ",
+                                                    d,
+                                                    ", got ",
+                                                    kernels[k][d].size()));
                                         }
-                                    }
                                 }
 
                                 size_t       warmupInvocations = listeners.numWarmupRuns();
                                 size_t       warmupEventCount  = kernels[0][0].size();
                                 TimingEvents warmupStartEvents(
-                                    devices, warmupInvocations, warmupEventCount);
+                                    active, warmupInvocations, warmupEventCount);
                                 TimingEvents warmupStopEvents(
-                                    devices, warmupInvocations, warmupEventCount);
+                                    active, warmupInvocations, warmupEventCount);
 
                                 // I-cache rotation counter: increments per launchKernels call
                                 // and selects which hipModule_t copy services the next launch.
@@ -1237,9 +1334,9 @@ int main(int argc, const char* argv[])
                                                      TimingEvents const* stopEvents,
                                                      size_t              invocation) {
                                     auto const& launch = kernels[launchIdx++ % kernels.size()];
-                                    for(size_t d = 0; d < devices.size(); d++)
+                                    for(size_t d = 0; d < active.size(); d++)
                                     {
-                                        auto&        ctx = *devices[d];
+                                        auto&        ctx = *active[d];
                                         ScopedDevice device(ctx.deviceId);
                                         if(startEvents)
                                             HIP_CHECK_EXC(ctx.adapter->launchKernels(
@@ -1276,8 +1373,8 @@ int main(int argc, const char* argv[])
                                 }
 
 #if TENSILELITE_CLIENT_ENABLE_ROCPROFSDK
-                                TimingEvents ProfilerStartEvents(devices, 1, warmupEventCount);
-                                TimingEvents ProfilerStopEvents(devices, 1, warmupEventCount);
+                                TimingEvents ProfilerStartEvents(active, 1, warmupEventCount);
+                                TimingEvents ProfilerStopEvents(active, 1, warmupEventCount);
                                 listeners.preProfiler();
                                 rotateAndSelect();
                                 launchAll(&ProfilerStartEvents, &ProfilerStopEvents, 0);
@@ -1295,8 +1392,8 @@ int main(int argc, const char* argv[])
                                     if(enq)
                                         for(int i = 0; i < syncs; i++)
                                         {
-                                            TimingEvents startEvents(devices, enq, eventCount);
-                                            TimingEvents stopEvents(devices, enq, eventCount);
+                                            TimingEvents startEvents(active, enq, eventCount);
+                                            TimingEvents stopEvents(active, enq, eventCount);
                                             std::vector<size_t> slots;
                                             for(size_t j = 0; j < std::min(enq, slotCount); j++)
                                                 slots.push_back((launchIdx + j) % slotCount);
@@ -1334,6 +1431,10 @@ int main(int argc, const char* argv[])
                                     solution->relaseDeviceUserArgs(dUA, dUAHost);
                                 }
                             }
+                            if(fusedA2A)
+                                forEachDevice(active, [](DeviceContext&) {
+                                    HIP_CHECK_EXC(hipDeviceSynchronize());
+                                });
                         }
                         catch(std::runtime_error const& err)
                         {

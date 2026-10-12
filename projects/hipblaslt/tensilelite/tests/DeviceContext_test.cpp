@@ -6,6 +6,8 @@
 #include "DeviceContext.hpp"
 #include "TimingEvents.hpp"
 
+#include <Tensile/ContractionProblem.hpp>
+
 #include <hip/hip_runtime.h>
 
 #include <memory>
@@ -90,4 +92,15 @@ TEST(TimingEvents, CreatesEachCardsEventsOnItsDevice)
         EXPECT_EQ(hipEventRecord(events.card(d)[2][1], devices[d]->stream), hipSuccess);
         EXPECT_EQ(hipEventSynchronize(events.card(d)[2][1]), hipSuccess);
     }
+}
+
+TEST(DeviceContext, ProblemWorld)
+{
+    using namespace TensileLite;
+    auto p = ContractionProblemGemm::GEMM(
+        false, true, 3072, 512, 2048, 3072, 512, 3072, 0.0, false, 1);
+    EXPECT_EQ(Client::problemWorld(p), 1u);
+    p.setFusedGemmA2A(true);
+    p.setFusedA2AWorld(4);
+    EXPECT_EQ(Client::problemWorld(p), 4u);
 }

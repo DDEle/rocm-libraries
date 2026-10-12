@@ -32,9 +32,9 @@
 #include "Reference.hpp"
 
 #include <Tensile/DataTypes.hpp>
-#include <Tensile/FusedA2AKernArg.hpp>
 #include <Tensile/hip/HipUtils.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <iostream>
 #include <sstream>
@@ -45,7 +45,8 @@ namespace TensileLite
     {
         ReferenceValidator::ReferenceValidator(po::variables_map const&                    args,
                                                std::vector<std::shared_ptr<DeviceContext>> devices)
-            : m_devices(std::move(devices))
+            : m_allDevices(std::move(devices))
+            , m_devices(m_allDevices)
         {
             m_elementsToValidate = args["num-elements-to-validate"].as<int>();
             m_printValids        = args["print-valids"].as<bool>();
@@ -85,6 +86,9 @@ namespace TensileLite
 
         void ReferenceValidator::preProblem(ContractionProblem* const problem)
         {
+            m_devices.assign(m_allDevices.begin(),
+                             m_allDevices.begin()
+                                 + std::min(problemWorld(*problem), m_allDevices.size()));
             if(m_enabled)
             {
                 m_problem = problem;
@@ -282,7 +286,7 @@ namespace TensileLite
             // card src's golden, for every token.
             std::vector<BFloat16> host(W * N * nShard);
             HIP_CHECK_EXC(hipMemcpy(host.data(),
-                                    inputs.fusedA2APeers[dst][FUSED_A2A_SLOT_RECV_PTR],
+                                    inputs.a2aRecv,
                                     host.size() * sizeof(BFloat16),
                                     hipMemcpyDeviceToHost));
             size_t mismatches = 0;

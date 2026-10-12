@@ -124,6 +124,7 @@ namespace TensileLite
             clock::time_point m_startTime;
             clock::time_point m_endTime;
 
+            std::vector<std::shared_ptr<DeviceContext>> m_allDevices;
             std::vector<std::shared_ptr<DeviceContext>> m_devices;
             std::vector<hipEvent_t>                     m_start;
             std::vector<hipEvent_t>                     m_stop;

@@ -146,7 +146,8 @@ namespace TensileLite
             , m_skiprun_from_map(0)
             , m_numSolutionSkip(0)
             , m_prob_sol_map(args["prob-sol-map"].as<prob_sol_map>())
-            , m_devices(std::move(devices))
+            , m_allDevices(std::move(devices))
+            , m_devices(m_allDevices)
         {
         }
 
@@ -168,6 +169,9 @@ namespace TensileLite
 
         void BenchmarkTimer::preProblem(ContractionProblem* const problem)
         {
+            m_devices.assign(m_allDevices.begin(),
+                             m_allDevices.begin()
+                                 + std::min(problemWorld(*problem), m_allDevices.size()));
             ++m_currProblemIdx; // update current prob-idx
 
             // test if we only have a specific solution to run (When restore-from-log)

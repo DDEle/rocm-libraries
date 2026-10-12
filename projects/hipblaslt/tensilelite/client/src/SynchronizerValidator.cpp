@@ -50,12 +50,16 @@ namespace TensileLite
         SynchronizerValidator::SynchronizerValidator(
             po::variables_map const& args, std::vector<std::shared_ptr<DeviceContext>> devices)
             : m_enabled(args["check-synchronizer"].as<bool>())
-            , m_devices(std::move(devices))
+            , m_allDevices(std::move(devices))
+            , m_devices(m_allDevices)
         {
         }
 
         void SynchronizerValidator::preProblem(ContractionProblem* const problem)
         {
+            m_devices.assign(m_allDevices.begin(),
+                             m_allDevices.begin()
+                                 + std::min(problemWorld(*problem), m_allDevices.size()));
             m_problem = problem;
         }
 

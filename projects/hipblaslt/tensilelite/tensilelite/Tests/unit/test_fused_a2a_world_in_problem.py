@@ -61,3 +61,21 @@ class TestExactDictWorld:
     def test_fused_rejects_range(self):
         with pytest.raises(RuntimeError, match="Range"):
             ProblemSizes(_problemType(), [{"Range": [[3072], [512], [1], [2048]]}])
+
+
+class TestFusedProblemTypeRejects:
+    @pytest.mark.parametrize("overrides, name", [
+        ({"UseBias": 1}, "UseBias"),
+        ({"UseScaleAB": "Scalar"}, "UseScaleAB"),
+        ({"UseScaleCD": True}, "UseScaleCD"),
+        ({"UseScaleAlphaVec": 1}, "UseScaleAlphaVec"),
+        ({"OutputAmaxD": True}, "OutputAmaxD"),
+        ({"GroupedGemm": True}, "GroupedGemm"),
+        ({"Activation": True, "ActivationType": "hipblaslt_all"}, "Activation"),
+    ])
+    def test_rejects(self, overrides, name):
+        with pytest.raises(Exception, match="FusedGemmA2A does not support .*%s" % name):
+            _problemType(**overrides)
+
+    def test_plain_fused_is_accepted(self):
+        assert _problemType()["FusedGemmA2A"]

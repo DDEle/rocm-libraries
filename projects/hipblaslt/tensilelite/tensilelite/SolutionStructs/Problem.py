@@ -1095,6 +1095,21 @@ class ProblemType(Mapping):
           printWarning("ActivationNoGuard is set to False cause Gradient is off.")
           self["ActivationNoGuard"] = False
 
+    if self["FusedGemmA2A"]:
+      unsupported = [name for name, used in (
+          ("UseBias", self["UseBias"]),
+          ("UseE", self["UseE"]),
+          ("UseGateResidual", self["UseGateResidual"]),
+          ("UseScaleAB", self["UseScaleAB"]),
+          ("UseScaleCD", self["UseScaleCD"]),
+          ("UseScaleAlphaVec", self["UseScaleAlphaVec"]),
+          ("OutputAmaxD", self["OutputAmaxD"]),
+          ("Sparse", self["Sparse"]),
+          ("GroupedGemm", self["GroupedGemm"]),
+          ("Activation", self["ActivationType"] != 'none')) if used]
+      if unsupported:
+        raise Exception("FusedGemmA2A does not support %s" % ", ".join(unsupported))
+
   ################################################################################
    # Function checkIfSupportedGEMMType:
   #   Assures 3 data-types are valid, supported and well-assigned

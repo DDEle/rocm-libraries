@@ -97,7 +97,7 @@ def fixSizeInconsistencies(sizes, fileType):
     origNumSizes = len(sizes)
     sizesDict = dict()
     for size, index in sizes:
-        size = size[:-4] if len(size) >= 8 else size
+        size = size[:4] + size[8:] if len(size) >= 8 else size
         sizesDict[tuple(value for value in size)] = [size, index]
     newSizes = list()
     for value in sizesDict.values():

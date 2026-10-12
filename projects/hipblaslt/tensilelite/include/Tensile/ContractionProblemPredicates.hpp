@@ -2912,9 +2912,9 @@ namespace TensileLite
                 }
             };
 
-            // value is the solution's MacroTile0.
-            struct FusedA2ATileDivisible
-                : public Predicate_CRTP<FusedA2ATileDivisible, ContractionProblemGemm>
+            // value is the solution's MacroTile0. rect_x and src_pitch are 14- and
+            // 19-bit SDMA fields counted in 8-element packets.
+            struct FusedA2AShape : public Predicate_CRTP<FusedA2AShape, ContractionProblemGemm>
             {
                 enum
                 {
@@ -2923,38 +2923,43 @@ namespace TensileLite
                 };
                 int64_t value;
 
-                FusedA2ATileDivisible() = default;
-                FusedA2ATileDivisible(int64_t value)
+                FusedA2AShape() = default;
+                FusedA2AShape(int64_t value)
                     : value(value)
                 {
                 }
 
                 static std::string Type()
                 {
-                    return "FusedA2ATileDivisible";
+                    return "FusedA2AShape";
                 }
 
-                bool divisible(ContractionProblemGemm const& problem) const
+                bool fits(ContractionProblemGemm const& problem) const
                 {
                     if(!problem.fusedGemmA2A())
                         return true;
-                    if(value <= 0 || problem.fusedA2AWorld() == 0)
+                    const int64_t world = problem.fusedA2AWorld();
+                    if(value <= 0 || world == 0)
                         return false;
-                    const int64_t am    = problem.fusedA2AExtent();
-                    const int64_t width = value * (int64_t)problem.fusedA2AWorld();
-                    return am % width == 0 && (int64_t)problem.freeSizeA(0) % value == 0;
+                    const int64_t m       = problem.freeSizeA(0);
+                    const int64_t am      = problem.fusedA2AExtent();
+                    const auto&   d       = problem.d();
+                    const size_t  mStride = d.strides()[problem.freeIndices()[0].d];
+                    const size_t  ldd     = d.strides()[problem.freeIndices()[1].d];
+                    return am % (value * world) == 0 && m % value == 0 && am <= m
+                           && ((am / world) >> 3) < (1 << 14) && mStride == 1 && ldd % 8 == 0
+                           && (ldd >> 3) < (1 << 19);
                 }
 
                 bool operator()(ContractionProblemGemm const& problem) const override
                 {
-                    return divisible(problem);
+                    return fits(problem);
                 }
 
                 bool debugEval(ContractionProblemGemm const& problem,
                                std::ostream&                 stream) const override
                 {
-                    return debugEvalCmp(
-                        problem, stream, "prob", divisible(problem), "==", "sol", true);
+                    return debugEvalCmp(problem, stream, "prob", fits(problem), "==", "sol", true);
                 }
             };
 

@@ -6,7 +6,7 @@ TestParameters:
   marks: [skip-gfx1250, skip-gfx1250-strict] # gfx950-only
 
 GlobalParameters:
-  SyncsPerBenchmark: 0
+  SyncsPerBenchmark: 1
   SleepPercent: 0
   NumElementsToValidate: -1
   NumBenchmarks: 1

@@ -285,8 +285,11 @@ Adapter class for class `ProblemSizes`. It satisfies the implicit usage requirem
 of ClientWriter.writeClientConfig() by converting ExactLogic to list of `Problem` objects
 """
 class ProblemSizesMock:
-  def __init__(self, exactLogic):
-    self.problems = [Problem(problem) for problem, solution in exactLogic]
+  def __init__(self, exactLogic, fusedGemmA2A=False):
+    if fusedGemmA2A:
+      self.problems = [Problem(sizes[:-2], world=sizes[-2], a2aExtent=sizes[-1]) for sizes, solution in exactLogic]
+    else:
+      self.problems = [Problem(problem) for problem, solution in exactLogic]
 
 class ProblemSizesMockDummy:
   def __init__(self):

@@ -178,6 +178,7 @@ def _set_all_gp(monkeypatch):
         "RotatingBufferSize": 0,
         "RotatingMode": 0,
         "RocProfCounter": [],
+        "WorldFilter": [],
         # DataInit keys for dataInitParams
         "DataInitTypeA": -1,
         "DataInitTypeB": -1,
@@ -983,3 +984,15 @@ class TestClientLogLevelEnum:
         assert CW.ClientLogLevel(1).name == "Terse"
         assert CW.ClientLogLevel(2).name == "Verbose"
         assert CW.ClientLogLevel(3).name == "Debug"
+
+
+class TestWorldFilter:
+    def test_default_writes_nothing(self, tmp_path, monkeypatch):
+        pt = _make_problem_type(_PLAIN_GEMM_PT_DICT)
+        assert "world-filter" not in _write_ini(tmp_path, monkeypatch, pt, _PLAIN_GEMM_PT_DICT)
+
+    def test_one_line_per_world(self, tmp_path, monkeypatch):
+        pt = _make_problem_type(_PLAIN_GEMM_PT_DICT)
+        content = _write_ini(tmp_path, monkeypatch, pt, _PLAIN_GEMM_PT_DICT,
+                             extra_gp={"WorldFilter": [2, 4]})
+        assert "world-filter=2\nworld-filter=4\n" in content

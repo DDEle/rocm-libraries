@@ -3,8 +3,10 @@
 
 import pytest
 
+import Tensile.ClientWriter as CW
 import Tensile.SolutionLibrary as SL
-from Tensile.SolutionStructs.Problem import ProblemSizes, ProblemType
+from Tensile.Contractions import ProblemType as ContractionsProblemType
+from Tensile.SolutionStructs.Problem import Problem, ProblemSizes, ProblemSizesMock, ProblemType
 from Tensile.TensileMergeLibrary import fixSizeInconsistencies
 
 pytestmark = pytest.mark.unit
@@ -117,3 +119,30 @@ class TestMergeKeepsWorld:
     def test_non_fused_unchanged(self):
         rows, _ = fixSizeInconsistencies([[[128, 128, 1, 64, 128, 128, 64, 64], [0, 1.0]]], "base")
         assert rows[0][0] == [128, 128, 1, 64]
+
+
+class TestClientWriterWorld:
+    def _params(self, fused):
+        cpt = ContractionsProblemType.FromOriginalState(_problemType(FusedGemmA2A=fused).state)
+        problem = Problem(sizes=[3072, 512, 1, 2048, 3072, 3072, 2048, 2048],
+                          world=4 if fused else None, a2aExtent=2048 if fused else None)
+        return CW.problemSizeParams(cpt, problem, [0])
+
+    def test_fused_writes_world_and_extent(self):
+        params = self._params(True)
+        assert ("world", 4) in params and ("fused-a2a-extent", 2048) in params
+
+    def test_non_fused_writes_neither(self):
+        keys = [k for k, _ in self._params(False)]
+        assert "world" not in keys and "fused-a2a-extent" not in keys
+
+
+class TestProblemSizesMockWorld:
+    def test_fused_rows_split_world(self):
+        mock = ProblemSizesMock([[[3072, 512, 1, 2048, 3072, 3072, 2048, 2048, 8, 2048], [0, 1.0]]], True)
+        p = mock.problems[0]
+        assert (list(p.sizes), p.world, p.a2aExtent) == ([3072, 512, 1, 2048, 3072, 3072, 2048, 2048], 8, 2048)
+
+    def test_non_fused_rows_untouched(self):
+        mock = ProblemSizesMock([[[128, 128, 1, 64], [0, 1.0]]])
+        assert (list(mock.problems[0].sizes), mock.problems[0].world) == ([128, 128, 1, 64], None)

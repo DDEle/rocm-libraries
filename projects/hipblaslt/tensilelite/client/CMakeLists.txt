@@ -59,7 +59,7 @@ if(amd_smi_FOUND)
 endif()
 # PRIVATE: hsakmt/hsa are needed only by TUs in this target that include the
 # header-only SdmaQueue.hpp -- today DeviceContext.cpp,
-# each gated on the macro below. The two executables compile one source each and never
+# gated on the macro below. The two executables compile one source each and never
 # include it, so they get neither the headers nor the libs.
 if(TENSILELITE_ENABLE_SDMA AND NOT WIN32)
     target_link_libraries(tensilelite-client-common

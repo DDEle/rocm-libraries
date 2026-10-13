@@ -273,6 +273,10 @@ class ExactDict(Problem):
         raise RuntimeError("world=%d must be >= 1" % self.world)
       if self.a2aExtent is None:
         self.a2aExtent = self.sizes[0]
+      if not 1 <= self.a2aExtent <= self.sizes[0]:
+        raise RuntimeError("a2aExtent=%d must be in [1, M=%d]" % (self.a2aExtent, self.sizes[0]))
+      if self.sizes[2] != 1:
+        raise RuntimeError("FusedGemmA2A problem %s has batch=%d; must be 1" % (list(self.sizes), self.sizes[2]))
     elif self.world is not None or self.a2aExtent is not None:
       raise RuntimeError("'world' and 'a2aExtent' apply only to FusedGemmA2A problems")
 

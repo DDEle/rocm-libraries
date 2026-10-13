@@ -145,6 +145,10 @@ namespace TensileLite
                     if(!fusedA2AWorldSizeValid(world))
                         throw std::invalid_argument(concatenate(
                             "world=", world, " is out of range [1, ", FUSED_A2A_MAX_RANKS, "]"));
+                for(int extent : m_fusedA2AExtents)
+                    if(extent < 1)
+                        throw std::invalid_argument(
+                            concatenate("fused-a2a-extent=", extent, " must be >= 1"));
             }
             else if(!m_fusedA2AWorlds.empty() || !m_fusedA2AExtents.empty())
                 throw std::invalid_argument(

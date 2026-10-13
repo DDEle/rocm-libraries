@@ -53,6 +53,15 @@ class TestExactDictWorld:
         with pytest.raises(RuntimeError, match="world=0"):
             _sizes(_problemType(), {"sizes": [3072, 512, 1, 2048], "world": 0})
 
+    @pytest.mark.parametrize("extent", [0, -2048, 4096])
+    def test_extent_must_be_within_m(self, extent):
+        with pytest.raises(RuntimeError, match="a2aExtent=%d" % extent):
+            _sizes(_problemType(), {"sizes": [3072, 512, 1, 2048], "world": 2, "a2aExtent": extent})
+
+    def test_fused_rejects_batch(self):
+        with pytest.raises(RuntimeError, match="batch=2"):
+            _sizes(_problemType(), {"sizes": [3072, 512, 2, 2048], "world": 2})
+
     def test_non_fused_rejects_world(self):
         with pytest.raises(RuntimeError, match="only to FusedGemmA2A"):
             _sizes(_problemType(FusedGemmA2A=False), {"sizes": [3072, 512, 1, 2048], "world": 2})

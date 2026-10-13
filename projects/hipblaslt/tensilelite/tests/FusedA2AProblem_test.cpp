@@ -179,6 +179,17 @@ TEST(FusedA2AClientProblemFactory, WorldOutOfRangeThrows)
     }
 }
 
+TEST(FusedA2AClientProblemFactory, ExtentBelowOneThrows)
+{
+    for(int extent : {0, -2048})
+    {
+        auto args = factoryArgs(true, 1);
+        setOption(args, "world", std::vector<int>{2});
+        setOption(args, "fused-a2a-extent", std::vector<int>{extent});
+        EXPECT_THROW(Client::ClientProblemFactory{args}, std::invalid_argument) << extent;
+    }
+}
+
 TEST(FusedA2AClientProblemFactory, WorldWithoutFusedThrows)
 {
     auto args = factoryArgs(false, 1);

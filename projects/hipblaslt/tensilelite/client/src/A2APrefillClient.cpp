@@ -66,6 +66,28 @@ namespace TensileLite
                 return (float)(int)(h % 9u) * 0.25f - 1.0f;
             }
 
+            // Standard normal by Box-Muller over two hashed uniforms in (0, 1).
+            inline float a2aNormalValue(uint64_t seed)
+            {
+                auto mix = [](uint64_t h) {
+                    h *= 0x9E3779B97F4A7C15ull;
+                    h ^= h >> 29;
+                    h *= 0xBF58476D1CE4E5B9ull;
+                    h ^= h >> 32;
+                    return ((double)(h >> 11) + 0.5) * 0x1.0p-53;
+                };
+                const double u1 = mix(2 * seed + 1), u2 = mix(2 * seed + 2);
+                return (float)(std::sqrt(-2.0 * std::log(u1)) * std::cos(6.283185307179586 * u2));
+            }
+
+            void a2aFillNormal(uint64_t seed, size_t rows, size_t cols, size_t ld, BFloat16* out)
+            {
+#pragma omp parallel for
+                for(size_t r = 0; r < rows; r++)
+                    for(size_t c = 0; c < cols; c++)
+                        out[r * ld + c] = BFloat16(a2aNormalValue(seed + r * cols + c));
+            }
+
             struct DeviceBuffer
             {
                 void* ptr = nullptr;
@@ -620,6 +642,15 @@ namespace TensileLite
                 const bool drainSend  = args["a2a-multigpu-drain-send"].as<int>() != 0;
                 const bool timing     = args["a2a-multigpu-time"].as<int>() != 0;
                 const int  rotate     = args["a2a-multigpu-sdma-rotate"].as<int>();
+                const bool validate   = args["a2a-multigpu-validate"].as<int>() != 0;
+                const bool normalInit = args["a2a-multigpu-init"].as<int>() == 1;
+                if(normalInit && validate)
+                {
+                    std::cerr << "[a2a-multigpu] ERROR: --a2a-multigpu-init 1 needs "
+                                 "--a2a-multigpu-validate 0"
+                              << std::endl;
+                    return 1;
+                }
 
                 int deviceCount = 0;
                 HIP_CHECK_EXC(hipGetDeviceCount(&deviceCount));
@@ -701,7 +732,10 @@ namespace TensileLite
                 // segStride = xElems.
                 std::vector<BFloat16> hostA(aElems), hostX((size_t)W * xElems);
                 std::vector<BFloat16> hostD(cdElems), gotB(xElems);
-                a2aFillA(M, K, lda, hostA);
+                if(normalInit)
+                    a2aFillNormal(0xA2A0000000ull, M, K, lda, hostA.data());
+                else
+                    a2aFillA(M, K, lda, hostA);
 
                 // devB and devD carry one slice per launch in a batch; devXSrc
                 // holds this rank's share of every x variant.
@@ -726,7 +760,10 @@ namespace TensileLite
 
                 for(int v = 0; v < A2A_X_VARIANTS; v++)
                 {
-                    a2aFillX(v, (size_t)W * xElems, hostX);
+                    if(normalInit)
+                        a2aFillNormal(0xB2B0000000ull * (v + 1), 1, (size_t)W * xElems, 0, hostX.data());
+                    else
+                        a2aFillX(v, (size_t)W * xElems, hostX);
                     for(int d = 0; d < W; d++)
                     {
                         HIP_CHECK_EXC(hipSetDevice(d));
@@ -1012,7 +1049,7 @@ namespace TensileLite
 
                     syncAll();
 
-                    for(int r = 0; r < n; r++)
+                    for(int r = 0; r < n && validate; r++)
                     {
                         a2aFillX((it0 + r) % A2A_X_VARIANTS, (size_t)W * xElems, hostX);
                         for(int d = 0; d < W; d++)

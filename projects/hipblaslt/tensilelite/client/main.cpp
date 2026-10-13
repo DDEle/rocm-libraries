@@ -313,6 +313,8 @@ namespace TensileLite
                 ("a2a-multigpu-war-barrier", po::value<int>()->default_value(1), "Enqueue the a2a-multigpu arm's boundary barrier ahead of the x rewrite (1=on). At 0 the arm keeps only the barrier ahead of the GEMM, which leaves a rewrite racing a peer's in-flight read of x untested.")
                 ("a2a-multigpu-time",        po::value<int>()->default_value(0), "Report the a2a-multigpu arm's makespan (1=on). The arm synchronizes after staging x and the gathered buffer, then times the flag reset, the boundary barrier and the GEMM across all ranks. Requires --a2a-multigpu-batch 1.")
                 ("a2a-multigpu-sdma-rotate", po::value<int>()->default_value(0), "Move each peer queue of the a2a-multigpu arm k steps along the even xGMI engines 2,4,...,14 from its KFD recommendation (gfx950 only). At 0 every queue keeps the KFD recommendation.")
+                ("a2a-multigpu-validate",    po::value<int>()->default_value(1), "Compare the a2a-multigpu arm's gathered buffer and output against the host reference after every launch (1=on).")
+                ("a2a-multigpu-init",        po::value<int>()->default_value(0), "Input values of the a2a-multigpu arm: 0 = multiples of 0.25 in [-1, 1], exact in bf16; 1 = standard normal, which needs --a2a-multigpu-validate 0.")
                 ("use-default-stream",       po::value<bool>()->default_value(false), "Use default Hip stream to run kernels.")
 
                 ("num-warmups",              po::value<int>()->default_value(0), "Number of warmups to run")

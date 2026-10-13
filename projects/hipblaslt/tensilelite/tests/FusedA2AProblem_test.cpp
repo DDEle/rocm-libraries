@@ -19,8 +19,8 @@ using namespace TensileLite;
 
 namespace
 {
-    ContractionProblemGemm
-        fusedProblem(size_t M, size_t N, size_t ldd, uint32_t world, int64_t extent)
+    ContractionProblemGemm fusedProblem(
+        size_t M, size_t N, size_t ldd, uint32_t world, int64_t extent, size_t batch = 1)
     {
         constexpr size_t K = 2048;
         auto             p = ContractionProblemGemm::GEMM_Strides(true,
@@ -32,7 +32,7 @@ namespace
                                                       M,
                                                       N,
                                                       K,
-                                                      1,
+                                                      batch,
                                                       K,
                                                       K * M,
                                                       K,
@@ -74,6 +74,9 @@ TEST(FusedA2AProblem, ShapePredicate)
     // (nShard >> 3) == 16352 and 16384
     EXPECT_TRUE(mt256(fusedProblem(261632, 16, 261632, 2, 261632)));
     EXPECT_FALSE(mt256(fusedProblem(262144, 16, 262144, 2, 262144)));
+    EXPECT_FALSE(mt256(fusedProblem(3072, 512, 3072, 2, 0)));
+    EXPECT_FALSE(mt256(fusedProblem(3072, 512, 3072, 2, -2048)));
+    EXPECT_FALSE(mt256(fusedProblem(3072, 512, 3072, 2, 2048, 2)));
 
     auto plain
         = ContractionProblemGemm::GEMM(false, true, 3000, 500, 100, 3000, 500, 3000, 0.0, false, 1);

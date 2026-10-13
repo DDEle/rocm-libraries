@@ -2938,10 +2938,13 @@ namespace TensileLite
                     if(!problem.fusedGemmA2A())
                         return true;
                     const int64_t world = problem.fusedA2AWorld();
-                    if(value <= 0 || world == 0)
+                    const int64_t am    = problem.fusedA2AExtent();
+                    if(value <= 0 || world == 0 || am <= 0)
                         return false;
+                    for(size_t i = 0; i < problem.batchIndices().size(); i++)
+                        if(problem.batchSize(i) != 1)
+                            return false;
                     const int64_t m       = problem.freeSizeA(0);
-                    const int64_t am      = problem.fusedA2AExtent();
                     const auto&   d       = problem.d();
                     const size_t  mStride = d.strides()[problem.freeIndices()[0].d];
                     const size_t  ldd     = d.strides()[problem.freeIndices()[1].d];

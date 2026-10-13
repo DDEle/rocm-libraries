@@ -83,7 +83,10 @@ def parseCurrentLibrary(libPath, sizePath):
     sizes = []
     if sizePath is None:
         for (size, mapping) in exactLogic:
-            sizes.append({"Exact": size})
+            if problemType["FusedGemmA2A"]:
+                sizes.append({"Exact": {"sizes": size[:-2], "world": size[-2], "a2aExtent": size[-1]}})
+            else:
+                sizes.append({"Exact": size})
     else:
         sizes = LibraryIO.read(sizePath)
 

@@ -112,7 +112,7 @@ class TestParseCurrentLibrary:
         """parseCurrentLibrary should parse library and create sizes from exactLogic"""
         from Tensile.TensileRetuneLibrary import parseCurrentLibrary, globalParameters
 
-        mock_problem_type = Mock()
+        mock_problem_type = {"FusedGemmA2A": False}
         mock_solution1 = MagicMock()
         mock_solution1.__eq__ = Mock(return_value=False)
         mock_exact_logic = [([64, 64, 1, 64], {}), ([128, 128, 1, 128], {})]
@@ -152,7 +152,7 @@ class TestParseCurrentLibrary:
         """parseCurrentLibrary should read PerfMetric from dict-format logic."""
         from Tensile.TensileRetuneLibrary import parseCurrentLibrary, globalParameters
 
-        mock_problem_type = Mock()
+        mock_problem_type = {"FusedGemmA2A": False}
         mock_solution1 = MagicMock()
         mock_solution1.__eq__ = Mock(return_value=False)
         mock_exact_logic = [([64, 64, 1, 64], {})]
@@ -171,6 +171,27 @@ class TestParseCurrentLibrary:
 
             assert len(result) == 3
             assert globalParameters["PerformanceMetric"] == "DeviceEfficiency"
+
+    @patch('Tensile.TensileRetuneLibrary.globalParameters', {})
+    @patch('Tensile.TensileRetuneLibrary.ProblemSizes')
+    @patch('Tensile.TensileRetuneLibrary.LibraryIO.parseLibraryLogicData')
+    def test_fused_logic_rows_become_exact_dicts(self, mock_parse, mock_problem_sizes):
+        from Tensile.TensileRetuneLibrary import parseCurrentLibrary
+
+        exactLogic = [([3072, 512, 1, 2048, 3072, 2048, 2048, 3072, 2, 2048], {}),
+                      ([3072, 512, 1, 2048, 4, 3072], {})]
+        mock_parse.return_value = (None, None, {"FusedGemmA2A": True}, [], exactLogic, None, None)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lib_file = os.path.join(tmpdir, "lib.yaml")
+            with open(lib_file, 'w') as f:
+                yaml.dump({"PerfMetric": "DeviceEfficiency"}, f)
+            parseCurrentLibrary(lib_file, None)
+
+        assert mock_problem_sizes.call_args[0][1] == [
+            {"Exact": {"sizes": [3072, 512, 1, 2048, 3072, 2048, 2048, 3072], "world": 2, "a2aExtent": 2048}},
+            {"Exact": {"sizes": [3072, 512, 1, 2048], "world": 4, "a2aExtent": 3072}},
+        ]
 
     @patch('Tensile.TensileRetuneLibrary.ProblemSizes')
     @patch('Tensile.TensileRetuneLibrary.LibraryIO.parseLibraryLogicData')

@@ -802,8 +802,9 @@ def writeClientConfigIni(forBenchmark, problemSizes, biasTypeArgs, factorDimArgs
         param("rotating-buffer-mode",     globalParameters["RotatingMode"])
         param("icache-rotate-copies",     globalParameters["IcacheRotateCopies"])
         param("icache-rotate-size",       globalParameters["IcacheRotateSize"])
-        for world in globalParameters["WorldFilter"]:
-            param("world-filter", world)
+        if problemType.fusedGemmA2A:
+            for world in globalParameters["WorldFilter"]:
+                param("world-filter", world)
         if globalParameters["RocProfCounter"]:
             for counter in globalParameters["RocProfCounter"]:
                 param("rocprof-counter", counter)

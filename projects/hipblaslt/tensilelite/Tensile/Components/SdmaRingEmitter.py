@@ -159,7 +159,8 @@ class SdmaRingEmitter:
     # ---- ReserveQueueSpace (CAS, NOT fetch_add) ----------------------------
 
     def emitReserveQueueSpace(self, module, w, peerGroupS, cursorBaseS, cursorOffS,
-                              cachedHwReadIdxS, sizeInBytes, outCurS, outOffsetS):
+                              cachedHwReadIdxS, sizeInBytes, outCurS, outOffsetS,
+                              cacheFromSeed=False):
         """Reserve `sizeInBytes` in the ring via a compare-exchange loop and
         compute the wrap-padding. outCurS (2 SGPRs) = reserved base index,
         outOffsetS (1 SGPR) = pad bytes, sizeInBytes an immediate or an SGPR.
@@ -197,6 +198,9 @@ class SdmaRingEmitter:
                             smem=SMEMModifiers(glc=True, offset=CUR_cachedWptr),
                             comment="seed cur = cachedWptr (hint; the CAS self-corrects)"))
         module.add(SWaitCnt(kmcnt=0, comment="wait cachedWptr seed"))
+        if cacheFromSeed:
+            module.add(SMovB64(dst=sgpr(cachedHwReadIdxS, 2), src=sgpr(casDataS + 2, 2),
+                               comment="EXPERIMENT: cachedHwReadIndex = seed"))
 
         module.add(loopLabel)
         module.add(SMovB64(dst=sgpr(outCurS, 2), src=sgpr(casDataS + 2, 2),

@@ -8077,7 +8077,6 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SLShiftLeftB32(dst=sgpr(curOff), shiftHex=int(log2(CURSOR_PAIR_BYTES)),
                               src=sgpr(srank),
                               comment="cursor pair offset = s * %u" % CURSOR_PAIR_BYTES))
-    ring.emitSeedCursorsAndCache(module, self, peerGrp, "A2ACounterPtr", curOff, cached)
     module.add(SSubU32(dst=sgpr(size), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
     module.add(SMinU32(dst=sgpr(size), src0=sgpr(size), src1=sgpr("A2ABlockCount"),
                        comment="non-empty groups = min(W-1, count)"))
@@ -8088,7 +8087,7 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SAddU32(dst=sgpr(size), src0=sgpr(size), src1=sgpr(pad),
                        comment="reservation = count COPYs + min(W-1, count) ATOMICs"))
     ring.emitReserveQueueSpace(module, self, peerGrp, "A2ACounterPtr", curOff,
-                               cached, sgpr(size), cur, pad)
+                               cached, sgpr(size), cur, pad, cacheFromSeed=True)
     module.add(SMovB64(dst=sgpr(pending, 2), src=sgpr(cur, 2), comment="pending = reserved base"))
 
     self.sgprPool.checkIn(size)

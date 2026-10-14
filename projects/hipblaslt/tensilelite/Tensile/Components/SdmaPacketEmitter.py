@@ -47,6 +47,12 @@ SDMA_OP_ATOMIC         = 10
 SDMA_ATOMIC_ADD_RTN_32 = 15
 ATOMIC_PACKET_DWORDS   = 8
 
+# FENCE writes DATA to ADDR once every earlier packet on the queue has completed;
+# MTYPE [18:16] = 3 (UC).
+SDMA_OP_FENCE        = 5
+FENCE_PACKET_DWORDS  = 4
+FENCE_HEADER_DW0     = (SDMA_OP_FENCE & 0xFF) | (3 << 16)
+
 # The packet's addressing granularity, header field [31:29].  Only the 16-byte
 # encoding is hardware-validated; the field being 3 bits wide is not evidence
 # that every encoding works, hence the allow-list rather than a range check.
@@ -154,6 +160,17 @@ class SdmaPacketEmitter:
                            comment="SUBWIN DW11: rect_x-1|rect_y-1 (both minus one; exact for rect_x >= 1)"))
         module.add(SMovB32(dst=sgpr(pktS + 12), src=hex(0),
                            comment="SUBWIN DW12: rect_z=0, default cache/swizzle"))
+
+    # ---- FENCE builder ------------------------------------------------------
+
+    def emitBuildFencePacket(self, module, pktS, dstAddrS, value=1):
+        """Build the 4 FENCE dwords into pktS[0:4]: write `value` to the
+        4-byte slot at dstAddrS (2 SGPRs)."""
+        module.add(SMovB32(dst=sgpr(pktS + 0), src=hex(FENCE_HEADER_DW0),
+                           comment="FENCE DW0: op=FENCE mtype=UC"))
+        module.add(SMovB32(dst=sgpr(pktS + 1), src=sgpr(dstAddrS + 0), comment="FENCE DW1: addr lo"))
+        module.add(SMovB32(dst=sgpr(pktS + 2), src=sgpr(dstAddrS + 1), comment="FENCE DW2: addr hi"))
+        module.add(SMovB32(dst=sgpr(pktS + 3), src=hex(value), comment="FENCE DW3: data"))
 
     # ---- ATOMIC ADD_RTN_32 builder ------------------------------------------
 

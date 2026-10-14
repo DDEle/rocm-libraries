@@ -501,6 +501,7 @@ defaultBenchmarkCommonParameters = [
     {"DirectToLdsMetadata": [1]},
     {"UseSubtileImpl": [False]},
     {"A2ASubRounds": [1]},
+    {"A2AFenceSignal": [False]},
     {"UseSgprForGRO": [-1]},
     {"UseInstOffsetForGRO": [0]},
     {"AssertSummationElementMultiple": [1]},

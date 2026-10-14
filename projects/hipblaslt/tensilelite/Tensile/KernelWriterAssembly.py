@@ -8004,7 +8004,7 @@ class KernelWriterAssembly(KernelWriter):
     from .Components.Signature import (FUSED_A2A_MODE1_FLAG_OFFSET,
                                        fusedA2AKernArgLayout)
     from .Components.SdmaPacketEmitter import (ATOMIC_PACKET_DWORDS, COPY_PACKET_DWORDS,
-                                               SdmaPacketEmitter)
+                                               FENCE_PACKET_DWORDS, SdmaPacketEmitter)
     from .Components.SdmaRingEmitter import (CURSOR_PAIR_BYTES, OFF_queueBuf, OFF_recvPtr,
                                              PEER_GROUP_BYTES, SdmaRingEmitter)
 
@@ -8095,8 +8095,10 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SSubU32(dst=sgpr(size), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
     module.add(SMinU32(dst=sgpr(size), src0=sgpr(size), src1=sgpr("A2ABlockCount"),
                        comment="non-empty groups = min(W-1, count)"))
-    module.add(SMulI32(dst=sgpr(size), src0=sgpr(size), src1=ATOMIC_PACKET_DWORDS * 4,
-                       comment="one ATOMIC per group"))
+    fence     = kernel["A2AFenceSignal"]
+    sigDwords = FENCE_PACKET_DWORDS if fence else ATOMIC_PACKET_DWORDS
+    module.add(SMulI32(dst=sgpr(size), src0=sgpr(size), src1=sigDwords * 4,
+                       comment="one %s per group" % ("FENCE" if fence else "ATOMIC")))
     module.add(SMulI32(dst=sgpr(pad), src0=sgpr("A2ABlockCount"), src1=COPY_PACKET_DWORDS * 4,
                        comment="one COPY per block"))
     module.add(SAddU32(dst=sgpr(size), src0=sgpr(size), src1=sgpr(pad),
@@ -8295,7 +8297,10 @@ class KernelWriterAssembly(KernelWriter):
       fStep = self.sgprPool.checkOut(1, tag="a2aEnq_fStep", preventOverflow=False)
       module.add(VReadfirstlaneB32(dst=sgpr(fFlag), src=vgpr(vFlag), comment="flag addr lo"))
       module.add(VReadfirstlaneB32(dst=sgpr(fFlag + 1), src=vgpr(vFlag + 1), comment="flag addr hi"))
-      pkt.emitBuildAtomicPacket(module, pktS, fFlag)
+      if fence:
+        pkt.emitBuildFencePacket(module, pktS, fFlag)
+      else:
+        pkt.emitBuildAtomicPacket(module, pktS, fFlag)
       module.add(SSubU32(dst=sgpr(fStep), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
       module.add(SMulI32(dst=sgpr(fStep), src0=sgpr(fStep), src1=sgpr(fStep),
                          comment="W-1 blocks of flag slots"))
@@ -8322,7 +8327,7 @@ class KernelWriterAssembly(KernelWriter):
                            comment="still inside the batch?"))
       module.add(SCBranchSCC1(labelName=pLoop.getLabelName(), comment="next block, no ATOMIC yet"))
 
-      ring.emitPlacePacket(module, self, peerGrp, pktS, ATOMIC_PACKET_DWORDS, pending, pad,
+      ring.emitPlacePacket(module, self, peerGrp, pktS, sigDwords, pending, pad,
                            queueBufV=vQBuf)
       if h == subRounds - 1:
         self.sgprPool.checkIn(pktS)

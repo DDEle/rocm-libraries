@@ -83,9 +83,8 @@ namespace TensileLite
             void a2aFillNormal(uint64_t seed, size_t rows, size_t cols, size_t ld, BFloat16* out)
             {
 #pragma omp parallel for
-                for(size_t r = 0; r < rows; r++)
-                    for(size_t c = 0; c < cols; c++)
-                        out[r * ld + c] = BFloat16(a2aNormalValue(seed + r * cols + c));
+                for(size_t i = 0; i < rows * cols; i++)
+                    out[(i / cols) * ld + i % cols] = BFloat16(a2aNormalValue(seed + i));
             }
 
             struct DeviceBuffer

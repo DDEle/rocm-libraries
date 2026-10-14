@@ -218,7 +218,8 @@ namespace TensileLite
                               << std::endl;
                     return false;
                 }
-                const size_t numCu = amd->computeUnitCount;
+                const size_t numCu = probeInputs.fusedA2ANumCu != 0 ? probeInputs.fusedA2ANumCu
+                                                                    : amd->computeUnitCount;
                 const size_t mt0   = solution.sizeMapping.macroTile.x;
                 const size_t mt1   = solution.sizeMapping.macroTile.y;
 
@@ -645,9 +646,18 @@ namespace TensileLite
                 const int  rotate     = args["a2a-multigpu-sdma-rotate"].as<int>();
                 const bool validate   = args["a2a-multigpu-validate"].as<int>() != 0;
                 const bool normalInit = args["a2a-multigpu-init"].as<int>() == 1;
+                const int  numCu      = std::max(0, args["a2a-multigpu-num-cu"].as<int>());
+                const bool noWait     = args["a2a-multigpu-no-wait"].as<int>() != 0;
                 if(normalInit && validate)
                 {
                     std::cerr << "[a2a-multigpu] ERROR: --a2a-multigpu-init 1 needs "
+                                 "--a2a-multigpu-validate 0"
+                              << std::endl;
+                    return 1;
+                }
+                if(noWait && validate)
+                {
+                    std::cerr << "[a2a-multigpu] ERROR: --a2a-multigpu-no-wait 1 needs "
                                  "--a2a-multigpu-validate 0"
                               << std::endl;
                     return 1;
@@ -873,6 +883,7 @@ namespace TensileLite
                     inputs[d].beta           = 0.0f;
                     inputs[d].fusedA2AMyRank = (uint32_t)d;
                     inputs[d].fusedA2ADrain  = 0;
+                    inputs[d].fusedA2ANumCu  = (uint32_t)numCu;
                     for(int j = 0; j < W; j++)
                     {
                         const HsaQueueResource& r = queues[d][j]->queueResource();
@@ -970,15 +981,18 @@ namespace TensileLite
                                                  segBytes,
                                                  hipMemcpyDeviceToDevice,
                                                  streams[d]));
-                    HIP_CHECK_EXC(hipMemsetAsync(
-                        gathered + segBytes, A2A_LOOPBACK_POISON, xBytes - segBytes, streams[d]));
+                    if(!noWait)
+                        HIP_CHECK_EXC(hipMemsetAsync(gathered + segBytes,
+                                                     A2A_LOOPBACK_POISON,
+                                                     xBytes - segBytes,
+                                                     streams[d]));
                 };
 
                 auto enqueueCompute = [&](int r, int d) {
                     HIP_CHECK_EXC(hipSetDevice(d));
                     HIP_CHECK_EXC(
                         hipMemsetAsync((char*)devCounter[d].ptr + FUSED_A2A_MODE1_FLAG_OFFSET,
-                                       0,
+                                       noWait ? 1 : 0,
                                        layout.flagBytes,
                                        streams[d]));
 

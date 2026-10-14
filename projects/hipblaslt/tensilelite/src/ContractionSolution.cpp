@@ -2135,7 +2135,9 @@ namespace TensileLite
                                problem.fusedA2AWorld(),
                                inputs.fusedA2ADrain,
                                static_cast<uint32_t>(problem.fusedA2AExtent()),
-                               static_cast<uint32_t>(pAMDGPU->computeUnitCount));
+                               inputs.fusedA2ANumCu != 0
+                                   ? inputs.fusedA2ANumCu
+                                   : static_cast<uint32_t>(pAMDGPU->computeUnitCount));
         }
 
         if(problemType.stochasticRounding)

@@ -1715,6 +1715,7 @@ namespace TensileLite
         uint32_t                        fusedA2AMyRank  = 0;
         uint32_t                        fusedA2ADrain   = 0;
         void*                           a2aRecv         = nullptr;
+        uint32_t                        fusedA2ANumCu   = 0;
 
         // Workspace
         void* ws = nullptr;

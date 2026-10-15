@@ -502,7 +502,6 @@ defaultBenchmarkCommonParameters = [
     {"UseSubtileImpl": [False]},
     {"A2ASubRounds": [1]},
     {"A2AFenceSignal": [False]},
-    {"A2AEnqueueAhead": [0]},
     {"UseSgprForGRO": [-1]},
     {"UseInstOffsetForGRO": [0]},
     {"AssertSummationElementMultiple": [1]},

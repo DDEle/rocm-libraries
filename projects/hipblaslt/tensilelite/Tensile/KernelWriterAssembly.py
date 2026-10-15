@@ -7908,10 +7908,9 @@ class KernelWriterAssembly(KernelWriter):
     ticket i < W-1 serves peer queue i. Requires the batch to draw at least W-1
     tickets.
 
-    A2AEnqueueAhead=1: batch 0 places batches 0 and 1, batch k > 0 places batch
-    k+1, and the last batch (unless it is batch 0) draws no ticket.
-    A2AEnqueueAhead=-1: batch 0 places every batch; no other batch draws.
-    Either way an enqueuer overwrites iBSgpr and A2ABlockCount.
+    Batch 0 places batches 0 and 1, batch k > 0 places batch k+1, and the last
+    batch (unless it is batch 0) draws no ticket. An enqueuer overwrites iBSgpr
+    and A2ABlockCount.
 
     Everything between the election and A2ASkipEnqueue runs on an enqueuer only.
     """
@@ -7925,19 +7924,14 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SSubU32(dst=sgpr(m), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
     module.add(SCmpEQU32(src0=sgpr(m), src1=0, comment="W == 1?"))
     module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(), comment="no remote queues"))
-    ahead = kernel["A2AEnqueueAhead"]
-    if ahead == 1:
-      module.add(SAddU32(dst=sgpr(wave), src0=sgpr("A2ABlockLo"), src1=sgpr("A2ABlockCount"),
-                         comment="bHi"))
-      module.add(SCmpEQU32(src0=sgpr(wave), src1=sgpr("NumWorkGroups1"), comment="last batch?"))
-      module.add(SCSelectB32(dst=sgpr(wave), src0=sgpr("A2ABlockLo"), src1=0,
-                             comment="bLo if the last batch, else 0"))
-      module.add(SCmpLgU32(src0=sgpr(wave), src1=0, comment="the last batch but not batch 0?"))
-      module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
-                              comment="the previous batch placed this one"))
-    elif ahead == -1:
-      module.add(SCmpLgU32(src0=sgpr("A2ABlockLo"), src1=0, comment="not batch 0?"))
-      module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(), comment="batch 0 placed this one"))
+    module.add(SAddU32(dst=sgpr(wave), src0=sgpr("A2ABlockLo"), src1=sgpr("A2ABlockCount"),
+                       comment="bHi"))
+    module.add(SCmpEQU32(src0=sgpr(wave), src1=sgpr("NumWorkGroups1"), comment="last batch?"))
+    module.add(SCSelectB32(dst=sgpr(wave), src0=sgpr("A2ABlockLo"), src1=0,
+                           comment="bLo if the last batch, else 0"))
+    module.add(SCmpLgU32(src0=sgpr(wave), src1=0, comment="the last batch but not batch 0?"))
+    module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
+                            comment="the previous batch placed this one"))
     module.add(SMinU32(dst=sgpr(m), src0=sgpr(m), src1=numWaves,
                        comment="m = min(numWaves, W-1)"))
     module.add(VReadfirstlaneB32(dst=sgpr(wave), src=vgpr("Serial"), comment="wave's first thread"))
@@ -8002,30 +7996,23 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
                             comment="no queue for this ticket -> skip the enqueue"))
 
-    if ahead == 0:
-      module.add(self.a2aEnqueue(kernel, tPB, data))
-    else:
-      lo       = iBSgpr
-      nextLbl  = Label(self.labels.getNameInc("a2a_next_batch"), "advance to the next batch")
-      placeLbl = Label(self.labels.getNameInc("a2a_place_batch"), "place one batch")
-      module.add(SMovB32(dst=sgpr(lo), src=sgpr("A2ABlockLo"), comment="this batch"))
-      if ahead == 1:
-        module.add(SCmpEQU32(src0=sgpr(lo), src1=0, comment="batch 0?"))
-        module.add(SCBranchSCC1(labelName=placeLbl.getLabelName(), comment="batch 0 places itself first"))
-      else:
-        module.add(SBranch(labelName=placeLbl.getLabelName(), comment="batch 0 places itself first"))
-      module.add(nextLbl)
-      module.add(self.a2aNextBatch(kernel, lo, numCuSgpr))
-      module.add(placeLbl)
-      module.add(self.a2aEnqueue(kernel, tPB, data, lo, "A2ABlockCount"))
-      if ahead == 1:
-        module.add(SCmpLgU32(src0=sgpr(lo), src1=sgpr("A2ABlockLo"), comment="placed the next batch?"))
-        module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(), comment="done"))
-      hi = self.sgprPool.checkOut(1, tag="a2aElect_hi", preventOverflow=False)
-      module.add(SAddU32(dst=sgpr(hi), src0=sgpr(lo), src1=sgpr("A2ABlockCount"), comment="bHi"))
-      module.add(SCmpLtU32(src0=sgpr(hi), src1=sgpr("NumWorkGroups1"), comment="batches left?"))
-      self.sgprPool.checkIn(hi)
-      module.add(SCBranchSCC1(labelName=nextLbl.getLabelName(), comment="place the next batch"))
+    lo       = iBSgpr
+    nextLbl  = Label(self.labels.getNameInc("a2a_next_batch"), "advance to the next batch")
+    placeLbl = Label(self.labels.getNameInc("a2a_place_batch"), "place one batch")
+    module.add(SMovB32(dst=sgpr(lo), src=sgpr("A2ABlockLo"), comment="this batch"))
+    module.add(SCmpEQU32(src0=sgpr(lo), src1=0, comment="batch 0?"))
+    module.add(SCBranchSCC1(labelName=placeLbl.getLabelName(), comment="batch 0 places itself first"))
+    module.add(nextLbl)
+    module.add(self.a2aNextBatch(kernel, lo, numCuSgpr))
+    module.add(placeLbl)
+    module.add(self.a2aEnqueue(kernel, tPB, data, lo))
+    module.add(SCmpLgU32(src0=sgpr(lo), src1=sgpr("A2ABlockLo"), comment="placed the next batch?"))
+    module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(), comment="done"))
+    hi = self.sgprPool.checkOut(1, tag="a2aElect_hi", preventOverflow=False)
+    module.add(SAddU32(dst=sgpr(hi), src0=sgpr(lo), src1=sgpr("A2ABlockCount"), comment="bHi"))
+    module.add(SCmpLtU32(src0=sgpr(hi), src1=sgpr("NumWorkGroups1"), comment="batches left?"))
+    self.sgprPool.checkIn(hi)
+    module.add(SCBranchSCC1(labelName=nextLbl.getLabelName(), comment="place the next batch"))
     self.sgprPool.checkIn(data)
     module.add(skipLabel)
     return module
@@ -8062,17 +8049,17 @@ class KernelWriterAssembly(KernelWriter):
     self.sgprPool.checkIn(acc)
     return module
 
-  def a2aEnqueue(self, kernel, tPB, qSgpr, loSgpr="A2ABlockLo", countSgpr="A2ABlockCount"):
+  def a2aEnqueue(self, kernel, tPB, qSgpr, loSgpr):
     """Emit one enqueuer's packing pass on peer queue i = qSgpr: one reservation,
     one COPY per block and one ATOMIC per group inside it, one submit.
 
     Runs only on an elected wave. Each lane but the last builds and stores one
     block's COPY; the last lane stores the group's ATOMIC with the final pass.
 
-    The blocks placed are [loSgpr, loSgpr + countSgpr).
+    The blocks placed are [loSgpr, loSgpr + A2ABlockCount).
 
     Both loops are do-while with no top-of-loop test, so they require W >= 2
-    (guarded by the election) and countSgpr >= 1.
+    (guarded by the election) and A2ABlockCount >= 1.
     """
     from .Components.Signature import (FUSED_A2A_MODE1_FLAG_OFFSET,
                                        fusedA2AKernArgLayout)
@@ -8138,7 +8125,7 @@ class KernelWriterAssembly(KernelWriter):
       bTop = tmpSgprInfo.idx + 1
       gRes = tmpSgprInfo.idx + 2
       module.add(SSubU32(dst=sgpr(wm1), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
-      module.add(SAddU32(dst=sgpr(bTop), src0=sgpr(loSgpr), src1=sgpr(countSgpr),
+      module.add(SAddU32(dst=sgpr(bTop), src0=sgpr(loSgpr), src1=sgpr("A2ABlockCount"),
                          comment="bHi"))
       module.add(SSubU32(dst=sgpr(bTop), src0=sgpr(bTop), src1=1, comment="bHi - 1"))
       module.add(scalarUInt24DivideAndRemainder(
@@ -8165,13 +8152,13 @@ class KernelWriterAssembly(KernelWriter):
                               comment="cursor pair offset = s * %u" % CURSOR_PAIR_BYTES))
     ring.emitSeedCursorsAndCache(module, self, peerGrp, "A2ACounterPtr", curOff, cached)
     module.add(SSubU32(dst=sgpr(size), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
-    module.add(SMinU32(dst=sgpr(size), src0=sgpr(size), src1=sgpr(countSgpr),
+    module.add(SMinU32(dst=sgpr(size), src0=sgpr(size), src1=sgpr("A2ABlockCount"),
                        comment="non-empty groups = min(W-1, count)"))
     fence     = kernel["A2AFenceSignal"]
     sigDwords = FENCE_PACKET_DWORDS if fence else ATOMIC_PACKET_DWORDS
     module.add(SMulI32(dst=sgpr(size), src0=sgpr(size), src1=sigDwords * 4,
                        comment="one %s per group" % ("FENCE" if fence else "ATOMIC")))
-    module.add(SMulI32(dst=sgpr(pad), src0=sgpr(countSgpr), src1=COPY_PACKET_DWORDS * 4,
+    module.add(SMulI32(dst=sgpr(pad), src0=sgpr("A2ABlockCount"), src1=COPY_PACKET_DWORDS * 4,
                        comment="one COPY per block"))
     module.add(SAddU32(dst=sgpr(size), src0=sgpr(size), src1=sgpr(pad),
                        comment="reservation = count COPYs + min(W-1, count) ATOMICs"))
@@ -8284,7 +8271,7 @@ class KernelWriterAssembly(KernelWriter):
     vOff  = self.vgprPool.checkOutAligned(2, 2, tag="a2aEnq_rowOffset")
     vAddr = self.vgprPool.checkOutAligned(2, 2, tag="a2aEnq_ringAddr")
 
-    module.add(SMovB32(dst=sgpr(pLeft), src=sgpr(countSgpr),
+    module.add(SMovB32(dst=sgpr(pLeft), src=sgpr("A2ABlockCount"),
                        comment="blocks left on this queue"))
     module.add(VReadfirstlaneB32(dst=sgpr(row), src=vgpr(vGStart),
                                  comment="first block of this group"))
@@ -8406,7 +8393,7 @@ class KernelWriterAssembly(KernelWriter):
 
       if h == 0:
         earlySkip = Label(self.labels.getNameInc("a2a_early_doorbell_skip"), "")
-        module.add(SCmpEQU32(src0=sgpr(pLeft), src1=sgpr(countSgpr),
+        module.add(SCmpEQU32(src0=sgpr(pLeft), src1=sgpr("A2ABlockCount"),
                              comment="first group of this queue?"))
         module.add(SCBranchSCC0(labelName=earlySkip.getLabelName(), comment="doorbell already rung"))
         module.add(SWaitCnt(vlcnt=0, comment="the group's packets are in the ring"))
@@ -8431,7 +8418,7 @@ class KernelWriterAssembly(KernelWriter):
       module.add(VReadfirstlaneB32(dst=sgpr(g), src=vgpr(vGStart), comment="this group's start"))
       module.add(SSubU32(dst=sgpr(g), src0=sgpr(g), src1=1,
                          comment="next group starts one block lower"))
-      module.add(SAddU32(dst=sgpr(lo), src0=sgpr(loSgpr), src1=sgpr(countSgpr),
+      module.add(SAddU32(dst=sgpr(lo), src0=sgpr(loSgpr), src1=sgpr("A2ABlockCount"),
                          comment="bHi"))
       module.add(SSubU32(dst=sgpr(lo), src0=sgpr(lo), src1=sgpr("A2AShardCounter"),
                          comment="bHi - W"))

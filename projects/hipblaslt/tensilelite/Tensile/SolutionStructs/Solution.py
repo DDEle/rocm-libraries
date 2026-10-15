@@ -1847,9 +1847,6 @@ class Solution(collections.abc.Mapping):
     if state["A2AFenceSignal"] and state["ProblemType"]["FusedA2AMode"] != 1:
       reject(state, printRejectionReason, "A2AFenceSignal requires FusedA2AMode=1")
       return
-    if state["A2AEnqueueAhead"] != 0 and state["ProblemType"]["FusedA2AMode"] != 1:
-      reject(state, printRejectionReason, "A2AEnqueueAhead requires FusedA2AMode=1")
-      return
 
     if state["ProblemType"]["FusedA2AMode"] == 1:
       if state["ProblemType"]["FusedGemmA2A"]:

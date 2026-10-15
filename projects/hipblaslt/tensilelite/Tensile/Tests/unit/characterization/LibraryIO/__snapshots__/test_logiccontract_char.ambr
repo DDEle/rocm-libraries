@@ -5,7 +5,6 @@
     'CUCount': 228,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -258,7 +257,6 @@
     'CUCount': None,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -499,7 +497,6 @@
     'CUCount': None,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -755,7 +752,6 @@
     'CUCount': None,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -1028,7 +1024,6 @@
     'CUCount': None,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -1281,7 +1276,6 @@
     'CUCount': None,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -1548,7 +1542,6 @@
     'CUCount': None,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -1804,7 +1797,6 @@
     'CUCount': 228,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -2060,7 +2052,6 @@
     'CUCount': None,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -2304,7 +2295,6 @@
     'CUCount': None,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -2560,7 +2550,6 @@
     'CUCount': None,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,
@@ -2815,7 +2804,6 @@
     'CUCount': None,
     'DefaultSolution': dict({
       '1LDSBuffer': 0,
-      'A2AEnqueueAhead': 0,
       'A2AFenceSignal': False,
       'A2ASubRounds': 1,
       'ActivationAlt': False,

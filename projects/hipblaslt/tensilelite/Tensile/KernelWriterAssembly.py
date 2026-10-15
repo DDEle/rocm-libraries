@@ -8064,8 +8064,7 @@ class KernelWriterAssembly(KernelWriter):
     from .Components.Signature import (FUSED_A2A_MODE1_FLAG_OFFSET,
                                        fusedA2AKernArgLayout)
     from .Components.SdmaPacketEmitter import (ATOMIC_PACKET_DWORDS, COPY_DW_DST, COPY_DW_SRC,
-                                               COPY_PACKET_DWORDS, FENCE_PACKET_DWORDS,
-                                               SdmaPacketEmitter)
+                                               COPY_PACKET_DWORDS, SdmaPacketEmitter)
     from .Components.SdmaRingEmitter import (CURSOR_PAIR_BYTES, OFF_queueBuf, OFF_recvPtr,
                                              PEER_GROUP_BYTES, SdmaRingEmitter)
 
@@ -8154,10 +8153,8 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SSubU32(dst=sgpr(size), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
     module.add(SMinU32(dst=sgpr(size), src0=sgpr(size), src1=sgpr("A2ABlockCount"),
                        comment="non-empty groups = min(W-1, count)"))
-    fence     = kernel["A2AFenceSignal"]
-    sigDwords = FENCE_PACKET_DWORDS if fence else ATOMIC_PACKET_DWORDS
-    module.add(SMulI32(dst=sgpr(size), src0=sgpr(size), src1=sigDwords * 4,
-                       comment="one %s per group" % ("FENCE" if fence else "ATOMIC")))
+    module.add(SMulI32(dst=sgpr(size), src0=sgpr(size), src1=ATOMIC_PACKET_DWORDS * 4,
+                       comment="one ATOMIC per group"))
     module.add(SMulI32(dst=sgpr(pad), src0=sgpr("A2ABlockCount"), src1=COPY_PACKET_DWORDS * 4,
                        comment="one COPY per block"))
     module.add(SAddU32(dst=sgpr(size), src0=sgpr(size), src1=sgpr(pad),
@@ -8250,10 +8247,7 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SMovB32(dst=EXECHI(), src=hex(1 << 31), comment="the signal lane"))
     module.add(VMovB32(dst=vgpr(vLaneStep), src=hex(1 << 30),
                        comment="the signal lane holds no block"))
-    if fence:
-      pkt.emitBuildFencePacketUniformV(module, vPkt)
-    else:
-      pkt.emitBuildAtomicPacketUniformV(module, vPkt)
+    pkt.emitBuildAtomicPacketUniformV(module, vPkt)
     module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
 
     ring.emitPadV(module, self, vQBuf, pending, pad, vLane, vPkt + 8, ww)
@@ -8321,8 +8315,7 @@ class KernelWriterAssembly(KernelWriter):
                             comment="&flag[bLast][i] hi (carry)"))
         pkt.emitSignalAddressV(module, vPkt, fFlag, ww - 1)
 
-      module.addComment1("A2A: the group's COPYs, one block per lane, then its %s"
-                         % ("FENCE" if fence else "ATOMIC"))
+      module.addComment1("A2A: the group's COPYs, one block per lane, then its ATOMIC")
       cLoop = Label(self.labels.getNameInc("a2a_copy_loop"), "up to one block per lane")
       module.add(SMovB32(dst=sgpr(rowC), src=sgpr(row), comment="first block of this pass"))
       module.add(SMovB32(dst=sgpr(nLeft), src=sgpr(nBlk), comment="blocks left in the group"))
@@ -8369,10 +8362,11 @@ class KernelWriterAssembly(KernelWriter):
                                comment="the signal lane, on the last pass"))
         module.add(SOrB32(dst=EXECHI(), src0=EXECHI(), src1=sgpr(sig), comment="+ the signal lane"))
         ring.emitLaneRingAddrV(module, self, vAddr, vQBuf, pending, vLaneOff)
-        ring.emitStorePacketV(module, vAddr, vPkt, sigDwords)
+        ring.emitStorePacketV(module, vAddr, vPkt, ATOMIC_PACKET_DWORDS)
         module.add(SAndN2B32(dst=EXECHI(), src0=EXECHI(), src1=sgpr(sig),
                              comment="- the signal lane"))
-        ring.emitStorePacketV(module, vAddr, vPkt, COPY_PACKET_DWORDS, firstDword=sigDwords)
+        ring.emitStorePacketV(module, vAddr, vPkt, COPY_PACKET_DWORDS,
+                              firstDword=ATOMIC_PACKET_DWORDS)
         module.add(SNop(waitState=1, comment="write-data hazard"))
         module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
         module.add(SAddU32(dst=sgpr(pending), src0=sgpr(pending), src1=sgpr(t),
@@ -8386,7 +8380,7 @@ class KernelWriterAssembly(KernelWriter):
                            comment="first block of the next pass"))
       module.add(SCmpLgU32(src0=sgpr(nLeft), src1=0, comment="blocks left in the group?"))
       module.add(SCBranchSCC1(labelName=cLoop.getLabelName(), comment="next pass"))
-      module.add(SAddU32(dst=sgpr(pending), src0=sgpr(pending), src1=sigDwords * 4,
+      module.add(SAddU32(dst=sgpr(pending), src0=sgpr(pending), src1=ATOMIC_PACKET_DWORDS * 4,
                          comment="pending += signal bytes"))
       module.add(SAddCU32(dst=sgpr(pending + 1), src0=sgpr(pending + 1), src1=0,
                           comment="pending hi carry"))

@@ -1359,7 +1359,6 @@
 # name: test_valid_parameters_key_roster
   list([
     '1LDSBuffer',
-    'A2AFenceSignal',
     'A2ASubRounds',
     'ActivationAlt',
     'ActivationFuncCall',
@@ -1540,14 +1539,6 @@
         1,
       ]),
       'len': 3,
-      'type': 'list',
-    }),
-    'A2AFenceSignal': dict({
-      'head': list([
-        False,
-        True,
-      ]),
-      'len': 2,
       'type': 'list',
     }),
     'A2ASubRounds': dict({

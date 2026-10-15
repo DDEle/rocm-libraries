@@ -550,8 +550,6 @@ validParameters = { # we need to make sure this matches develop
     "UseSubtileImpl": [False, True],
     # FusedA2AMode=1: K sub-rounds per peer shard, each with its own flag.
     "A2ASubRounds": [1, 2, 4],
-    # FusedA2AMode=1: signal each flag with an SDMA FENCE instead of an ATOMIC ADD.
-    "A2AFenceSignal": [False, True],
     # Load options:
     # (GRO = Global Read Offset)
     # BufferLoad=0:

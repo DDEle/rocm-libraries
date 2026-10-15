@@ -257,6 +257,7 @@ def test_a2a_mode_rejects_fused_gemm_a2a(_gp_gfx942, gfx942_iim, assembler, caps
 _MODE_KNOBS = [
     ("A2ASubRounds", 2, "A2ASubRounds > 1 requires FusedA2AMode=1"),
     ("A2AFenceSignal", True, "A2AFenceSignal requires FusedA2AMode=1"),
+    ("A2AEnqueueAhead", 1, "A2AEnqueueAhead requires FusedA2AMode=1"),
 ]
 
 

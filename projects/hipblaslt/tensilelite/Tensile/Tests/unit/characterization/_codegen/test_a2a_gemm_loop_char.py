@@ -17,6 +17,9 @@ _CONFIG = "Tensile/Tests/common/comm/gfx950/a2a_gemm_loop.yaml"
 # Same solution; K gives an odd unroll trip count K/DepthU.
 _CONFIG_ODD_TRIP = "Tensile/Tests/common/comm/gfx950/a2a_gemm_loop_odd_trip.yaml"
 
+_CONFIG_AHEAD = "Tensile/Tests/common/comm/gfx950/a2a_gemm_loop_enqueue_ahead.yaml"
+_CONFIG_ALL = "Tensile/Tests/common/comm/gfx950/a2a_gemm_loop_enqueue_all.yaml"
+
 
 def _tn_problem_type(**overrides):
     from Tensile.SolutionStructs.Problem import ProblemType
@@ -849,12 +852,13 @@ class TestA2AGemmPacketBody:
 class TestA2AGemmRegisterBudget:
     """The emitted kernel's SGPR high-water mark."""
 
-    def test_kernel_stays_within_the_sgpr_ceiling(self):
+    @pytest.mark.parametrize("config", [_CONFIG, _CONFIG_AHEAD, _CONFIG_ALL])
+    def test_kernel_stays_within_the_sgpr_ceiling(self, config):
         import re
 
         from config_harness import emit_kernels_from_config
 
-        src = emit_kernels_from_config(_CONFIG, limit=1, arch="gfx950")[0][1]
+        src = emit_kernels_from_config(config, limit=1, arch="gfx950")[0][1]
         found = re.findall(r"\.amdhsa_next_free_sgpr\s+(\d+)", src)
         assert found, "no .amdhsa_next_free_sgpr in the emitted kernel"
         assert int(found[0]) <= 102
@@ -1327,3 +1331,147 @@ class TestA2AGemmF64PairAlignment:
             "f64 vgpr tuples must be 64 bit aligned; the assembler rejects these:\n"
             + "\n".join(odd)
         )
+
+
+class TestA2AGemmEnqueueAhead:
+    """A2AEnqueueAhead: an enqueuer places later batches than its own."""
+
+    def _src(self, config):
+        from config_harness import emit_kernels_from_config
+
+        return emit_kernels_from_config(config, limit=1, arch="gfx950")[0][1]
+
+    def _election(self, src):
+        """Up to the election atomic."""
+        import re
+
+        m = re.search(r"^s_atomic_inc [^\n]*$", src, re.M)
+        assert m, "no s_atomic_inc in the emitted kernel"
+        return src[: m.start()]
+
+    def _tail(self, src):
+        """The election atomic through the skip label."""
+        import re
+
+        head = re.search(r"^s_atomic_inc [^\n]*$", src, re.M)
+        tail = re.search(r"^label_A2ASkipEnqueue:", src, re.M)
+        assert head and tail, "no a2a packing pass in the emitted kernel"
+        return src[head.end() : tail.start()]
+
+    def _lo(self, tail):
+        """The SGPR holding the first block of the batch being placed."""
+        import re
+
+        m = re.search(r"^s_mov_b32 s(\d+), s\[sgprA2ABlockLo\][^\n]*// this batch$", tail, re.M)
+        assert m, "the placed batch is not seeded from this batch"
+        return m.group(1)
+
+    def _pass(self, tail):
+        """The packing pass alone: the place label through the submit."""
+        import re
+
+        head = re.search(r"^label_a2a_place_batch\w*:", tail, re.M)
+        end = re.search(r"^s_cmp_\w+ s\d+, s\[sgpr(A2ABlockLo|NumWorkGroups1)\]", tail[head.end() :], re.M)
+        assert head and end, "no packing pass between the place label and the loop test"
+        return tail[head.end() : head.end() + end.start()]
+
+    def test_the_default_places_its_own_batch_only(self):
+        assert "label_a2a_next_batch" not in self._src(_CONFIG)
+
+    def test_the_last_batch_but_batch_0_skips_the_election(self):
+        import re
+
+        assert re.search(
+            r"s_add_u32 s(\d+), s\[sgprA2ABlockLo\], s\[sgprA2ABlockCount\][^\n]*\n"
+            r"s_cmp_eq_u32 s\1, s\[sgprNumWorkGroups1\][^\n]*\n"
+            r"s_cselect_b32 s\1, s\[sgprA2ABlockLo\], 0[^\n]*\n"
+            r"s_cmp_lg_u32 s\1, 0[^\n]*\n"
+            r"s_cbranch_scc1 label_A2ASkipEnqueue",
+            self._election(self._src(_CONFIG_AHEAD)),
+        ), "the last batch still draws a ticket"
+
+    def test_every_batch_but_batch_0_skips_the_election(self):
+        import re
+
+        assert re.search(
+            r"s_cmp_lg_u32 s\[sgprA2ABlockLo\], 0[^\n]*\n"
+            r"s_cbranch_scc1 label_A2ASkipEnqueue",
+            self._election(self._src(_CONFIG_ALL)),
+        ), "a batch past batch 0 still draws a ticket"
+
+    @pytest.mark.parametrize("config", [_CONFIG_AHEAD, _CONFIG_ALL])
+    def test_the_pass_reads_the_placed_batch(self, config):
+        tail = self._src(config)
+        tail = self._tail(tail)
+        lo, body = self._lo(tail), self._pass(tail)
+        assert "sgprA2ABlockLo" not in body, "the pass reads this batch's floor"
+        assert "v_cmp_le_i32 vcc, s%s, v" % lo in body, "lanes are not masked at the placed floor"
+
+    @pytest.mark.parametrize("config", [_CONFIG_AHEAD, _CONFIG_ALL])
+    def test_the_pass_keeps_the_placed_floor_and_the_cu_count(self, config):
+        import re
+
+        tail = self._tail(self._src(config))
+        lo, body = self._lo(tail), self._pass(tail)
+        cu = re.search(r"^s_mul_i32 s\d+, s\d+, s(\d+)[^\n]*// iB \* numCu$", tail, re.M)
+        assert cu, "the next batch does not read the CU count"
+        for reg in (lo, cu.group(1)):
+            assert not re.search(r"^(?!s_cmp)\w+ s%s\b" % reg, body, re.M), "the pass writes s%s" % reg
+
+    @pytest.mark.parametrize("config", [_CONFIG_AHEAD, _CONFIG_ALL])
+    def test_the_next_batch_starts_at_the_previous_top(self, config):
+        import re
+
+        tail = self._tail(self._src(config))
+        lo = self._lo(tail)
+        assert re.search(
+            r"^label_a2a_next_batch\w*:[^\n]*\n"
+            r"s_add_u32 s%s, s%s, s\[sgprA2ABlockCount\][^\n]*\n" % (lo, lo),
+            tail,
+            re.M,
+        ), "the next batch does not start at bLo + count"
+        assert re.search(
+            r"s_min_u32 s(\d+), s\1, s\[sgprNumWorkGroups1\][^\n]*\n"
+            r"s_sub_u32 s\[sgprA2ABlockCount\], s\1, s%s[^\n]*\n"
+            r"label_a2a_place_batch" % lo,
+            tail,
+        ), "the next batch's count is not its clamped top minus its floor"
+
+    def test_one_batch_ahead_stops_after_the_next_batch(self):
+        import re
+
+        tail = self._tail(self._src(_CONFIG_AHEAD))
+        lo = self._lo(tail)
+        assert re.search(
+            r"s_cmp_lg_u32 s%s, s\[sgprA2ABlockLo\][^\n]*\n"
+            r"s_cbranch_scc1 label_A2ASkipEnqueue[^\n]*\n"
+            r"s_add_u32 s(\d+), s%s, s\[sgprA2ABlockCount\][^\n]*\n"
+            r"s_cmp_lt_u32 s\1, s\[sgprNumWorkGroups1\][^\n]*\n"
+            r"s_cbranch_scc1 label_a2a_next_batch\w*[^\n]*\n$" % (lo, lo),
+            tail,
+        ), "batch 0 does not go on to batch 1 only, or batch k > 0 does not stop"
+
+    def test_every_batch_runs_to_the_last(self):
+        import re
+
+        tail = self._tail(self._src(_CONFIG_ALL))
+        lo = self._lo(tail)
+        assert re.search(
+            r"s_cbranch_scc1 label_A2ASkipEnqueue[^\n]*// done",
+            tail,
+        ) is None
+        assert re.search(
+            r"s_add_u32 s(\d+), s%s, s\[sgprA2ABlockCount\][^\n]*\n"
+            r"s_cmp_lt_u32 s\1, s\[sgprNumWorkGroups1\][^\n]*\n"
+            r"s_cbranch_scc1 label_a2a_next_batch\w*[^\n]*\n$" % lo,
+            tail,
+        ), "batch 0 stops before the last batch"
+
+    @pytest.mark.parametrize("config", [_CONFIG_AHEAD, _CONFIG_ALL])
+    def test_the_flag_row_floor_is_written_once(self, config):
+        import re
+
+        def writes(src):
+            return len(re.findall(r"^(?!s_cmp)\w+ s\[sgprA2ABlockLo\],", src, re.M))
+
+        assert writes(self._src(config)) == writes(self._src(_CONFIG))

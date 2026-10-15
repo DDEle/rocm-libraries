@@ -552,6 +552,8 @@ validParameters = { # we need to make sure this matches develop
     "A2ASubRounds": [1, 2, 4],
     # FusedA2AMode=1: signal each flag with an SDMA FENCE instead of an ATOMIC ADD.
     "A2AFenceSignal": [False, True],
+    # FusedA2AMode=1: batch k enqueues batch k+1 (1) or batch 0 enqueues every batch (-1).
+    "A2AEnqueueAhead": [0, 1, -1],
     # Load options:
     # (GRO = Global Read Offset)
     # BufferLoad=0:

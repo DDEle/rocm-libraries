@@ -867,12 +867,12 @@ int main(int argc, const char* argv[])
     calibrateTimingOverhead();
 
     const FusedA2A fusedMode = fusedA2AFromString(args["fused-a2a"].as<std::string>());
-    bool           fusedA2A  = fusedMode == FusedA2A::GemmA2A;
+    bool           fusedA2A  = fusedMode != FusedA2A::None;
     if(fusedA2A)
         checkFusedA2AArgs(args);
     auto const& worldFilter = args["world-filter"].as<std::vector<int>>();
     if(!fusedA2A && !worldFilter.empty())
-        throw std::runtime_error("--world-filter applies only with --fused-a2a GemmA2A");
+        throw std::runtime_error("--world-filter applies only with --fused-a2a");
 
     auto problems        = problemFactory.problems();
     int  firstProblemIdx = args["problem-start-idx"].as<int>();

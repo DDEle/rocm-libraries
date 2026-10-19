@@ -377,7 +377,7 @@ namespace TensileLite
             MXSA          = 15,
             MXSB          = 16,
             GATE_RESIDUAL = 17,
-            A2A_RECV      = 18,
+            A2A_BUF       = 18,
             TENSOR_COUNT
         };
 
@@ -1261,17 +1261,20 @@ namespace TensileLite
             m_fusedA2AExtent = extent;
         }
 
-        // recv[W][N][AM/W] in D's type.
-        void setA2ARecv()
+        // GemmA2A: recv[W][N][AM/W] in D's type. A2AGemm: x[W][N][K/W] in B's type.
+        void setA2ABuf()
         {
             const size_t world  = m_world;
-            const size_t nShard = m_fusedA2AExtent / world;
             const size_t tokens = freeSizeB(0);
-            m_tensors[ContractionProblemGemm::TENSOR::A2A_RECV]
-                = {"a2aRecv",
-                   m_tensors[ContractionProblemGemm::TENSOR::D].dataType(),
-                   {nShard, tokens, world},
-                   {1, nShard, nShard * tokens}};
+            const bool   gather = m_fusedA2A == FusedA2A::A2AGemm;
+            const size_t shard  = gather ? boundSize(0) / world : m_fusedA2AExtent / world;
+            m_tensors[ContractionProblemGemm::TENSOR::A2A_BUF]
+                = {"a2aBuf",
+                   m_tensors[gather ? ContractionProblemGemm::TENSOR::B
+                                    : ContractionProblemGemm::TENSOR::D]
+                       .dataType(),
+                   {shard, tokens, world},
+                   {1, shard, shard * tokens}};
         }
 
         size_t mxBlockA() const
@@ -1715,7 +1718,7 @@ namespace TensileLite
         void*                           fusedA2ACounter = nullptr;
         uint32_t                        fusedA2AMyRank  = 0;
         uint32_t                        fusedA2ADrain   = 0;
-        void*                           a2aRecv         = nullptr;
+        void*                           a2aBuf          = nullptr;
 
         // Workspace
         void* ws = nullptr;

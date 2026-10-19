@@ -282,7 +282,7 @@ namespace TensileLite
             // card src's golden, for every token.
             std::vector<BFloat16> host(W * N * nShard);
             HIP_CHECK_EXC(hipMemcpy(host.data(),
-                                    inputs.a2aRecv,
+                                    inputs.a2aBuf,
                                     host.size() * sizeof(BFloat16),
                                     hipMemcpyDeviceToHost));
             size_t mismatches = 0;

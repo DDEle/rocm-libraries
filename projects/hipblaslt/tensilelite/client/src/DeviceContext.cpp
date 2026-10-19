@@ -109,11 +109,11 @@ namespace TensileLite
             if(gemm == nullptr || gemm->fusedA2A() != FusedA2A::GemmA2A)
                 return;
             const size_t bytes
-                = gemm->tensors()[ContractionProblemGemm::TENSOR::A2A_RECV].totalAllocatedBytes();
+                = gemm->tensors()[ContractionProblemGemm::TENSOR::A2A_BUF].totalAllocatedBytes();
             forEachDevice(devices, [&](DeviceContext& ctx) {
                 for(auto const& slot : ctx.inputArr)
                     HIP_CHECK_EXC(hipMemset(
-                        dynamic_cast<ContractionInputs const&>(*slot).a2aRecv, 0, bytes));
+                        dynamic_cast<ContractionInputs const&>(*slot).a2aBuf, 0, bytes));
             });
         }
 
@@ -167,7 +167,7 @@ namespace TensileLite
                 const HsaQueueResource& q     = queue.queueResource();
                 scratch.fusedA2APeers.push_back(
                     {(char*)devices[j]->commFlags + channel * FUSED_A2A_FLAG_BLOCK_BYTES,
-                     peer.a2aRecv,
+                     peer.a2aBuf,
                      queue.ringBase(),
                      (void*)q.Queue_read_ptr_aql,
                      (void*)q.Queue_write_ptr_aql,

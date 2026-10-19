@@ -100,7 +100,7 @@ namespace TensileLite
                      });
             m_mayUseSynchronizer = partialReduction || customStreamK || mbsk || customArg
                                    || solution->problemType.outputAmaxD
-                                   || solution->problemType.fusedGemmA2A;
+                                   || solution->problemType.fusedA2A == FusedA2A::GemmA2A;
         }
 
         void SynchronizerValidator::postSolution()

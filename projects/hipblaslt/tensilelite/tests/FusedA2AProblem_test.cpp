@@ -7,6 +7,7 @@
 
 #include <Tensile/ContractionProblem.hpp>
 #include <Tensile/ContractionProblemPredicates.hpp>
+#include <Tensile/FusedA2A.hpp>
 #include <Tensile/FusedA2AKernArg.hpp>
 
 #include <memory>
@@ -41,7 +42,7 @@ namespace
                                                       ldd,
                                                       ldd * N,
                                                       0.0);
-        p.setFusedGemmA2A(true);
+        p.setFusedA2A(FusedA2A::GemmA2A);
         p.setWorld(world);
         p.setFusedA2AExtent(extent);
         return p;
@@ -104,7 +105,7 @@ namespace
         setOption(args, "mx-b-block", 0);
         setOption(args, "mx-a-type", rocisa::DataType::E8);
         setOption(args, "mx-b-type", rocisa::DataType::E8);
-        setOption(args, "fused-gemm-a2a", fused);
+        setOption(args, "fused-a2a", std::string(fused ? "GemmA2A" : "None"));
         setOption(args, "metadata-layout", 0);
         setOption(args, "a-ops", TensorOps{});
         setOption(args, "b-ops", TensorOps{});
@@ -133,7 +134,7 @@ TEST(FusedA2AClientProblemFactory, PerProblemWorldAndExtent)
     for(size_t i = 0; i < 2; i++)
     {
         auto const& p = gemmAt(factory, i);
-        EXPECT_TRUE(p.fusedGemmA2A());
+        EXPECT_EQ(p.fusedA2A(), FusedA2A::GemmA2A);
         EXPECT_EQ(p.world(), worlds[i]);
         EXPECT_EQ(p.fusedA2AExtent(), 2048);
         size_t const nShard = 2048 / worlds[i];
@@ -170,4 +171,29 @@ TEST(FusedA2AClientProblemFactory, NonFusedKeepsDefaultWorld)
     Client::ClientProblemFactory factory(factoryArgs(false, 1));
     ASSERT_EQ(factory.problems().size(), 1u);
     EXPECT_EQ(gemmAt(factory, 0).world(), 1u);
+}
+
+TEST(FusedA2AProblem, ModeNamesRoundTrip)
+{
+    for(int i = 0; i < static_cast<int>(FusedA2A::Count); i++)
+    {
+        auto mode = static_cast<FusedA2A>(i);
+        EXPECT_EQ(fusedA2AFromString(ToString(mode)), mode);
+    }
+    EXPECT_EQ(ToString(FusedA2A::A2AGemm), "A2AGemm");
+    EXPECT_THROW(fusedA2AFromString("true"), std::invalid_argument);
+}
+
+TEST(FusedA2AProblem, ModePredicateIsolatesTheThreeKinds)
+{
+    const FusedA2A modes[] = {FusedA2A::None, FusedA2A::GemmA2A, FusedA2A::A2AGemm};
+    for(auto problemMode : modes)
+        for(auto solutionMode : modes)
+        {
+            auto p = fusedProblem(3072, 512, 3072, 4, 2048);
+            p.setFusedA2A(problemMode);
+            Predicates::Contraction::FusedA2AEqual pred(solutionMode);
+            EXPECT_EQ(pred(p), problemMode == solutionMode)
+                << ToString(problemMode) << " vs " << ToString(solutionMode);
+        }
 }

@@ -131,7 +131,7 @@ namespace TensileLite
                      Base::template Pair<Predicates::Contraction::WorkgroupMappingXCCCheck>(),
                      Base::template Pair<Predicates::Contraction::SwizzleTensorA>(),
                      Base::template Pair<Predicates::Contraction::SwizzleTensorB>(),
-                     Base::template Pair<Predicates::Contraction::FusedGemmA2A>(),
+                     Base::template Pair<Predicates::Contraction::FusedA2AEqual>(),
                      Base::template Pair<Predicates::Contraction::FusedA2AShape>(),
                      Base::template Pair<Predicates::Contraction::A2AWorldNonZero>(),
                      Base::template Pair<Predicates::Contraction::A2AShardDivisible>(),
@@ -579,8 +579,8 @@ namespace TensileLite
         };
 
         template <typename IO>
-        struct MappingTraits<Predicates::Contraction::FusedGemmA2A, IO>
-            : public AutoMappingTraits<Predicates::Contraction::FusedGemmA2A, IO>
+        struct MappingTraits<Predicates::Contraction::FusedA2AEqual, IO>
+            : public AutoMappingTraits<Predicates::Contraction::FusedA2AEqual, IO>
         {
         };
 

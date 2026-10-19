@@ -106,7 +106,7 @@ namespace TensileLite
                               std::vector<std::shared_ptr<DeviceContext>> const& devices)
         {
             auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
-            if(gemm == nullptr || !gemm->fusedGemmA2A())
+            if(gemm == nullptr || gemm->fusedA2A() != FusedA2A::GemmA2A)
                 return;
             const size_t bytes
                 = gemm->tensors()[ContractionProblemGemm::TENSOR::A2A_RECV].totalAllocatedBytes();
@@ -127,7 +127,7 @@ namespace TensileLite
         {
             const size_t slot = launch % devices[rank]->inputArr.size();
             auto const*  gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
-            if(gemm == nullptr || !gemm->fusedGemmA2A())
+            if(gemm == nullptr || gemm->fusedA2A() != FusedA2A::GemmA2A)
                 return devices[rank]->inputArr[slot].get();
 
             const size_t world        = devices.size();

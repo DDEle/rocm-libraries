@@ -2879,36 +2879,36 @@ namespace TensileLite
                 }
             };
 
-            struct FusedGemmA2A : public Predicate_CRTP<FusedGemmA2A, ContractionProblemGemm>
+            struct FusedA2AEqual : public Predicate_CRTP<FusedA2AEqual, ContractionProblemGemm>
             {
                 enum
                 {
                     HasIndex = false,
                     HasValue = true
                 };
-                bool value;
+                FusedA2A value = FusedA2A::None;
 
-                FusedGemmA2A() = default;
-                FusedGemmA2A(bool value)
+                FusedA2AEqual() = default;
+                FusedA2AEqual(FusedA2A value)
                     : value(value)
                 {
                 }
 
                 static std::string Type()
                 {
-                    return "FusedGemmA2A";
+                    return "FusedA2A";
                 }
 
                 bool operator()(ContractionProblemGemm const& problem) const override
                 {
-                    return problem.fusedGemmA2A() == value;
+                    return problem.fusedA2A() == value;
                 }
 
                 bool debugEval(ContractionProblemGemm const& problem,
                                std::ostream&                 stream) const override
                 {
                     return debugEvalCmp(
-                        problem, stream, "prob", problem.fusedGemmA2A(), "==", "sol", value);
+                        problem, stream, "prob", problem.fusedA2A(), "==", "sol", value);
                 }
             };
 
@@ -2935,7 +2935,7 @@ namespace TensileLite
 
                 bool fits(ContractionProblemGemm const& problem) const
                 {
-                    if(!problem.fusedGemmA2A())
+                    if(problem.fusedA2A() != FusedA2A::GemmA2A)
                         return true;
                     const int64_t world = problem.world();
                     const int64_t am    = problem.fusedA2AExtent();
@@ -2963,7 +2963,7 @@ namespace TensileLite
                 {
                     bool               rv = fits(problem);
                     std::ostringstream details;
-                    if(problem.fusedGemmA2A())
+                    if(problem.fusedA2A() == FusedA2A::GemmA2A)
                     {
                         const auto& d = problem.d();
                         details << "world=" << problem.world() << " am=" << problem.fusedA2AExtent()

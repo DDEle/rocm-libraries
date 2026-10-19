@@ -2779,7 +2779,7 @@ namespace TensileLite
         }
 
         // The fused GEMM+A2A segment follows batchOffsets in the kernel signature.
-        if(problem.fusedGemmA2A() || problemType.fusedA2AMode == 1)
+        if(problemType.fusedA2A != FusedA2A::None)
         {
             AMDGPU const* pAMDGPU = dynamic_cast<AMDGPU const*>(&hardware);
             assert(pAMDGPU != nullptr && pAMDGPU->computeUnitCount != 0);

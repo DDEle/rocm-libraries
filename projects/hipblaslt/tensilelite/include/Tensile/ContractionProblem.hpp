@@ -34,6 +34,7 @@
 
 #include <Tensile/ContractionProblem_fwd.hpp>
 #include <Tensile/ContractionSolution_fwd.hpp>
+#include <Tensile/FusedA2A.hpp>
 #include <Tensile/FusedA2AKernArg.hpp>
 
 #include <Tensile/TensorDescriptor.hpp>
@@ -1240,14 +1241,14 @@ namespace TensileLite
             m_swizzleTensorB = swizzle;
         }
 
-        bool fusedGemmA2A() const
+        FusedA2A fusedA2A() const
         {
-            return m_fusedGemmA2A;
+            return m_fusedA2A;
         }
 
-        void setFusedGemmA2A(bool fusedGemmA2A)
+        void setFusedA2A(FusedA2A mode)
         {
-            m_fusedGemmA2A = fusedGemmA2A;
+            m_fusedA2A = mode;
         }
 
         int64_t fusedA2AExtent() const
@@ -1541,7 +1542,7 @@ namespace TensileLite
         bool             m_outputAmaxD             = false;
         bool             m_swizzleTensorA          = false;
         bool             m_swizzleTensorB          = false;
-        bool             m_fusedGemmA2A            = false;
+        FusedA2A         m_fusedA2A                = FusedA2A::None;
         int64_t          m_fusedA2AExtent          = 0;
         int              m_useBias                 = 0;
         bool             m_useGateResidual         = false;

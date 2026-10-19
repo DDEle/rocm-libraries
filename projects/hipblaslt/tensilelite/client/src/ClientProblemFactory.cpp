@@ -99,7 +99,7 @@ namespace TensileLite
             , m_padMXScaleTensorFreeDim(false)
             , m_swizzleTensorA(false)
             , m_swizzleTensorB(false)
-            , m_fusedGemmA2A(args["fused-gemm-a2a"].as<bool>())
+            , m_fusedA2A(fusedA2AFromString(args["fused-a2a"].as<std::string>()))
             , m_worlds(args.count("world") ? args["world"].as<std::vector<int>>()
                                            : std::vector<int>())
             , m_fusedA2AExtents(args.count("fused-a2a-extent")
@@ -129,12 +129,12 @@ namespace TensileLite
             if(pointerArrayBatch && m_sparse)
                 throw std::invalid_argument("batch-mode=1 does not support sparse GEMM");
 
-            if(m_fusedGemmA2A)
+            if(m_fusedA2A == FusedA2A::GemmA2A)
             {
                 if(m_worlds.size() != m_problemSizes.size()
                    || m_fusedA2AExtents.size() != m_problemSizes.size())
                     throw std::invalid_argument(
-                        concatenate("fused-gemm-a2a needs one world and one fused-a2a-extent per "
+                        concatenate("fused-a2a GemmA2A needs one world and one fused-a2a-extent per "
                                     "problem-size; got ",
                                     m_worlds.size(),
                                     " and ",
@@ -152,7 +152,7 @@ namespace TensileLite
             }
             else if(!m_worlds.empty() || !m_fusedA2AExtents.empty())
                 throw std::invalid_argument(
-                    "world and fused-a2a-extent apply only with fused-gemm-a2a");
+                    "world and fused-a2a-extent apply only with fused-a2a GemmA2A");
 
             if(m_mxBlockA || m_mxBlockB)
             {
@@ -487,8 +487,8 @@ namespace TensileLite
                                 rv.back().setWorkspaceSize(m_maxWorkspaceSize);
                                 rv.back().setSwizzleTensorA(m_swizzleTensorA);
                                 rv.back().setSwizzleTensorB(m_swizzleTensorB);
-                                rv.back().setFusedGemmA2A(m_fusedGemmA2A);
-                                if(m_fusedGemmA2A)
+                                rv.back().setFusedA2A(m_fusedA2A);
+                                if(m_fusedA2A == FusedA2A::GemmA2A)
                                 {
                                     rv.back().setWorld(m_worlds[i]);
                                     rv.back().setFusedA2AExtent(m_fusedA2AExtents[i]);

@@ -135,7 +135,8 @@ namespace TensileLite
             m_validatedSolution = false;
             m_errorInSolution   = false;
             m_executedSolution  = false;
-            m_fusedA2A          = solution != nullptr && solution->problemType.fusedGemmA2A;
+            m_fusedA2A          = solution != nullptr
+                         && solution->problemType.fusedA2A == FusedA2A::GemmA2A;
 
             // Re-run CPU reference after DataInitialization refreshes MX inputs.
             if(!m_enabled || m_problem == nullptr || m_referenceInputs.empty()

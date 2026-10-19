@@ -27,6 +27,7 @@
 #include <Tensile/Contractions.hpp>
 #include <Tensile/DataTypes.hpp>
 #include <Tensile/EmbeddedLibrary.hpp>
+#include <Tensile/FusedA2A.hpp>
 #include <Tensile/MasterSolutionLibrary.hpp>
 #include <Tensile/Tensile.hpp>
 #include <Tensile/hip/HipHardware.hpp>
@@ -237,7 +238,7 @@ namespace TensileLite
                 ("mx-b-type",                po::value<rocisa::DataType>()->default_value(rocisa::DataType::E8), "type of mx datatype input matrix B")
                 ("swizzle-tensor-a",         po::value<bool>()->default_value(false), "Swizzle input tensor A.")
                 ("swizzle-tensor-b",         po::value<bool>()->default_value(false), "Swizzle input tensor B.")
-                ("fused-gemm-a2a",           po::value<bool>()->default_value(false), "Fuse an all-to-all PUSH into the GEMM epilogue.")
+                ("fused-a2a",                po::value<std::string>()->default_value("None"), "Fused A2A mode: None, GemmA2A (all-to-all PUSH from the GEMM epilogue) or A2AGemm (B gathered from the peers one K shard at a time).")
                 ("mx-scale-format",          po::value<int>()->default_value(0), "MX scale data format (0=none, 1=pre-swizzle for GPU kernel layout)")
                 ("activation-compute-type",  po::value<rocisa::DataType>()->default_value(rocisa::DataType::None), "Activation compute type.")
                 ("high-precision-accumulate", po::value<bool>()->default_value(false), "Use high-precision accumulate.")
@@ -865,12 +866,13 @@ int main(int argc, const char* argv[])
     initTimingBuffer();
     calibrateTimingOverhead();
 
-    bool fusedA2A = args["fused-gemm-a2a"].as<bool>();
+    const FusedA2A fusedMode = fusedA2AFromString(args["fused-a2a"].as<std::string>());
+    bool           fusedA2A  = fusedMode == FusedA2A::GemmA2A;
     if(fusedA2A)
         checkFusedA2AArgs(args);
     auto const& worldFilter = args["world-filter"].as<std::vector<int>>();
     if(!fusedA2A && !worldFilter.empty())
-        throw std::runtime_error("--world-filter applies only with --fused-gemm-a2a");
+        throw std::runtime_error("--world-filter applies only with --fused-a2a GemmA2A");
 
     auto problems        = problemFactory.problems();
     int  firstProblemIdx = args["problem-start-idx"].as<int>();

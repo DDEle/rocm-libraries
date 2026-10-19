@@ -318,7 +318,9 @@ namespace TensileLite
                 if(bad.first != got + segBytes)
                 {
                     std::cerr << "[a2a-gemm] GATHERED MISMATCH card=" << rank << " segment=" << j
-                              << " src=" << src << " byte=" << (bad.first - got) << "\n";
+                              << " src=" << src
+                              << " element=" << (bad.first - got) / problem.b().elementBytes()
+                              << "\n";
                     return false;
                 }
             }

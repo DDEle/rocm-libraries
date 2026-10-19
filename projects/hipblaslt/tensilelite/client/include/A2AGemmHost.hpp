@@ -71,19 +71,34 @@ namespace TensileLite
             return (rank + segment) % world;
         }
 
-        // words: rank's mode-1 flag block. Empty when seq == launches and every peer's
-        // done equals seq.
+        // words: rank's mode-1 flag block. Empty when seq == launches, every peer's done
+        // equals seq, and every other word of the block (including done[rank] and done[s >= world])
+        // is 0.
         inline std::string
             a2aGemmCommResidue(uint32_t const* words, size_t rank, size_t world, size_t launches)
         {
-            const uint32_t seq = words[FUSED_A2A_MODE1_SEQ_OFFSET / sizeof(uint32_t)];
+            constexpr size_t doneWord = FUSED_A2A_MODE1_DONE_OFFSET / sizeof(uint32_t);
+            constexpr size_t seqWord  = FUSED_A2A_MODE1_SEQ_OFFSET / sizeof(uint32_t);
+            const uint32_t   seq      = words[seqWord];
             if(seq != launches)
                 return concatenate("seq=", seq, ", launches=", launches);
-            for(size_t s = 0; s < world; s++)
+            for(size_t w = 0; w < FUSED_A2A_FLAG_BLOCK_BYTES / sizeof(uint32_t); w++)
             {
-                const uint32_t done = words[FUSED_A2A_MODE1_DONE_OFFSET / sizeof(uint32_t) + s];
-                if(s != rank && done != seq)
-                    return concatenate("done[", s, "]=", done, ", seq=", seq);
+                if(w == seqWord)
+                    continue;
+                const bool   isDone = w >= doneWord && w < doneWord + FUSED_A2A_MAX_RANKS;
+                const size_t s      = w - doneWord;
+                if(isDone && s < world && s != rank)
+                {
+                    if(words[w] != seq)
+                        return concatenate("done[", s, "]=", words[w], ", seq=", seq);
+                }
+                else if(words[w] != 0)
+                    return concatenate(isDone ? "done[" : "word[",
+                                       isDone ? s : w,
+                                       "]=",
+                                       words[w],
+                                       ", expected 0");
             }
             return "";
         }

@@ -59,3 +59,49 @@ TEST(A2AGemmHost, CommResidueChecksSeqAndEveryPeersDone)
     words[done + 2] = 4;
     EXPECT_NE(a2aGemmCommResidue(words.data(), 1, 3, 5), "");
 }
+
+TEST(A2AGemmHost, CommResidueRejectsAStrayWordOutsideDoneAndSeq)
+{
+    std::vector<uint32_t> words(TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES / sizeof(uint32_t), 0);
+    const size_t seq  = FUSED_A2A_MODE1_SEQ_OFFSET / sizeof(uint32_t);
+    const size_t done = FUSED_A2A_MODE1_DONE_OFFSET / sizeof(uint32_t);
+    words[seq]      = 5;
+    words[done + 0] = 5;
+    words[done + 2] = 5;
+    for(size_t stray : {done + TensileLite::FUSED_A2A_MAX_RANKS, seq - 1, seq + 1, words.size() - 1})
+    {
+        words[stray] = 1;
+        EXPECT_NE(a2aGemmCommResidue(words.data(), 1, 3, 5), "") << "word " << stray;
+        words[stray] = 0;
+    }
+    EXPECT_EQ(a2aGemmCommResidue(words.data(), 1, 3, 5), "");
+}
+
+TEST(A2AGemmHost, CommResidueRejectsADoneSlotBeyondTheWorld)
+{
+    std::vector<uint32_t> words(TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES / sizeof(uint32_t), 0);
+    const size_t seq  = FUSED_A2A_MODE1_SEQ_OFFSET / sizeof(uint32_t);
+    const size_t done = FUSED_A2A_MODE1_DONE_OFFSET / sizeof(uint32_t);
+    words[seq]      = 5;
+    words[done + 0] = 5;
+    words[done + 2] = 5;
+    for(size_t s = 3; s < TensileLite::FUSED_A2A_MAX_RANKS; s++)
+    {
+        words[done + s] = 5;
+        EXPECT_NE(a2aGemmCommResidue(words.data(), 1, 3, 5), "") << "done[" << s << "]";
+        words[done + s] = 0;
+    }
+}
+
+// The drain-send loop skips s == myRank, so done[rank] is never written.
+TEST(A2AGemmHost, CommResidueRequiresOwnDoneToStayZero)
+{
+    std::vector<uint32_t> words(TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES / sizeof(uint32_t), 0);
+    const size_t seq  = FUSED_A2A_MODE1_SEQ_OFFSET / sizeof(uint32_t);
+    const size_t done = FUSED_A2A_MODE1_DONE_OFFSET / sizeof(uint32_t);
+    words[seq]      = 5;
+    words[done + 0] = 5;
+    words[done + 2] = 5;
+    words[done + 1] = 5;
+    EXPECT_NE(a2aGemmCommResidue(words.data(), 1, 3, 5), "");
+}

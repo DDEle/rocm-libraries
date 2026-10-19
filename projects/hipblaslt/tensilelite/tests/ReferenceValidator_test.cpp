@@ -292,6 +292,9 @@ TEST_F(A2AGemmReferenceTest, ReferenceBInterleavesEveryRanksX)
 TEST_F(A2AGemmReferenceTest, GatheredSegmentsMatchTheSourceX)
 {
     startRanks();
+    const size_t xBytes = gemm().tensors()[ContractionProblemGemm::TENSOR::A2A_BUF]
+                              .totalAllocatedBytes();
+    ASSERT_NE(0, std::memcmp(ref[0]->a2aBuf, ref[1]->a2aBuf, xBytes));
     for(size_t d = 0; d < world; d++)
         uploadGathered(d);
     EXPECT_EQ(validate(), "PASSED");

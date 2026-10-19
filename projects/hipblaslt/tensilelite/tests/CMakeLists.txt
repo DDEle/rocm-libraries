@@ -19,6 +19,7 @@ endforeach()
 target_sources(tensilelite-tests
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/A2AGemmKernArg_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/AlmostEqual_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/BenchmarkTimer_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/CachingLibrary_test.cpp"

@@ -1266,10 +1266,13 @@ namespace TensileLite
             for(size_t i = startStrideAB; i < mxsa.dimensions(); i++)
                 args.template append<uint32_t>(concatenate_if<T_Debug>("strideMXSA", i), mxsa.strides()[i]);
 
+        const size_t bStrideDivisor
+            = problemType.fusedA2A == FusedA2A::A2AGemm ? problem.world() : 1;
         for(size_t i = startStrideAB; i < b.dimensions(); i++)
         {
             auto stride_b = problemType.sparse == 2 ? compressed.strides()[i] : b.strides()[i];
-            args.template append<uint32_t>(concatenate_if<T_Debug>("strideB", i), stride_b);
+            args.template append<uint32_t>(concatenate_if<T_Debug>("strideB", i),
+                                           stride_b / bStrideDivisor);
         }
 
         if(problemType.mxBlockB)

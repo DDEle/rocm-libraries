@@ -3,11 +3,12 @@
 
 #pragma once
 
-// FusedA2AMode=1 counter block and its guard tail:
+// FusedA2A: A2AGemm counter block and its guard tail:
 //
-//   +0    cursors   MAX_RANKS * 2 * u64   SDMA cursor pair per queue
-//   +128  flag      tokenBlocks*(W-1)*u32 flag[b][queue], rounded to a line
-//   ...   counter   batches * u32         counter[iB]
+//   +0    cursors   MAX_RANKS * 2 * u64     SDMA cursor pair per queue
+//   +128  flag      tokenBlocks*(W-1)*S*u32 flag[b][queue], rounded to a line
+//   ...   tally     (tokenBlocks+1) * u32   block tallies and the grid tally
+//   ...   counter   batches * u32           counter[iB]
 //   ...   guard tail
 //
 // Each region starts on a 64-byte line; the trailing variable-size region gets

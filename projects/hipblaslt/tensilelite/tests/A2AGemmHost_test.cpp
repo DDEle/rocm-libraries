@@ -93,7 +93,6 @@ TEST(A2AGemmHost, CommResidueRejectsADoneSlotBeyondTheWorld)
     }
 }
 
-// The drain-send loop skips s == myRank, so done[rank] is never written.
 TEST(A2AGemmHost, CommResidueRequiresOwnDoneToStayZero)
 {
     std::vector<uint32_t> words(TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES / sizeof(uint32_t), 0);

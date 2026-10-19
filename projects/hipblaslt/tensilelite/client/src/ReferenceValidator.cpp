@@ -302,7 +302,8 @@ namespace TensileLite
             const size_t world    = m_devices->size();
             const size_t N        = problem.freeSizeB(0);
             const size_t kLocal   = problem.boundSize(0) / world;
-            const size_t segBytes = N * kLocal * problem.b().elementBytes();
+            const size_t elem     = static_cast<size_t>(problem.b().elementBytes());
+            const size_t segBytes = N * kLocal * elem;
 
             std::vector<uint8_t> host(world * segBytes);
             HIP_CHECK_EXC(hipMemcpy(host.data(), inputs.b, host.size(), hipMemcpyDeviceToHost));
@@ -319,7 +320,7 @@ namespace TensileLite
                 {
                     std::cerr << "[a2a-gemm] GATHERED MISMATCH card=" << rank << " segment=" << j
                               << " src=" << src
-                              << " element=" << (bad.first - got) / problem.b().elementBytes()
+                              << " element=" << static_cast<size_t>(bad.first - got) / elem
                               << "\n";
                     return false;
                 }

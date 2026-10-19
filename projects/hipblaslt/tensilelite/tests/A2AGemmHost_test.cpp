@@ -105,3 +105,17 @@ TEST(A2AGemmHost, CommResidueRequiresOwnDoneToStayZero)
     words[done + 1] = 5;
     EXPECT_NE(a2aGemmCommResidue(words.data(), 1, 3, 5), "");
 }
+
+TEST(A2AGemmHost, CommResidueRequiresASingleRankBlockToStayZero)
+{
+    std::vector<uint32_t> words(TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES / sizeof(uint32_t), 0);
+    const size_t seq  = FUSED_A2A_MODE1_SEQ_OFFSET / sizeof(uint32_t);
+    const size_t done = FUSED_A2A_MODE1_DONE_OFFSET / sizeof(uint32_t);
+    EXPECT_EQ(a2aGemmCommResidue(words.data(), 0, 1, 5), "");
+    for(size_t stray : {seq, done, done + 1, size_t(0), words.size() - 1})
+    {
+        words[stray] = 5;
+        EXPECT_NE(a2aGemmCommResidue(words.data(), 0, 1, 5), "") << "word " << stray;
+        words[stray] = 0;
+    }
+}

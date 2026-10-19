@@ -273,15 +273,12 @@ namespace TensileLite
 
         bool SynchronizerValidator::checkA2AGemm(DeviceContext& device, size_t rank)
         {
-            std::string  what;
-            const size_t world = m_devices->size();
-            if(world >= 2)
-                what = a2aGemmCommResidue(
-                    reinterpret_cast<uint32_t const*>(
-                        readBuffer(device.deviceId, device.commFlags, FUSED_A2A_FLAG_BLOCK_BYTES)),
-                    rank,
-                    world,
-                    device.launches);
+            std::string what = a2aGemmCommResidue(
+                reinterpret_cast<uint32_t const*>(
+                    readBuffer(device.deviceId, device.commFlags, FUSED_A2A_FLAG_BLOCK_BYTES)),
+                rank,
+                m_devices->size(),
+                device.launches);
             if(what.empty() && device.a2aCounter != nullptr)
             {
                 const int bad = fusedA2ACounterSentinelFirstBad(reinterpret_cast<uint32_t const*>(

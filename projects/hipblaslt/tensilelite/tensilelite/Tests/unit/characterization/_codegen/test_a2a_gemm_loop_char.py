@@ -986,7 +986,7 @@ class TestA2AGemmPredicates:
     registrations by name.
     """
 
-    _GUARDS = ("A2AWorldNonZero", "A2AShardDivisible", "A2AGsuCoalescedOff")
+    _GUARDS = ("A2AGemmShape", "A2AGsuCoalescedOff")
     _CPP_PREDICATES = "include/Tensile/Serialization/ContractionPredicates.hpp"
 
     def _predicates(self, mode=None):
@@ -1003,8 +1003,19 @@ class TestA2AGemmPredicates:
     def test_mode_one_emits_every_guard(self):
         assert set(self._GUARDS) <= set(self._predicates())
 
-    def test_shard_divisible_carries_depth_u(self):
-        assert self._predicates()["A2AShardDivisible"] == 64
+    def test_shape_carries_depth_u_times_sub_rounds(self):
+        assert self._predicates()["A2AGemmShape"] == 64
+
+    def test_sub_rounds_scale_the_shape_divisor(self):
+        from config_harness import derive_states
+
+        from Tensile.Contractions import ProblemPredicate, ProblemType
+
+        state = derive_states(_CONFIG, arch="gfx950", limit_solutions=1)[0]
+        state["A2ASubRounds"] = 2
+        pt = ProblemType.FromOriginalState(state["ProblemType"])
+        preds = {p.tag: p.value for p in ProblemPredicate.CompoundPredicates(state, pt)}
+        assert preds["A2AGemmShape"] == 128
 
     def test_mode_zero_emits_none_of_them(self):
         assert not set(self._GUARDS) & set(self._predicates(mode="None"))

@@ -197,3 +197,73 @@ TEST(FusedA2AProblem, ModePredicateIsolatesTheThreeKinds)
                 << ToString(problemMode) << " vs " << ToString(solutionMode);
         }
 }
+
+namespace
+{
+    ContractionProblemGemm
+        a2aGemmProblem(size_t K, uint32_t world, size_t ldb = 0, size_t batch = 1)
+    {
+        constexpr size_t M = 3072, N = 2048;
+        if(ldb == 0)
+            ldb = K;
+        auto p = ContractionProblemGemm::GEMM_Strides(true,
+                                                      false,
+                                                      rocisa::DataType::BFloat16,
+                                                      rocisa::DataType::BFloat16,
+                                                      rocisa::DataType::BFloat16,
+                                                      rocisa::DataType::BFloat16,
+                                                      M,
+                                                      N,
+                                                      K,
+                                                      batch,
+                                                      K,
+                                                      K * M,
+                                                      ldb,
+                                                      ldb * N,
+                                                      M,
+                                                      M * N,
+                                                      M,
+                                                      M * N,
+                                                      0.0);
+        p.setFusedA2A(FusedA2A::A2AGemm);
+        p.setWorld(world);
+        return p;
+    }
+}
+
+TEST(FusedA2AProblem, A2AGemmShapeAcceptsTheCommShapes)
+{
+    Predicates::Contraction::A2AGemmShape du64(64);
+    for(uint32_t w : {1u, 2u, 4u, 8u})
+        EXPECT_TRUE(du64(a2aGemmProblem(4096, w))) << w;
+}
+
+TEST(FusedA2AProblem, A2AGemmShapeRejectsAShardThatIsNotWholeDepthU)
+{
+    Predicates::Contraction::A2AGemmShape du64(64);
+    EXPECT_FALSE(du64(a2aGemmProblem(4352, 8)));
+}
+
+TEST(FusedA2AProblem, A2AGemmShapeSubRoundsJoinTheDivisor)
+{
+    EXPECT_TRUE(Predicates::Contraction::A2AGemmShape(64)(a2aGemmProblem(4352, 4)));
+    EXPECT_FALSE(Predicates::Contraction::A2AGemmShape(128)(a2aGemmProblem(4352, 4)));
+}
+
+TEST(FusedA2AProblem, A2AGemmShapeRejectsPaddedB)
+{
+    Predicates::Contraction::A2AGemmShape du64(64);
+    EXPECT_FALSE(du64(a2aGemmProblem(4096, 4, 4096 + 64)));
+}
+
+TEST(FusedA2AProblem, A2AGemmShapeRejectsBatch)
+{
+    Predicates::Contraction::A2AGemmShape du64(64);
+    EXPECT_FALSE(du64(a2aGemmProblem(4096, 4, 0, 2)));
+}
+
+TEST(FusedA2AProblem, A2AGemmShapeRejectsWorldZero)
+{
+    Predicates::Contraction::A2AGemmShape du64(64);
+    EXPECT_FALSE(du64(a2aGemmProblem(4096, 0)));
+}

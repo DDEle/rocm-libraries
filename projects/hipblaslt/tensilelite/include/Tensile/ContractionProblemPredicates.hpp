@@ -2981,37 +2981,8 @@ namespace TensileLite
                 }
             };
 
-            struct A2AWorldNonZero : public Predicate_CRTP<A2AWorldNonZero, ContractionProblemGemm>
-            {
-                enum
-                {
-                    HasIndex = false,
-                    HasValue = false
-                };
-
-                A2AWorldNonZero() = default;
-
-                static std::string Type()
-                {
-                    return "A2AWorldNonZero";
-                }
-
-                virtual bool operator()(ContractionProblemGemm const& problem) const override
-                {
-                    return problem.world() > 0;
-                }
-
-                virtual bool debugEval(ContractionProblemGemm const& problem,
-                                       std::ostream&                 stream) const override
-                {
-                    return debugEvalCmp(
-                        problem, stream, "prob", problem.world(), ">", "sol", 0);
-                }
-            };
-
-            // value is the solution's DepthU; W comes from the problem at runtime.
-            struct A2AShardDivisible
-                : public Predicate_CRTP<A2AShardDivisible, ContractionProblemGemm>
+            // value is the solution's DepthU * A2ASubRounds.
+            struct A2AGemmShape : public Predicate_CRTP<A2AGemmShape, ContractionProblemGemm>
             {
                 enum
                 {
@@ -3020,35 +2991,51 @@ namespace TensileLite
                 };
                 int64_t value;
 
-                A2AShardDivisible() = default;
-                A2AShardDivisible(int64_t value)
+                A2AGemmShape() = default;
+                A2AGemmShape(int64_t value)
                     : value(value)
                 {
                 }
 
                 static std::string Type()
                 {
-                    return "A2AShardDivisible";
+                    return "A2AGemmShape";
                 }
 
-                bool divisible(ContractionProblemGemm const& problem) const
+                bool fits(ContractionProblemGemm const& problem) const
                 {
-                    const int64_t w = (int64_t)problem.world();
-                    if(w == 0 || value <= 0)
+                    const int64_t world = problem.world();
+                    if(world == 0 || value <= 0)
                         return false;
-                    return (int64_t)problem.boundSize(0) % (w * value) == 0;
+                    for(size_t i = 0; i < problem.batchIndices().size(); i++)
+                        if(problem.batchSize(i) != 1)
+                            return false;
+                    const int64_t k = problem.boundSize(0);
+                    auto const&   b = problem.b();
+                    return k % (world * value) == 0
+                           && b.strides()[problem.boundIndices()[0].b] == 1
+                           && (int64_t)b.strides()[problem.freeIndicesB()[0].i] == k;
                 }
 
                 virtual bool operator()(ContractionProblemGemm const& problem) const override
                 {
-                    return divisible(problem);
+                    return fits(problem);
                 }
 
                 virtual bool debugEval(ContractionProblemGemm const& problem,
                                        std::ostream&                 stream) const override
                 {
-                    return debugEvalCmp(
-                        problem, stream, "prob", divisible(problem), "==", "sol", true);
+                    bool               rv = fits(problem);
+                    std::ostringstream details;
+                    auto const&        b = problem.b();
+                    details << "world=" << problem.world() << " K=" << problem.boundSize(0)
+                            << " DU*S=" << value
+                            << " strideBK=" << b.strides()[problem.boundIndices()[0].b]
+                            << " strideBN=" << b.strides()[problem.freeIndicesB()[0].i]
+                            << " (need world >= 1, K % (world*DU*S) == 0, strideBK == 1,"
+                               " strideBN == K, batch == 1)";
+                    PredicateDebugger::printRow(stream, rv, this->type(), details.str());
+                    return rv;
                 }
             };
 

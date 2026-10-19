@@ -667,8 +667,7 @@ class ProblemPredicate(Properties.Predicate):
                        value=kTiles * state['DepthU'] + 1)]
 
         if state['ProblemType']['FusedA2A'] == 'A2AGemm':
-            rv += [cls('A2AWorldNonZero')]
-            rv += [cls('A2AShardDivisible', value=state['DepthU'])]
+            rv += [cls('A2AGemmShape', value=state['DepthU'] * state['A2ASubRounds'])]
             rv += [cls('A2AGsuCoalescedOff')]
 
         return rv

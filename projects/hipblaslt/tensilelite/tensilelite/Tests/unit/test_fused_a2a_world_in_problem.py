@@ -282,3 +282,35 @@ class TestLibLogicToYamlWorld:
         data = formProblemSize(None, 0, {}, problemSizes=[{"Exact": exact}])
         p = self._reload(_problemType(), data)[0]
         assert (list(p.sizes[:4]), p.world, p.a2aExtent) == ([3072, 512, 1, 2048], 2, 2048)
+
+
+class TestProblemStrRoundTrip:
+    @staticmethod
+    def _roundTrip(problemType, exact):
+        import yaml
+        written = _sizes(problemType, exact).exacts[0]
+        parsed = yaml.safe_load(str(written))
+        return _sizes(problemType, parsed).exacts[0]
+
+    def test_a2a_gemm_keeps_world_and_zero_extent(self):
+        p = self._roundTrip(_a2aGemmType(), {"sizes": [3072, 2048, 1, 4096], "world": 4})
+        assert (p.world, p.a2aExtent) == (4, 0)
+
+    def test_a2a_gemm_omits_extent(self):
+        assert "a2aExtent" not in str(_sizes(_a2aGemmType(), {"sizes": [3072, 2048, 1, 4096], "world": 4}).exacts[0])
+
+    def test_gemm_a2a_keeps_world_and_extent(self):
+        p = self._roundTrip(_problemType(), {"sizes": [3072, 512, 1, 2048], "world": 4, "a2aExtent": 1024})
+        assert (p.world, p.a2aExtent) == (4, 1024)
+
+
+class TestLibLogicToYamlA2AGemm:
+    def test_logic_row_reloads_without_extent(self):
+        from tensilelite.TensileLibLogicToYaml import formProblemSize
+        config = {**_FUSED_CONFIG, "FusedA2A": "A2AGemm"}
+        logic = [([3072, 2048, 1, 4096, 3072, 3072, 4096, 4096, 4, 0], [0, 1.0])]
+        data = formProblemSize(logic, 0, config)
+        exact = data["BenchmarkFinalParameters"][0]["ProblemSizes"][0]["Exact"]
+        assert "a2aExtent" not in exact
+        p = TestLibLogicToYamlWorld._reload(_a2aGemmType(), data)[0]
+        assert (p.world, p.a2aExtent) == (4, 0)

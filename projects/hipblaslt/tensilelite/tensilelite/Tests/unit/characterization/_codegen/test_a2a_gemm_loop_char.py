@@ -978,6 +978,42 @@ class TestA2AGemmSubRoundsReachTheLibrary:
         assert '"a2aSubRounds", s.a2aSubRounds' in hdr.read_text()
 
 
+class TestA2AGemmSubRoundsName:
+    _KERNEL_S1 = (
+        "Cijk_Alik_Bljk_BBS_BH_A2AGemm_UserArgs_MT256x256x64_MI16x16x1_CMS_SN_LDSB0_AFC0_AG0_AGGSUA0_AGNTAB0_AFEM1_AFEM1_ASEM1_BL1_BS1_CD1_1_CLR1_CLS0_CADS0_DTLA1_DTLB1_DTLM0_DTVA0_DTVB0_DTVMXSA0_DTVMXSB0_DTVSM0_DPLB0_EPS0_ELFLR0_EMLLn1_FDSI0_GRPM1_GRVWA8_GRVWB8_GSUAMB_GLS0_HPLR0_ISA950_ICIW0_IU1_IA0_LDSSI0_LDSTI0_LBSPPA1024_LBSPPB1024_LBSPPMXSA0_LBSPPMXSB0_LBSPPM0_LPA16_LPB16_LPMXSA0_LPMXSB0_LPMn1_LRVWn1_LWPMn1_MIAV0_MIWT8_8_MXLIBL_MXSFNS_MO64_MGRIPM1_NTn1_NTA0_NTB0_NTC0_NTD0_NTE0_NTG0_NTMXSA0_NTMXSB0_NTM0_NTWS0_NVn1_NVA0_NVB0_NVC0_NVD0_NVE0_NVG0_NVMXSA0_NVMXSB0_NVM0_NVWS0_NEPBS0_NLCA1_NLCB1_ONLL0_PAP0_PGL0_PGR2_PLR1_PKA1_RAP0_SGROB0_SIA3_SS0_SPO0_SRVW0_SSO0_SVW4_SNLL0_SIP1_SGRO0_TDMI0_TDMIM0_TDMLWS0_TDMPLB0_TDMS0_TIN0_THn1_THA0_THB0_THC0_THD0_THE0_THG0_THMXSA0_THMXSB0_THM0_THWS0_TPSN_TLDS1_TLDSMn1_ULSGRO0_USL1_USLMX0_UDFMAC0_UIOFGRO0_UPLRP0_USFGROn1_USI0_VSn1_VWA8_VWB8_WSGRA0_WSGRB0_WS64_WG32_8_1_WGMXCC1"
+    )
+    _SOLUTION_S1 = (
+        "Cijk_Alik_Bljk_BBS_BH_A2AGemm_UserArgs_MT256x256x64_MI16x16x1_CMS_SN_LDSB0_AFC0_AG0_AGGSUA0_AGNTAB0_AFEM1_AFEM1_ASEM1_BL1_BS1_CD1_1_CLR1_CLS0_CADS0_DTLA1_DTLB1_DTLM0_DTVA0_DTVB0_DTVMXSA0_DTVMXSB0_DTVSM0_DPLB0_EPS0_ELFLR0_EMLLn1_FDSI0_GRPM1_GRVWA8_GRVWB8_GSU1_GSUAMB_GSUC0_GSUWGMRR0_GLS0_HPLR0_ISA950_ICIW0_IU1_IA0_LDSSI0_LDSTI0_LBSPPA1024_LBSPPB1024_LBSPPMXSA0_LBSPPMXSB0_LBSPPM0_LPA16_LPB16_LPMXSA0_LPMXSB0_LPMn1_LRVWn1_LWPMn1_MIAV0_MIWT8_8_MXLIBL_MXSFNS_MO64_MGRIPM1_NTn1_NTA0_NTB0_NTC0_NTD0_NTE0_NTG0_NTMXSA0_NTMXSB0_NTM0_NTWS0_NVn1_NVA0_NVB0_NVC0_NVD0_NVE0_NVG0_NVMXSA0_NVMXSB0_NVM0_NVWS0_NEPBS0_NLCA1_NLCB1_ONLL0_PAP0_PGL0_PGR2_PLR1_PKA1_RAP0_SGROB0_SIA3_SS0_SU0_SUM0_SUS128_SPO0_SRVW0_SSO0_SVW4_SNLL0_SIP1_SGRO0_TDMI0_TDMIM0_TDMLWS0_TDMPLB0_TDMS0_TIN0_THn1_THA0_THB0_THC0_THD0_THE0_THG0_THMXSA0_THMXSB0_THM0_THWS0_TPSN_TLDS1_TLDSMn1_ULSGRO0_USL1_USLMX0_UDFMAC0_UIOFGRO0_UPLRP0_USFGROn1_USI0_VSn1_VWA8_VWB8_WSGRA0_WSGRB0_WS64_WG32_8_1_WGM1_WGMXCC1_WGMXCCGn1"
+    )
+
+    def _names(self, config, subRounds, mode=None):
+        from config_harness import derive_states
+
+        from Tensile.SolutionStructs.Naming import getKernelNameMin, getSolutionNameMin
+
+        state = derive_states(config, arch="gfx950", limit_solutions=1)[0]
+        state["A2ASubRounds"] = subRounds
+        if mode is not None:
+            state["ProblemType"]["FusedA2A"] = mode
+        return getKernelNameMin(state, False), getSolutionNameMin(state, False)
+
+    def test_sub_rounds_split_the_names(self):
+        names = [self._names(_CONFIG, s) for s in (1, 2, 4)]
+        for which in (0, 1):
+            assert len({n[which] for n in names}) == 3
+
+    def test_single_sub_round_names_are_unchanged(self):
+        assert self._names(_CONFIG, 1) == (self._KERNEL_S1, self._SOLUTION_S1)
+
+    @pytest.mark.parametrize(
+        "config, mode",
+        [("tensilelite/Tests/common/comm/gfx950/fused_a2a.yaml", None), (_CONFIG, "None")],
+        ids=["GemmA2A", "stock"],
+    )
+    def test_other_modes_ignore_sub_rounds(self, config, mode):
+        assert self._names(config, 2, mode) == self._names(config, 1, mode)
+
+
 class TestA2AGemmPredicates:
     """The runtime shard guards ride on the solution's compound predicate list.
 

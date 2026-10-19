@@ -139,6 +139,7 @@ namespace TensileLite
                     A2A_GEMM_POISON_BYTE,
                     bBytes));
             launches = 0;
+            HIP_CHECK_EXC(hipDeviceSynchronize());
         }
 
         void resetA2ABuffers(ContractionProblem const&                          problem,

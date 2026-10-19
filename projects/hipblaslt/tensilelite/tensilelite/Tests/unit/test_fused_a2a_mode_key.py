@@ -83,3 +83,17 @@ class TestPredicate:
         cpt = ContractionsProblemType.FromOriginalState(_pt(FusedA2A=mode).state)
         tags = [p.tag for p in cpt.predicates(True, True, True)]
         assert ("BatchSizeEqual" in tags) is expected
+
+
+def test_shipped_fused_logic_uses_the_mode_key():
+    import pathlib
+    import subprocess
+
+    rel = ("projects/hipblaslt/library/src/amd_detail/rocblaslt/src/Tensile/Logic/asm_full/"
+           "gfx950/gfx950/Equality/gfx950_Cijk_Alik_Bljk_BBS_BH_FusedA2A_UserArgs.yaml")
+    text = subprocess.run(["git", "show", "HEAD:" + rel], capture_output=True, text=True,
+                          cwd=pathlib.Path(__file__).resolve().parents[6]).stdout
+    if not text:
+        pytest.skip("logic file not reachable from this checkout")
+    assert "FusedA2A: GemmA2A" in text
+    assert "FusedGemmA2A" not in text

@@ -1485,3 +1485,167 @@ class TestA2AGemmEnqueueAhead:
         import re
 
         assert len(re.findall(r"^(?!s_cmp)\w+ s\[sgprA2ABlockLo\],", self._src(), re.M)) == 1
+
+
+class TestA2AGemmExitTally:
+    """The tail after the shard loop: block and grid tallies, the grid winner's flag
+    clear and done publish, and the KernelEnd drain-send wait."""
+
+    def _src(self):
+        from config_harness import emit_kernels_from_config
+
+        return emit_kernels_from_config(_CONFIG, limit=1, arch="gfx950")[0][1]
+
+    def _tail(self, src):
+        """The shard loop's back-edge through the tally's end label."""
+        import re
+
+        head = list(re.finditer(r"^s_cbranch_scc0 label_A2AShardLoopBegin", src, re.M))
+        end = re.search(r"^label_a2a_exit_tally_end\w*:", src, re.M)
+        assert head and end, "no exit tally after the shard loop"
+        assert head[-1].end() < end.start()
+        return src[head[-1].end() : end.start()]
+
+    def _wait(self, src):
+        """KernelEnd through s_endpgm."""
+        import re
+
+        m = re.search(r"^label_KernelEnd:\n(.*?)^s_endpgm", src, re.M | re.S)
+        assert m, "no KernelEnd in the emitted kernel"
+        return m.group(1)
+
+    def _atomics(self, tail):
+        import re
+
+        return list(re.finditer(r"^s_atomic_inc (s\d+), (s\[\d+:\d+\]), (s\d+) glc", tail, re.M))
+
+    def test_single_rank_skips_the_tally(self):
+        import re
+
+        tail = self._tail(self._src())
+        assert re.search(
+            r"s_cmp_eq_u32 s\[sgprA2AKLocal\], 1[^\n]*\n"
+            r"s_cbranch_scc1 label_a2a_exit_tally_end",
+            tail[: self._atomics(tail)[0].start()],
+        ), "W == 1 still tallies"
+
+    def test_every_wave_passes_a_barrier_before_wave_0_tallies(self):
+        import re
+
+        tail = self._tail(self._src())
+        before = tail[: self._atomics(tail)[0].start()]
+        barrier = before.find("s_barrier")
+        wave = re.search(r"s_cmp_ge_u32 s\d+, 64[^\n]*\ns_cbranch_scc1 label_a2a_exit_tally_end", before)
+        assert barrier >= 0 and wave and barrier < wave.start(), "the tally can clear a flag a wave still polls"
+
+    def test_block_then_grid_tally_wrap_at_their_counts(self):
+        import re
+
+        tail = self._tail(self._src())
+        atomics = self._atomics(tail)
+        assert len(atomics) == 2
+        for m, slot, wrap in zip(atomics, ("sgprWorkGroup1", "sgprNumWorkGroups1"),
+                                 ("sgprNumWorkGroups0", "sgprNumWorkGroups1")):
+            seg = tail[: m.start()]
+            assert re.search(r"s_lshl_b32 %s, s\[%s\], 2[^\n]*\n" % (m.group(3), slot), seg)
+            assert re.search(r"s_sub_u32 %s, s\[%s\], 1[^\n]*\n$" % (m.group(1), wrap), seg)
+            after = tail[m.end() :]
+            assert re.search(
+                r"s_sub_u32 (s\d+), s\[%s\], 1[^\n]*\n"
+                r"s_cmp_lg_u32 %s, \1[^\n]*\n"
+                r"s_cbranch_scc1 label_a2a_exit_tally_end" % (wrap, m.group(1)),
+                after,
+            ), "the %s tally does not gate on its last arrival" % slot
+
+    def test_tallies_sit_past_the_flag_block(self):
+        import re
+
+        from Tensile.Components.Signature import FUSED_A2A_MODE1_FLAG_OFFSET
+
+        tail = self._tail(self._src())
+        base = self._atomics(tail)[0].group(2)
+        lo = base[2:].split(":")[0]
+        m = re.search(r"s_add_u32 s%s, s\[sgprA2ACounterPtr\], (s\d+)" % lo, tail)
+        assert m, "the tally base is not counter_ptr + the flag block"
+        assert re.search(r"s_and_b32 %s, %s, 0xffffffc0" % (m.group(1), m.group(1)), tail)
+        assert tail.count("s_add_u32 %s, %s, %d" % ((self._atomics(tail)[0].group(3),) * 2
+                                                     + (FUSED_A2A_MODE1_FLAG_OFFSET,))) == 2
+
+    def test_election_counters_sit_past_the_tallies(self):
+        import re
+
+        src = self._src()
+        m = re.search(
+            r"s_lshl_b32 (s\d+), s\[sgprNumWorkGroups1\], 2[^\n]*\n"
+            r"s_add_u32 \1, \1, 67[^\n]*\n"
+            r"s_and_b32 \1, \1, 0xffffffc0[^\n]*\n"
+            r"s_add_u32 (s\d+), \2, \1[^\n]*\+ tally region",
+            src[: re.search(r"^s_atomic_inc ", src, re.M).start()],
+        )
+        assert m, "the election counter offset skips no tally region"
+
+    def test_grid_winner_clears_the_flag_block_at_system_scope(self):
+        import re
+
+        from Tensile.Components.Signature import FUSED_A2A_MODE1_FLAG_OFFSET
+
+        tail = self._tail(self._src())
+        clear = tail[self._atomics(tail)[1].end() :]
+        assert re.search(
+            r"global_store_dword v\d+, v\d+, s\[sgprA2ACounterPtr:sgprA2ACounterPtr\+1\] "
+            r"offset:%d sc0 sc1" % FUSED_A2A_MODE1_FLAG_OFFSET,
+            clear,
+        ), "the flag clear does not reach memory"
+
+    def test_drain_send_bit_gates_the_publish(self):
+        import re
+
+        from Tensile.Components.Signature import FUSED_A2A_DRAIN_SEND
+
+        tail = self._tail(self._src())
+        gate = re.search(
+            r"s_and_b32 (s\d+), \1, %d[^\n]*\n"
+            r"s_cbranch_scc0 label_a2a_exit_tally_end" % FUSED_A2A_DRAIN_SEND,
+            tail,
+        )
+        assert gate, "the publish is not gated on FUSED_A2A_DRAIN_SEND"
+        assert tail.find("label_a2a_publish_done") > gate.end()
+
+    def test_publish_stores_seq_to_every_other_peer_at_system_scope(self):
+        import re
+
+        from Tensile.Components.Signature import FUSED_A2A_MODE1_SEQ_OFFSET
+
+        tail = self._tail(self._src())
+        assert re.search(
+            r"v_add_u32 (v\d+), 1, \1[^\n]*\n"
+            r"global_store_dword v\d+, \1, s\[sgprA2ACounterPtr:sgprA2ACounterPtr\+1\] "
+            r"offset:%d sc0 sc1" % FUSED_A2A_MODE1_SEQ_OFFSET,
+            tail,
+        ), "seq is not bumped in this rank's flagPtr block"
+        loop = tail[tail.find("label_a2a_publish_done:") :]
+        assert re.search(
+            r"s_cmp_eq_u32 s\[sgprA2AShardIdx\], s\[sgprA2AShardCounter\][^\n]*\n"
+            r"s_cbranch_scc1 label_a2a_publish_next",
+            loop,
+        ), "the publish does not skip this rank"
+        assert re.search(r"global_store_dword v\d+, v\d+, s\[\d+:\d+\] sc0 sc1", loop)
+        assert tail.rstrip().endswith("s_mov_b32 s[sgprA2AShardIdx], 1                    // arm the drain-send wait")
+
+    def test_kernel_end_waits_for_every_other_peer_done(self):
+        import re
+
+        wait = self._wait(self._src())
+        assert re.search(r"s_cmp_eq_u32 s\[sgprA2AShardIdx\], 0[^\n]*\ns_cbranch_scc1 label_a2a_drain_send_end", wait)
+        assert re.search(
+            r"s_cmp_eq_u32 s\[sgprA2AShardIdx\], s\[sgprA2AShardCounter\][^\n]*\n"
+            r"s_cbranch_scc1 label_a2a_drain_send_next",
+            wait,
+        ), "the wait does not skip this rank"
+        assert re.search(
+            r"global_load_dword (v\d+), v\d+, s\[sgprA2ACounterPtr:sgprA2ACounterPtr\+1\] sc0 sc1[^\n]*\n"
+            r"s_waitcnt vmcnt\(0\)[^\n]*\n"
+            r"v_cmp_gt_u32 vcc, s\[sgprA2AFeatIdx\], \1[^\n]*\n"
+            r"s_cbranch_vccnz label_a2a_drain_send_spin",
+            wait,
+        ), "the wait does not spin on done[s] < seq at system scope"

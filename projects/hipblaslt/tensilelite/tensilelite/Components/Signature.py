@@ -80,9 +80,14 @@ FUSED_A2A_COUNTER3_OFFSET = _fusedA2AAlignLine(
 FUSED_A2A_COUNTER1_OFFSET = _fusedA2AAlignLine(FUSED_A2A_COUNTER3_OFFSET + 4)
 FUSED_A2A_OUTBOUND_OFFSET = _fusedA2AAlignLine(FUSED_A2A_MAX_RANKS * 4)
 # FusedA2AMode==1 layout of the same block: the cursor region is shared, then the
-# flag block, then the election counters on the next line past the flags (a runtime
-# offset, so no constant for it here).
+# flag block, then numTokenBlocks block tallies and one grid tally, then the election
+# counters, each on the next line past the previous region (runtime offsets, so no
+# constants for them here).
 FUSED_A2A_MODE1_FLAG_OFFSET = _fusedA2AAlignLine(FUSED_A2A_MAX_RANKS * CURSOR_PAIR_BYTES)
+# FusedA2AMode==1 layout of a peer's flagPtr block: done[src] holds the last launch
+# sequence number rank src finished reading this rank's x for; seq is this rank's own.
+FUSED_A2A_MODE1_DONE_OFFSET = 0
+FUSED_A2A_MODE1_SEQ_OFFSET  = FUSED_A2A_OUTBOUND_OFFSET
 FUSED_A2A_DRAIN_RECV = 1
 FUSED_A2A_DRAIN_SEND = 2
 

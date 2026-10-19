@@ -7024,6 +7024,7 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
 
     module.add(self.a2aTransitionPhase(kernel, tensorParametersA, tensorParametersB))
     module.add(self.closeA2AShardLoop(kernel))
+    module.add(self.a2aExitTally(kernel))
 
     # Drop GlobalReadIncs* from the free pool so endSummation's store-phase SRDs don't
     # re-check-out an already-grabbed slot.
@@ -10987,6 +10988,13 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
   ##############################################################################
   @abc.abstractmethod
   def a2aTransitionPhase(self, kernel, tPA, tPB):
+    return ""
+
+  ##############################################################################
+  # A2A-GEMM Exit Tally
+  ##############################################################################
+  @abc.abstractmethod
+  def a2aExitTally(self, kernel):
     return ""
 
   ##############################################################################

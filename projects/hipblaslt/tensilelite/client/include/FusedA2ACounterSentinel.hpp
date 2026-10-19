@@ -39,13 +39,23 @@ namespace TensileLite
         constexpr size_t FUSED_A2A_MODE1_FLAG_OFFSET = fusedA2AAlignLine(
             (size_t)FUSED_A2A_MAX_RANKS * FUSED_A2A_CURSORS_PER_QUEUE * sizeof(uint64_t));
 
-        // The one region reset per launch, sized as the kernel rounds it in
-        // a2aElect. worldSize must be >= 1.
+        // Twinned with FUSED_A2A_MODE1_{DONE,SEQ}_OFFSET in Tensile/Components/Signature.py:
+        // the mode-1 layout of a flagPtr block.
+        constexpr size_t FUSED_A2A_MODE1_DONE_OFFSET = 0;
+        constexpr size_t FUSED_A2A_MODE1_SEQ_OFFSET  = FUSED_A2A_OUTBOUND_OFFSET;
+
+        // Sized as the kernel rounds it in a2aFlagBlockBytes. worldSize must be >= 1.
         constexpr size_t
             fusedA2AMode1FlagBytes(uint32_t worldSize, uint32_t tokenBlocks, uint32_t subRounds = 1)
         {
             return fusedA2AAlignLine((size_t)tokenBlocks * (worldSize - 1) * subRounds
                                      * sizeof(uint32_t));
+        }
+
+        // Block tallies plus the grid tally, sized as a2aTallyBytes rounds them.
+        constexpr size_t fusedA2AMode1TallyBytes(uint32_t tokenBlocks)
+        {
+            return fusedA2AAlignLine(((size_t)tokenBlocks + 1) * sizeof(uint32_t));
         }
 
         // Live mode-1 bytes. `batches` is the number of distinct iB the kernel
@@ -57,7 +67,7 @@ namespace TensileLite
         {
             return FUSED_A2A_MODE1_FLAG_OFFSET
                    + fusedA2AMode1FlagBytes(worldSize, tokenBlocks, subRounds)
-                   + (size_t)batches * sizeof(uint32_t);
+                   + fusedA2AMode1TallyBytes(tokenBlocks) + (size_t)batches * sizeof(uint32_t);
         }
 
         constexpr size_t fusedA2AMode1AllocBytes(uint32_t worldSize,

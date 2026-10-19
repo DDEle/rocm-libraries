@@ -8451,6 +8451,40 @@ class KernelWriterAssembly(KernelWriter):
     self.vgprPool.checkIn(tmpVgpr)
     return module
 
+  def a2aFlagBlockBytes(self, kernel, dst, wSgpr):
+    """dst = the mode-1 flag block, numTokenBlocks * (W-1) * S * 4, rounded up to a line."""
+    from .Components.Signature import FUSED_A2A_LINE_BYTES
+    module = Module("a2aFlagBlockBytes")
+    module.add(SSubU32(dst=sgpr(dst), src0=sgpr(wSgpr), src1=1, comment="W - 1"))
+    module.add(SMulI32(dst=sgpr(dst), src0=sgpr("NumWorkGroups1"), src1=sgpr(dst),
+                       comment="numTokenBlocks * (W-1)"))
+    if kernel["A2ASubRounds"] > 1:
+      module.add(SLShiftLeftB32(dst=sgpr(dst), shiftHex=2 + log2(kernel["A2ASubRounds"]),
+                                src=sgpr(dst),
+                                comment="flag block bytes = numTokenBlocks * (W-1) * S * 4"))
+    else:
+      module.add(SLShiftLeftB32(dst=sgpr(dst), shiftHex=2, src=sgpr(dst),
+                                comment="flag block bytes = numTokenBlocks * (W-1) * 4"))
+    module.add(SAddU32(dst=sgpr(dst), src0=sgpr(dst), src1=FUSED_A2A_LINE_BYTES - 1,
+                       comment=f"round up to a {FUSED_A2A_LINE_BYTES}-byte line"))
+    module.add(SAndB32(dst=sgpr(dst), src0=sgpr(dst),
+                       src1=hex(0xFFFFFFFF & -FUSED_A2A_LINE_BYTES),
+                       comment="flag block rounded up to a line"))
+    return module
+
+  def a2aTallyBytes(self, dst):
+    """dst = numTokenBlocks block tallies + the grid tally, rounded up to a line."""
+    from .Components.Signature import FUSED_A2A_LINE_BYTES
+    module = Module("a2aTallyBytes")
+    module.add(SLShiftLeftB32(dst=sgpr(dst), shiftHex=2, src=sgpr("NumWorkGroups1"),
+                              comment="numTokenBlocks * 4"))
+    module.add(SAddU32(dst=sgpr(dst), src0=sgpr(dst), src1=4 + FUSED_A2A_LINE_BYTES - 1,
+                       comment="+ grid tally, round up to a line"))
+    module.add(SAndB32(dst=sgpr(dst), src0=sgpr(dst),
+                       src1=hex(0xFFFFFFFF & -FUSED_A2A_LINE_BYTES),
+                       comment="tally region rounded up to a line"))
+    return module
+
   def a2aElect(self, kernel, tPB, iBSgpr, numCuSgpr):
     """Elect one enqueuer work-group per batch. The caller keeps iBSgpr and
     numCuSgpr live across the call.
@@ -8465,7 +8499,7 @@ class KernelWriterAssembly(KernelWriter):
 
     Everything between the election and A2ASkipEnqueue runs on an enqueuer only.
     """
-    from .Components.Signature import FUSED_A2A_LINE_BYTES, FUSED_A2A_MODE1_FLAG_OFFSET
+    from .Components.Signature import FUSED_A2A_MODE1_FLAG_OFFSET
     module    = Module("a2aElect")
     skipLabel = Label("A2ASkipEnqueue", "")
     drawnLbl  = Label(self.labels.getNameInc("a2a_ticket_drawn"), "")
@@ -8493,23 +8527,11 @@ class KernelWriterAssembly(KernelWriter):
                                src=sgpr(wave), comment="wave index"))
 
     off = self.sgprPool.checkOut(1, tag="a2aElect_off", preventOverflow=False)
-    module.add(SSubU32(dst=sgpr(off), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
-    module.add(SMulI32(dst=sgpr(off), src0=sgpr("NumWorkGroups1"), src1=sgpr(off),
-                       comment="numTokenBlocks * (W-1)"))
-    if kernel["A2ASubRounds"] > 1:
-      module.add(SLShiftLeftB32(dst=sgpr(off), shiftHex=2 + log2(kernel["A2ASubRounds"]),
-                                src=sgpr(off),
-                                comment="flag block bytes = numTokenBlocks * (W-1) * S * 4"))
-    else:
-      module.add(SLShiftLeftB32(dst=sgpr(off), shiftHex=2, src=sgpr(off),
-                                comment="flag block bytes = numTokenBlocks * (W-1) * 4"))
-    module.add(SAddU32(dst=sgpr(off), src0=sgpr(off), src1=FUSED_A2A_LINE_BYTES - 1,
-                       comment=f"round up to a {FUSED_A2A_LINE_BYTES}-byte line"))
-    module.add(SAndB32(dst=sgpr(off), src0=sgpr(off),
-                       src1=hex(0xFFFFFFFF & -FUSED_A2A_LINE_BYTES),
-                       comment="flag block rounded up to a line"))
+    module.add(self.a2aFlagBlockBytes(kernel, off, "A2AShardCounter"))
 
     slot = self.sgprPool.checkOut(1, tag="a2aElect_slot", preventOverflow=False)
+    module.add(self.a2aTallyBytes(slot))
+    module.add(SAddU32(dst=sgpr(off), src0=sgpr(off), src1=sgpr(slot), comment="+ tally region"))
     module.add(SLShiftLeftB32(dst=sgpr(slot), shiftHex=2, src=sgpr(iBSgpr), comment="iB * 4"))
     module.add(SAddU32(dst=sgpr(off), src0=sgpr(off), src1=sgpr(slot),
                        comment="byte offset of counter[iB] past the flag block"))
@@ -9026,6 +9048,185 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SCmpEQI32(src0=sgpr("A2AShardCounter"), src1=0, comment="shard counter==0"))
     module.add(SCBranchSCC0(labelName=self.a2aShardLoopLabel().getLabelName(),
                             comment="restart shard loop"))
+    return module
+
+  def a2aExitTally(self, kernel):
+    """Count this work-group out of its token block, and the token block out of the
+    grid. The grid's last work-group clears the flag block and, with
+    FUSED_A2A_DRAIN_SEND, bumps seq, stores it to every peer's done[myRank] and arms
+    a2aDrainSendWait.
+
+    Leaves A2AShardIdx = 1 if armed else 0; when armed, A2AFeatIdx = seq,
+    A2AKLocal = W, A2AShardCounter = myRank and A2ACounterPtr = this rank's flagPtr.
+    """
+    from .Components.Signature import (FUSED_A2A_DRAIN_SEND, FUSED_A2A_MODE1_DONE_OFFSET,
+                                       FUSED_A2A_MODE1_FLAG_OFFSET, FUSED_A2A_MODE1_SEQ_OFFSET,
+                                       PEER_GROUP_BYTES, fusedA2AKernArgLayout)
+    module = Module("a2aExitTally")
+    if kernel["ProblemType"]["FusedA2AMode"] != 1:
+      return module
+    layout  = fusedA2AKernArgLayout()
+    base    = self.states.fusedA2AKernArgBase
+    ww      = kernel["WavefrontSize"]
+    endLbl  = Label(self.labels.getNameInc("a2a_exit_tally_end"), "")
+    clrLbl  = Label(self.labels.getNameInc("a2a_clear_flags"), "")
+    pubLbl  = Label(self.labels.getNameInc("a2a_publish_done"), "")
+    nextLbl = Label(self.labels.getNameInc("a2a_publish_next"), "")
+
+    module.add(SMovB32(dst=sgpr("A2AShardIdx"), src=0, comment="drain-send wait not armed"))
+    module.add(self.argLoader.loadKernArg("A2AKLocal", "KernArgAddress",
+                                          sgprOffset=hex(base + layout["FusedW"]), dword=1))
+    module.add(self.argLoader.loadKernArg("A2AShardCounter", "KernArgAddress",
+                                          sgprOffset=hex(base + layout["FusedMyRank"]), dword=1))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedW and FusedMyRank"))
+    module.add(SCmpEQU32(src0=sgpr("A2AKLocal"), src1=1, comment="W == 1?"))
+    module.add(SCBranchSCC1(labelName=endLbl.getLabelName(), comment="no flags, no peers"))
+    module.add(SBarrier(comment="every wave passed its last flag wait"))
+
+    flagBytes = self.sgprPool.checkOut(1, tag="a2aExitTally_flagBytes", preventOverflow=False)
+    tmp       = self.sgprPool.checkOut(1, tag="a2aExitTally_tmp", preventOverflow=False)
+    old       = self.sgprPool.checkOut(1, tag="a2aExitTally_old", preventOverflow=False)
+    ptr       = self.sgprPool.checkOutAligned(2, 2, tag="a2aExitTally_ptr", preventOverflow=False)
+    module.add(VReadfirstlaneB32(dst=sgpr(tmp), src=vgpr("Serial"), comment="wave's first thread"))
+    module.add(SCmpGeU32(src0=sgpr(tmp), src1=ww, comment="wave index != 0?"))
+    module.add(SCBranchSCC1(labelName=endLbl.getLabelName(), comment="wave 0 tallies"))
+
+    module.add(self.a2aFlagBlockBytes(kernel, flagBytes, "A2AKLocal"))
+    module.add(SAddU32(dst=sgpr(ptr), src0=sgpr("A2ACounterPtr"), src1=sgpr(flagBytes),
+                       comment="&tally[0] - FLAG_OFFSET lo"))
+    module.add(SAddCU32(dst=sgpr(ptr + 1), src0=sgpr("A2ACounterPtr+1"), src1=0,
+                        comment="&tally[0] - FLAG_OFFSET hi (carry)"))
+    for slotSrc, wrapSrc, what in (("WorkGroup1", "NumWorkGroups0", "block"),
+                                   ("NumWorkGroups1", "NumWorkGroups1", "grid")):
+      module.add(SLShiftLeftB32(dst=sgpr(tmp), shiftHex=2, src=sgpr(slotSrc),
+                                comment="%s tally byte offset" % what))
+      module.add(SAddU32(dst=sgpr(tmp), src0=sgpr(tmp), src1=FUSED_A2A_MODE1_FLAG_OFFSET,
+                         comment="+ FLAG_OFFSET"))
+      module.add(SSubU32(dst=sgpr(old), src0=sgpr(wrapSrc), src1=1,
+                         comment="DATA = %s - 1" % wrapSrc))
+      module.add(SAtomicInc(dst=sgpr(old), base=sgpr(ptr, 2), soffset=sgpr(tmp),
+                            smem=SMEMModifiers(glc=True),
+                            comment="old = atomic_inc(%s tally), wrap at DATA, return pre-op" % what))
+      module.add(SWaitCnt(kmcnt=0, comment="wait the %s tally return" % what))
+      module.add(SSubU32(dst=sgpr(tmp), src0=sgpr(wrapSrc), src1=1, comment="%s - 1" % wrapSrc))
+      module.add(SCmpLgU32(src0=sgpr(old), src1=sgpr(tmp), comment="not the last of the %s?" % what))
+      module.add(SCBranchSCC1(labelName=endLbl.getLabelName(), comment="done"))
+
+    module.addComment1("A2A: the grid's last work-group")
+    vOff  = self.vgprPool.checkOut(1, tag="a2aExitTally_offset")
+    vData = self.vgprPool.checkOut(1, tag="a2aExitTally_data")
+    module.add(VAndB32(dst=vgpr(vOff), src0=ww - 1, src1=vgpr("Serial"), comment="lane id"))
+    module.add(VLShiftLeftB32(dst=vgpr(vOff), shiftHex=2, src=vgpr(vOff), comment="lane * 4"))
+    module.add(VMovB32(dst=vgpr(vData), src=0))
+    module.add(SMovB32(dst=sgpr(old), src=0, comment="bytes cleared"))
+    module.add(clrLbl)
+    module.add(VCmpGtU32(dst=VCC(), src0=sgpr(flagBytes), src1=vgpr(vOff), comment="inside the flags?"))
+    module.add(SMovB64(dst=EXEC(), src=VCC(), comment="lanes inside the flags"))
+    module.add(GlobalStoreB32(vaddr=vgpr(vOff), src=vgpr(vData), saddr=sgpr("A2ACounterPtr", 2),
+                              modifier=GLOBALModifiers(offset=FUSED_A2A_MODE1_FLAG_OFFSET, glc=True,
+                                                       slc=True, isStore=True),
+                              comment="flag = 0 (system scope)"))
+    module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+    module.add(VAddU32(dst=vgpr(vOff), src0=ww * 4, src1=vgpr(vOff), comment="next stride"))
+    module.add(SAddU32(dst=sgpr(old), src0=sgpr(old), src1=ww * 4, comment="bytes cleared"))
+    module.add(SCmpLtU32(src0=sgpr(old), src1=sgpr(flagBytes), comment="any left?"))
+    module.add(SCBranchSCC1(labelName=clrLbl.getLabelName(), comment="clear the next stride"))
+    self.sgprPool.checkIn(old)
+    self.sgprPool.checkIn(flagBytes)
+
+    module.add(self.argLoader.loadKernArg(tmp, "KernArgAddress",
+                                          sgprOffset=hex(base + layout["FusedDrain"]), dword=1))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedDrain"))
+    module.add(SAndB32(dst=sgpr(tmp), src0=sgpr(tmp), src1=FUSED_A2A_DRAIN_SEND,
+                       comment="drain-send?"))
+    module.add(SCBranchSCC0(labelName=endLbl.getLabelName(), comment="no"))
+
+    module.add(SMulI32(dst=sgpr(tmp), src0=sgpr("A2AShardCounter"), src1=PEER_GROUP_BYTES,
+                       comment="my peer group offset"))
+    module.add(SLoadB64(dst=sgpr("A2ACounterPtr", 2), base=sgpr("KernArgAddress", 2),
+                        soffset=sgpr(tmp),
+                        smem=SMEMModifiers(offset=base + layout["peer_0_flagPtr"]),
+                        comment="my flagPtr"))
+    module.add(SWaitCnt(kmcnt=0, comment="wait my flagPtr"))
+    module.add(SMovB64(dst=EXEC(), src=1, comment="lane 0"))
+    module.add(VMovB32(dst=vgpr(vOff), src=0))
+    module.add(GlobalLoadB32(dst=vgpr(vData), vaddr=vgpr(vOff), saddr=sgpr("A2ACounterPtr", 2),
+                             modifier=GLOBALModifiers(offset=FUSED_A2A_MODE1_SEQ_OFFSET, glc=True,
+                                                      slc=True, isStore=False),
+                             comment="seq"))
+    module.add(SWaitCnt(vlcnt=0, comment="wait seq"))
+    module.add(VAddU32(dst=vgpr(vData), src0=1, src1=vgpr(vData), comment="seq + 1"))
+    module.add(GlobalStoreB32(vaddr=vgpr(vOff), src=vgpr(vData), saddr=sgpr("A2ACounterPtr", 2),
+                              modifier=GLOBALModifiers(offset=FUSED_A2A_MODE1_SEQ_OFFSET, glc=True,
+                                                       slc=True, isStore=True),
+                              comment="seq = seq + 1"))
+    module.add(VReadfirstlaneB32(dst=sgpr("A2AFeatIdx"), src=vgpr(vData), comment="this launch's seq"))
+    module.add(SLShiftLeftB32(dst=sgpr(tmp), shiftHex=2, src=sgpr("A2AShardCounter"), comment="myRank * 4"))
+    module.add(VMovB32(dst=vgpr(vOff), src=sgpr(tmp), comment="done[myRank] offset"))
+    module.add(SMovB32(dst=sgpr("A2AShardIdx"), src=0, comment="peer s = 0"))
+    module.add(pubLbl)
+    module.add(SCmpEQU32(src0=sgpr("A2AShardIdx"), src1=sgpr("A2AShardCounter"), comment="s == myRank?"))
+    module.add(SCBranchSCC1(labelName=nextLbl.getLabelName(), comment="skip self"))
+    module.add(SMulI32(dst=sgpr(tmp), src0=sgpr("A2AShardIdx"), src1=PEER_GROUP_BYTES,
+                       comment="peer group offset"))
+    module.add(SLoadB64(dst=sgpr(ptr, 2), base=sgpr("KernArgAddress", 2), soffset=sgpr(tmp),
+                        smem=SMEMModifiers(offset=base + layout["peer_0_flagPtr"]),
+                        comment="peer s flagPtr"))
+    module.add(SWaitCnt(kmcnt=0, comment="wait peer s flagPtr"))
+    module.add(GlobalStoreB32(vaddr=vgpr(vOff), src=vgpr(vData), saddr=sgpr(ptr, 2),
+                              modifier=GLOBALModifiers(offset=FUSED_A2A_MODE1_DONE_OFFSET, glc=True,
+                                                       slc=True, isStore=True),
+                              comment="peer s done[myRank] = seq (system scope)"))
+    module.add(nextLbl)
+    module.add(SAddU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=1, comment="s + 1"))
+    module.add(SCmpLtU32(src0=sgpr("A2AShardIdx"), src1=sgpr("A2AKLocal"), comment="s < W?"))
+    module.add(SCBranchSCC1(labelName=pubLbl.getLabelName(), comment="next peer"))
+    module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+    module.add(SMovB32(dst=sgpr("A2AShardIdx"), src=1, comment="arm the drain-send wait"))
+    self.vgprPool.checkIn(vData)
+    self.vgprPool.checkIn(vOff)
+    self.sgprPool.checkIn(ptr)
+    self.sgprPool.checkIn(tmp)
+    module.add(endLbl)
+    return module
+
+  def a2aDrainSendWait(self, kernel):
+    """If a2aExitTally armed it, spin until every peer's done slot reaches seq."""
+    from .Components.Signature import FUSED_A2A_MODE1_DONE_OFFSET
+    module = Module("a2aDrainSendWait")
+    if kernel["ProblemType"]["FusedA2AMode"] != 1:
+      return module
+    endLbl  = Label(self.labels.getNameInc("a2a_drain_send_end"), "")
+    peerLbl = Label(self.labels.getNameInc("a2a_drain_send_peer"), "")
+    spinLbl = Label(self.labels.getNameInc("a2a_drain_send_spin"), "")
+    nextLbl = Label(self.labels.getNameInc("a2a_drain_send_next"), "")
+    module.add(SCmpEQU32(src0=sgpr("A2AShardIdx"), src1=0, comment="armed?"))
+    module.add(SCBranchSCC1(labelName=endLbl.getLabelName(), comment="no"))
+    vOff = self.vgprPool.checkOut(1, tag="a2aDrainSendWait_offset")
+    vVal = self.vgprPool.checkOut(1, tag="a2aDrainSendWait_value")
+    module.add(SMovB64(dst=EXEC(), src=1, comment="lane 0"))
+    module.add(SMovB32(dst=sgpr("A2AShardIdx"), src=0, comment="peer s = 0"))
+    module.add(peerLbl)
+    module.add(SCmpEQU32(src0=sgpr("A2AShardIdx"), src1=sgpr("A2AShardCounter"), comment="s == myRank?"))
+    module.add(SCBranchSCC1(labelName=nextLbl.getLabelName(), comment="skip self"))
+    module.add(VLShiftLeftB32(dst=vgpr(vOff), shiftHex=2, src=sgpr("A2AShardIdx"),
+                              comment="done[s] offset"))
+    module.add(spinLbl)
+    module.add(GlobalLoadB32(dst=vgpr(vVal), vaddr=vgpr(vOff), saddr=sgpr("A2ACounterPtr", 2),
+                             modifier=GLOBALModifiers(offset=FUSED_A2A_MODE1_DONE_OFFSET, glc=True,
+                                                      slc=True, isStore=False),
+                             comment="poll done[s] at system scope"))
+    module.add(SWaitCnt(vlcnt=0, comment="wait the done poll"))
+    module.add(VCmpGtU32(dst=VCC(), src0=sgpr("A2AFeatIdx"), src1=vgpr(vVal), comment="done[s] < seq?"))
+    module.add(SCBranchVCCNZ(labelName=spinLbl.getLabelName(), comment="peer s still reading"))
+    module.add(nextLbl)
+    module.add(SAddU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=1, comment="s + 1"))
+    module.add(SCmpLtU32(src0=sgpr("A2AShardIdx"), src1=sgpr("A2AKLocal"), comment="s < W?"))
+    module.add(SCBranchSCC1(labelName=peerLbl.getLabelName(), comment="next peer"))
+    module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+    self.vgprPool.checkIn(vVal)
+    self.vgprPool.checkIn(vOff)
+    module.add(endLbl)
     return module
 
   def a2aWaitFlag(self, kernel):
@@ -20103,6 +20304,8 @@ class KernelWriterAssembly(KernelWriter):
       # TODO- refine this part, put outside of this function
       if kernel["ProblemType"]["OutputAmaxD"]:
         imod.add(self.insertAmaxD(kernel))
+
+      imod.add(self.a2aDrainSendWait(kernel))
 
     imod.add(SEndpgm(comment="Kernel End"))
     return imod

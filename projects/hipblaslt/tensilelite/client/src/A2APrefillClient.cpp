@@ -546,11 +546,6 @@ namespace TensileLite
                                                  A2A_LOOPBACK_POISON,
                                                  bBytes - segBytes,
                                                  stream));
-                    HIP_CHECK_EXC(hipMemsetAsync((char*)devCounter.ptr
-                                                     + FUSED_A2A_MODE1_FLAG_OFFSET,
-                                                 0,
-                                                 layout.flagBytes,
-                                                 stream));
 
                     auto kernels = solution->solve(problem, inputs, *hardware, nullptr, 0, stream);
                     HIP_CHECK_EXC(adapter.launchKernels(kernels, stream, nullptr, nullptr));
@@ -624,6 +619,7 @@ namespace TensileLite
                 const int skewXUs    = std::max(0, args["a2a-multigpu-skew-x-us"].as<int>());
                 const int skewGemmUs = std::max(0, args["a2a-multigpu-skew-gemm-us"].as<int>());
                 const bool warBarrier = args["a2a-multigpu-war-barrier"].as<int>() != 0;
+                const bool drainSend  = args["a2a-multigpu-drain-send"].as<int>() != 0;
                 const bool timing     = args["a2a-multigpu-time"].as<int>() != 0;
                 const int  rotate     = args["a2a-multigpu-sdma-rotate"].as<int>();
 
@@ -665,7 +661,8 @@ namespace TensileLite
                 std::cout << "[a2a-multigpu] W=" << W << " M=" << M << " N=" << N << " K=" << K
                           << " k_local=" << kLoc << " launches=" << launches << " batch=" << batch
                           << " skew-x-us=" << skewXUs << " skew-gemm-us=" << skewGemmUs
-                          << " war-barrier=" << warBarrier << " time=" << timing << std::endl;
+                          << " war-barrier=" << warBarrier << " drain-send=" << drainSend
+                          << " time=" << timing << std::endl;
 
                 ContractionProblemGemm problem = base;
                 problem.resetTensor(ContractionProblemGemm::TENSOR::B,
@@ -775,6 +772,15 @@ namespace TensileLite
                     arrivals.p[d] = (uint32_t*)devArrival[d].ptr;
                 }
 
+                // Written by remote peers. Zeroed only here, never per launch.
+                std::vector<DeviceBuffer> devComm(W);
+                for(int d = 0; d < W; d++)
+                {
+                    HIP_CHECK_EXC(hipSetDevice(d));
+                    HIP_CHECK_EXC(devComm[d].allocateFineGrained(FUSED_A2A_FLAG_BLOCK_BYTES));
+                    HIP_CHECK_EXC(hipMemset(devComm[d].ptr, 0, FUSED_A2A_FLAG_BLOCK_BYTES));
+                }
+
                 // Created after P2P enable. The self entry (j == d) is never
                 // enqueued.
                 std::vector<std::vector<std::unique_ptr<SdmaQueue>>> queues(W);
@@ -840,11 +846,11 @@ namespace TensileLite
                     inputs[d].alpha          = 1.0f;
                     inputs[d].beta           = 0.0f;
                     inputs[d].fusedA2AMyRank = (uint32_t)d;
-                    inputs[d].fusedA2ADrain  = 0;
+                    inputs[d].fusedA2ADrain  = drainSend ? FUSED_A2A_DRAIN_SEND : 0;
                     for(int j = 0; j < W; j++)
                     {
                         const HsaQueueResource& r = queues[d][j]->queueResource();
-                        inputs[d].fusedA2APeers.push_back({nullptr,
+                        inputs[d].fusedA2APeers.push_back({devComm[j].ptr,
                                                            devX[j].ptr,
                                                            queues[d][j]->ringBase(),
                                                            (void*)r.Queue_read_ptr_aql,
@@ -944,11 +950,6 @@ namespace TensileLite
 
                 auto enqueueCompute = [&](int r, int d) {
                     HIP_CHECK_EXC(hipSetDevice(d));
-                    HIP_CHECK_EXC(
-                        hipMemsetAsync((char*)devCounter[d].ptr + FUSED_A2A_MODE1_FLAG_OFFSET,
-                                       0,
-                                       layout.flagBytes,
-                                       streams[d]));
 
                     // RAW barrier: gates the GEMM below.
                     hipLaunchKernelGGL(
@@ -1084,6 +1085,26 @@ namespace TensileLite
                                 rc = 1;
                         }
                     }
+                }
+
+                for(int d = 0; drainSend && W >= 2 && d < W; d++)
+                {
+                    std::vector<uint32_t> comm(FUSED_A2A_FLAG_BLOCK_BYTES / sizeof(uint32_t));
+                    HIP_CHECK_EXC(hipSetDevice(d));
+                    HIP_CHECK_EXC(hipMemcpy(comm.data(),
+                                            devComm[d].ptr,
+                                            FUSED_A2A_FLAG_BLOCK_BYTES,
+                                            hipMemcpyDeviceToHost));
+                    const uint32_t seq = comm[FUSED_A2A_MODE1_SEQ_OFFSET / sizeof(uint32_t)];
+                    bool           ok  = seq == (uint32_t)launches;
+                    for(int s = 0; s < W; s++)
+                        if(s != d
+                           && comm[FUSED_A2A_MODE1_DONE_OFFSET / sizeof(uint32_t) + s] != seq)
+                            ok = false;
+                    std::cout << "[a2a-multigpu] W=" << W << " dev=" << d << " seq=" << seq
+                              << " done=" << (ok ? "match" : "MISMATCH") << std::endl;
+                    if(!ok)
+                        rc = 1;
                 }
 
                 if(!makespanUs.empty())

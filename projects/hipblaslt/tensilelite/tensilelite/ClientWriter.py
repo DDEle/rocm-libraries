@@ -675,7 +675,6 @@ def writeClientConfigIni(forBenchmark, problemSizes, biasTypeArgs, factorDimArgs
         param('swizzle-tensor-a', problemType.swizzleTensorA)
         param('swizzle-tensor-b', problemType.swizzleTensorB)
         param('fused-a2a', problemType.fusedA2A)
-        param('a2a-prefill', problemType.fusedA2A == 'A2AGemm')
         if problemType.mxBlockA:
             param('mx-a-block', problemType.mxBlockA)
             param('mx-a-type', problemType.mxTypeA.toName())

@@ -6,8 +6,11 @@
 # The index structure is the stock GEMM one; K holds the whole W*k_local
 # reduction and one shard round covers K/W. The shard count is the problem's world.
 
+TestParameters:
+  marks: [skip-gfx1250, skip-gfx1250-strict] # gfx950-only
+
 GlobalParameters:
-  SyncsPerBenchmark: 0
+  SyncsPerBenchmark: 1
   SleepPercent: 0
   NumElementsToValidate: -1
   NumBenchmarks: 1
@@ -63,3 +66,5 @@ LibraryLogic:
   DeviceNames: ["Device 75a0"]
   ArchitectureName: "gfx950"
   LibraryType: "Equality"
+
+LibraryClient:

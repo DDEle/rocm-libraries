@@ -62,6 +62,8 @@ if FUSED_A2A_MAX_RANKS > 31:
 from .SdmaRingEmitter import CURSOR_PAIR_BYTES, FUSED_A2A_PEER_FIELDS, PEER_GROUP_BYTES
 
 FUSED_A2A_LINE_BYTES = 64
+# Twinned with FUSED_A2A_MODE1_FLAG_ALIGN in client/include/FusedA2ACounterSentinel.hpp.
+FUSED_A2A_MODE1_FLAG_ALIGN = 128
 
 
 def _fusedA2AAlignLine(nbytes):

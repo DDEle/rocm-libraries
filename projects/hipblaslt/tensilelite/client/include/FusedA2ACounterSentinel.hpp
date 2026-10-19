@@ -39,13 +39,17 @@ namespace TensileLite
         constexpr size_t FUSED_A2A_MODE1_FLAG_OFFSET = fusedA2AAlignLine(
             (size_t)FUSED_A2A_MAX_RANKS * FUSED_A2A_CURSORS_PER_QUEUE * sizeof(uint64_t));
 
+        // Twinned with FUSED_A2A_MODE1_FLAG_ALIGN in Tensile/Components/Signature.py.
+        constexpr size_t FUSED_A2A_MODE1_FLAG_ALIGN = 128;
+
         // The one region reset per launch, sized as the kernel rounds it in
         // a2aElect. worldSize must be >= 1.
         constexpr size_t
             fusedA2AMode1FlagBytes(uint32_t worldSize, uint32_t tokenBlocks, uint32_t subRounds = 1)
         {
-            return fusedA2AAlignLine((size_t)tokenBlocks * (worldSize - 1) * subRounds
-                                     * sizeof(uint32_t));
+            return ((size_t)tokenBlocks * (worldSize - 1) * subRounds * sizeof(uint32_t)
+                    + FUSED_A2A_MODE1_FLAG_ALIGN - 1)
+                   / FUSED_A2A_MODE1_FLAG_ALIGN * FUSED_A2A_MODE1_FLAG_ALIGN;
         }
 
         // Live mode-1 bytes. `batches` is the number of distinct iB the kernel

@@ -8465,10 +8465,14 @@ class KernelWriterAssembly(KernelWriter):
 
     Everything between the election and A2ASkipEnqueue runs on an enqueuer only.
     """
-    from .Components.Signature import FUSED_A2A_LINE_BYTES, FUSED_A2A_MODE1_FLAG_OFFSET
+    import os
+    from .Components.Signature import (FUSED_A2A_LINE_BYTES, FUSED_A2A_MODE1_FLAG_ALIGN,
+                                       FUSED_A2A_MODE1_FLAG_OFFSET)
     module    = Module("a2aElect")
     skipLabel = Label("A2ASkipEnqueue", "")
     numWaves  = kernel["NumThreads"] // kernel["WavefrontSize"]
+    if os.environ.get("A2A_DIAG_ELECT_WAVES"):
+      numWaves = int(os.environ["A2A_DIAG_ELECT_WAVES"])
 
     m    = self.sgprPool.checkOut(1, tag="a2aElect_m", preventOverflow=False)
     wave = self.sgprPool.checkOut(1, tag="a2aElect_wave", preventOverflow=False)
@@ -8483,17 +8487,42 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SCmpLgU32(src0=sgpr(wave), src1=0, comment="the last batch but not batch 0?"))
     module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
                             comment="the previous batch placed this one"))
-    module.add(SMinU32(dst=sgpr(m), src0=sgpr(m), src1=numWaves,
-                       comment="m = min(numWaves, W-1)"))
-    module.add(VReadfirstlaneB32(dst=sgpr(wave), src=vgpr("Serial"), comment="wave's first thread"))
-    module.add(SLShiftRightB32(dst=sgpr(wave), shiftHex=log2(kernel["WavefrontSize"]),
-                               src=sgpr(wave), comment="wave index"))
-    module.add(SCmpGeU32(src0=sgpr(wave), src1=sgpr(m), comment="wave index >= m?"))
-    self.sgprPool.checkIn(wave)
-    self.sgprPool.checkIn(m)
-    module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
-                            comment="no ticket for this wave"))
+    mode = "static" if os.environ.get("A2A_DIAG_ELECT_STATIC") == "1" else \
+           "wg" if os.environ.get("A2A_DIAG_ELECT_WG") == "1" else "wave"
+    wavesPerWG = kernel["NumThreads"] // kernel["WavefrontSize"]
+    if mode == "wave":
+      module.add(SMinU32(dst=sgpr(m), src0=sgpr(m), src1=numWaves,
+                         comment="m = min(numWaves, W-1)"))
+      module.add(VReadfirstlaneB32(dst=sgpr(wave), src=vgpr("Serial"), comment="wave's first thread"))
+      module.add(SLShiftRightB32(dst=sgpr(wave), shiftHex=log2(kernel["WavefrontSize"]),
+                                 src=sgpr(wave), comment="wave index"))
+      module.add(SCmpGeU32(src0=sgpr(wave), src1=sgpr(m), comment="wave index >= m?"))
+      self.sgprPool.checkIn(wave)
+      self.sgprPool.checkIn(m)
+      module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
+                              comment="no ticket for this wave"))
+    else:
+      self.sgprPool.checkIn(m)
+      if mode == "static":
+        module.add(SOrB32(dst=sgpr(wave), src0=sgpr("WorkGroup0"), src1=sgpr("WorkGroup1"),
+                          comment="nonzero unless dispatch id 0"))
+        module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
+                                comment="only dispatch id 0 enqueues"))
+      else:
+        module.add(SCmpLgU32(src0=sgpr("WorkGroup0"), src1=0, comment="feature tile != 0?"))
+        module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
+                                comment="only feature tile 0 draws"))
+      module.add(VReadfirstlaneB32(dst=sgpr(wave), src=vgpr("Serial"), comment="wave's first thread"))
+      module.add(SLShiftRightB32(dst=sgpr(wave), shiftHex=log2(kernel["WavefrontSize"]),
+                                 src=sgpr(wave), comment="wave index"))
+    electSubset = os.environ.get("A2A_DIAG_ELECT_SUBSET") == "1" or mode == "wg"
+    if mode == "wave" and electSubset:
+      module.add(SCmpLgU32(src0=sgpr("WorkGroup0"), src1=0, comment="feature tile != 0?"))
+      module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
+                              comment="only feature tile 0 draws"))
 
+    outer  = module
+    module = Module("a2aElectTicket")
     off = self.sgprPool.checkOut(1, tag="a2aElect_off", preventOverflow=False)
     module.add(SSubU32(dst=sgpr(off), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
     module.add(SMulI32(dst=sgpr(off), src0=sgpr("NumWorkGroups1"), src1=sgpr(off),
@@ -8505,11 +8534,12 @@ class KernelWriterAssembly(KernelWriter):
     else:
       module.add(SLShiftLeftB32(dst=sgpr(off), shiftHex=2, src=sgpr(off),
                                 comment="flag block bytes = numTokenBlocks * (W-1) * 4"))
-    module.add(SAddU32(dst=sgpr(off), src0=sgpr(off), src1=FUSED_A2A_LINE_BYTES - 1,
-                       comment=f"round up to a {FUSED_A2A_LINE_BYTES}-byte line"))
+    flagAlign = FUSED_A2A_MODE1_FLAG_ALIGN if os.environ.get("A2A_DIAG_FLAG_ALIGN128") == "1" else FUSED_A2A_LINE_BYTES
+    module.add(SAddU32(dst=sgpr(off), src0=sgpr(off), src1=flagAlign - 1,
+                       comment=f"round up to {flagAlign} bytes"))
     module.add(SAndB32(dst=sgpr(off), src0=sgpr(off),
-                       src1=hex(0xFFFFFFFF & -FUSED_A2A_LINE_BYTES),
-                       comment="flag block rounded up to a line"))
+                       src1=hex(0xFFFFFFFF & -flagAlign),
+                       comment="flag block rounded up"))
 
     slot = self.sgprPool.checkOut(1, tag="a2aElect_slot", preventOverflow=False)
     module.add(SLShiftLeftB32(dst=sgpr(slot), shiftHex=2, src=sgpr(iBSgpr), comment="iB * 4"))
@@ -8525,14 +8555,22 @@ class KernelWriterAssembly(KernelWriter):
     self.sgprPool.checkIn(off)
 
     data = self.sgprPool.checkOut(1, tag="a2aElect_data", preventOverflow=False)
-    module.add(SSubU32(dst=sgpr(data), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
-    module.add(SMinU32(dst=sgpr(data), src0=sgpr(data), src1=numWaves,
-                       comment="m = min(numWaves, W-1)"))
-    module.add(SMulI32(dst=sgpr(data), src0=sgpr(data), src1=sgpr("A2ABlockCount"),
-                       comment="count * m"))
-    module.add(SMulI32(dst=sgpr(data), src0=sgpr(data), src1=sgpr("NumWorkGroups0"),
-                       comment="count * F * m = the batch's ticket count"))
-    module.add(SSubU32(dst=sgpr(data), src0=sgpr(data), src1=1, comment="DATA = count * F * m - 1"))
+    if mode == "wg":
+      drawnLbl = Label(self.labels.getNameInc("a2a_ticket_drawn"), "")
+      module.add(SSubU32(dst=sgpr(data), src0=sgpr("A2ABlockCount"), src1=1,
+                         comment="DATA = count - 1, one ticket per feature-tile-0 WG"))
+      module.add(SCmpLgU32(src0=sgpr(wave), src1=0, comment="wave index != 0?"))
+      module.add(SCBranchSCC1(labelName=drawnLbl.getLabelName(), comment="wave 0 draws for the WG"))
+    else:
+      module.add(SSubU32(dst=sgpr(data), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
+      module.add(SMinU32(dst=sgpr(data), src0=sgpr(data), src1=numWaves,
+                         comment="m = min(numWaves, W-1)"))
+      module.add(SMulI32(dst=sgpr(data), src0=sgpr(data), src1=sgpr("A2ABlockCount"),
+                         comment="count * m"))
+      if not electSubset:
+        module.add(SMulI32(dst=sgpr(data), src0=sgpr(data), src1=sgpr("NumWorkGroups0"),
+                           comment="count * F * m = the batch's ticket count"))
+      module.add(SSubU32(dst=sgpr(data), src0=sgpr(data), src1=1, comment="DATA = count * F * m - 1"))
     module.add(SAtomicInc(dst=sgpr(data), base=sgpr(ptr, 2),
                           soffset=hex(FUSED_A2A_MODE1_FLAG_OFFSET),
                           smem=SMEMModifiers(glc=True),
@@ -8540,12 +8578,41 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SWaitCnt(kmcnt=0, comment="wait the election atomic return (SMEM -> lgkmcnt)"))
     self.sgprPool.checkIn(ptr)
 
-    nq = self.sgprPool.checkOut(1, tag="a2aElect_numQueues", preventOverflow=False)
-    module.add(SSubU32(dst=sgpr(nq), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
-    module.add(SCmpGeU32(src0=sgpr(data), src1=sgpr(nq), comment="ticket >= W-1?"))
-    self.sgprPool.checkIn(nq)
-    module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
-                            comment="no queue for this ticket -> skip the enqueue"))
+    if mode == "wg":
+      vAddr = self.vgprPool.checkOut(1, tag="a2aElect_ldsAddr")
+      vTk   = self.vgprPool.checkOut(1, tag="a2aElect_ldsTicket")
+      module.add(VMovB32(dst=vgpr(vAddr), src=0, comment="LDS slot 0, untouched before the prefetch"))
+      module.add(VMovB32(dst=vgpr(vTk), src=sgpr(data), comment="ticket"))
+      module.add(DSStoreB32(vgpr(vAddr), vgpr(vTk), DSModifiers(offset=0), comment="publish the WG's ticket"))
+      module.add(SWaitCnt(dscnt=0))
+      module.add(drawnLbl)
+      module.add(SBarrier(comment="ticket published"))
+      module.add(VMovB32(dst=vgpr(vAddr), src=0))
+      module.add(DSLoadB32(vgpr(vTk), vgpr(vAddr), DSModifiers(offset=0), comment="the WG's ticket"))
+      module.add(SWaitCnt(dscnt=0))
+      module.add(VReadfirstlaneB32(dst=sgpr(data), src=vgpr(vTk)))
+      module.add(SBarrier(comment="every wave read the slot before it is reused"))
+      self.vgprPool.checkIn(vTk)
+      self.vgprPool.checkIn(vAddr)
+      module.add(SCmpLgU32(src0=sgpr(data), src1=0, comment="ticket != 0?"))
+      module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(), comment="another WG enqueues"))
+    else:
+      nq = self.sgprPool.checkOut(1, tag="a2aElect_numQueues", preventOverflow=False)
+      module.add(SSubU32(dst=sgpr(nq), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
+      module.add(SCmpGeU32(src0=sgpr(data), src1=sgpr(nq), comment="ticket >= W-1?"))
+      self.sgprPool.checkIn(nq)
+      module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(),
+                              comment="no queue for this ticket -> skip the enqueue"))
+
+    ticketModule, module = module, outer
+    if mode != "static":
+      module.add(ticketModule)
+    if mode != "wave":
+      nq = self.sgprPool.checkOut(1, tag="a2aElect_numQueues", preventOverflow=False)
+      module.add(SSubU32(dst=sgpr(nq), src0=sgpr("A2AShardCounter"), src1=1, comment="W - 1"))
+      module.add(SCmpGeU32(src0=sgpr(wave), src1=sgpr(nq), comment="wave index >= W-1?"))
+      module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(), comment="no queue for this wave"))
+      module.add(SMovB32(dst=sgpr(data), src=sgpr(wave), comment="queue = wave index"))
 
     lo       = iBSgpr
     nextLbl  = Label(self.labels.getNameInc("a2a_next_batch"), "advance to the next batch")
@@ -8556,15 +8623,29 @@ class KernelWriterAssembly(KernelWriter):
     module.add(nextLbl)
     module.add(self.a2aNextBatch(kernel, lo, numCuSgpr))
     module.add(placeLbl)
-    module.add(self.a2aEnqueue(kernel, tPB, data, lo))
-    module.add(SCmpLgU32(src0=sgpr(lo), src1=sgpr("A2ABlockLo"), comment="placed the next batch?"))
-    module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(), comment="done"))
+    if mode == "wave":
+      module.add(self.a2aEnqueue(kernel, tPB, data, lo))
+    else:
+      queueLbl = Label(self.labels.getNameInc("a2a_place_queue"), "one of this wave's queues")
+      module.add(queueLbl)
+      module.add(self.a2aEnqueue(kernel, tPB, data, lo))
+      module.add(SAddU32(dst=sgpr(data), src0=sgpr(data), src1=wavesPerWG,
+                         comment="next queue of this wave"))
+      module.add(SCmpLtU32(src0=sgpr(data), src1=sgpr(nq), comment="queue < W-1?"))
+      module.add(SCBranchSCC1(labelName=queueLbl.getLabelName(), comment="place it"))
+      module.add(SMovB32(dst=sgpr(data), src=sgpr(wave), comment="queue = wave index"))
+    if mode != "static":
+      module.add(SCmpLgU32(src0=sgpr(lo), src1=sgpr("A2ABlockLo"), comment="placed the next batch?"))
+      module.add(SCBranchSCC1(labelName=skipLabel.getLabelName(), comment="done"))
     hi = self.sgprPool.checkOut(1, tag="a2aElect_hi", preventOverflow=False)
     module.add(SAddU32(dst=sgpr(hi), src0=sgpr(lo), src1=sgpr("A2ABlockCount"), comment="bHi"))
     module.add(SCmpLtU32(src0=sgpr(hi), src1=sgpr("NumWorkGroups1"), comment="batches left?"))
     self.sgprPool.checkIn(hi)
     module.add(SCBranchSCC1(labelName=nextLbl.getLabelName(), comment="place the next batch"))
     self.sgprPool.checkIn(data)
+    if mode != "wave":
+      self.sgprPool.checkIn(nq)
+      self.sgprPool.checkIn(wave)
     module.add(skipLabel)
     return module
 

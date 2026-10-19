@@ -644,7 +644,9 @@ namespace TensileLite
 
                 const int batch = std::max(1, args["a2a-multigpu-batch"].as<int>());
                 const int skewXUs    = std::max(0, args["a2a-multigpu-skew-x-us"].as<int>());
-                const int skewGemmUs = std::max(0, args["a2a-multigpu-skew-gemm-us"].as<int>());
+                const int  skewGemmRaw = args["a2a-multigpu-skew-gemm-us"].as<int>();
+                const int  skewGemmUs  = std::abs(skewGemmRaw);
+                const bool skewOthers  = skewGemmRaw < 0;
                 const bool warBarrier = args["a2a-multigpu-war-barrier"].as<int>() != 0;
                 const bool timing     = args["a2a-multigpu-time"].as<int>() != 0;
                 const int  rotate     = args["a2a-multigpu-sdma-rotate"].as<int>();
@@ -652,6 +654,7 @@ namespace TensileLite
                 const bool normalInit = args["a2a-multigpu-init"].as<int>() == 1;
                 const int  numCu      = std::max(0, args["a2a-multigpu-num-cu"].as<int>());
                 const bool noWait     = args["a2a-multigpu-no-wait"].as<int>() != 0;
+                const bool warmQueues = args["a2a-multigpu-warm-queues"].as<int>() != 0;
                 if(normalInit && validate)
                 {
                     std::cerr << "[a2a-multigpu] ERROR: --a2a-multigpu-init 1 needs "
@@ -900,6 +903,36 @@ namespace TensileLite
                     }
                 }
 
+                std::vector<A2AQueueWarm> warm(W);
+                for(int d = 0; warmQueues && d < W; d++)
+                {
+                    HIP_CHECK_EXC(hipSetDevice(d));
+                    HIP_CHECK_EXC(hipMalloc(&warm[d].sink, 4 * sizeof(uint64_t)));
+                    HIP_CHECK_EXC(hipMemset(warm[d].sink, 0, 4 * sizeof(uint64_t)));
+                    warm[d].ringPages = SDMA_QUEUE_SIZE / 4096;
+                    for(int j = 0; j < W; j++)
+                    {
+                        if(j == d)
+                            continue;
+                        const HsaQueueResource& r = queues[d][j]->queueResource();
+                        warm[d].rptr[warm[d].n]   = (uint64_t const*)r.Queue_read_ptr_aql;
+                        warm[d].wptr[warm[d].n]   = (uint64_t const*)r.Queue_write_ptr_aql;
+                        warm[d].ring[warm[d].n++] = (uint32_t const*)queues[d][j]->ringBase();
+                        for(void const* p : {(void const*)r.Queue_read_ptr_aql,
+                                             (void const*)r.Queue_write_ptr_aql,
+                                             (void const*)queues[d][j]->ringBase()})
+                        {
+                            hipPointerAttribute_t at{};
+                            const hipError_t      e = hipPointerGetAttributes(&at, p);
+                            std::cout << "[a2a-multigpu] queue rank=" << d << " peer=" << j
+                                      << " ptr=" << p << " err=" << e
+                                      << " type=" << (int)at.type << " device=" << at.device
+                                      << " devPtr=" << at.devicePointer
+                                      << " hostPtr=" << at.hostPointer << std::endl;
+                        }
+                    }
+                }
+
                 A2ACounterLayout layout;
                 if(!a2aCounterLayout(
                        *solution, *hardware, problem, inputs[0], M, N, W, "[a2a-multigpu]", layout))
@@ -1005,7 +1038,13 @@ namespace TensileLite
                         a2aBoundaryBarrierKernel, 1, 1, 0, streams[d], arrivals, d, W);
                     HIP_CHECK_EXC(hipGetLastError());
 
-                    if(skewGemmUs != 0 && d == W - 1)
+                    if(warmQueues)
+                    {
+                        hipLaunchKernelGGL(a2aQueueWarmKernel, 1, 64, 0, streams[d], warm[d]);
+                        HIP_CHECK_EXC(hipGetLastError());
+                    }
+
+                    if(skewGemmUs != 0 && (skewOthers ? d != 0 : d == W - 1))
                     {
                         hipLaunchKernelGGL(a2aSkewKernel,
                                            1,
@@ -1146,6 +1185,17 @@ namespace TensileLite
                               << " makespan-max-us=" << mx << " spread-us=" << (mx - mn)
                               << " enqueue-min-us=" << enqMn << " enqueue-max-us=" << enqMx
                               << " samples=" << makespanUs.size() << std::endl;
+                }
+
+                for(int d = 0; warmQueues && d < W; d++)
+                {
+                    HIP_CHECK_EXC(hipSetDevice(d));
+                    uint64_t s[4];
+                    HIP_CHECK_EXC(hipMemcpy(s, warm[d].sink, sizeof(s), hipMemcpyDeviceToHost));
+                    std::cout << "[a2a-multigpu] warm rank=" << d << " launches=" << s[2]
+                              << " first-rptr-read-us=" << (s[2] ? s[0] / 100.0 / s[2] : 0.0)
+                              << " first-ring-read-us=" << (s[2] ? s[1] / 100.0 / s[2] : 0.0)
+                              << std::endl;
                 }
 
                 for(int d = 0; d < W; d++)

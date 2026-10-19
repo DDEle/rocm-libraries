@@ -1,0 +1,109 @@
+// Copyright Advanced Micro Devices, Inc., or its affiliates.
+// SPDX-License-Identifier: MIT
+
+#pragma once
+
+// FusedA2AMode=1 counter block and its guard tail:
+//
+//   +0    cursors   MAX_RANKS * 2 * u64   SDMA cursor pair per queue
+//   +128  flag      tokenBlocks*(W-1)*u32 flag[b][queue], rounded to a line
+//   ...   counter   batches * u32         counter[iB]
+//   ...   guard tail
+//
+// Each region starts on a 64-byte line; the trailing variable-size region gets
+// no tail padding. The cursor region is sized by FUSED_A2A_MAX_RANKS rather
+// than the runtime world size. The guard tail catches an iB that runs past the
+// counter region by absorbing the write inside the allocation instead of
+// letting it reach whatever hipMalloc handed back next.
+
+#include <cstddef>
+#include <cstdint>
+
+#include <Tensile/FusedA2AKernArg.hpp> // FUSED_A2A_MAX_RANKS, fusedA2AAlignLine
+
+namespace TensileLite
+{
+    namespace Client
+    {
+        // Wide enough that a plausible off-by-one lands inside it, and a
+        // whole number of 4-byte counter slots.
+        constexpr size_t FUSED_A2A_COUNTER_SENTINEL_BYTES = 64;
+        constexpr size_t FUSED_A2A_COUNTER_SENTINEL_WORDS
+            = FUSED_A2A_COUNTER_SENTINEL_BYTES / sizeof(uint32_t);
+
+        // [0] reservation, [1] commit. Interleaved per queue so the kernel
+        // reaches both from one base and never needs W.
+        constexpr size_t FUSED_A2A_CURSORS_PER_QUEUE = 2;
+
+        // Twinned with FUSED_A2A_MODE1_FLAG_OFFSET in Tensile/Components/Signature.py.
+        constexpr size_t FUSED_A2A_MODE1_FLAG_OFFSET = fusedA2AAlignLine(
+            (size_t)FUSED_A2A_MAX_RANKS * FUSED_A2A_CURSORS_PER_QUEUE * sizeof(uint64_t));
+
+        // Twinned with FUSED_A2A_MODE1_{DONE,SEQ}_OFFSET in Tensile/Components/Signature.py:
+        // the mode-1 layout of a flagPtr block.
+        constexpr size_t FUSED_A2A_MODE1_DONE_OFFSET = 0;
+        constexpr size_t FUSED_A2A_MODE1_SEQ_OFFSET  = FUSED_A2A_OUTBOUND_OFFSET;
+
+        // Sized as the kernel rounds it in a2aFlagBlockBytes. worldSize must be >= 1.
+        constexpr size_t
+            fusedA2AMode1FlagBytes(uint32_t worldSize, uint32_t tokenBlocks, uint32_t subRounds = 1)
+        {
+            return fusedA2AAlignLine((size_t)tokenBlocks * (worldSize - 1) * subRounds
+                                     * sizeof(uint32_t));
+        }
+
+        // Block tallies plus the grid tally, sized as a2aTallyBytes rounds them.
+        constexpr size_t fusedA2AMode1TallyBytes(uint32_t tokenBlocks)
+        {
+            return fusedA2AAlignLine(((size_t)tokenBlocks + 1) * sizeof(uint32_t));
+        }
+
+        // Live mode-1 bytes. `batches` is the number of distinct iB the kernel
+        // can compute, not the world size.
+        constexpr size_t fusedA2AMode1PayloadBytes(uint32_t worldSize,
+                                                   uint32_t tokenBlocks,
+                                                   uint32_t batches,
+                                                   uint32_t subRounds = 1)
+        {
+            return FUSED_A2A_MODE1_FLAG_OFFSET
+                   + fusedA2AMode1FlagBytes(worldSize, tokenBlocks, subRounds)
+                   + fusedA2AMode1TallyBytes(tokenBlocks) + (size_t)batches * sizeof(uint32_t);
+        }
+
+        constexpr size_t fusedA2AMode1AllocBytes(uint32_t worldSize,
+                                                 uint32_t tokenBlocks,
+                                                 uint32_t batches,
+                                                 uint32_t subRounds = 1)
+        {
+            return fusedA2AMode1PayloadBytes(worldSize, tokenBlocks, batches, subRounds)
+                   + FUSED_A2A_COUNTER_SENTINEL_BYTES;
+        }
+
+        // Expected guard word at index i: the high half is far from any legal
+        // counter value, and the low half varies per word so a shifted
+        // overrun is still detected.
+        constexpr uint32_t fusedA2ACounterSentinelWord(size_t i)
+        {
+            return 0xA2A50000u | (uint32_t)(i & 0xFFFFu);
+        }
+
+        // Fill the guard tail. `guard` points at the first byte past the
+        // payload and must have FUSED_A2A_COUNTER_SENTINEL_WORDS words.
+        inline void fusedA2ACounterSentinelFill(uint32_t* guard)
+        {
+            for(size_t i = 0; i < FUSED_A2A_COUNTER_SENTINEL_WORDS; i++)
+                guard[i] = fusedA2ACounterSentinelWord(i);
+        }
+
+        // Index of the first corrupted guard word, or -1 if the tail is intact.
+        inline int fusedA2ACounterSentinelFirstBad(const uint32_t* guard)
+        {
+            for(size_t i = 0; i < FUSED_A2A_COUNTER_SENTINEL_WORDS; i++)
+            {
+                if(guard[i] != fusedA2ACounterSentinelWord(i))
+                    return (int)i;
+            }
+            return -1;
+        }
+    } // namespace Client
+} // namespace TensileLite

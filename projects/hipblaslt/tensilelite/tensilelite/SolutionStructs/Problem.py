@@ -525,6 +525,9 @@ _defaultProblemType = {
     # PUSHes the first AM feature columns to remote peer recv slots from the
     # GEMM epilogue; the remaining columns store locally.
     "FusedGemmA2A": False,
+    # A2A fusion mode. 0=Off, 1=GatheredB (B arrives one shard at a time from
+    # the peers; the shard dimension is the outer of two summation indices).
+    "FusedA2AMode": 0,
     # For kernels putting arguments in workspaces instead of kernel arguments, they can choose to support user arguments input instead.
     "SupportUserArgs": True,
     "SwizzleTensorA": False,

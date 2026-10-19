@@ -950,6 +950,34 @@ class TestA2AGemmSolutionProblemType:
         assert getKernelNameMin(state, False) != getKernelNameMin(stock, False)
 
 
+class TestA2AGemmSubRoundsReachTheLibrary:
+    def _size_mapping(self, subRounds):
+        from config_harness import derive_states
+
+        from Tensile.Contractions import SizeMapping
+
+        state = derive_states(_CONFIG, arch="gfx950", limit_solutions=1)[0]
+        state["A2ASubRounds"] = subRounds
+        return SizeMapping.FromOriginalState(state)
+
+    def test_state_keys_carry_sub_rounds(self):
+        from Tensile.Contractions import SizeMapping
+
+        assert "a2aSubRounds" in SizeMapping.StateKeys
+
+    @pytest.mark.parametrize("subRounds", [1, 2, 4])
+    def test_sub_rounds_round_trip(self, subRounds):
+        assert self._size_mapping(subRounds).a2aSubRounds == subRounds
+
+    def test_cpp_maps_sub_rounds(self):
+        import pathlib
+
+        hdr = pathlib.Path("include/Tensile/Serialization/ContractionSolution.hpp")
+        if not hdr.is_file():
+            pytest.skip("run from the tensilelite root to reach the C++ headers")
+        assert '"a2aSubRounds", s.a2aSubRounds' in hdr.read_text()
+
+
 class TestA2AGemmPredicates:
     """The runtime shard guards ride on the solution's compound predicate list.
 

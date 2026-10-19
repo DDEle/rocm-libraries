@@ -769,7 +769,8 @@ class SizeMapping:
                  'DirectToLdsA',
                  'DirectToLdsB',
                  'ExpertSchedulingMode',
-                 'clusterDim'
+                 'clusterDim',
+                 'a2aSubRounds'
                  ]
 
     @classmethod
@@ -869,7 +870,8 @@ class SizeMapping:
                    DirectToLdsA             = dtlA,
                    DirectToLdsB             = dtlB,
                    ExpertSchedulingMode     = d.get('ExpertSchedulingMode', 0),
-                   clusterDim               = d['ClusterDim']
+                   clusterDim               = d['ClusterDim'],
+                   a2aSubRounds             = d.get('A2ASubRounds', 1)
                    )
     @classmethod
     def ReadOriginalMacroTile(cls, d):

@@ -504,6 +504,7 @@ namespace TensileLite
         bool DirectToLdsB = false;
 
         int expertSchedulingMode = 0;
+        int a2aSubRounds         = 1;
 
         std::array<int, 2> waveGroup;
     };

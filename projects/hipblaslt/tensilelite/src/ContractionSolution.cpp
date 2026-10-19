@@ -706,6 +706,10 @@ namespace TensileLite
                            ContractionSolution::GroupedInputs const&        inputs,
                            DeviceUserArguments<TAct>*                       args)
     {
+        for(auto const& problem : problems)
+            if(problem.fusedA2A() == FusedA2A::A2AGemm)
+                throw std::runtime_error("A2AGemm does not support device user arguments");
+
         for(int i = 0; i < problems.size(); i++)
         {
             const TensorDescriptor& e = problems[i].tensor(ContractionProblemGemm::TENSOR::E);

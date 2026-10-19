@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -93,5 +94,34 @@ TEST(A2AGemmKernArg, DenseBDescriptorPacksTheShardStrides)
         auto bypass = kernargs(bypassProblem(w), FusedA2A::GemmA2A);
         ASSERT_EQ(dense.size(), bypass.size()) << "world " << w;
         EXPECT_EQ(dense, bypass) << "world " << w;
+    }
+}
+
+TEST(A2AGemmKernArg, DeviceUserArgsRejectA2AGemm)
+{
+    ContractionInputs inputs;
+    inputs.alpha          = 1.0f;
+    inputs.beta           = 0.0f;
+    inputs.activationArgs = {0.0f, 0.0f};
+    ContractionGroupedInputs grouped;
+    grouped.grouped = {inputs};
+    DeviceUserArguments<float> args{};
+    auto userArgs = [&](ContractionProblemGemm p) {
+        p.setAlphaType(rocisa::DataType::Float);
+        p.setBetaType(rocisa::DataType::Float);
+        setDeviceUserArgs<float>({p}, grouped, &args);
+    };
+
+    auto stock = problemWithB(1, K, N * K);
+    stock.setFusedA2A(FusedA2A::None);
+    EXPECT_NO_THROW(userArgs(stock));
+    try
+    {
+        userArgs(problemWithB(2, K, N * K));
+        ADD_FAILURE() << "setDeviceUserArgs accepted an A2AGemm problem";
+    }
+    catch(std::runtime_error const& e)
+    {
+        EXPECT_STREQ(e.what(), "A2AGemm does not support device user arguments");
     }
 }

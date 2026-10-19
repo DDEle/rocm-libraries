@@ -221,7 +221,7 @@ class TestA2AGemmBatchNumbering:
 
 
 class TestA2AGemmElection:
-    """The batch's enqueuers: the per-wave gate, the SMEM atomic, its target, the ticket."""
+    """The batch's enqueuer work-group: the gates, the SMEM atomic, its target, the LDS broadcast."""
 
     # NumThreads / WavefrontSize of the config, and log2(WavefrontSize).
     _NUM_WAVES = 4
@@ -257,45 +257,90 @@ class TestA2AGemmElection:
             src[: self._atomic(src).start()],
         ), "W == 1 still draws a ticket"
 
-    def test_waves_past_m_skip_the_election_atomic(self):
+    def _wave(self, src):
+        """The SGPR holding the wave index."""
+        import re
+
+        m = re.search(
+            r"v_readfirstlane_b32 s(\d+), v\[vgprSerial\][^\n]*\n"
+            r"s_lshr_b32 s\1, s\1, %d[^\n]*// wave index" % self._WAVE_SHIFT,
+            src[: self._atomic(src).start()],
+        )
+        assert m, "no wave index before the election atomic"
+        return "s" + m.group(1)
+
+    def test_only_feature_tile_0_draws(self):
         import re
 
         src = self._src()
         assert re.search(
-            r"s_min_u32 s(\d+), s\1, %d[^\n]*\n"
-            r"v_readfirstlane_b32 s(\d+), v\[vgprSerial\][^\n]*\n"
-            r"s_lshr_b32 s\2, s\2, %d[^\n]*\n"
-            r"s_cmp_ge_u32 s\2, s\1[^\n]*\n"
-            r"s_cbranch_scc1 label_A2ASkipEnqueue"
-            % (self._NUM_WAVES, self._WAVE_SHIFT),
+            r"s_cmp_lg_u32 s\[sgprWorkGroup0\], 0[^\n]*\n"
+            r"s_cbranch_scc1 label_A2ASkipEnqueue",
             src[: self._atomic(src).start()],
-        ), "the election is not gated on wave index < min(numWaves, W-1)"
+        ), "work-groups other than feature tile 0 still draw a ticket"
 
-    def test_election_target_is_the_batch_ticket_count(self):
+    def test_only_wave_0_draws(self):
         import re
 
         src = self._src()
-        m = re.search(
-            r"s_sub_u32 s(\d+), s\[sgprA2AShardCounter\], 1[^\n]*\n"
-            r"s_min_u32 s\1, s\1, %d[^\n]*\n"
-            r"s_mul_i32 s\1, s\1, s\[sgprA2ABlockCount\][^\n]*\n"
-            r"s_mul_i32 s\1, s\1, s\[sgprNumWorkGroups0\][^\n]*\n"
-            r"s_sub_u32 s\1, s\1, 1" % self._NUM_WAVES,
+        assert re.search(
+            r"s_cmp_lg_u32 %s, 0[^\n]*\n"
+            r"s_cbranch_scc1 label_a2a_ticket_drawn\w*[^\n]*\n"
+            r"s_atomic_inc " % re.escape(self._wave(src)),
             src,
-        )
-        assert m, "the election DATA is not count * F * min(numWaves, W-1) - 1"
+        ), "a wave other than wave 0 reaches the election atomic"
+
+    def test_election_target_is_the_batch_block_count(self):
+        import re
+
+        src = self._src()
+        m = re.search(r"s_sub_u32 s(\d+), s\[sgprA2ABlockCount\], 1[^\n]*// DATA", src)
+        assert m, "the election DATA is not count - 1"
         assert self._atomic(src).group(0).startswith("s_atomic_inc s%s," % m.group(1))
 
-    def test_a_ticket_below_w_minus_1_wins(self):
+    def test_ticket_0_wins_through_an_lds_broadcast(self):
         import re
 
         src = self._src()
+        tick = re.escape(self._ticket(src))
         assert re.search(
+            r"v_mov_b32 v(\d+), %s[^\n]*\n"
+            r"ds_write_b32 v\d+, v\1[^\n]*\n"
+            r"s_waitcnt lgkmcnt\(0\)[^\n]*\n"
+            r"label_a2a_ticket_drawn\w*:[^\n]*\n"
+            r"s_barrier[^\n]*\n"
+            r"v_mov_b32 v(\d+), 0[^\n]*\n"
+            r"ds_read_b32 v(\d+), v\2[^\n]*\n"
+            r"s_waitcnt lgkmcnt\(0\)[^\n]*\n"
+            r"v_readfirstlane_b32 %s, v\3[^\n]*\n"
+            r"s_barrier[^\n]*\n"
+            r"s_cmp_lg_u32 %s, 0[^\n]*\n"
+            r"s_cbranch_scc1 label_A2ASkipEnqueue" % (tick, tick, tick),
+            src[self._atomic(src).end() :],
+        ), "the work-group does not take wave 0's ticket from LDS and enqueue only on ticket 0"
+
+    def test_wave_w_serves_queues_w_up_by_num_waves(self):
+        import re
+
+        src = self._src()
+        tick = re.escape(self._ticket(src))
+        wave = re.escape(self._wave(src))
+        m = re.search(
             r"s_sub_u32 s(\d+), s\[sgprA2AShardCounter\], 1[^\n]*\n"
             r"s_cmp_ge_u32 %s, s\1\b[^\n]*\n"
-            r"s_cbranch_scc1 label_A2ASkipEnqueue" % re.escape(self._ticket(src)),
+            r"s_cbranch_scc1 label_A2ASkipEnqueue[^\n]*\n"
+            r"s_mov_b32 %s, %s\b" % (wave, tick, wave),
             src[self._atomic(src).end() :],
-        ), "the election does not admit exactly the tickets below W-1"
+        )
+        assert m, "the first queue is not the wave index, or waves at W-1 and up still enqueue"
+        assert re.search(
+            r"s_add_u32 %s, %s, %d[^\n]*\n"
+            r"s_cmp_lt_u32 %s, s%s\b[^\n]*\n"
+            r"s_cbranch_scc1 label_a2a_place_\w+[^\n]*\n"
+            r"s_mov_b32 %s, %s\b"
+            % (tick, tick, self._NUM_WAVES, tick, m.group(1), tick, wave),
+            src[m.end() :],
+        ), "a wave does not step its queue by numWaves below W-1"
 
     def test_the_served_rank_carries_the_ticket(self):
         import re
@@ -528,8 +573,9 @@ class TestA2AGemmEnqueueLoops:
         body = self._packing_pass(self._src())
         tail = body[body.rindex("store committedWptr = pending") :].splitlines()[1:]
         assert [l.split()[0] for l in tail if l.strip()] == [
-            "s_waitcnt", "s_cmp_lg_u32", "s_cbranch_scc1", "s_add_u32", "s_cmp_lt_u32", "s_cbranch_scc1"
-        ], "the enqueuer does more than pick the next batch after a submit:\n%s" % "\n".join(tail)
+            "s_waitcnt", "s_add_u32", "s_cmp_lt_u32", "s_cbranch_scc1", "s_mov_b32",
+            "s_cmp_lg_u32", "s_cbranch_scc1", "s_add_u32", "s_cmp_lt_u32", "s_cbranch_scc1"
+        ], "the enqueuer does more than pick the next queue and batch after a submit:\n%s" % "\n".join(tail)
 
 
 class TestA2AGemmRoundGroupOrder:

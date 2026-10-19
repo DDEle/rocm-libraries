@@ -3,8 +3,7 @@
 # A2A-GEMM outer shard-loop (FusedA2A: A2AGemm) config for gfx950.
 #
 # The index structure is the stock GEMM one; K holds the whole W*k_local
-# reduction and one shard round covers K/W. The shard count
-# is a runtime scalar and is not a ProblemSizes entry.
+# reduction and one shard round covers K/W. The shard count is the problem's world.
 
 GlobalParameters:
   SyncsPerBenchmark: 0
@@ -54,7 +53,10 @@ BenchmarkProblems:
       BenchmarkJoinParameters:
       BenchmarkFinalParameters:
         - ProblemSizes:
-          - Exact: [3072, 2048, 1, 4096]   # W=4, k_local=1024
+          - Exact: {sizes: [3072, 2048, 1, 4096], world: 1}
+          - Exact: {sizes: [3072, 2048, 1, 4096], world: 2}
+          - Exact: {sizes: [3072, 2048, 1, 4096], world: 4}
+          - Exact: {sizes: [3072, 2048, 1, 4096], world: 8}
 
 LibraryLogic:
   ScheduleName: "a2a_gemm_loop_gfx950"

@@ -266,20 +266,28 @@ class ExactDict(Problem):
         raise RuntimeError ("specified size=%s does not have enough indices for problem (expected %d, got %d)" \
                 % (self.sizes, problemType["TotalIndices"], len(self.sizes)))
 
-    if problemType and problemType["FusedA2A"] == "GemmA2A":
+    if problemType and isFusedA2A(problemType):
       from ..Components.Signature import FUSED_A2A_MAX_RANKS
+      mode = problemType["FusedA2A"]
       if self.world is None:
-        raise RuntimeError("FusedA2A=GemmA2A problem %s must set 'world'" % list(self.sizes))
+        raise RuntimeError("FusedA2A=%s problem %s must set 'world'" % (mode, list(self.sizes)))
       if not 1 <= self.world <= FUSED_A2A_MAX_RANKS:
         raise RuntimeError("world=%d must be in [1, %d]" % (self.world, FUSED_A2A_MAX_RANKS))
-      if self.a2aExtent is None:
-        self.a2aExtent = self.sizes[0]
-      if not 1 <= self.a2aExtent <= self.sizes[0]:
-        raise RuntimeError("a2aExtent=%d must be in [1, M=%d]" % (self.a2aExtent, self.sizes[0]))
       if self.sizes[2] != 1:
-        raise RuntimeError("FusedA2A=GemmA2A problem %s has batch=%d; must be 1" % (list(self.sizes), self.sizes[2]))
+        raise RuntimeError("FusedA2A=%s problem %s has batch=%d; must be 1" % (mode, list(self.sizes), self.sizes[2]))
+      if mode == "GemmA2A":
+        if self.a2aExtent is None:
+          self.a2aExtent = self.sizes[0]
+        if not 1 <= self.a2aExtent <= self.sizes[0]:
+          raise RuntimeError("a2aExtent=%d must be in [1, M=%d]" % (self.a2aExtent, self.sizes[0]))
+      else:
+        if self.a2aExtent is not None:
+          raise RuntimeError("a2aExtent applies only to FusedA2A=GemmA2A problems")
+        self.a2aExtent = 0
+        if self.sizes[3] % self.world != 0:
+          raise RuntimeError("K=%d is not a multiple of world=%d" % (self.sizes[3], self.world))
     elif self.world is not None or self.a2aExtent is not None:
-      raise RuntimeError("'world' and 'a2aExtent' apply only to FusedA2A=GemmA2A problems")
+      raise RuntimeError("'world' and 'a2aExtent' apply only to fused A2A problems")
 
 
 ################################################################################
@@ -290,8 +298,8 @@ Adapter class for class `ProblemSizes`. It satisfies the implicit usage requirem
 of ClientWriter.writeClientConfig() by converting ExactLogic to list of `Problem` objects
 """
 class ProblemSizesMock:
-  def __init__(self, exactLogic, fusedGemmA2A=False):
-    if fusedGemmA2A:
+  def __init__(self, exactLogic, fusedA2A=False):
+    if fusedA2A:
       self.problems = [Problem(sizes[:-2], world=sizes[-2], a2aExtent=sizes[-1]) for sizes, solution in exactLogic]
     else:
       self.problems = [Problem(problem) for problem, solution in exactLogic]
@@ -313,15 +321,15 @@ class ProblemSizes:
         for sizeTypeKey in dictionary:
           #print ("PROBLEM parsed:", sizeTypeKey, dictionary[sizeTypeKey])
           if sizeTypeKey == "Range":
-            if problemType["FusedA2A"] == "GemmA2A":
-              raise RuntimeError("FusedA2A=GemmA2A problems must use Exact dicts, not Range")
+            if isFusedA2A(problemType):
+              raise RuntimeError("fused A2A problems must use Exact dicts, not Range")
             psr = ProblemSizeRange(problemType, dictionary[sizeTypeKey])
             self.ranges.append( psr )
           elif sizeTypeKey == "Exact":
             e= dictionary[sizeTypeKey]
             if isinstance(e,list):
-              if problemType["FusedA2A"] == "GemmA2A":
-                raise RuntimeError("FusedA2A=GemmA2A problem %s must be an Exact dict with 'world'" % e)
+              if isFusedA2A(problemType):
+                raise RuntimeError("fused A2A problem %s must be an Exact dict with 'world'" % e)
               self.exacts.append(ExactList(e, problemType))
             elif isinstance(e,dict):
               self.exacts.append(ExactDict(e, problemType))
@@ -539,6 +547,11 @@ _defaultProblemType = {
 }
 
 FUSED_A2A_MODES = ("None", "GemmA2A", "A2AGemm")
+
+
+def isFusedA2A(problemType):
+  """problemType: a ProblemType or a raw logic ProblemType dict."""
+  return (problemType or {}).get("FusedA2A", "None") != "None"
 
 # The supported typed GEMM, each entry is (Ti, To, Tc).
 # DataType (Ti)        = The data-type of the input matrices: A/B

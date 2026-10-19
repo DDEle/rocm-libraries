@@ -27,7 +27,7 @@ from . import LibraryIO
 from .Common.GlobalParameters import defaultInternalSupportParams, defaultSolution
 from .Common.Constants import HR
 from .CustomKernels import isCustomKernelConfig
-from .SolutionStructs.Problem import ProblemSizesMock, ProblemType
+from .SolutionStructs.Problem import ProblemSizesMock, ProblemType, isFusedA2A
 from .SolutionStructs.Problem import _defaultProblemType as defaultProblemType
 from .Common.GlobalParameters import globalParameters
 from .Common.Architectures import gfxToIsa, isaToGfx, steppingArchOf, tuningArchOf
@@ -657,7 +657,7 @@ def formProblemSize(
         temp["ProblemSizes"] = [{"Exact": FlowList([1, 1, 1, 1])}]
     else:
         problems = ProblemSizesMock(
-            exactLogic, problemTypeStat.get("FusedA2A", "None") == "GemmA2A"
+            exactLogic, isFusedA2A(problemTypeStat)
         ).problems
         for problem, (_, mapping) in zip(problems, exactLogic):
             if mapping[0] != solutionIndex:

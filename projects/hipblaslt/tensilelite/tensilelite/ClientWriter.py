@@ -32,7 +32,7 @@ from pathlib import Path
 from enum import Enum
 from glob import glob
 
-from .SolutionStructs.Problem import ProblemType, ProblemSizesMock, ProblemSizesMockDummy
+from .SolutionStructs.Problem import ProblemType, ProblemSizesMock, ProblemSizesMockDummy, isFusedA2A
 from .SolutionStructs import ActivationArgs, BiasTypeArgs, FactorDimArgs, GateTypeArgs
 from .Toolchain.Component import Assembler
 
@@ -171,7 +171,7 @@ def main(config, assembler: Assembler, cCompiler: str, isaInfoMap, outputPath: P
         logic.schedule, logic.problemType, logic.exactLogic, logic.library
     functions.append((scheduleName, problemType))
     functionNames.append("tensile_%s" % (problemType))
-    problemSizes = ProblemSizesMock(exactLogic, problemType["FusedA2A"] == "GemmA2A") if exactLogic else ProblemSizesMockDummy()
+    problemSizes = ProblemSizesMock(exactLogic, isFusedA2A(problemType)) if exactLogic else ProblemSizesMockDummy()
     if len(problemType["BiasDataTypeList"]) > 0:
       biasTypeArgs = BiasTypeArgs(problemType, [problemType["BiasDataTypeList"][0]])
     else:
@@ -565,7 +565,7 @@ def problemSizeParams(problemType, problem, factorDim):
         gatestrides[index.d] = sc[1]
       rv.append(('gate-strides', ",".join(map(str, gatestrides))))
 
-    if problemType.fusedA2A == 'GemmA2A':
+    if problemType.fusedA2A != 'None':
       rv.append(('world', problem.world))
       rv.append(('fused-a2a-extent', problem.a2aExtent))
 
@@ -803,7 +803,7 @@ def writeClientConfigIni(forBenchmark, problemSizes, biasTypeArgs, factorDimArgs
         param("rotating-buffer-mode",     globalParameters["RotatingMode"])
         param("icache-rotate-copies",     globalParameters["IcacheRotateCopies"])
         param("icache-rotate-size",       globalParameters["IcacheRotateSize"])
-        if problemType.fusedA2A == 'GemmA2A':
+        if problemType.fusedA2A != 'None':
             for world in globalParameters["WorldFilter"]:
                 param("world-filter", world)
         if globalParameters["RocProfCounter"]:

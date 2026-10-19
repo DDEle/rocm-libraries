@@ -4,8 +4,7 @@
 # an odd unroll trip count K/DepthU.
 #
 # The index structure is the stock GEMM one; K holds the whole W*k_local
-# reduction and one shard round covers K/W. The shard count
-# is a runtime scalar and is not a ProblemSizes entry.
+# reduction and one shard round covers K/W. The shard count is the problem's world.
 
 GlobalParameters:
   SyncsPerBenchmark: 0
@@ -55,7 +54,9 @@ BenchmarkProblems:
       BenchmarkJoinParameters:
       BenchmarkFinalParameters:
         - ProblemSizes:
-          - Exact: [3072, 2048, 1, 4352]   # W=4, k_local=1088
+          - Exact: {sizes: [3072, 2048, 1, 4352], world: 1}
+          - Exact: {sizes: [3072, 2048, 1, 4352], world: 2}
+          - Exact: {sizes: [3072, 2048, 1, 4352], world: 4}
 
 LibraryLogic:
   ScheduleName: "a2a_gemm_loop_odd_trip_gfx950"

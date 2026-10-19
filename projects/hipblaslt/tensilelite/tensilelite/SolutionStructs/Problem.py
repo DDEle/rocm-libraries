@@ -266,10 +266,10 @@ class ExactDict(Problem):
         raise RuntimeError ("specified size=%s does not have enough indices for problem (expected %d, got %d)" \
                 % (self.sizes, problemType["TotalIndices"], len(self.sizes)))
 
-    if problemType and problemType["FusedGemmA2A"]:
+    if problemType and problemType["FusedA2A"] == "GemmA2A":
       from ..Components.Signature import FUSED_A2A_MAX_RANKS
       if self.world is None:
-        raise RuntimeError("FusedGemmA2A problem %s must set 'world'" % list(self.sizes))
+        raise RuntimeError("FusedA2A=GemmA2A problem %s must set 'world'" % list(self.sizes))
       if not 1 <= self.world <= FUSED_A2A_MAX_RANKS:
         raise RuntimeError("world=%d must be in [1, %d]" % (self.world, FUSED_A2A_MAX_RANKS))
       if self.a2aExtent is None:
@@ -277,9 +277,9 @@ class ExactDict(Problem):
       if not 1 <= self.a2aExtent <= self.sizes[0]:
         raise RuntimeError("a2aExtent=%d must be in [1, M=%d]" % (self.a2aExtent, self.sizes[0]))
       if self.sizes[2] != 1:
-        raise RuntimeError("FusedGemmA2A problem %s has batch=%d; must be 1" % (list(self.sizes), self.sizes[2]))
+        raise RuntimeError("FusedA2A=GemmA2A problem %s has batch=%d; must be 1" % (list(self.sizes), self.sizes[2]))
     elif self.world is not None or self.a2aExtent is not None:
-      raise RuntimeError("'world' and 'a2aExtent' apply only to FusedGemmA2A problems")
+      raise RuntimeError("'world' and 'a2aExtent' apply only to FusedA2A=GemmA2A problems")
 
 
 ################################################################################
@@ -313,15 +313,15 @@ class ProblemSizes:
         for sizeTypeKey in dictionary:
           #print ("PROBLEM parsed:", sizeTypeKey, dictionary[sizeTypeKey])
           if sizeTypeKey == "Range":
-            if problemType["FusedGemmA2A"]:
-              raise RuntimeError("FusedGemmA2A problems must use Exact dicts, not Range")
+            if problemType["FusedA2A"] == "GemmA2A":
+              raise RuntimeError("FusedA2A=GemmA2A problems must use Exact dicts, not Range")
             psr = ProblemSizeRange(problemType, dictionary[sizeTypeKey])
             self.ranges.append( psr )
           elif sizeTypeKey == "Exact":
             e= dictionary[sizeTypeKey]
             if isinstance(e,list):
-              if problemType["FusedGemmA2A"]:
-                raise RuntimeError("FusedGemmA2A problem %s must be an Exact dict with 'world'" % e)
+              if problemType["FusedA2A"] == "GemmA2A":
+                raise RuntimeError("FusedA2A=GemmA2A problem %s must be an Exact dict with 'world'" % e)
               self.exacts.append(ExactList(e, problemType))
             elif isinstance(e,dict):
               self.exacts.append(ExactDict(e, problemType))
@@ -522,12 +522,9 @@ _defaultProblemType = {
     "ActivationNoGuard": False,
     # AmaxD
     "OutputAmaxD": False,
-    # PUSHes the first AM feature columns to remote peer recv slots from the
-    # GEMM epilogue; the remaining columns store locally.
-    "FusedGemmA2A": False,
-    # A2A fusion mode. 0=Off, 1=GatheredB (B arrives one shard at a time from
-    # the peers; the shard dimension is the outer of two summation indices).
-    "FusedA2AMode": 0,
+    # GemmA2A: the GEMM epilogue PUSHes the first AM feature columns to the peers.
+    # A2AGemm: B arrives from the peers one K shard at a time.
+    "FusedA2A": "None",
     # For kernels putting arguments in workspaces instead of kernel arguments, they can choose to support user arguments input instead.
     "SupportUserArgs": True,
     "SwizzleTensorA": False,
@@ -540,6 +537,8 @@ _defaultProblemType = {
     "DataTypeMXSA": "E8",
     "DataTypeMXSB": "E8",
 }
+
+FUSED_A2A_MODES = ("None", "GemmA2A", "A2AGemm")
 
 # The supported typed GEMM, each entry is (Ti, To, Tc).
 # DataType (Ti)        = The data-type of the input matrices: A/B
@@ -874,6 +873,13 @@ class ProblemType(Mapping):
     for key in _defaultProblemType:
       assignParameterWithDefault(self.state, key, config, _defaultProblemType)
 
+    if "FusedGemmA2A" in config and config["FusedGemmA2A"]:
+      raise Exception("ProblemType key FusedGemmA2A is retired; write FusedA2A: GemmA2A")
+    if "FusedA2AMode" in config and config["FusedA2AMode"]:
+      raise Exception("ProblemType key FusedA2AMode is retired; write FusedA2A: A2AGemm")
+    if self["FusedA2A"] not in FUSED_A2A_MODES:
+      raise Exception("FusedA2A=%s; must be one of %s" % (self["FusedA2A"], ", ".join(FUSED_A2A_MODES)))
+
     # Validate parameter types against the _defaultProblemType registry
     validateProblemTypeParameterTypes(
         self.state,
@@ -1106,7 +1112,7 @@ class ProblemType(Mapping):
           printWarning("ActivationNoGuard is set to False cause Gradient is off.")
           self["ActivationNoGuard"] = False
 
-    if self["FusedGemmA2A"]:
+    if self["FusedA2A"] != "None":
       unsupported = [name for name, used in (
           ("UseBias", self["UseBias"]),
           ("UseE", self["UseE"]),
@@ -1117,9 +1123,10 @@ class ProblemType(Mapping):
           ("OutputAmaxD", self["OutputAmaxD"]),
           ("Sparse", self["Sparse"]),
           ("GroupedGemm", self["GroupedGemm"]),
-          ("Activation", self["ActivationType"] != 'none')) if used]
+          ("Activation", self["ActivationType"] != 'none'),
+          ("TransposeB", self["FusedA2A"] == "A2AGemm" and self["TransposeB"])) if used]
       if unsupported:
-        raise Exception("FusedGemmA2A does not support %s" % ", ".join(unsupported))
+        raise Exception("FusedA2A=%s does not support %s" % (self["FusedA2A"], ", ".join(unsupported)))
 
   ################################################################################
    # Function checkIfSupportedGEMMType:
@@ -1396,8 +1403,10 @@ class ProblemType(Mapping):
         name.append(f"Aux{self['DataTypeE'].toChar()}")
     if self["OutputAmaxD"]:
       name.append("AmaxD")
-    if self["FusedGemmA2A"]:
+    if self["FusedA2A"] == "GemmA2A":
       name.append("FusedA2A")
+    if self["FusedA2A"] == "A2AGemm":
+      name.append("A2AGemm")
     if self["Sparse"]:
       if self["Sparse"] == 2:
         name.append("SPBML%d"%(self["MetadataLayout"]))

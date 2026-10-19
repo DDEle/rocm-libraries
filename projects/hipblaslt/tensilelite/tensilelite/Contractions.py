@@ -74,7 +74,7 @@ class ProblemType:
                  'highPrecisionAccumulate', 'useInitialStridesAB', 'useInitialStridesCD', 'stridedBatched', 'groupedGemm',
                  'useGradient', 'activationType', 'activationArgLength', 'activationComputeDataType', 'activationNoGuard',
                  'sparse', 'f32XdlMathOp', 'supportDeviceUserArguments', 'outputAmaxD', 'swizzleTensorA', 'swizzleTensorB', 'metadataLayout',
-                 'mxBlockA', 'mxBlockB', 'mxTypeA', 'mxTypeB', 'mxScaleFormat', 'fusedGemmA2A', 'fusedA2AMode']
+                 'mxBlockA', 'mxBlockB', 'mxTypeA', 'mxTypeB', 'mxScaleFormat', 'fusedA2A']
     @classmethod
     def FromOriginalState(cls, d):
         indices = [None]*d['TotalIndices']
@@ -295,8 +295,7 @@ class ProblemType:
         rv.swizzleTensorA = d.get('SwizzleTensorA', False)
         rv.swizzleTensorB = d.get('SwizzleTensorB', False)
 
-        rv.fusedGemmA2A = d.get('FusedGemmA2A', False)
-        rv.fusedA2AMode = d.get('FusedA2AMode', 0)
+        rv.fusedA2A = d.get('FusedA2A', 'None')
 
         rv.mxBlockA = d.get('MXBlockA', 0)
         rv.mxBlockB = d.get('MXBlockB', 0)
@@ -430,8 +429,8 @@ class ProblemType:
             predicates.append(ProblemPredicate("SupportDeviceUserArguments", value=self.supportDeviceUserArguments))
             predicates.append(ProblemPredicate("SwizzleTensorA", value=self.swizzleTensorA))
             predicates.append(ProblemPredicate("SwizzleTensorB", value=self.swizzleTensorB))
-            predicates.append(ProblemPredicate("FusedGemmA2A", value=self.fusedGemmA2A))
-            if self.fusedGemmA2A and self.batched:
+            predicates.append(ProblemPredicate("FusedA2A", value=self.fusedA2A))
+            if self.fusedA2A != 'None' and self.batched:
                 predicates.append(ProblemPredicate("BatchSizeEqual", index=0, value=1))
             predicates.append(ProblemPredicate("MXBlockA", value=self.mxBlockA))
             if self.mxBlockA:
@@ -626,7 +625,7 @@ class ProblemPredicate(Properties.Predicate):
         if state['ProblemType']['SwizzleTensorB']:
             rv += [cls('SwizzleTensorB', value=state['ProblemType']['SwizzleTensorB'])]
 
-        if state['ProblemType']['FusedGemmA2A']:
+        if state['ProblemType']['FusedA2A'] == 'GemmA2A':
             rv += [cls('FusedA2AShape', value=state['MacroTile0'])]
 
         if state.get('ReuseAcrossPersistent', 0):
@@ -667,7 +666,7 @@ class ProblemPredicate(Properties.Predicate):
             rv += [cls('SizeLessThan', index=kIdx,
                        value=kTiles * state['DepthU'] + 1)]
 
-        if state['ProblemType']['FusedA2AMode'] == 1:
+        if state['ProblemType']['FusedA2A'] == 'A2AGemm':
             rv += [cls('A2AWorldNonZero')]
             rv += [cls('A2AShardDivisible', value=state['DepthU'])]
             rv += [cls('A2AGsuCoalescedOff')]

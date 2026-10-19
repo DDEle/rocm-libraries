@@ -2276,58 +2276,54 @@ class Solution(collections.abc.Mapping):
       reject(state, printRejectionReason, "Either GlobalSplitU or a persistent TileProcessingStrategy must be enabled")
       return
 
-    if state["ProblemType"]["FusedGemmA2A"]:
+    if state["ProblemType"]["FusedA2A"] == "GemmA2A":
       if isa[:2] not in ((9, 4), (9, 5)):
         reject(state, printRejectionReason,
-               "FusedGemmA2A requires a gfx94x/gfx95x ISA (the SdmaPacketEmitter "
+               "FusedA2A=GemmA2A requires a gfx94x/gfx95x ISA (the SdmaPacketEmitter "
                "packet layout is gfx9 only)")
         return
       if not state["ProblemType"]["DestDataType"].isBFloat16():
-        reject(state, printRejectionReason, "FusedGemmA2A only supports a bf16 D")
+        reject(state, printRejectionReason, "FusedA2A=GemmA2A only supports a bf16 D")
         return
       if isPersistent(state):
-        reject(state, printRejectionReason, "FusedGemmA2A requires TileProcessingStrategy=None")
+        reject(state, printRejectionReason, "FusedA2A=GemmA2A requires TileProcessingStrategy=None")
         return
       mt0, mt1 = state["MacroTile0"], state["MacroTile1"]
       if mt0 not in (128, 256) or mt1 not in (128, 256):
-        reject(state, printRejectionReason, "FusedGemmA2A supports MacroTile0/1 in {128, 256}")
+        reject(state, printRejectionReason, "FusedA2A=GemmA2A supports MacroTile0/1 in {128, 256}")
         return
       if state["GlobalSplitU"] != 1:
         reject(state, printRejectionReason,
-               "FusedGemmA2A requires GlobalSplitU=1 (the DRAIN owner is elected "
+               "FusedA2A=GemmA2A requires GlobalSplitU=1 (the DRAIN owner is elected "
                "against NumWorkGroups0*NumWorkGroups1; any other GSU can multiply "
                "the arriving work-group count -- GSU=-1 resolves at runtime -- so "
                "the election may fire early)")
         return
       state["InternalSupportParams"]["SupportUserGSU"] = False # Disable UserGSU for the last-WG election
 
-    if state["A2ASubRounds"] != 1 and state["ProblemType"]["FusedA2AMode"] != 1:
-      reject(state, printRejectionReason, "A2ASubRounds > 1 requires FusedA2AMode=1")
+    if state["A2ASubRounds"] != 1 and state["ProblemType"]["FusedA2A"] != "A2AGemm":
+      reject(state, printRejectionReason, "A2ASubRounds > 1 requires FusedA2A=A2AGemm")
       return
 
-    if state["ProblemType"]["FusedA2AMode"] == 1:
-      if state["ProblemType"]["FusedGemmA2A"]:
-        reject(state, printRejectionReason,
-               "FusedA2AMode=1 and FusedGemmA2A are mutually exclusive")
-        return
+    if state["ProblemType"]["FusedA2A"] == "A2AGemm":
       if state["ProblemType"]["Sparse"]:
-        reject(state, printRejectionReason, "FusedA2AMode=1 does not support sparse problems")
+        reject(state, printRejectionReason, "FusedA2A=A2AGemm does not support sparse problems")
         return
       if state["GlobalSplitU"] != 1:
-        reject(state, printRejectionReason, "FusedA2AMode=1 requires GlobalSplitU=1")
+        reject(state, printRejectionReason, "FusedA2A=A2AGemm requires GlobalSplitU=1")
         return
       if isPersistent(state):
-        reject(state, printRejectionReason, "FusedA2AMode=1 requires TileProcessingStrategy=None")
+        reject(state, printRejectionReason, "FusedA2A=A2AGemm requires TileProcessingStrategy=None")
         return
       if state["StaggerU"] != 0:
-        reject(state, printRejectionReason, "FusedA2AMode=1 requires StaggerU=0")
+        reject(state, printRejectionReason, "FusedA2A=A2AGemm requires StaggerU=0")
         return
       if state["UseSubtileImpl"]:
-        reject(state, printRejectionReason, "FusedA2AMode=1 requires UseSubtileImpl=0")
+        reject(state, printRejectionReason, "FusedA2A=A2AGemm requires UseSubtileImpl=0")
         return
       if state["DirectToVgprA"] or state["DirectToVgprB"]:
         reject(state, printRejectionReason,
-               "FusedA2AMode=1 requires DirectToVgprA=DirectToVgprB=0")
+               "FusedA2A=A2AGemm requires DirectToVgprA=DirectToVgprB=0")
         return
       state["OptNoLoadLoop"] = 0
 

@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
-"""A2A-GEMM (FusedA2AMode=1, GatheredB) outer shard-loop codegen characterization.
+"""A2A-GEMM (FusedA2A: A2AGemm) outer shard-loop codegen characterization.
 
 The index structure is the stock GEMM one: K is a single summation index
 holding the whole W*k_local reduction. The shard loop wraps the unroll loop,
@@ -52,7 +52,7 @@ class TestA2AGemmSummationIndices:
         assert pt["IndicesSummation"] == [3]
 
     def test_a2a_gemm_leaves_the_index_structure_alone(self):
-        pt = _tn_problem_type(FusedA2AMode=1)
+        pt = _tn_problem_type(FusedA2A="A2AGemm")
         assert pt["NumIndicesSummation"] == 1
         assert pt["IndicesSummation"] == [3]
         assert pt["IndexAssignmentsA"] == [3, 0, 2]
@@ -70,7 +70,7 @@ class TestA2AGemmConfigPath:
         states = derive_states(_CONFIG, arch="gfx950", limit_solutions=1)
         assert len(states) == 1, "the config must derive exactly one solution"
         pt = states[0]["ProblemType"]
-        assert pt["FusedA2AMode"] == 1
+        assert pt["FusedA2A"] == "A2AGemm"
         assert pt["NumIndicesSummation"] == 1
 
     def test_config_emits_a_kernel(self):
@@ -929,13 +929,25 @@ class TestA2AGemmSolutionProblemType:
     def test_state_keys_carry_the_mode(self):
         from Tensile.Contractions import ProblemType
 
-        assert "fusedA2AMode" in ProblemType.StateKeys
+        assert "fusedA2A" in ProblemType.StateKeys
 
     def test_mode_round_trips(self):
-        assert self._contraction_problem_type(FusedA2AMode=1).fusedA2AMode == 1
+        assert self._contraction_problem_type(FusedA2A="A2AGemm").fusedA2A == "A2AGemm"
 
     def test_stock_gemm_leaves_the_mode_at_zero(self):
-        assert self._contraction_problem_type().fusedA2AMode == 0
+        assert self._contraction_problem_type().fusedA2A == "None"
+
+    def test_kernel_name_differs_from_stock(self):
+        import copy
+
+        from config_harness import derive_states
+
+        from Tensile.SolutionStructs.Naming import getKernelNameMin
+
+        state = derive_states(_CONFIG, arch="gfx950", limit_solutions=1)[0]
+        stock = copy.deepcopy(state)
+        stock["ProblemType"]["FusedA2A"] = "None"
+        assert getKernelNameMin(state, False) != getKernelNameMin(stock, False)
 
 
 class TestA2AGemmPredicates:
@@ -956,7 +968,7 @@ class TestA2AGemmPredicates:
 
         state = derive_states(_CONFIG, arch="gfx950", limit_solutions=1)[0]
         if mode is not None:
-            state["ProblemType"]["FusedA2AMode"] = mode
+            state["ProblemType"]["FusedA2A"] = mode
         pt = ProblemType.FromOriginalState(state["ProblemType"])
         return {p.tag: p.value for p in ProblemPredicate.CompoundPredicates(state, pt)}
 
@@ -967,7 +979,7 @@ class TestA2AGemmPredicates:
         assert self._predicates()["A2AShardDivisible"] == 64
 
     def test_mode_zero_emits_none_of_them(self):
-        assert not set(self._GUARDS) & set(self._predicates(mode=0))
+        assert not set(self._GUARDS) & set(self._predicates(mode="None"))
 
     def test_cpp_registers_every_guard(self):
         import pathlib

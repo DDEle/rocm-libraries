@@ -402,7 +402,7 @@ def mergeLogic(oriData: dict[str, Any], incData: dict[str, Any], forceMerge, noE
     verbose(origNumSizes, "sizes and", origNumSolutions, "solutions in base logic file")
     verbose(incNumSizes, "sizes and", incNumSolutions, "solutions in incremental logic file")
 
-    fusedGemmA2A = oriData.get("ProblemType", {}).get("FusedGemmA2A", False)
+    fusedGemmA2A = oriData.get("ProblemType", {}).get("FusedA2A", "None") == "GemmA2A"
     oriExactLogic, origNumSizes = fixSizeInconsistencies(oriExactLogic, "base", fusedGemmA2A)
     incExactLogic, incNumSizes = fixSizeInconsistencies(incExactLogic, "incremental", fusedGemmA2A)
     oriData["ExactLogic"] = oriExactLogic

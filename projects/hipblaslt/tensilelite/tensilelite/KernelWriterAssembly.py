@@ -3744,7 +3744,7 @@ class KernelWriterAssembly(KernelWriter):
     # The product counts SURVIVING work-groups: ClusterDim != [1,1] rounds the grid
     # up host-side, but those padded work-groups s_endpgm in the prologue
     # (clusterPadEarlyExit).
-    if kernel["ProblemType"]["FusedGemmA2A"]:
+    if kernel["ProblemType"]["FusedA2A"] == "GemmA2A":
       from .Components.GlobalWriteBatch import emitFusedA2ACounterPtrLatch, \
         emitFusedA2ANShardLatch
       module.add(FusedA2AWgRemap(self, kernel))
@@ -8006,7 +8006,7 @@ class KernelWriterAssembly(KernelWriter):
 
       quotient = loopCounterName
       # SizesSum holds the whole reduction W*k_local; one shard round covers k_local.
-      if kernel.get("ProblemType", {}).get("FusedA2AMode", 0) == 1:
+      if kernel.get("ProblemType", {}).get("FusedA2A", "None") == "A2AGemm":
         dividend = "A2AKLocal"
       else:
         dividend = "SizesSum+%u" % loopIdx #sumSize = self.sumSize(kernel, loopIdx)
@@ -8325,7 +8325,7 @@ class KernelWriterAssembly(KernelWriter):
 
   def openA2AShardLoop(self, kernel, tPA, tPB):
     module = Module("openA2AShardLoop")
-    if kernel["ProblemType"]["FusedA2AMode"] != 1:
+    if kernel["ProblemType"]["FusedA2A"] != "A2AGemm":
       return module
     from .Components.Signature import fusedA2AKernArgLayout
     layout = fusedA2AKernArgLayout()
@@ -9082,7 +9082,7 @@ class KernelWriterAssembly(KernelWriter):
 
   def closeA2AShardLoop(self, kernel):
     module = Module("closeA2AShardLoop")
-    if kernel["ProblemType"]["FusedA2AMode"] != 1:
+    if kernel["ProblemType"]["FusedA2A"] != "A2AGemm":
       return module
     module.add(SSubU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardCounter"), src1=1,
                        comment="dec shard counter"))
@@ -9104,7 +9104,7 @@ class KernelWriterAssembly(KernelWriter):
                                        FUSED_A2A_MODE1_FLAG_OFFSET, FUSED_A2A_MODE1_SEQ_OFFSET,
                                        PEER_GROUP_BYTES, fusedA2AKernArgLayout)
     module = Module("a2aExitTally")
-    if kernel["ProblemType"]["FusedA2AMode"] != 1:
+    if kernel["ProblemType"]["FusedA2A"] != "A2AGemm":
       return module
     layout  = fusedA2AKernArgLayout()
     base    = self.states.fusedA2AKernArgBase
@@ -9235,7 +9235,7 @@ class KernelWriterAssembly(KernelWriter):
     """If a2aExitTally armed it, spin until every peer's done slot reaches seq."""
     from .Components.Signature import FUSED_A2A_MODE1_DONE_OFFSET
     module = Module("a2aDrainSendWait")
-    if kernel["ProblemType"]["FusedA2AMode"] != 1:
+    if kernel["ProblemType"]["FusedA2A"] != "A2AGemm":
       return module
     endLbl  = Label(self.labels.getNameInc("a2a_drain_send_end"), "")
     peerLbl = Label(self.labels.getNameInc("a2a_drain_send_peer"), "")
@@ -9356,7 +9356,7 @@ class KernelWriterAssembly(KernelWriter):
   def a2aTransitionPhase(self, kernel, tPA, tPB):
     from .Components.Signature import fusedA2AKernArgLayout
     module = Module("a2aTransitionPhase")
-    if kernel["ProblemType"]["FusedA2AMode"] != 1:
+    if kernel["ProblemType"]["FusedA2A"] != "A2AGemm":
       return module
     module.addComment1("A2A_TRANSITION begin")
     endLabel = Label("A2ATransitionEnd", "")
@@ -18468,7 +18468,7 @@ class KernelWriterAssembly(KernelWriter):
                   break
 
         # The store batch loop mutates `ss` (StoreState) and `biasLocalBarrierInit`.
-        # For FusedGemmA2A we regenerate the loop body TWICE (PUSH + LOCAL) under a
+        # For FusedA2A=GemmA2A we regenerate the loop body TWICE (PUSH + LOCAL) under a
         # single hoisted runtime gate, so factor the body into a closure that returns
         # a Module (rather than adding directly to actLoopModule) and can be replayed
         # from the same codegen-state after an explicit ss/biasLocalBarrierInit reset.
@@ -18476,7 +18476,7 @@ class KernelWriterAssembly(KernelWriter):
           nonlocal biasLocalBarrierInit
           m = Module("storeBatchLoop")
           # codeAccVgprRead / codeMulAlpha are consumed in-place (popFirstItem) by
-          # globalWriteBatch. For the FusedGemmA2A two-pass replay each pass must start
+          # globalWriteBatch. For the FusedA2A=GemmA2A two-pass replay each pass must start
           # from an unconsumed queue, so take a per-pass deepcopy.
           passAccVgprRead = deepcopy(codeAccVgprRead) if codeAccVgprRead is not None else None
           passMulAlpha    = deepcopy(codeMulAlpha) if codeMulAlpha is not None else None
@@ -18505,7 +18505,7 @@ class KernelWriterAssembly(KernelWriter):
             biasLocalBarrierInit = True
           return m
 
-        if kernel["ProblemType"]["FusedGemmA2A"]:
+        if kernel["ProblemType"]["FusedA2A"] == "GemmA2A":
           # Hoist the PUSH/local dispatch gate out of the per-store body: emit ONE
           # runtime gate, then the whole store body twice -- once with only the PUSH
           # version (mode "PUSH"), once with only the local version (mode "LOCAL").

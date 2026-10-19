@@ -24,7 +24,7 @@ _FUSED_CONFIG = {
     "TransposeB": False,
     "UseBeta": True,
     "Batched": True,
-    "FusedGemmA2A": True,
+    "FusedA2A": "GemmA2A",
 }
 
 
@@ -64,8 +64,8 @@ class TestExactDictWorld:
             _sizes(_problemType(), {"sizes": [3072, 512, 2, 2048], "world": 2})
 
     def test_non_fused_rejects_world(self):
-        with pytest.raises(RuntimeError, match="only to FusedGemmA2A"):
-            _sizes(_problemType(FusedGemmA2A=False), {"sizes": [3072, 512, 1, 2048], "world": 2})
+        with pytest.raises(RuntimeError, match="apply only to"):
+            _sizes(_problemType(FusedA2A="None"), {"sizes": [3072, 512, 1, 2048], "world": 2})
 
     def test_fused_rejects_exact_list(self):
         with pytest.raises(RuntimeError, match="Exact dict"):
@@ -83,7 +83,7 @@ class TestFusedProblemTypeRejects:
         ({"Activation": True, "ActivationType": "hipblaslt_all"}, "Activation"),
     ])
     def test_rejects(self, overrides, name):
-        with pytest.raises(Exception, match="FusedGemmA2A does not support .*%s" % name):
+        with pytest.raises(Exception, match="FusedA2A=GemmA2A does not support .*%s" % name):
             _problemType(**overrides)
 
 
@@ -139,7 +139,7 @@ class _FusedMockProblemType(dict):
             "Index0": 0, "Index1": 1, "IndexUnroll": 3, "TotalIndices": 4, "NumIndicesLD": 0,
             "NumIndicesC": 3, "IndexAssignmentsA": [3, 0, 2], "IndexAssignmentsB": [3, 1, 2],
             "IndexAssignmentsLD": [], "DataType": _MockDataType(), "OperationType": "GEMM",
-            "TileAwareSelection": False, "GroupedGemm": False, "FusedGemmA2A": True,
+            "TileAwareSelection": False, "GroupedGemm": False, "FusedA2A": "GemmA2A",
         })
 
     def __hash__(self):

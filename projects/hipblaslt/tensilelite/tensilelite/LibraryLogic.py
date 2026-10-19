@@ -302,7 +302,7 @@ class LogicAnalyzer:
     # merge problem sizes from size groups
     #self.numIndices = len(problemSizesList[0].numProblemSizes)
     self.numIndices = self.problemType["TotalIndices"] + problemType["NumIndicesLD"]
-    self.fusedGemmA2A = self.problemType.get("FusedGemmA2A", False)
+    self.fusedGemmA2A = self.problemType.get("FusedA2A", "None") == "GemmA2A"
     unifiedProblemSizes = []
     for i in range(0, self.numIndices):
       unifiedProblemSizes.append(set())
@@ -445,7 +445,7 @@ class LogicAnalyzer:
           header = [col.strip() for col in row]
           missing = [name for name in ("World", "A2AExtent") if name not in header]
           if missing:
-            printExit("\"%s\" has no %s column(s) required for FusedGemmA2A" % (dataFileName, ", ".join(missing)))
+            printExit("\"%s\" has no %s column(s) required for FusedA2A=GemmA2A" % (dataFileName, ", ".join(missing)))
           worldIdx = header.index("World")
           extentIdx = header.index("A2AExtent")
         if perfUnit == "GFlops":

@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
-"""Solution-validation guards for ``ProblemType["FusedGemmA2A"]`` on gfx942.
+"""Solution-validation guards for ``ProblemType["FusedA2A"] == "GemmA2A"`` on gfx942.
 
 The fused GEMM + all-to-all store path is only correct inside a narrow window,
 so ``Solution.assignDerivedParameters`` rejects every configuration outside it
@@ -136,7 +136,7 @@ def _make_params(iim, arch=_ARCH, mi=None, **overrides):
         "TransposeB": False,
         "UseBeta": True,
         "Batched": True,
-        "FusedGemmA2A": True,
+        "FusedA2A": "GemmA2A",
     }
     problem_type.update(pt)
 
@@ -185,7 +185,7 @@ def _derive(iim, assembler, capsys, **overrides):
 # Positive: the fused config is accepted, and clears SupportUserGSU.
 # ---------------------------------------------------------------------------
 def test_fused_a2a_base_is_accepted(_gp_gfx942, gfx942_iim, assembler, capsys):
-    """FusedGemmA2A=1 on gfx942, bf16 D, StreamK=0, MT 128x128, GSU=1 is valid.
+    """FusedA2A=GemmA2A on gfx942, bf16 D, StreamK=0, MT 128x128, GSU=1 is valid.
 
     Without this the negative tests below could all pass on a base that was
     rejected for an unrelated reason.
@@ -201,9 +201,9 @@ def test_fused_a2a_base_is_accepted(_gp_gfx942, gfx942_iim, assembler, capsys):
 def test_fused_a2a_off_leaves_user_gsu_alone(_gp_gfx942, gfx942_iim, assembler, capsys):
     """Control: with the flag off the guard block does not run at all, so the
     same solution keeps the default SupportUserGSU. This is what makes the
-    ``FusedGemmA2A=0`` default a no-op for every shipping solution."""
+    ``FusedA2A=None`` default a no-op for every shipping solution."""
     sol, out = _derive(
-        gfx942_iim, assembler, capsys, ProblemType={"FusedGemmA2A": False}
+        gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "None"}
     )
     assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
     assert sol["InternalSupportParams"]["SupportUserGSU"] is True
@@ -219,7 +219,7 @@ def test_fused_a2a_rejects_unsupported_isa(_gp_gfx942, gfx90a_iim, assembler, ca
     sol, out = _derive(gfx90a_iim, assembler, capsys, arch="gfx90a",
                        mi=[16, 16, 16, 1, 1, 4, 4, 2, 2])
     assert sol.get("Valid") is False
-    assert "FusedGemmA2A requires a gfx94x/gfx95x ISA" in out
+    assert "FusedA2A=GemmA2A requires a gfx94x/gfx95x ISA" in out
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +231,7 @@ def test_fused_a2a_rejects_non_bf16_d(_gp_gfx942, gfx942_iim, assembler, capsys)
         gfx942_iim, assembler, capsys, ProblemType={"DestDataType": "s"}
     )
     assert sol.get("Valid") is False
-    assert "FusedGemmA2A only supports a bf16 D" in out
+    assert "FusedA2A=GemmA2A only supports a bf16 D" in out
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +243,7 @@ def test_fused_a2a_rejects_streamk(_gp_gfx942, gfx942_iim, assembler, capsys, as
     sol, out = _derive(gfx942_iim, assembler, capsys,
                        TileProcessingStrategy="StreamK", WorkAssignment=assignment)
     assert sol.get("Valid") is False
-    assert "FusedGemmA2A requires TileProcessingStrategy=None" in out
+    assert "FusedA2A=GemmA2A requires TileProcessingStrategy=None" in out
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +254,7 @@ def test_fused_a2a_rejects_unsupported_macrotile(
 ):
     sol, out = _derive(gfx942_iim, assembler, capsys, mi=list(_MI_MT64))
     assert sol.get("Valid") is False
-    assert "FusedGemmA2A supports MacroTile0/1 in {128, 256}" in out
+    assert "FusedA2A=GemmA2A supports MacroTile0/1 in {128, 256}" in out
 
 
 # ---------------------------------------------------------------------------
@@ -266,4 +266,4 @@ def test_fused_a2a_rejects_unsupported_macrotile(
 def test_fused_a2a_rejects_non_unit_gsu(_gp_gfx942, gfx942_iim, assembler, capsys, gsu):
     sol, out = _derive(gfx942_iim, assembler, capsys, GlobalSplitU=gsu)
     assert sol.get("Valid") is False
-    assert "FusedGemmA2A requires GlobalSplitU=1" in out
+    assert "FusedA2A=GemmA2A requires GlobalSplitU=1" in out

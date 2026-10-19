@@ -171,7 +171,7 @@ def main(config, assembler: Assembler, cCompiler: str, isaInfoMap, outputPath: P
         logic.schedule, logic.problemType, logic.exactLogic, logic.library
     functions.append((scheduleName, problemType))
     functionNames.append("tensile_%s" % (problemType))
-    problemSizes = ProblemSizesMock(exactLogic, problemType["FusedGemmA2A"]) if exactLogic else ProblemSizesMockDummy()
+    problemSizes = ProblemSizesMock(exactLogic, problemType["FusedA2A"] == "GemmA2A") if exactLogic else ProblemSizesMockDummy()
     if len(problemType["BiasDataTypeList"]) > 0:
       biasTypeArgs = BiasTypeArgs(problemType, [problemType["BiasDataTypeList"][0]])
     else:
@@ -324,7 +324,7 @@ def getBuildClientLibraryScript(buildPath, libraryLogicPath, cxxCompiler, target
   if globalParameters["DisableAsmComments"]:
     callCreateLibraryCmd += " --disable-asm-comments"
 
-  if any((LibraryIO.rawLibraryLogic(LibraryIO.readYAML(f))[4] or {}).get("FusedGemmA2A", False)
+  if any((LibraryIO.rawLibraryLogic(LibraryIO.readYAML(f))[4] or {}).get("FusedA2A", "None") != "None"
          for f in glob(os.path.join(libraryLogicPath, "*.yaml"))):
     callCreateLibraryCmd += " --enable-gemm-a2a-fusion"
 
@@ -565,7 +565,7 @@ def problemSizeParams(problemType, problem, factorDim):
         gatestrides[index.d] = sc[1]
       rv.append(('gate-strides', ",".join(map(str, gatestrides))))
 
-    if problemType.fusedGemmA2A:
+    if problemType.fusedA2A == 'GemmA2A':
       rv.append(('world', problem.world))
       rv.append(('fused-a2a-extent', problem.a2aExtent))
 
@@ -674,8 +674,8 @@ def writeClientConfigIni(forBenchmark, problemSizes, biasTypeArgs, factorDimArgs
         param('use-scaleAlphaVec',   problemType.useScaleAlphaVec)
         param('swizzle-tensor-a', problemType.swizzleTensorA)
         param('swizzle-tensor-b', problemType.swizzleTensorB)
-        param('fused-gemm-a2a', problemType.fusedGemmA2A)
-        param('a2a-prefill', problemType.fusedA2AMode == 1)
+        param('fused-a2a', problemType.fusedA2A)
+        param('a2a-prefill', problemType.fusedA2A == 'A2AGemm')
         if problemType.mxBlockA:
             param('mx-a-block', problemType.mxBlockA)
             param('mx-a-type', problemType.mxTypeA.toName())
@@ -803,7 +803,7 @@ def writeClientConfigIni(forBenchmark, problemSizes, biasTypeArgs, factorDimArgs
         param("rotating-buffer-mode",     globalParameters["RotatingMode"])
         param("icache-rotate-copies",     globalParameters["IcacheRotateCopies"])
         param("icache-rotate-size",       globalParameters["IcacheRotateSize"])
-        if problemType.fusedGemmA2A:
+        if problemType.fusedA2A == 'GemmA2A':
             for world in globalParameters["WorldFilter"]:
                 param("world-filter", world)
         if globalParameters["RocProfCounter"]:

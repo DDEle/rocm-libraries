@@ -1,9 +1,9 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
-"""Solution-validation guards for ``ProblemType["FusedA2AMode"] == 1`` (GatheredB).
+"""Solution-validation guards for ``ProblemType["FusedA2A"] == "A2AGemm"``.
 
 The guards admit GlobalSplitU=1, TileProcessingStrategy=None, StaggerU=0,
-UseSubtileImpl=0, no DirectToVgpr, non-sparse, and FusedGemmA2A off.
+UseSubtileImpl=0, no DirectToVgpr, and non-sparse.
 
 Each negative test flips one knob off a known-good base and asserts the specific
 diagnostic. The positive test pins the accept path.
@@ -111,7 +111,7 @@ def _make_params(iim, arch=_ARCH, **overrides):
         "TransposeB": False,
         "UseBeta": True,
         "Batched": True,
-        "FusedA2AMode": 1,
+        "FusedA2A": "A2AGemm",
     }
     problem_type.update(pt)
 
@@ -165,7 +165,7 @@ def test_a2a_mode_base_is_accepted(_gp_gfx942, gfx942_iim, assembler, capsys):
 
 def test_a2a_mode_off_keeps_one_summation_index(_gp_gfx942, gfx942_iim, assembler, capsys):
     """Control: mode 0 is the stock single-summation GEMM."""
-    sol, out = _derive(gfx942_iim, assembler, capsys, ProblemType={"FusedA2AMode": 0})
+    sol, out = _derive(gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "None"})
     assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
     assert sol["ProblemType"]["NumIndicesSummation"] == 1
 
@@ -185,9 +185,9 @@ def test_a2a_mode_off_does_not_apply_the_guards(
 ):
     """Control: none of the guards fire when the mode is off."""
     _, out = _derive(
-        gfx942_iim, assembler, capsys, ProblemType={"FusedA2AMode": 0}, **{param: value}
+        gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "None"}, **{param: value}
     )
-    assert "FusedA2AMode=1" not in out
+    assert "FusedA2A=A2AGemm" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +197,7 @@ def test_a2a_mode_off_does_not_apply_the_guards(
 def test_a2a_mode_rejects_non_unit_gsu(_gp_gfx942, gfx942_iim, assembler, capsys, gsu):
     sol, out = _derive(gfx942_iim, assembler, capsys, GlobalSplitU=gsu)
     assert sol.get("Valid") is False
-    assert "FusedA2AMode=1 requires GlobalSplitU=1" in out
+    assert "FusedA2A=A2AGemm requires GlobalSplitU=1" in out
 
 
 @pytest.mark.parametrize("assignment", ["StaticGrid", "DynamicWorkQueue", "Hybrid"])
@@ -205,14 +205,14 @@ def test_a2a_mode_rejects_streamk(_gp_gfx942, gfx942_iim, assembler, capsys, ass
     sol, out = _derive(gfx942_iim, assembler, capsys,
                        TileProcessingStrategy="StreamK", WorkAssignment=assignment)
     assert sol.get("Valid") is False
-    assert "FusedA2AMode=1 requires TileProcessingStrategy=None" in out
+    assert "FusedA2A=A2AGemm requires TileProcessingStrategy=None" in out
 
 
 @pytest.mark.parametrize("staggeru", [2, 32])
 def test_a2a_mode_rejects_staggeru(_gp_gfx942, gfx942_iim, assembler, capsys, staggeru):
     sol, out = _derive(gfx942_iim, assembler, capsys, StaggerU=staggeru)
     assert sol.get("Valid") is False
-    assert "FusedA2AMode=1 requires StaggerU=0" in out
+    assert "FusedA2A=A2AGemm requires StaggerU=0" in out
 
 
 def test_a2a_mode_base_is_accepted_on_gfx950(_gp_gfx942, gfx950_iim, assembler, capsys):
@@ -224,14 +224,14 @@ def test_a2a_mode_rejects_subtile(_gp_gfx942, gfx950_iim, assembler, capsys):
     # UseSubtileImpl is forced off outside gfx950/gfx1250.
     sol, out = _derive(gfx950_iim, assembler, capsys, arch="gfx950", UseSubtileImpl=True)
     assert sol.get("Valid") is False
-    assert "FusedA2AMode=1 requires UseSubtileImpl=0" in out
+    assert "FusedA2A=A2AGemm requires UseSubtileImpl=0" in out
 
 
 @pytest.mark.parametrize("tc", ["A", "B"])
 def test_a2a_mode_rejects_direct_to_vgpr(_gp_gfx942, gfx942_iim, assembler, capsys, tc):
     sol, out = _derive(gfx942_iim, assembler, capsys, **{f"DirectToVgpr{tc}": True})
     assert sol.get("Valid") is False
-    assert "FusedA2AMode=1 requires DirectToVgprA=DirectToVgprB=0" in out
+    assert "FusedA2A=A2AGemm requires DirectToVgprA=DirectToVgprB=0" in out
 
 
 # ---------------------------------------------------------------------------
@@ -239,24 +239,15 @@ def test_a2a_mode_rejects_direct_to_vgpr(_gp_gfx942, gfx942_iim, assembler, caps
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("sparse", [1, 2])
 def test_a2a_mode_rejects_sparse(_gp_gfx942, gfx942_iim, assembler, capsys, sparse):
-    sol, out = _derive(gfx942_iim, assembler, capsys, ProblemType={"Sparse": sparse})
-    assert sol.get("Valid") is False
-    assert "FusedA2AMode=1 does not support sparse problems" in out
-
-
-def test_a2a_mode_rejects_fused_gemm_a2a(_gp_gfx942, gfx942_iim, assembler, capsys):
-    sol, out = _derive(
-        gfx942_iim, assembler, capsys, ProblemType={"FusedGemmA2A": True}
-    )
-    assert sol.get("Valid") is False
-    assert "FusedA2AMode=1 and FusedGemmA2A are mutually exclusive" in out
+    with pytest.raises(Exception, match="FusedA2A=A2AGemm does not support .*Sparse"):
+        _derive(gfx942_iim, assembler, capsys, ProblemType={"Sparse": sparse})
 
 
 # ---------------------------------------------------------------------------
 # Mode-only knobs.
 # ---------------------------------------------------------------------------
 _MODE_KNOBS = [
-    ("A2ASubRounds", 2, "A2ASubRounds > 1 requires FusedA2AMode=1"),
+    ("A2ASubRounds", 2, "A2ASubRounds > 1 requires FusedA2A=A2AGemm"),
 ]
 
 
@@ -271,7 +262,7 @@ def test_a2a_knob_rejected_without_mode(
     _gp_gfx942, gfx942_iim, assembler, capsys, param, value, msg
 ):
     sol, out = _derive(
-        gfx942_iim, assembler, capsys, ProblemType={"FusedA2AMode": 0}, **{param: value}
+        gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "None"}, **{param: value}
     )
     assert sol.get("Valid") is False
     assert msg in out

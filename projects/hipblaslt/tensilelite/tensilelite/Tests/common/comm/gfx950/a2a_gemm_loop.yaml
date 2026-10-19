@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
-# A2A-GEMM outer shard-loop (FusedA2AMode=1, GatheredB) config for gfx950.
+# A2A-GEMM outer shard-loop (FusedA2A: A2AGemm) config for gfx950.
 #
 # The index structure is the stock GEMM one; K holds the whole W*k_local
 # reduction and one shard round covers K/W. The shard count
@@ -31,7 +31,7 @@ BenchmarkProblems:
       TransposeB: False
       UseBeta: True
       Batched: True
-      FusedA2AMode: 1
+      FusedA2A: A2AGemm
     - # BenchmarkProblemSizeGroup
       InitialSolutionParameters:
       BenchmarkCommonParameters:

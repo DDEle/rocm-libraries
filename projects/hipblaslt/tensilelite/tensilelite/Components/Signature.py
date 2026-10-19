@@ -79,12 +79,12 @@ FUSED_A2A_COUNTER3_OFFSET = _fusedA2AAlignLine(
     FUSED_A2A_COUNTER2_OFFSET + FUSED_A2A_MAX_RANKS * 4)
 FUSED_A2A_COUNTER1_OFFSET = _fusedA2AAlignLine(FUSED_A2A_COUNTER3_OFFSET + 4)
 FUSED_A2A_OUTBOUND_OFFSET = _fusedA2AAlignLine(FUSED_A2A_MAX_RANKS * 4)
-# FusedA2AMode==1 layout of the same block: the cursor region is shared, then the
+# FusedA2A=A2AGemm layout of the same block: the cursor region is shared, then the
 # flag block, then numTokenBlocks block tallies and one grid tally, then the election
 # counters, each on the next line past the previous region (runtime offsets, so no
 # constants for them here).
 FUSED_A2A_MODE1_FLAG_OFFSET = _fusedA2AAlignLine(FUSED_A2A_MAX_RANKS * CURSOR_PAIR_BYTES)
-# FusedA2AMode==1 layout of a peer's flagPtr block: done[src] holds the last launch
+# FusedA2A=A2AGemm layout of a peer's flagPtr block: done[src] holds the last launch
 # sequence number rank src finished reading this rank's x for; seq is this rank's own.
 FUSED_A2A_MODE1_DONE_OFFSET = 0
 FUSED_A2A_MODE1_SEQ_OFFSET  = FUSED_A2A_OUTBOUND_OFFSET
@@ -474,7 +474,7 @@ class SignatureDefault(Signature):
 
         # Fused GEMM.A2A kernarg metadata; registered LAST so it lands at the
         # tail. See fusedA2AKernArgLayout() for the offset contract.
-        if kernel["ProblemType"]["FusedGemmA2A"] or kernel["ProblemType"]["FusedA2AMode"] == 1:
+        if kernel["ProblemType"]["FusedA2A"] != "None":
             fusedBase = signature.offset
             for j in range(FUSED_A2A_MAX_RANKS):
                 for f in FUSED_A2A_PEER_FIELDS:

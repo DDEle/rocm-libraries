@@ -5,6 +5,7 @@
 
 #include <Tensile/ContractionProblem_fwd.hpp>
 #include <Tensile/ContractionSolution_fwd.hpp>
+#include <Tensile/FusedA2A.hpp>
 #include <Tensile/FusedA2AKernArg.hpp>
 #include <Tensile/Tensile_fwd.hpp>
 #include <Tensile/hip/HipSolutionAdapter.hpp>
@@ -65,13 +66,30 @@ namespace TensileLite
             size_t                                      commFlagsBytes;
             void*                                       commFlags = nullptr;
             std::vector<std::shared_ptr<SdmaQueue>>     sdmaQueues;
+            void*                                       a2aCounter      = nullptr;
+            size_t                                      a2aCounterBytes = 0;
+            size_t                                      a2aPayloadBytes = 0;
+            size_t                                      launches        = 0;
+
+            // Grows the A2A+GEMM counter, zeroes its payload and arms the guard tail;
+            // zeroes commFlags and poisons every slot's B.
+            void armA2AGemm(size_t counterAllocBytes, size_t counterPayloadBytes, size_t bBytes);
 
         private:
             void release();
         };
 
-        constexpr size_t kCommChannels   = 2;
-        constexpr size_t kCommFlagsBytes = kCommChannels * FUSED_A2A_FLAG_BLOCK_BYTES;
+        constexpr size_t fusedA2ACommChannels(FusedA2A mode)
+        {
+            return mode == FusedA2A::GemmA2A ? 2 : 1;
+        }
+
+        constexpr size_t fusedA2ACommFlagsBytes(FusedA2A mode)
+        {
+            return mode == FusedA2A::None
+                       ? 0
+                       : fusedA2ACommChannels(mode) * FUSED_A2A_FLAG_BLOCK_BYTES;
+        }
 
         template <typename F>
         void forEachDevice(std::vector<std::shared_ptr<DeviceContext>> const& devices, F&& f)
@@ -83,10 +101,12 @@ namespace TensileLite
             }
         }
 
-        // devices: the problem's ranks, rank r on devices[r]. Both are no-ops unless the
-        // problem is a fused GEMM+A2A.
-        void clearRecvBuffers(ContractionProblem const&                          problem,
-                              std::vector<std::shared_ptr<DeviceContext>> const& devices);
+        // devices: the problem's ranks, rank r on devices[r]. A no-op unless the problem is
+        // fused. GemmA2A zeroes every slot's A2A_BUF; A2AGemm arms every rank.
+        void resetA2ABuffers(ContractionProblem const&                          problem,
+                             ContractionSolution const&                         solution,
+                             Hardware const&                                    hardware,
+                             std::vector<std::shared_ptr<DeviceContext>> const& devices);
 
         // Copies devices[rank]'s inputs into scratch and adds the peers of the launch's slot
         // and channel.

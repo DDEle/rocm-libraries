@@ -913,7 +913,7 @@ int main(int argc, const char* argv[])
             devices.push_back(
                 std::make_shared<DeviceContext>(id,
                                                 args["use-default-stream"].as<bool>(),
-                                                fusedA2A ? kCommFlagsBytes : 0,
+                                                fusedA2ACommFlagsBytes(fusedMode),
                                                 fusedA2A ? deviceIds : std::vector<int>{}));
     }
     std::shared_ptr<DeviceContext>              device0 = devices[0];
@@ -1262,7 +1262,7 @@ int main(int argc, const char* argv[])
                     {
                         try
                         {
-                            clearRecvBuffers(*problem, active);
+                            resetA2ABuffers(*problem, *solution, *hardware, active);
                             while(listeners.needMoreRunsInSolution())
                             {
                                 if(resetInput)
@@ -1278,7 +1278,7 @@ int main(int argc, const char* argv[])
                                 {
                                     ScopedTimer  timer("kernel_solving");
                                     const size_t slots    = device0->inputArr.size();
-                                    const size_t channels = fusedA2A ? kCommChannels : 1;
+                                    const size_t channels = fusedA2ACommChannels(fusedMode);
                                     kernels.assign(
                                         std::lcm(slots, channels),
                                         std::vector<std::vector<KernelInvocation>>(active.size()));
@@ -1351,6 +1351,7 @@ int main(int argc, const char* argv[])
                                         else
                                             HIP_CHECK_EXC(ctx.adapter->launchKernels(
                                                 launch[d], ctx.stream, nullptr, nullptr));
+                                        ctx.launches++;
                                     }
                                 };
 

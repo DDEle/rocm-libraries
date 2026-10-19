@@ -1139,7 +1139,8 @@ class ProblemType(Mapping):
           ("Sparse", self["Sparse"]),
           ("GroupedGemm", self["GroupedGemm"]),
           ("Activation", self["ActivationType"] != 'none'),
-          ("TransposeB", self["FusedA2A"] == "A2AGemm" and self["TransposeB"])) if used]
+          ("TransposeB", self["FusedA2A"] == "A2AGemm" and self["TransposeB"]),
+          ("UseInitialStridesAB", self["FusedA2A"] == "A2AGemm" and self["UseInitialStridesAB"])) if used]
       if unsupported:
         raise Exception("FusedA2A=%s does not support %s" % (self["FusedA2A"], ", ".join(unsupported)))
 

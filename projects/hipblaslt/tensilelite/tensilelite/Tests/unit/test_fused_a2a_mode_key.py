@@ -55,6 +55,7 @@ class TestA2AGemmProblemTypeRejects:
     @pytest.mark.parametrize("overrides, name", [
         ({"UseBias": 1}, "UseBias"),
         ({"TransposeB": True}, "TransposeB"),
+        ({"UseInitialStridesAB": True}, "UseInitialStridesAB"),
     ])
     def test_rejects(self, overrides, name):
         with pytest.raises(Exception, match="FusedA2A=A2AGemm does not support .*%s" % name):

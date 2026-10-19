@@ -83,15 +83,6 @@ namespace TensileLite
 {
     namespace Client
     {
-        // A2A-GEMM shard-loop bring-up entry point. Defined in
-        // A2APrefillClient.cpp. Dispatched per problem when a2a-prefill or
-        // a2a-multigpu is set; returns a process exit code.
-        int runA2APrefill(po::variables_map const&                                       args,
-                          std::shared_ptr<MasterSolutionLibrary<ContractionProblemGemm>> library,
-                          std::shared_ptr<Hardware>                                      hardware,
-                          hip::SolutionAdapter&                                          adapter,
-                          ContractionProblem*                                            problem);
-
         __global__ void flush_icache()
         {
             asm __volatile__("s_icache_inv \n\t"
@@ -300,19 +291,6 @@ namespace TensileLite
                 ("world-filter",             po::value<std::vector<int>>()->default_value(std::vector<int>()), "Fused GEMM+A2A: run only the problems whose world is listed; empty runs all.")
                 ("fused-a2a-drain-recv",     po::value<int>()->default_value(1), "Runtime drainRecv flag passed to the fused kernel (1=on): the kernel exits only once this card's recv buffer is complete.")
                 ("fused-a2a-drain-send",     po::value<int>()->default_value(1), "Runtime drainSend flag passed to the fused kernel (1=on): the kernel exits only once this card's engines have finished reading D[0:AM), so D can be reused on stream order alone. Independent of --fused-a2a-drain-recv.")
-                ("a2a-prefill",              po::value<bool>()->default_value(false), "Run the single-GPU A2A-GEMM shard-loop bring-up arm: the host lays the W gathered shards out in B (ldb = K/W), launches the FusedA2AMode=1 kernel, and compares every output element against a shard-aware CPU reference. Skips the generic single-GPU path below.")
-                ("a2a-prefill-worlds",       po::value<std::vector<int>>()->default_value(std::vector<int>()), "World sizes to sweep in the a2a-prefill arm, one value per occurrence. Defaults to 1 and 4. Each must divide K.")
-                ("a2a-loopback",             po::value<bool>()->default_value(false), "Also run the loopback arm at each swept world size: the host fills gathered segment 0 and points every peer group at this device; the kernel's own SDMA packets deliver segments 1..W-1. Compares gathered byte-for-byte against the host layout on top of the output comparison. Needs a client built with -DTENSILELITE_ENABLE_SDMA=ON, and W <= 8.")
-                ("a2a-loopback-launches",    po::value<int>()->default_value(2), "Launches per world size in the a2a-loopback and a2a-multigpu arms. Values below 2 leave the per-launch flag reset and the counter wrap untested.")
-                ("a2a-multigpu",             po::value<bool>()->default_value(false), "Run the multi-GPU A2A-GEMM arm: one process drives W devices, rank d on device d, each with its own x, gathered buffer, SDMA queue set, counter and arrival counter. Each launch rewrites x with the next of 8 variants, bracketed by two boundary barriers: one ahead of the rewrite, one ahead of the GEMM. Needs a client built with -DTENSILELITE_ENABLE_SDMA=ON, W <= 8, and at least W visible devices.")
-                ("a2a-multigpu-batch",       po::value<int>()->default_value(1), "Launches the a2a-multigpu arm enqueues back to back before the host synchronizes. Each launch in a batch gets its own gathered and output slice. At 1 the host separates every pair of launches, which leaves the barrier ahead of the x rewrite untested.")
-                ("a2a-multigpu-skew-x-us",   po::value<int>()->default_value(0), "Microseconds of busy-wait the a2a-multigpu arm enqueues on the last rank's stream between the first boundary barrier and the x rewrite.")
-                ("a2a-multigpu-skew-gemm-us",po::value<int>()->default_value(0), "Microseconds of busy-wait the a2a-multigpu arm enqueues on the last rank's stream between the second boundary barrier and the GEMM.")
-                ("a2a-multigpu-war-barrier", po::value<int>()->default_value(0), "Enqueue the a2a-multigpu arm's boundary barrier ahead of the x rewrite (1=on).")
-                ("a2a-multigpu-drain-send",  po::value<int>()->default_value(1), "Pass FUSED_A2A_DRAIN_SEND to the a2a-multigpu arm's kernel (1=on): each rank's kernel exits only once every peer has finished reading its x.")
-                ("a2a-multigpu-time",        po::value<int>()->default_value(0), "Report the a2a-multigpu arm's makespan (1=on). The arm synchronizes after staging x and the gathered buffer, then times the boundary barrier and the GEMM across all ranks. Requires --a2a-multigpu-batch 1.")
-                ("a2a-multigpu-sdma-rotate", po::value<int>()->default_value(0), "Move each peer queue of the a2a-multigpu arm k steps along the even xGMI engines 2,4,...,14 from its KFD recommendation (gfx950 only). At 0 every queue keeps the KFD recommendation.")
-                ("a2a-sub-rounds",           po::value<int>()->default_value(1), "K sub-rounds per peer shard the code object was generated with (its A2ASubRounds). Sizes the flag region of every a2a arm.")
                 ("use-default-stream",       po::value<bool>()->default_value(false), "Use default Hip stream to run kernels.")
 
                 ("num-warmups",              po::value<int>()->default_value(0), "Number of warmups to run")
@@ -1108,19 +1086,6 @@ int main(int argc, const char* argv[])
                 reporters->report(ResultKey::ProblemIndex, problemIdx);
                 reporters->report(ResultKey::ProblemProgress,
                                   concatenate(problemIdx, "/", lastProblemIdx));
-
-                // Self-contained allocate+prefill+launch+compare; skips the
-                // single-GPU path below.
-                if(args["a2a-prefill"].as<bool>() || args["a2a-multigpu"].as<bool>())
-                {
-                    int rc = runA2APrefill(args, library, hardware, *device0->adapter, problem);
-                    if(rc != 0)
-                    {
-                        flushTimingBuffer();
-                        return rc;
-                    }
-                    continue;
-                }
 
                 {
                     ScopedTimer timer("pre_problem");

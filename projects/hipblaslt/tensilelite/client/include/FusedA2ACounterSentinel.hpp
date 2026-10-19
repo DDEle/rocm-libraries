@@ -70,15 +70,6 @@ namespace TensileLite
                    + fusedA2AMode1TallyBytes(tokenBlocks) + (size_t)batches * sizeof(uint32_t);
         }
 
-        constexpr size_t fusedA2AMode1AllocBytes(uint32_t worldSize,
-                                                 uint32_t tokenBlocks,
-                                                 uint32_t batches,
-                                                 uint32_t subRounds = 1)
-        {
-            return fusedA2AMode1PayloadBytes(worldSize, tokenBlocks, batches, subRounds)
-                   + FUSED_A2A_COUNTER_SENTINEL_BYTES;
-        }
-
         // Expected guard word at index i: the high half is far from any legal
         // counter value, and the low half varies per word so a shifted
         // overrun is still detected.

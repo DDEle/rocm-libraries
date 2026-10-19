@@ -339,6 +339,8 @@ namespace TensileLite
                 inputs.d     = devD.ptr;
                 inputs.alpha = 1.0f;
                 inputs.beta  = 0.0f;
+                // peer[0].x (the recvPtr slot) is B at W=1.
+                inputs.fusedA2APeers.push_back({nullptr, devB.ptr});
 
                 if(solution->requiredWorkspaceSize(problem, *hardware) != 0)
                 {
@@ -404,13 +406,13 @@ namespace TensileLite
             }
 
             // First gathered segment differing from its host-side source, or -1.
-            // want[r] is the source for segment r.
+            // want[r] is the source for segment r; segment 0 is never written.
             int a2aFirstBadSegment(BFloat16 const*                     got,
                                    std::vector<BFloat16 const*> const& want,
                                    size_t                              segElems,
                                    size_t&                             badIdx)
             {
-                for(size_t r = 0; r < want.size(); r++)
+                for(size_t r = 1; r < want.size(); r++)
                 {
                     BFloat16 const* seg = got + r * segElems;
                     for(size_t i = 0; i < segElems; i++)
@@ -540,12 +542,8 @@ namespace TensileLite
                 {
                     HIP_CHECK_EXC(
                         hipMemsetAsync(devD.ptr, 0, cdElems * sizeof(BFloat16), stream));
-                    HIP_CHECK_EXC(hipMemcpyAsync(
-                        devB.ptr, devX.ptr, segBytes, hipMemcpyDeviceToDevice, stream));
-                    HIP_CHECK_EXC(hipMemsetAsync((char*)devB.ptr + segBytes,
-                                                 A2A_LOOPBACK_POISON,
-                                                 bBytes - segBytes,
-                                                 stream));
+                    HIP_CHECK_EXC(
+                        hipMemsetAsync(devB.ptr, A2A_LOOPBACK_POISON, bBytes, stream));
 
                     auto kernels = solution->solve(problem, inputs, *hardware, nullptr, 0, stream);
                     HIP_CHECK_EXC(adapter.launchKernels(kernels, stream, nullptr, nullptr));
@@ -696,7 +694,6 @@ namespace TensileLite
                 const size_t segElems = N * kLoc;
                 const size_t xElems   = (size_t)W * segElems;
                 const size_t cdElems  = M * N;
-                const size_t segBytes = segElems * sizeof(BFloat16);
                 const size_t xBytes   = xElems * sizeof(BFloat16);
                 const size_t cdBytes  = cdElems * sizeof(BFloat16);
 
@@ -939,13 +936,8 @@ namespace TensileLite
                                                  xBytes,
                                                  hipMemcpyDeviceToDevice,
                                                  streams[d]));
-                    HIP_CHECK_EXC(hipMemcpyAsync(gathered,
-                                                 (char*)devX[d].ptr + (size_t)d * segBytes,
-                                                 segBytes,
-                                                 hipMemcpyDeviceToDevice,
-                                                 streams[d]));
-                    HIP_CHECK_EXC(hipMemsetAsync(
-                        gathered + segBytes, A2A_LOOPBACK_POISON, xBytes - segBytes, streams[d]));
+                    HIP_CHECK_EXC(
+                        hipMemsetAsync(gathered, A2A_LOOPBACK_POISON, xBytes, streams[d]));
                 };
 
                 auto enqueueCompute = [&](int r, int d) {

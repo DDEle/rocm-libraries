@@ -1149,6 +1149,83 @@ class TestA2AGemmFeatureShardIndex:
         )
 
 
+class TestA2AGemmLocalRoundReadsX:
+    """Round 0 reads rows [myRank*nToken, +nToken) of this rank's x, not gathered segment 0."""
+
+    def _src(self):
+        from config_harness import emit_kernels_from_config
+
+        return emit_kernels_from_config(_CONFIG, limit=1, arch="gfx950")[0][1]
+
+    def _rebase(self, src):
+        """The prologue between the B SRD setup and the shard-loop label."""
+        head = src.index("label_StridedBatchedGemmLoadB_End:")
+        return src[head : src.index("label_A2AShardLoopBegin:")]
+
+    def _x_load(self, body):
+        import re
+
+        from Tensile.Components.SdmaRingEmitter import OFF_recvPtr, PEER_GROUP_BYTES
+
+        m = re.search(
+            r"s_mul_i32 s(\d+), s\[sgprA2AFeatIdx\], %d[^\n]*\n"
+            r"s_load_dwordx2 s\[(\d+):(\d+)\], s\[sgprKernArgAddress:sgprKernArgAddress\+1\], "
+            r"s\1 offset:(\d+)" % PEER_GROUP_BYTES,
+            body,
+        )
+        assert m, "round 0 never loads the x pointer of peer group myRank"
+        return m, OFF_recvPtr
+
+    def test_round_zero_loads_this_ranks_x_pointer(self):
+        src = self._src()
+        m, offRecv = self._x_load(self._rebase(src))
+        segBase = TestA2AGemmPacketBody()._segment_base(src)
+        assert int(m.group(4)) == segBase + offRecv, "the load misses the peer x slot"
+
+    def test_round_zero_steps_to_this_ranks_rows(self):
+        import re
+
+        body = self._rebase(self._src())
+        assert re.search(
+            r"s_mul_i32 s(\d+), s\[sgprA2AFeatIdx\], s\[sgprSizeJ\][^\n]*\n"
+            r"s_mul_hi_u32 s(\d+), s\1, s\[sgprStrideB1J\][^\n]*\n"
+            r"s_mul_i32 s(\d+), s\1, s\[sgprStrideB1J\]",
+            body,
+        ), "round 0 does not offset x by myRank * nToken rows"
+
+    def test_round_zero_rebases_srdb_from_addressb_onto_x(self):
+        import re
+
+        body = self._rebase(self._src())
+        m, _ = self._x_load(body)
+        lo, hi = m.group(2), m.group(3)
+        tail = body[m.end() :]
+        sub = re.search(
+            r"s_sub_u32 s%s, s%s, s\[sgprAddressB\+0\][^\n]*\n"
+            r"s_subb_u32 s%s, s%s, s\[sgprAddressB\+1\]" % (lo, lo, hi, hi),
+            tail,
+        )
+        assert sub, "the x base is not taken relative to AddressB"
+        add = re.search(
+            r"s_add_u32 s\[sgprSrdB\+0\], s\[sgprSrdB\+0\], s%s[^\n]*\n"
+            r"s_addc_u32 s\[sgprSrdB\+1\], s\[sgprSrdB\+1\], s%s" % (lo, hi),
+            tail,
+        )
+        assert add and add.start() > sub.end(), "srdB is not moved onto x"
+
+    def test_the_rebase_keeps_the_address_pre_pad(self):
+        import re
+
+        body = self._rebase(self._src())
+        m, _ = self._x_load(body)
+        assert re.search(
+            r"s_sub_u32 s%s, s%s, %d[^\n]*\n"
+            r"s_subb_u32 s%s, s%s, 0" % (m.group(2), m.group(2), TestA2AGemmPacketBody._PRE_PAD,
+                                         m.group(3), m.group(3)),
+            body[m.end() :],
+        ), "the rebased srdB drops the AddressB pre-pad"
+
+
 class TestA2AGemmPerBlockMisphase:
     """Token block b walks the peer queues from b % (W-1), rotating one per round.
 

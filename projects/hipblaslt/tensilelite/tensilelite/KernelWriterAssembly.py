@@ -8359,6 +8359,7 @@ class KernelWriterAssembly(KernelWriter):
                        comment="gathered segment = peer queue + 1"))
     self.vgprPool.checkIn(tmpVgpr)
     module.add(self.a2aShiftSrd(kernel, tPA, "A2AFeatIdx"))
+    module.add(self.a2aRebaseLocalB(kernel, tPB))
     module.add(self.a2aBatchSpan(kernel, tPB))
     subRounds = kernel["A2ASubRounds"]
     if subRounds > 1:
@@ -8369,6 +8370,49 @@ class KernelWriterAssembly(KernelWriter):
       module.add(SAddU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardCounter"), src1=1,
                          comment="rounds = 1 + (W-1) * S"))
     module.add(self.a2aShardLoopLabel())
+    return module
+
+  def a2aPrePadB(self, kernel, tPB):
+    """Bytes defineAndResources subtracts from AddressB."""
+    if self.states.groOffsetInMacroTile and not kernel["UseSubtileImpl"] \
+        and not kernel["enableTDMB"]:
+      return int(self.states.srdShiftLeft["B"] * tPB["bpeGR"])
+    return 0
+
+  def a2aRebaseLocalB(self, kernel, tPB):
+    """Move SrdB from gathered segment 0 onto rows [myRank*nToken, +nToken) of this rank's x."""
+    from .Components.Signature import fusedA2AKernArgLayout
+    from .Components.SdmaRingEmitter import OFF_recvPtr, PEER_GROUP_BYTES
+    module = Module("a2aRebaseLocalB")
+    layout = fusedA2AKernArgLayout()
+    xImm   = self.states.fusedA2AKernArgBase + layout["peer_0_flagPtr"] + OFF_recvPtr
+    prePad = self.a2aPrePadB(kernel, tPB)
+    with self.allocTmpSgpr(4, alignment=2, tag="a2aRebaseLocalB") as tmpSgprInfo:
+      x   = tmpSgprInfo.idx
+      off = tmpSgprInfo.idx + 2
+      module.add(SMulI32(dst=sgpr(off), src0=sgpr("A2AFeatIdx"), src1=PEER_GROUP_BYTES,
+                         comment="peer group offset = myRank * %u" % PEER_GROUP_BYTES))
+      module.add(SLoadB64(dst=sgpr(x, 2), base=sgpr("KernArgAddress", 2), soffset=sgpr(off),
+                          smem=SMEMModifiers(offset=xImm), comment="this rank's x"))
+      module.add(SMulI32(dst=sgpr(off), src0=sgpr("A2AFeatIdx"),
+                         src1=self.sizeRef(tPB["tileIdx"]), comment="myRank * nToken"))
+      module.addModuleAsFlatItems(self.s_mul_u64_u32(sgpr(off), sgpr(off + 1), sgpr(off),
+                                                     self.strideRef("B", tPB["tileIdx"]),
+                                                     comment="row * ldb"))
+      module.add(SLShiftLeftB64(dst=sgpr(off, 2), src=sgpr(off, 2),
+                                shiftHex=log2(int(tPB["bpeGR"])), comment="elements -> bytes"))
+      module.add(SWaitCnt(kmcnt=0, comment="wait this rank's x"))
+      module.add(SAddU32(dst=sgpr(x), src0=sgpr(x), src1=sgpr(off), comment="this rank's rows"))
+      module.add(SAddCU32(dst=sgpr(x + 1), src0=sgpr(x + 1), src1=sgpr(off + 1)))
+      module.add(SSubU32(dst=sgpr(x), src0=sgpr(x), src1=sgpr("AddressB+0"),
+                         comment="relative to AddressB"))
+      module.add(SSubBU32(dst=sgpr(x + 1), src0=sgpr(x + 1), src1=sgpr("AddressB+1")))
+      if prePad:
+        module.add(SSubU32(dst=sgpr(x), src0=sgpr(x), src1=prePad, comment="keep the pre-pad"))
+        module.add(SSubBU32(dst=sgpr(x + 1), src0=sgpr(x + 1), src1=0))
+      module.add(SAddU32(dst=sgpr("SrdB+0"), src0=sgpr("SrdB+0"), src1=sgpr(x),
+                         comment="SrdB base: gathered -> x"))
+      module.add(SAddCU32(dst=sgpr("SrdB+1"), src0=sgpr("SrdB+1"), src1=sgpr(x + 1)))
     return module
 
   def a2aBatchSpan(self, kernel, tPB):
@@ -8674,10 +8718,7 @@ class KernelWriterAssembly(KernelWriter):
     copyBytes = COPY_PACKET_DWORDS * 4
     # peer[s].x rides in the mode-0 recvPtr slot.
     xImm      = fusedBase + layout["peer_0_flagPtr"] + OFF_recvPtr
-    prePad    = 0
-    if self.states.groOffsetInMacroTile and not kernel["UseSubtileImpl"] \
-        and not kernel["enableTDMB"]:
-      prePad = int(self.states.srdShiftLeft["B"] * bpe)
+    prePad    = self.a2aPrePadB(kernel, tPB)
 
     gLoop = Label(self.labels.getNameInc("a2a_group_loop"),
                   "blocks this queue feeds to one consumption round")

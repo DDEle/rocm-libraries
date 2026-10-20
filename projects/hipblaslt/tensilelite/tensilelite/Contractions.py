@@ -295,7 +295,7 @@ class ProblemType:
         rv.swizzleTensorA = d.get('SwizzleTensorA', False)
         rv.swizzleTensorB = d.get('SwizzleTensorB', False)
 
-        rv.fusedA2A = d.get('FusedA2A', 'None')
+        rv.fusedA2A = d.get('FusedA2A', 'Disabled')
 
         rv.mxBlockA = d.get('MXBlockA', 0)
         rv.mxBlockB = d.get('MXBlockB', 0)
@@ -430,7 +430,7 @@ class ProblemType:
             predicates.append(ProblemPredicate("SwizzleTensorA", value=self.swizzleTensorA))
             predicates.append(ProblemPredicate("SwizzleTensorB", value=self.swizzleTensorB))
             predicates.append(ProblemPredicate("FusedA2A", value=self.fusedA2A))
-            if self.fusedA2A != 'None' and self.batched:
+            if self.fusedA2A != 'Disabled' and self.batched:
                 predicates.append(ProblemPredicate("BatchSizeEqual", index=0, value=1))
             predicates.append(ProblemPredicate("MXBlockA", value=self.mxBlockA))
             if self.mxBlockA:

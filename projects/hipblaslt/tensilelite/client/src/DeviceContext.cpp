@@ -148,7 +148,7 @@ namespace TensileLite
                              std::vector<std::shared_ptr<DeviceContext>> const& devices)
         {
             auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
-            if(gemm == nullptr || gemm->fusedA2A() == FusedA2A::None)
+            if(gemm == nullptr || gemm->fusedA2A() == FusedA2A::Disabled)
                 return;
             if(gemm->fusedA2A() == FusedA2A::GemmA2A)
             {
@@ -212,7 +212,7 @@ namespace TensileLite
         {
             const size_t slot = launch % devices[rank]->inputArr.size();
             auto const*  gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
-            if(gemm == nullptr || gemm->fusedA2A() == FusedA2A::None)
+            if(gemm == nullptr || gemm->fusedA2A() == FusedA2A::Disabled)
                 return devices[rank]->inputArr[slot].get();
 
             const FusedA2A mode    = gemm->fusedA2A();

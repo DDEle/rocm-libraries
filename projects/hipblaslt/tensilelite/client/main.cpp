@@ -229,7 +229,7 @@ namespace TensileLite
                 ("mx-b-type",                po::value<rocisa::DataType>()->default_value(rocisa::DataType::E8), "type of mx datatype input matrix B")
                 ("swizzle-tensor-a",         po::value<bool>()->default_value(false), "Swizzle input tensor A.")
                 ("swizzle-tensor-b",         po::value<bool>()->default_value(false), "Swizzle input tensor B.")
-                ("fused-a2a",                po::value<std::string>()->default_value("None"), "Fused A2A mode: None, GemmA2A (all-to-all PUSH from the GEMM epilogue) or A2AGemm (B gathered from the peers one K shard at a time).")
+                ("fused-a2a",                po::value<std::string>()->default_value("Disabled"), "Fused A2A mode: Disabled, GemmA2A (all-to-all PUSH from the GEMM epilogue) or A2AGemm (B gathered from the peers one K shard at a time).")
                 ("mx-scale-format",          po::value<int>()->default_value(0), "MX scale data format (0=none, 1=pre-swizzle for GPU kernel layout)")
                 ("activation-compute-type",  po::value<rocisa::DataType>()->default_value(rocisa::DataType::None), "Activation compute type.")
                 ("high-precision-accumulate", po::value<bool>()->default_value(false), "Use high-precision accumulate.")
@@ -845,7 +845,7 @@ int main(int argc, const char* argv[])
     calibrateTimingOverhead();
 
     const FusedA2A fusedMode = fusedA2AFromString(args["fused-a2a"].as<std::string>());
-    bool           fusedA2A  = fusedMode != FusedA2A::None;
+    bool           fusedA2A  = fusedMode != FusedA2A::Disabled;
     if(fusedA2A)
         checkFusedA2AArgs(args);
     auto const& worldFilter = args["world-filter"].as<std::vector<int>>();

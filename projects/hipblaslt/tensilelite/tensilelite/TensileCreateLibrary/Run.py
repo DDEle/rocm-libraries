@@ -1166,7 +1166,7 @@ def _includeGemmA2AFusionProblemType(problemType, enabled: bool) -> bool:
     cannot answer the question from emptying the library, which fails far more
     quietly than building the solutions the gate meant to skip.
     """
-    return enabled or (problemType or {}).get("FusedA2A", "None") not in ("GemmA2A", "A2AGemm")
+    return enabled or (problemType or {}).get("FusedA2A", "Disabled") not in ("GemmA2A", "A2AGemm")
 
 
 ################################################################################

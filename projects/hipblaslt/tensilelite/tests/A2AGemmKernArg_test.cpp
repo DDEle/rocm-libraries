@@ -113,7 +113,7 @@ TEST(A2AGemmKernArg, DeviceUserArgsRejectA2AGemm)
     };
 
     auto stock = problemWithB(1, K, N * K);
-    stock.setFusedA2A(FusedA2A::None);
+    stock.setFusedA2A(FusedA2A::Disabled);
     EXPECT_NO_THROW(userArgs(stock));
     try
     {

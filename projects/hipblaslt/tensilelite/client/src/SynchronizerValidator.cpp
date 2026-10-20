@@ -61,7 +61,7 @@ namespace TensileLite
         void SynchronizerValidator::preSolution(ContractionSolution* const solution)
         {
             m_failedInSolution = false;
-            m_fusedA2A = solution != nullptr ? solution->problemType.fusedA2A : FusedA2A::None;
+            m_fusedA2A = solution != nullptr ? solution->problemType.fusedA2A : FusedA2A::Disabled;
             // Covers the possible uses of the pointer: Flags in singleCallArgs
             // for StreamK, the dstD/Synchronizer block for MBSK, AmaxSync for
             // amaxD, and the AddressFlags/AddressSynchronizer/AmaxSync args of
@@ -102,7 +102,7 @@ namespace TensileLite
                      });
             m_mayUseSynchronizer = partialReduction || customStreamK || mbsk || customArg
                                    || solution->problemType.outputAmaxD
-                                   || solution->problemType.fusedA2A != FusedA2A::None;
+                                   || solution->problemType.fusedA2A != FusedA2A::Disabled;
         }
 
         void SynchronizerValidator::postSolution()

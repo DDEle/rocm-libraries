@@ -65,7 +65,7 @@ class TestExactDictWorld:
 
     def test_non_fused_rejects_world(self):
         with pytest.raises(RuntimeError, match="apply only to"):
-            _sizes(_problemType(FusedA2A="None"), {"sizes": [3072, 512, 1, 2048], "world": 2})
+            _sizes(_problemType(FusedA2A="Disabled"), {"sizes": [3072, 512, 1, 2048], "world": 2})
 
     def test_fused_rejects_exact_list(self):
         with pytest.raises(RuntimeError, match="Exact dict"):

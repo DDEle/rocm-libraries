@@ -143,7 +143,7 @@ namespace TensileLite
             ContractionProblem* m_problem;
 
             bool m_enabled;
-            FusedA2A m_fusedA2A = FusedA2A::None;
+            FusedA2A m_fusedA2A = FusedA2A::Disabled;
 
             int  m_elementsToValidate;
             bool m_printValids;

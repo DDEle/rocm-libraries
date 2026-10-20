@@ -2886,7 +2886,7 @@ namespace TensileLite
                     HasIndex = false,
                     HasValue = true
                 };
-                FusedA2A value = FusedA2A::None;
+                FusedA2A value = FusedA2A::Disabled;
 
                 FusedA2AEqual() = default;
                 FusedA2AEqual(FusedA2A value)

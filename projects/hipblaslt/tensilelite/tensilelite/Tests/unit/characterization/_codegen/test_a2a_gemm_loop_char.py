@@ -935,7 +935,7 @@ class TestA2AGemmSolutionProblemType:
         assert self._contraction_problem_type(FusedA2A="A2AGemm").fusedA2A == "A2AGemm"
 
     def test_stock_gemm_leaves_the_mode_at_zero(self):
-        assert self._contraction_problem_type().fusedA2A == "None"
+        assert self._contraction_problem_type().fusedA2A == "Disabled"
 
     def test_kernel_name_differs_from_stock(self):
         import copy
@@ -946,7 +946,7 @@ class TestA2AGemmSolutionProblemType:
 
         state = derive_states(_CONFIG, arch="gfx950", limit_solutions=1)[0]
         stock = copy.deepcopy(state)
-        stock["ProblemType"]["FusedA2A"] = "None"
+        stock["ProblemType"]["FusedA2A"] = "Disabled"
         assert getKernelNameMin(state, False) != getKernelNameMin(stock, False)
 
 
@@ -1007,7 +1007,7 @@ class TestA2AGemmSubRoundsName:
 
     @pytest.mark.parametrize(
         "config, mode",
-        [("tensilelite/Tests/common/comm/gfx950/fused_a2a.yaml", None), (_CONFIG, "None")],
+        [("tensilelite/Tests/common/comm/gfx950/fused_a2a.yaml", None), (_CONFIG, "Disabled")],
         ids=["GemmA2A", "stock"],
     )
     def test_other_modes_ignore_sub_rounds(self, config, mode):
@@ -1054,7 +1054,7 @@ class TestA2AGemmPredicates:
         assert preds["A2AGemmShape"] == 128
 
     def test_mode_zero_emits_none_of_them(self):
-        assert not set(self._GUARDS) & set(self._predicates(mode="None"))
+        assert not set(self._GUARDS) & set(self._predicates(mode="Disabled"))
 
     def test_cpp_registers_every_guard(self):
         import pathlib

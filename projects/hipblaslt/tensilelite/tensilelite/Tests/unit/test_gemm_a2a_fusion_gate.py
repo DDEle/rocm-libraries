@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 @pytest.mark.parametrize(
     "problem_type,enabled,expected",
     [
-        ({"FusedA2A": "None"}, False, True),
+        ({"FusedA2A": "Disabled"}, False, True),
         ({"FusedA2A": "GemmA2A"}, False, False),
         ({"FusedA2A": "A2AGemm"}, False, False),
         ({"FusedA2A": "GemmA2A"}, True, True),
@@ -85,7 +85,7 @@ def test_disabled_build_drops_fused_logic_and_reports_it(
     assert any("filtered 1 logic files" in message for message in reported)
 
 
-@pytest.mark.parametrize("fused,expected", [("GemmA2A", True), ("A2AGemm", True), ("None", False), (None, False)])
+@pytest.mark.parametrize("fused,expected", [("GemmA2A", True), ("A2AGemm", True), ("Disabled", False), (None, False)])
 def test_library_client_build_enables_fusion_for_fused_logic(tmp_path, fused, expected):
     from Tensile.ClientWriter import getBuildClientLibraryScript
 

@@ -8006,7 +8006,7 @@ class KernelWriterAssembly(KernelWriter):
 
       quotient = loopCounterName
       # SizesSum holds the whole reduction W*k_local; one shard round covers k_local.
-      if kernel.get("ProblemType", {}).get("FusedA2A", "None") == "A2AGemm":
+      if kernel.get("ProblemType", {}).get("FusedA2A", "Disabled") == "A2AGemm":
         dividend = "A2AKLocal"
       else:
         dividend = "SizesSum+%u" % loopIdx #sumSize = self.sumSize(kernel, loopIdx)

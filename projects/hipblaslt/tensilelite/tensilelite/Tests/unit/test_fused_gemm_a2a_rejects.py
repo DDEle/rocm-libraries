@@ -201,9 +201,9 @@ def test_fused_a2a_base_is_accepted(_gp_gfx942, gfx942_iim, assembler, capsys):
 def test_fused_a2a_off_leaves_user_gsu_alone(_gp_gfx942, gfx942_iim, assembler, capsys):
     """Control: with the flag off the guard block does not run at all, so the
     same solution keeps the default SupportUserGSU. This is what makes the
-    ``FusedA2A=None`` default a no-op for every shipping solution."""
+    ``FusedA2A=Disabled`` default a no-op for every shipping solution."""
     sol, out = _derive(
-        gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "None"}
+        gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "Disabled"}
     )
     assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
     assert sol["InternalSupportParams"]["SupportUserGSU"] is True

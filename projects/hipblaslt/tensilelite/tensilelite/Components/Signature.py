@@ -474,7 +474,7 @@ class SignatureDefault(Signature):
 
         # Fused GEMM.A2A kernarg metadata; registered LAST so it lands at the
         # tail. See fusedA2AKernArgLayout() for the offset contract.
-        if kernel["ProblemType"]["FusedA2A"] != "None":
+        if kernel["ProblemType"]["FusedA2A"] != "Disabled":
             fusedBase = signature.offset
             for j in range(FUSED_A2A_MAX_RANKS):
                 for f in FUSED_A2A_PEER_FIELDS:

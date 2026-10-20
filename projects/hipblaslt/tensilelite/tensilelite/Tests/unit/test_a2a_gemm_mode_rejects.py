@@ -165,7 +165,7 @@ def test_a2a_mode_base_is_accepted(_gp_gfx942, gfx942_iim, assembler, capsys):
 
 def test_a2a_mode_off_keeps_one_summation_index(_gp_gfx942, gfx942_iim, assembler, capsys):
     """Control: mode 0 is the stock single-summation GEMM."""
-    sol, out = _derive(gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "None"})
+    sol, out = _derive(gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "Disabled"})
     assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
     assert sol["ProblemType"]["NumIndicesSummation"] == 1
 
@@ -185,7 +185,7 @@ def test_a2a_mode_off_does_not_apply_the_guards(
 ):
     """Control: none of the guards fire when the mode is off."""
     _, out = _derive(
-        gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "None"}, **{param: value}
+        gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "Disabled"}, **{param: value}
     )
     assert "FusedA2A=A2AGemm" not in out
 
@@ -262,7 +262,7 @@ def test_a2a_knob_rejected_without_mode(
     _gp_gfx942, gfx942_iim, assembler, capsys, param, value, msg
 ):
     sol, out = _derive(
-        gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "None"}, **{param: value}
+        gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "Disabled"}, **{param: value}
     )
     assert sol.get("Valid") is False
     assert msg in out

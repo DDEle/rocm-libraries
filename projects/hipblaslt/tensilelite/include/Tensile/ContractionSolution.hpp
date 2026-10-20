@@ -1353,7 +1353,7 @@ namespace TensileLite
             bool supportDeviceUserArguments = false;
             bool swizzleTensorA             = false;
             bool swizzleTensorB             = false;
-            FusedA2A fusedA2A               = FusedA2A::None;
+            FusedA2A fusedA2A               = FusedA2A::Disabled;
             int  metadataLayout             = 0;
             int  mxBlockA                   = 0;
             int  mxBlockB                   = 0;

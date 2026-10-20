@@ -150,7 +150,7 @@ TEST(DeviceContext, CommBytesFollowTheMode)
 {
     using namespace TensileLite;
     using namespace TensileLite::Client;
-    EXPECT_EQ(fusedA2ACommFlagsBytes(FusedA2A::None), 0u);
+    EXPECT_EQ(fusedA2ACommFlagsBytes(FusedA2A::Disabled), 0u);
     EXPECT_EQ(fusedA2ACommFlagsBytes(FusedA2A::GemmA2A), 2 * FUSED_A2A_FLAG_BLOCK_BYTES);
     EXPECT_EQ(fusedA2ACommFlagsBytes(FusedA2A::A2AGemm), FUSED_A2A_FLAG_BLOCK_BYTES);
 }

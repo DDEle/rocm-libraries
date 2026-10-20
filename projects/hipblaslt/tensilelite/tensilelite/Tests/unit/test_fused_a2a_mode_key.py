@@ -26,8 +26,8 @@ def _pt(**overrides):
 
 
 class TestModeValues:
-    def test_default_is_none(self):
-        assert _pt()["FusedA2A"] == "None"
+    def test_default_is_disabled(self):
+        assert _pt()["FusedA2A"] == "Disabled"
 
     @pytest.mark.parametrize("mode", ["GemmA2A", "A2AGemm"])
     def test_modes_round_trip(self, mode):
@@ -48,7 +48,7 @@ class TestRetiredKeys:
             _pt(FusedA2AMode=1)
 
     def test_false_and_zero_are_ignored(self):
-        assert _pt(FusedGemmA2A=False, FusedA2AMode=0)["FusedA2A"] == "None"
+        assert _pt(FusedGemmA2A=False, FusedA2AMode=0)["FusedA2A"] == "Disabled"
 
 
 class TestA2AGemmProblemTypeRejects:
@@ -72,14 +72,14 @@ class TestName:
 
 
 class TestPredicate:
-    @pytest.mark.parametrize("mode", ["None", "GemmA2A", "A2AGemm"])
+    @pytest.mark.parametrize("mode", ["Disabled", "GemmA2A", "A2AGemm"])
     def test_every_solution_carries_the_mode(self, mode):
         cpt = ContractionsProblemType.FromOriginalState(_pt(FusedA2A=mode).state)
         preds = {p.tag: p.value for p in cpt.predicates(True, True, True)}
         assert preds["FusedA2A"] == mode
         assert "FusedGemmA2A" not in preds
 
-    @pytest.mark.parametrize("mode, expected", [("None", False), ("GemmA2A", True), ("A2AGemm", True)])
+    @pytest.mark.parametrize("mode, expected", [("Disabled", False), ("GemmA2A", True), ("A2AGemm", True)])
     def test_batch_one_follows_either_mode(self, mode, expected):
         cpt = ContractionsProblemType.FromOriginalState(_pt(FusedA2A=mode).state)
         tags = [p.tag for p in cpt.predicates(True, True, True)]

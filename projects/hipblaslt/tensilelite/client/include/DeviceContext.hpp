@@ -86,7 +86,7 @@ namespace TensileLite
 
         constexpr size_t fusedA2ACommFlagsBytes(FusedA2A mode)
         {
-            return mode == FusedA2A::None
+            return mode == FusedA2A::Disabled
                        ? 0
                        : fusedA2ACommChannels(mode) * FUSED_A2A_FLAG_BLOCK_BYTES;
         }

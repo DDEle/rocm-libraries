@@ -324,7 +324,7 @@ def getBuildClientLibraryScript(buildPath, libraryLogicPath, cxxCompiler, target
   if globalParameters["DisableAsmComments"]:
     callCreateLibraryCmd += " --disable-asm-comments"
 
-  if any((LibraryIO.rawLibraryLogic(LibraryIO.readYAML(f))[4] or {}).get("FusedA2A", "None") != "None"
+  if any((LibraryIO.rawLibraryLogic(LibraryIO.readYAML(f))[4] or {}).get("FusedA2A", "Disabled") != "Disabled"
          for f in glob(os.path.join(libraryLogicPath, "*.yaml"))):
     callCreateLibraryCmd += " --enable-gemm-a2a-fusion"
 
@@ -565,7 +565,7 @@ def problemSizeParams(problemType, problem, factorDim):
         gatestrides[index.d] = sc[1]
       rv.append(('gate-strides', ",".join(map(str, gatestrides))))
 
-    if problemType.fusedA2A != 'None':
+    if problemType.fusedA2A != 'Disabled':
       rv.append(('world', problem.world))
       rv.append(('fused-a2a-extent', problem.a2aExtent))
 
@@ -802,7 +802,7 @@ def writeClientConfigIni(forBenchmark, problemSizes, biasTypeArgs, factorDimArgs
         param("rotating-buffer-mode",     globalParameters["RotatingMode"])
         param("icache-rotate-copies",     globalParameters["IcacheRotateCopies"])
         param("icache-rotate-size",       globalParameters["IcacheRotateSize"])
-        if problemType.fusedA2A != 'None':
+        if problemType.fusedA2A != 'Disabled':
             for world in globalParameters["WorldFilter"]:
                 param("world-filter", world)
         if globalParameters["RocProfCounter"]:

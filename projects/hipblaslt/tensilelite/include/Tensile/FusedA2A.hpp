@@ -11,7 +11,7 @@ namespace TensileLite
 {
     enum class FusedA2A : int
     {
-        None = 0,
+        Disabled = 0,
         GemmA2A,
         A2AGemm,
         Count
@@ -21,8 +21,8 @@ namespace TensileLite
     {
         switch(mode)
         {
-        case FusedA2A::None:
-            return "None";
+        case FusedA2A::Disabled:
+            return "Disabled";
         case FusedA2A::GemmA2A:
             return "GemmA2A";
         case FusedA2A::A2AGemm:
@@ -38,7 +38,7 @@ namespace TensileLite
             if(ToString(static_cast<FusedA2A>(i)) == name)
                 return static_cast<FusedA2A>(i);
         throw std::invalid_argument("FusedA2A '" + name
-                                    + "' is not one of None, GemmA2A, A2AGemm");
+                                    + "' is not one of Disabled, GemmA2A, A2AGemm");
     }
 
     inline std::ostream& operator<<(std::ostream& stream, FusedA2A mode)

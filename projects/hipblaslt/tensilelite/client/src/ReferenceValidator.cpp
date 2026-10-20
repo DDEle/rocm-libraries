@@ -140,7 +140,7 @@ namespace TensileLite
             m_validatedSolution = false;
             m_errorInSolution   = false;
             m_executedSolution  = false;
-            m_fusedA2A = solution != nullptr ? solution->problemType.fusedA2A : FusedA2A::None;
+            m_fusedA2A = solution != nullptr ? solution->problemType.fusedA2A : FusedA2A::Disabled;
 
             // Re-run CPU reference after DataInitialization refreshes MX inputs.
             if(!m_enabled || m_problem == nullptr || m_referenceInputs.empty()
@@ -268,7 +268,7 @@ namespace TensileLite
                           || (m_fusedA2A == FusedA2A::GemmA2A && recvMatches(d, in))
                           || (m_fusedA2A == FusedA2A::A2AGemm
                               && (m_devices->size() < 2 || gatheredMatches(d, in)))
-                          || m_fusedA2A == FusedA2A::None;
+                          || m_fusedA2A == FusedA2A::Disabled;
                     if(!ok)
                     {
                         m_errorInSolution = true;

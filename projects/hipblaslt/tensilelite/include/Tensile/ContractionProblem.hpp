@@ -1545,7 +1545,7 @@ namespace TensileLite
         bool             m_outputAmaxD             = false;
         bool             m_swizzleTensorA          = false;
         bool             m_swizzleTensorB          = false;
-        FusedA2A         m_fusedA2A                = FusedA2A::None;
+        FusedA2A         m_fusedA2A                = FusedA2A::Disabled;
         int64_t          m_fusedA2AExtent          = 0;
         int              m_useBias                 = 0;
         bool             m_useGateResidual         = false;

@@ -138,7 +138,7 @@ namespace
         setOption(args, "mx-a-type", rocisa::DataType::E8);
         setOption(args, "mx-b-type", rocisa::DataType::E8);
         setOption(args, "mx-scale-format", mxScaleFormat);
-        setOption(args, "fused-a2a", std::string("None"));
+        setOption(args, "fused-a2a", std::string("Disabled"));
         setOption(args, "metadata-layout", 0);
         setOption(args, "a-ops", TensileLite::TensorOps{});
         setOption(args, "b-ops", TensileLite::TensorOps{});

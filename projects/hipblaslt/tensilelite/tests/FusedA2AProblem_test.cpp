@@ -105,7 +105,7 @@ namespace
         setOption(args, "mx-b-block", 0);
         setOption(args, "mx-a-type", rocisa::DataType::E8);
         setOption(args, "mx-b-type", rocisa::DataType::E8);
-        setOption(args, "fused-a2a", std::string(fused ? "GemmA2A" : "None"));
+        setOption(args, "fused-a2a", std::string(fused ? "GemmA2A" : "Disabled"));
         setOption(args, "metadata-layout", 0);
         setOption(args, "a-ops", TensorOps{});
         setOption(args, "b-ops", TensorOps{});
@@ -186,7 +186,7 @@ TEST(FusedA2AProblem, ModeNamesRoundTrip)
 
 TEST(FusedA2AProblem, ModePredicateIsolatesTheThreeKinds)
 {
-    const FusedA2A modes[] = {FusedA2A::None, FusedA2A::GemmA2A, FusedA2A::A2AGemm};
+    const FusedA2A modes[] = {FusedA2A::Disabled, FusedA2A::GemmA2A, FusedA2A::A2AGemm};
     for(auto problemMode : modes)
         for(auto solutionMode : modes)
         {

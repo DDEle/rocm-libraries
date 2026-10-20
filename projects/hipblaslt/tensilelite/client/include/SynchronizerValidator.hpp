@@ -158,7 +158,7 @@ namespace TensileLite
             // One narrow-alpha warning per run, not one per solution.
             bool                m_narrowAlphaWarned = false;
             ContractionProblem* m_problem      = nullptr;
-            FusedA2A            m_fusedA2A     = FusedA2A::None;
+            FusedA2A            m_fusedA2A     = FusedA2A::Disabled;
             uint8_t*            m_staging      = nullptr;
             size_t              m_stagingBytes = 0;
 

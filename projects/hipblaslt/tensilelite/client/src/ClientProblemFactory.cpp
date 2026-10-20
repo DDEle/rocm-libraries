@@ -129,7 +129,7 @@ namespace TensileLite
             if(pointerArrayBatch && m_sparse)
                 throw std::invalid_argument("batch-mode=1 does not support sparse GEMM");
 
-            if(m_fusedA2A != FusedA2A::None)
+            if(m_fusedA2A != FusedA2A::Disabled)
             {
                 if(m_worlds.size() != m_problemSizes.size()
                    || m_fusedA2AExtents.size() != m_problemSizes.size())
@@ -492,7 +492,7 @@ namespace TensileLite
                                 rv.back().setSwizzleTensorA(m_swizzleTensorA);
                                 rv.back().setSwizzleTensorB(m_swizzleTensorB);
                                 rv.back().setFusedA2A(m_fusedA2A);
-                                if(m_fusedA2A != FusedA2A::None)
+                                if(m_fusedA2A != FusedA2A::Disabled)
                                 {
                                     rv.back().setWorld(m_worlds[i]);
                                     rv.back().setFusedA2AExtent(m_fusedA2AExtents[i]);

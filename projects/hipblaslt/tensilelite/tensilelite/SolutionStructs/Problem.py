@@ -534,7 +534,7 @@ _defaultProblemType = {
     "OutputAmaxD": False,
     # GemmA2A: the GEMM epilogue PUSHes the first AM feature columns to the peers.
     # A2AGemm: B arrives from the peers one K shard at a time.
-    "FusedA2A": "None",
+    "FusedA2A": "Disabled",
     # For kernels putting arguments in workspaces instead of kernel arguments, they can choose to support user arguments input instead.
     "SupportUserArgs": True,
     "SwizzleTensorA": False,
@@ -548,12 +548,12 @@ _defaultProblemType = {
     "DataTypeMXSB": "E8",
 }
 
-FUSED_A2A_MODES = ("None", "GemmA2A", "A2AGemm")
+FUSED_A2A_MODES = ("Disabled", "GemmA2A", "A2AGemm")
 
 
 def isFusedA2A(problemType):
   """problemType: a ProblemType or a raw logic ProblemType dict."""
-  return (problemType or {}).get("FusedA2A", "None") != "None"
+  return (problemType or {}).get("FusedA2A", "Disabled") != "Disabled"
 
 # The supported typed GEMM, each entry is (Ti, To, Tc).
 # DataType (Ti)        = The data-type of the input matrices: A/B
@@ -1127,7 +1127,7 @@ class ProblemType(Mapping):
           printWarning("ActivationNoGuard is set to False cause Gradient is off.")
           self["ActivationNoGuard"] = False
 
-    if self["FusedA2A"] != "None":
+    if self["FusedA2A"] != "Disabled":
       unsupported = [name for name, used in (
           ("UseBias", self["UseBias"]),
           ("UseE", self["UseE"]),

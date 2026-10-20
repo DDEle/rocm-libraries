@@ -476,7 +476,7 @@ class MasterSolutionLibrary:
                 else:
                     predicate = Properties.Predicate(tag="GridBasedMatching") # to make different from TruePred
 
-                matchingLib = MatchingLibrary.FromOriginalState(d["Library"], solutions, problemType.fusedA2A != 'None')
+                matchingLib = MatchingLibrary.FromOriginalState(d["Library"], solutions, problemType.fusedA2A != 'Disabled')
                 library = PredicateLibrary(tag="Problem")
                 library.rows.append({"predicate": predicate, "library": matchingLib})
             elif d["LibraryType"] == "FreeSize":

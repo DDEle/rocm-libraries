@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -42,21 +44,10 @@ namespace
         return p;
     }
 
-    ContractionProblemGemm bypassProblem(uint32_t world)
-    {
-        const size_t kLocal = K / world;
-        auto         p      = problemWithB(world, K, N * K);
-        p.resetTensor(ContractionProblemGemm::TENSOR::B,
-                      rocisa::DataType::BFloat16,
-                      {K, N, 1},
-                      {1, kLocal, N * kLocal});
-        return p;
-    }
-
-    void configure(ContractionSolution& s, FusedA2A mode)
+    void configure(ContractionSolution& s)
     {
         s.kernelName                      = "a2a_gemm_symbol";
-        s.problemType.fusedA2A            = mode;
+        s.problemType.fusedA2A            = FusedA2A::A2AGemm;
         s.sizeMapping.macroTile           = TensileLite::dim3(256, 256, 1);
         s.sizeMapping.depthU              = 64;
         s.sizeMapping.workGroupSize       = TensileLite::dim3(256, 1, 1);
@@ -68,10 +59,10 @@ namespace
         s.sizeMapping.CUOccupancy         = 1;
     }
 
-    std::vector<uint8_t> kernargs(ContractionProblemGemm const& problem, FusedA2A mode)
+    std::vector<uint32_t> packedStridesB(ContractionProblemGemm const& problem)
     {
         ContractionSolution solution;
-        configure(solution, mode);
+        configure(solution);
         auto device = TensileLite::testing::makeDevice(
             TensileLite::testing::_MI350_CHIP_ID, TensileLite::testing::_CPX_CU, "mi350cpx");
         ContractionInputs inputs;
@@ -79,9 +70,18 @@ namespace
         inputs.beta  = 0.0f;
         auto launch  = solution.resolvePersistentSettings(problem, device);
         auto call
-            = solution.generateSingleCall<false>(problem, inputs, device, launch, GSUSettings{});
-        auto data = static_cast<uint8_t const*>(call.args.data());
-        return {data, data + call.args.size()};
+            = solution.generateSingleCall<true>(problem, inputs, device, launch, GSUSettings{});
+        std::vector<uint32_t> strides;
+        for(auto name : {"strideB1", "strideB2"})
+        {
+            auto arg = KernelArguments::const_iterator(call.args, name);
+            if(arg == call.args.end())
+                throw std::runtime_error(std::string("Missing packed argument ") + name);
+            uint32_t value = 0;
+            std::memcpy(&value, (*arg).first, sizeof(value));
+            strides.push_back(value);
+        }
+        return strides;
     }
 }
 
@@ -89,11 +89,9 @@ TEST(A2AGemmKernArg, DenseBDescriptorPacksTheShardStrides)
 {
     for(uint32_t w : {1u, 2u, 4u, 8u})
     {
-        auto dense  = kernargs(problemWithB(w, K, N * K), FusedA2A::A2AGemm);
-        // GemmA2A packs B strides undivided
-        auto bypass = kernargs(bypassProblem(w), FusedA2A::GemmA2A);
-        ASSERT_EQ(dense.size(), bypass.size()) << "world " << w;
-        EXPECT_EQ(dense, bypass) << "world " << w;
+        auto strides = packedStridesB(problemWithB(w, K, N * K));
+        EXPECT_EQ(strides, (std::vector<uint32_t>{uint32_t(K / w), uint32_t(N * K / w)}))
+            << "world " << w;
     }
 }
 

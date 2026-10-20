@@ -10,7 +10,7 @@
 
 using namespace TensileLite::Client;
 
-TEST(A2AGemmHost, CounterLayoutMatchesTheBypassSizing)
+TEST(A2AGemmHost, CounterLayoutMatchesTheKernelSizing)
 {
     // M=3072, N=2048, MT 256x256, 256 CUs, W=4, S=1: F=12, tokenBlocks=8, batches=(7*12)/256+1=1.
     auto l = a2aGemmCounterLayout(3072, 2048, 256, 256, 256, 4, 1);

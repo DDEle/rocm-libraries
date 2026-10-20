@@ -72,6 +72,7 @@
 #include <elf.h>
 #include <limits> // std::numeric_limits<> sentinel
 #endif
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -827,6 +828,10 @@ int main(int argc, const char* argv[])
     using namespace TensileLite::Client;
 
     auto args = parse_args(argc, argv);
+
+    // Keeps hipSetDevice from re-pinning this thread to each rank's NUMA node.
+    if(fusedA2AFromString(args["fused-a2a"].as<std::string>()) != FusedA2A::Disabled)
+        setenv("AMD_CPU_AFFINITY", "0", 0);
 
     // Enable timing instrumentation if requested
     g_timingInstrumentationEnabled = args["timing-instrumentation"].as<bool>();

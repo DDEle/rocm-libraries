@@ -231,8 +231,8 @@ def _getName(state, requiredParameters: frozenset, splitGSU: bool, ignoreInterna
   components.append('SN')
   if state.get("TileProcessingStrategy") == "DataParallel":
     components.append(f'PLAV{state.get("InternalSupportParams", {}).get("PersistentLoopArgsVersion", 0)}')
-  if pt.get("FusedA2A") == "A2AGemm" and state.get("A2ASubRounds", 1) != 1:
-    components.append(f'SR{state["A2ASubRounds"]}')
+  if pt.get("FusedA2A") == "A2AGemm":
+    components.append(f'SR{state.get("A2ASubRounds", 1)}')
 
   # Skip SFA tag if using default wgm algo
   if "SpaceFillingAlgo" in requiredParametersTemp and len(state["SpaceFillingAlgo"]) == 0:

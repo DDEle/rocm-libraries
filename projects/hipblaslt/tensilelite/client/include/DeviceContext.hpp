@@ -13,7 +13,10 @@
 
 #include <hip/hip_runtime.h>
 
+#include <cstdint>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace TensileLite
@@ -48,10 +51,13 @@ namespace TensileLite
         {
             // sdmaPeers: device ids to enable P2P to and open one SDMA queue each for,
             // indexed by rank; the entry equal to deviceId is a loopback queue.
+            // sdmaRotate: steps each peer queue takes along the even xGMI engines
+            // (sdmaRotateEngine) from KFD's recommendation.
             DeviceContext(int                     deviceId,
                           bool                    useDefaultStream,
                           size_t                  commFlagsBytes = 0,
-                          std::vector<int> const& sdmaPeers      = {});
+                          std::vector<int> const& sdmaPeers      = {},
+                          int                     sdmaRotate     = 0);
             ~DeviceContext();
 
             DeviceContext(DeviceContext const&)            = delete;
@@ -89,6 +95,22 @@ namespace TensileLite
             return mode == FusedA2A::Disabled
                        ? 0
                        : fusedA2ACommChannels(mode) * FUSED_A2A_FLAG_BLOCK_BYTES;
+        }
+
+        constexpr int fusedA2ASdmaRotateDefault(FusedA2A mode)
+        {
+            return mode == FusedA2A::A2AGemm ? -1 : 0;
+        }
+
+        // Moves engine `steps` places around the ring 2, 4, ..., 14 (gfx950 xGMI engines).
+        inline uint32_t sdmaRotateEngine(uint32_t engine, int steps)
+        {
+            if(steps == 0)
+                return engine;
+            if(engine < 2 || engine > 14 || engine % 2 != 0)
+                throw std::runtime_error("SDMA rotation needs an even xGMI engine in 2..14; got "
+                                         + std::to_string(engine));
+            return 2 + 2 * ((((int)engine - 2) / 2 + steps % 7 + 7) % 7);
         }
 
         template <typename F>

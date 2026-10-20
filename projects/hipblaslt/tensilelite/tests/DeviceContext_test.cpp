@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 using TensileLite::Client::DeviceContext;
@@ -153,4 +154,28 @@ TEST(DeviceContext, CommBytesFollowTheMode)
     EXPECT_EQ(fusedA2ACommFlagsBytes(FusedA2A::Disabled), 0u);
     EXPECT_EQ(fusedA2ACommFlagsBytes(FusedA2A::GemmA2A), 2 * FUSED_A2A_FLAG_BLOCK_BYTES);
     EXPECT_EQ(fusedA2ACommFlagsBytes(FusedA2A::A2AGemm), FUSED_A2A_FLAG_BLOCK_BYTES);
+}
+
+TEST(DeviceContext, SdmaRotateWalksTheEvenXgmiEngines)
+{
+    using TensileLite::Client::sdmaRotateEngine;
+    for(uint32_t e : {0u, 1u, 2u, 14u, 16u})
+        EXPECT_EQ(sdmaRotateEngine(e, 0), e);
+    EXPECT_EQ(sdmaRotateEngine(2, -1), 14u);
+    EXPECT_EQ(sdmaRotateEngine(4, -1), 2u);
+    EXPECT_EQ(sdmaRotateEngine(14, -1), 12u);
+    EXPECT_EQ(sdmaRotateEngine(14, 1), 2u);
+    EXPECT_EQ(sdmaRotateEngine(6, 7), 6u);
+    EXPECT_EQ(sdmaRotateEngine(6, -8), 4u);
+    for(uint32_t e : {0u, 3u, 16u})
+        EXPECT_THROW(sdmaRotateEngine(e, -1), std::runtime_error);
+}
+
+TEST(DeviceContext, SdmaRotateDefaultsByMode)
+{
+    using namespace TensileLite;
+    using namespace TensileLite::Client;
+    EXPECT_EQ(fusedA2ASdmaRotateDefault(FusedA2A::A2AGemm), -1);
+    EXPECT_EQ(fusedA2ASdmaRotateDefault(FusedA2A::GemmA2A), 0);
+    EXPECT_EQ(fusedA2ASdmaRotateDefault(FusedA2A::Disabled), 0);
 }

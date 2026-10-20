@@ -291,6 +291,7 @@ namespace TensileLite
                 ("world-filter",             po::value<std::vector<int>>()->default_value(std::vector<int>()), "Fused GEMM+A2A: run only the problems whose world is listed; empty runs all.")
                 ("fused-a2a-drain-recv",     po::value<int>()->default_value(1), "Runtime drainRecv flag passed to the fused kernel (1=on): the kernel exits only once this card's recv buffer is complete.")
                 ("fused-a2a-drain-send",     po::value<int>()->default_value(1), "Runtime drainSend flag passed to the fused kernel (1=on): the kernel exits only once this card's engines have finished reading D[0:AM), so D can be reused on stream order alone. Independent of --fused-a2a-drain-recv.")
+                ("fused-a2a-sdma-rotate",    po::value<int>(), "Fused A2A: move each peer SDMA queue this many steps along the even xGMI engines 2,4,...,14 from its KFD recommendation (gfx950). Defaults to -1 for A2AGemm and 0 for GemmA2A.")
                 ("use-default-stream",       po::value<bool>()->default_value(false), "Use default Hip stream to run kernels.")
 
                 ("num-warmups",              po::value<int>()->default_value(0), "Number of warmups to run")
@@ -887,12 +888,16 @@ int main(int argc, const char* argv[])
 
         std::vector<int> deviceIds(world);
         std::iota(deviceIds.begin(), deviceIds.end(), args["device-idx"].as<int>());
+        const int sdmaRotate = args.count("fused-a2a-sdma-rotate")
+                                   ? args["fused-a2a-sdma-rotate"].as<int>()
+                                   : fusedA2ASdmaRotateDefault(fusedMode);
         for(int id : deviceIds)
             devices.push_back(
                 std::make_shared<DeviceContext>(id,
                                                 args["use-default-stream"].as<bool>(),
                                                 fusedA2ACommFlagsBytes(fusedMode),
-                                                fusedA2A ? deviceIds : std::vector<int>{}));
+                                                fusedA2A ? deviceIds : std::vector<int>{},
+                                                sdmaRotate));
     }
     std::shared_ptr<DeviceContext>              device0 = devices[0];
     std::vector<std::shared_ptr<DeviceContext>> active;

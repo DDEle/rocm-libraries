@@ -43,7 +43,8 @@ namespace TensileLite
         DeviceContext::DeviceContext(int                     deviceId,
                                      bool                    useDefaultStream,
                                      size_t                  commFlagsBytes,
-                                     std::vector<int> const& sdmaPeers)
+                                     std::vector<int> const& sdmaPeers,
+                                     int                     sdmaRotate)
             : deviceId(deviceId)
             , adapter(std::make_shared<hip::SolutionAdapter>())
             , commFlagsBytes(commFlagsBytes)
@@ -77,8 +78,11 @@ namespace TensileLite
                     }
                     const uint32_t node = sdmaNodeIdForDevice(deviceId);
                     for(int peer : sdmaPeers)
+                    {
+                        const uint32_t engine = sdmaSelectEngine(node, sdmaNodeIdForDevice(peer));
                         sdmaQueues.push_back(std::make_shared<SdmaQueue>(
-                            node, sdmaSelectEngine(node, sdmaNodeIdForDevice(peer))));
+                            node, peer == deviceId ? engine : sdmaRotateEngine(engine, sdmaRotate)));
+                    }
 #else
                     throw std::runtime_error(
                         "DeviceContext: SDMA queues requested, but this client was built without "

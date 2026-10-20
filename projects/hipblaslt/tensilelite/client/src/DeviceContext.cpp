@@ -76,9 +76,21 @@ namespace TensileLite
                             HIP_CHECK_EXC(pe);
                     }
                     const uint32_t node = sdmaNodeIdForDevice(deviceId);
+                    // R8 EXPERIMENT (not for merge): TL_R8_SDMAROT=k moves each peer queue k
+                    // steps along the even xGMI engines 2..14, as the old --a2a-multigpu-sdma-rotate.
+                    char const* rotEnv = std::getenv("TL_R8_SDMAROT");
+                    const int   rotate = rotEnv ? std::atoi(rotEnv) : 0;
                     for(int peer : sdmaPeers)
-                        sdmaQueues.push_back(std::make_shared<SdmaQueue>(
-                            node, sdmaSelectEngine(node, sdmaNodeIdForDevice(peer))));
+                    {
+                        uint32_t engine = sdmaSelectEngine(node, sdmaNodeIdForDevice(peer));
+                        if(rotate != 0 && peer != deviceId && engine >= 2 && engine <= 14
+                           && engine % 2 == 0)
+                            engine = 2 + 2 * ((((int)engine - 2) / 2 + rotate % 7 + 7) % 7);
+                        if(std::getenv("TL_R8_SDMALOG"))
+                            std::cout << "[r8] sdma dev " << deviceId << " -> peer " << peer
+                                      << " engine " << engine << std::endl;
+                        sdmaQueues.push_back(std::make_shared<SdmaQueue>(node, engine));
+                    }
 #else
                     throw std::runtime_error(
                         "DeviceContext: SDMA queues requested, but this client was built without "

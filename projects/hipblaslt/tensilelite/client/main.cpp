@@ -72,12 +72,17 @@
 #include <elf.h>
 #include <limits> // std::numeric_limits<> sentinel
 #endif
+#include <atomic>
+#include <cstdlib>
+#include <exception>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <numeric>
 #include <sstream>
+#include <thread>
 
 namespace TensileLite
 {
@@ -104,6 +109,127 @@ namespace TensileLite
                              "s_nop 0 \n\t" ::
                                  :);
         }
+
+        // R8 EXPERIMENT (not for merge): launch-path switches and host timing.
+        inline int r8Env(char const* name)
+        {
+            char const* v = std::getenv(name);
+            return v ? std::atoi(v) : 0;
+        }
+
+        struct R8Prof
+        {
+            std::vector<double>              setUs, launchUs, roundUs, tailUs;
+            std::vector<std::vector<double>> rankSet, rankLaunch, rankRestore;
+            void add(std::vector<std::vector<double>>& v, size_t d, double x)
+            {
+                if(v.size() <= d)
+                    v.resize(d + 1);
+                v[d].push_back(x);
+            }
+            static void stat(std::vector<double> v, std::string const& name)
+            {
+                if(v.empty())
+                    return;
+                std::sort(v.begin(), v.end());
+                double sum = 0;
+                for(double x : v)
+                    sum += x;
+                std::cout << "[r8] " << name << " n=" << v.size() << " mean=" << sum / v.size()
+                          << " p50=" << v[v.size() / 2] << " p10=" << v[v.size() / 10]
+                          << " p90=" << v[v.size() * 9 / 10] << " max=" << v.back() << " us"
+                          << std::endl;
+            }
+            void report(char const* tag) const
+            {
+                std::cout << "[r8] ---- " << tag << std::endl;
+                stat(setUs, "set");
+                stat(launchUs, "launch");
+                stat(roundUs, "round");
+                stat(tailUs, "tail");
+                for(size_t d = 0; d < rankSet.size(); d++)
+                    stat(rankSet[d], "rank" + std::to_string(d) + ".set");
+                for(size_t d = 0; d < rankRestore.size(); d++)
+                    stat(rankRestore[d], "rank" + std::to_string(d) + ".restore");
+                for(size_t d = 0; d < rankLaunch.size(); d++)
+                    stat(rankLaunch[d], "rank" + std::to_string(d) + ".launch");
+            }
+        };
+
+        class R8Pool
+        {
+        public:
+            explicit R8Pool(std::vector<int> const& deviceIds)
+                : m_errors(deviceIds.size())
+            {
+                for(size_t i = 0; i < deviceIds.size(); i++)
+                    m_threads.emplace_back([this, i, dev = deviceIds[i]] { work(i, dev); });
+                while(m_ready.load(std::memory_order_acquire) != (int)deviceIds.size())
+                    std::this_thread::yield();
+            }
+
+            ~R8Pool()
+            {
+                m_stop.store(true, std::memory_order_release);
+                for(auto& t : m_threads)
+                    t.join();
+            }
+
+            template <typename F>
+            void run(F&& f)
+            {
+                std::function<void(size_t)> job = std::forward<F>(f);
+                m_job                           = &job;
+                m_pending.store((int)m_threads.size(), std::memory_order_relaxed);
+                m_gen.fetch_add(1, std::memory_order_release);
+                while(m_pending.load(std::memory_order_acquire) != 0)
+                    __builtin_ia32_pause();
+                m_job = nullptr;
+                for(auto& e : m_errors)
+                    if(e)
+                    {
+                        auto err = e;
+                        e        = nullptr;
+                        std::rethrow_exception(err);
+                    }
+            }
+
+        private:
+            void work(size_t i, int dev)
+            {
+                static_cast<void>(hipSetDevice(dev));
+                m_ready.fetch_add(1, std::memory_order_release);
+                uint64_t seen = 0;
+                while(true)
+                {
+                    uint64_t g;
+                    while((g = m_gen.load(std::memory_order_acquire)) == seen)
+                    {
+                        if(m_stop.load(std::memory_order_acquire))
+                            return;
+                        __builtin_ia32_pause();
+                    }
+                    seen = g;
+                    try
+                    {
+                        (*m_job)(i);
+                    }
+                    catch(...)
+                    {
+                        m_errors[i] = std::current_exception();
+                    }
+                    m_pending.fetch_sub(1, std::memory_order_release);
+                }
+            }
+
+            std::vector<std::thread>                   m_threads;
+            std::vector<std::exception_ptr>            m_errors;
+            std::function<void(size_t)>*               m_job = nullptr;
+            std::atomic<uint64_t>                      m_gen{0};
+            std::atomic<int>                           m_pending{0};
+            std::atomic<int>                           m_ready{0};
+            std::atomic<bool>                          m_stop{false};
+        };
 
         uint32_t flush_grid_size()
         {
@@ -784,7 +910,8 @@ namespace TensileLite
             if(toValidate != 0 && args["print-max"].as<int>() <= 0)
                 throw std::runtime_error("[fused-a2a] validation needs --print-max > 0.");
             for(auto name : {"init-a", "init-b"})
-                if(args[name].as<InitMode>() != InitMode::Random)
+                if(args[name].as<InitMode>() != InitMode::Random
+                   && !(r8Env("TL_R8_ANYINIT") && toValidate == 0))
                     throw std::runtime_error(concatenate("[fused-a2a] --",
                                                          name,
                                                          " must be ",
@@ -1299,25 +1426,103 @@ int main(int argc, const char* argv[])
 
                                 // One counter across warmups, the profiler run and every sync.
                                 size_t launchIdx = 0;
+                                const int r8Mode = r8Env("TL_R8_LAUNCH");
+                                const bool r8HostProf = r8Env("TL_R8_HOSTPROF") != 0;
+                                R8Prof     r8Prof;
+                                std::unique_ptr<R8Pool> r8Pool;
+                                if(r8Mode == 2)
+                                {
+                                    std::vector<int> ids;
+                                    for(auto const& ctx : active)
+                                        ids.push_back(ctx->deviceId);
+                                    r8Pool = std::make_unique<R8Pool>(ids);
+                                }
+                                using r8Clock = std::chrono::steady_clock;
+                                auto r8Us     = [](r8Clock::time_point a, r8Clock::time_point b) {
+                                    return std::chrono::duration<double, std::micro>(b - a).count();
+                                };
+                                auto launchRank = [&](std::vector<std::vector<KernelInvocation>> const& launch,
+                                                      size_t              d,
+                                                      TimingEvents const* startEvents,
+                                                      TimingEvents const* stopEvents,
+                                                      size_t              invocation) {
+                                    auto& ctx = *active[d];
+                                    if(startEvents)
+                                        HIP_CHECK_EXC(ctx.adapter->launchKernels(
+                                            launch[d],
+                                            ctx.stream,
+                                            startEvents->card(d)[invocation],
+                                            stopEvents->card(d)[invocation]));
+                                    else
+                                        HIP_CHECK_EXC(ctx.adapter->launchKernels(
+                                            launch[d], ctx.stream, nullptr, nullptr));
+                                    ctx.launches++;
+                                };
                                 auto   launchAll = [&](TimingEvents const* startEvents,
                                                      TimingEvents const* stopEvents,
                                                      size_t              invocation) {
                                     auto const& launch = kernels[launchIdx++ % kernels.size()];
-                                    for(size_t d = 0; d < active.size(); d++)
+                                    auto        t0     = r8Clock::now();
+                                    if(r8Mode == 2)
                                     {
-                                        auto&        ctx = *active[d];
-                                        ScopedDevice device(ctx.deviceId);
-                                        if(startEvents)
-                                            HIP_CHECK_EXC(ctx.adapter->launchKernels(
-                                                launch[d],
-                                                ctx.stream,
-                                                startEvents->card(d)[invocation],
-                                                stopEvents->card(d)[invocation]));
-                                        else
-                                            HIP_CHECK_EXC(ctx.adapter->launchKernels(
-                                                launch[d], ctx.stream, nullptr, nullptr));
-                                        ctx.launches++;
+                                        if(r8HostProf && r8Prof.rankLaunch.size() < active.size())
+                                            r8Prof.rankLaunch.resize(active.size());
+                                        r8Pool->run([&](size_t d) {
+                                            auto b = r8Clock::now();
+                                            launchRank(launch, d, startEvents, stopEvents, invocation);
+                                            if(r8HostProf)
+                                                r8Prof.rankLaunch[d].push_back(r8Us(b, r8Clock::now()));
+                                        });
                                     }
+                                    else if(r8Mode == 1)
+                                    {
+                                        int prev = 0;
+                                        HIP_CHECK_EXC(hipGetDevice(&prev));
+                                        for(size_t d = 0; d < active.size(); d++)
+                                        {
+                                            auto a = r8Clock::now();
+                                            HIP_CHECK_EXC(hipSetDevice(active[d]->deviceId));
+                                            auto b = r8Clock::now();
+                                            launchRank(launch, d, startEvents, stopEvents, invocation);
+                                            if(r8HostProf)
+                                            {
+                                                auto c = r8Clock::now();
+                                                r8Prof.setUs.push_back(r8Us(a, b));
+                                                r8Prof.launchUs.push_back(r8Us(b, c));
+                                                r8Prof.add(r8Prof.rankSet, d, r8Us(a, b));
+                                                r8Prof.add(r8Prof.rankLaunch, d, r8Us(b, c));
+                                            }
+                                        }
+                                        auto a = r8Clock::now();
+                                        HIP_CHECK_EXC(hipSetDevice(prev));
+                                        if(r8HostProf)
+                                            r8Prof.tailUs.push_back(r8Us(a, r8Clock::now()));
+                                    }
+                                    else
+                                    {
+                                        for(size_t d = 0; d < active.size(); d++)
+                                        {
+                                            auto                  a = r8Clock::now();
+                                            r8Clock::time_point b, c;
+                                            {
+                                                ScopedDevice device(active[d]->deviceId);
+                                                b = r8Clock::now();
+                                                launchRank(launch, d, startEvents, stopEvents, invocation);
+                                                c = r8Clock::now();
+                                            }
+                                            auto e = r8Clock::now();
+                                            if(r8HostProf)
+                                            {
+                                                r8Prof.setUs.push_back(r8Us(a, b));
+                                                r8Prof.launchUs.push_back(r8Us(b, c));
+                                                r8Prof.add(r8Prof.rankSet, d, r8Us(a, b));
+                                                r8Prof.add(r8Prof.rankLaunch, d, r8Us(b, c));
+                                                r8Prof.add(r8Prof.rankRestore, d, r8Us(c, e));
+                                            }
+                                        }
+                                    }
+                                    if(r8HostProf)
+                                        r8Prof.roundUs.push_back(r8Us(t0, r8Clock::now()));
                                 };
 
                                 if(warmupInvocations > 0)
@@ -1395,6 +1600,8 @@ int main(int argc, const char* argv[])
 
                                     listeners.postSyncs();
                                 }
+                                if(r8HostProf)
+                                    r8Prof.report(concatenate("mode=", r8Mode, " ranks=", active.size()).c_str());
 
                                 if(useUserArgs)
                                 {

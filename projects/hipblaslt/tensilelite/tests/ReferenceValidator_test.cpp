@@ -19,6 +19,7 @@
 
 #include <hip/hip_runtime.h>
 
+#include <cstring>
 #include <map>
 #include <memory>
 #include <string>
@@ -65,7 +66,7 @@ namespace
         setOption(args, "mx-a-type", rocisa::DataType::E8);
         setOption(args, "mx-b-type", rocisa::DataType::E8);
         setOption(args, "mx-scale-format", 0);
-        setOption(args, "fused-gemm-a2a", false);
+        setOption(args, "fused-a2a", std::string("Disabled"));
         setOption(args, "metadata-layout", 0);
         setOption(args, "a-ops", TensorOps{});
         setOption(args, "b-ops", TensorOps{});
@@ -196,4 +197,122 @@ TEST_F(ReferenceValidatorTest, OneShotValidatesOnlyTheFirstRun)
     validator->postSolution();
     EXPECT_EQ(validation(), "PASSED");
     EXPECT_EQ(validator->error(), 0);
+}
+
+namespace
+{
+    class A2AGemmReferenceTest : public ReferenceValidatorTest
+    {
+    protected:
+        static constexpr size_t world = 2;
+
+        A2AGemmReferenceTest()
+        {
+            setOption(args, "fused-a2a", std::string("A2AGemm"));
+            setOption(args, "world", std::vector<int>{static_cast<int>(world)});
+            setOption(args, "fused-a2a-extent", std::vector<int>{0});
+        }
+
+        void startRanks()
+        {
+            solution.problemType.fusedA2A = FusedA2A::A2AGemm;
+            device1                       = std::make_shared<DeviceContext>(0, true);
+            device1->dataInit             = std::make_shared<DataInitialization>(args, *factory);
+            devices                       = {device, device1};
+            validator                     = std::make_unique<ReferenceValidator>(args);
+            validator->setDevices(&devices);
+            validator->setReporter(reporter);
+            validator->preProblem(problem);
+            validator->preSolution(&solution);
+            for(size_t d = 0; d < world; d++)
+            {
+                auto in = std::dynamic_pointer_cast<ContractionInputs>(
+                    devices[d]->dataInit->prepareGPUInputs(problem));
+                devices[d]->inputArr = {in};
+                ref[d]               = std::dynamic_pointer_cast<ContractionInputs>(
+                    validator->referenceInputs(d));
+                HIP_CHECK_EXC(hipMemcpy(
+                    in->d, ref[d]->d, gemm().d().totalAllocatedBytes(), hipMemcpyHostToDevice));
+            }
+        }
+
+        ContractionProblemGemm const& gemm() const
+        {
+            return dynamic_cast<ContractionProblemGemm const&>(*problem);
+        }
+
+        // Rank d's device B: segment j holds the x block rank d of rank (d + j) % world.
+        void uploadGathered(size_t d)
+        {
+            const size_t segBytes = gemm().freeSizeB(0) * (gemm().boundSize(0) / world)
+                                    * gemm().b().elementBytes();
+            auto const& in = dynamic_cast<ContractionInputs const&>(*devices[d]->inputArr[0]);
+            for(size_t j = 0; j < world; j++)
+                HIP_CHECK_EXC(hipMemcpy(static_cast<uint8_t*>(const_cast<void*>(in.b)) + j * segBytes,
+                                        static_cast<uint8_t const*>(ref[(d + j) % world]->a2aBuf)
+                                            + d * segBytes,
+                                        segBytes,
+                                        hipMemcpyHostToDevice));
+        }
+
+        std::string validate()
+        {
+            TimingEvents events({}, 1, 1);
+            validator->validateWarmups({0}, events, events);
+            validator->postWarmup(events, events);
+            validator->postSolution();
+            return validation();
+        }
+
+        std::shared_ptr<DeviceContext>      device1;
+        std::unique_ptr<ReferenceValidator> validator;
+        std::shared_ptr<ContractionInputs>  ref[world];
+    };
+}
+
+TEST_F(A2AGemmReferenceTest, ReferenceBInterleavesEveryRanksX)
+{
+    startRanks();
+    const size_t N      = gemm().freeSizeB(0);
+    const size_t K      = gemm().boundSize(0);
+    const size_t kLocal = K / world;
+    const size_t elem   = gemm().b().elementBytes();
+    for(size_t d = 0; d < world; d++)
+        for(size_t n = 0; n < N; n++)
+            for(size_t r = 0; r < world; r++)
+                EXPECT_EQ(0,
+                          std::memcmp(static_cast<uint8_t const*>(ref[d]->b) + (n * K + r * kLocal) * elem,
+                                      static_cast<uint8_t const*>(ref[r]->a2aBuf)
+                                          + (d * N + n) * kLocal * elem,
+                                      kLocal * elem))
+                    << "rank " << d << " n " << n << " from " << r;
+}
+
+TEST_F(A2AGemmReferenceTest, GatheredSegmentsMatchTheSourceX)
+{
+    startRanks();
+    const size_t xBytes = gemm().tensors()[ContractionProblemGemm::TENSOR::A2A_BUF]
+                              .totalAllocatedBytes();
+    ASSERT_NE(0, std::memcmp(ref[0]->a2aBuf, ref[1]->a2aBuf, xBytes));
+    for(size_t d = 0; d < world; d++)
+        uploadGathered(d);
+    EXPECT_EQ(validate(), "PASSED");
+}
+
+TEST_F(A2AGemmReferenceTest, CorruptGatheredSegmentFailsTheSolution)
+{
+    startRanks();
+    for(size_t d = 0; d < world; d++)
+        uploadGathered(d);
+    const size_t segBytes = gemm().freeSizeB(0) * (gemm().boundSize(0) / world)
+                            * gemm().b().elementBytes();
+    uint8_t bad = ~static_cast<uint8_t const*>(ref[1]->a2aBuf)[0];
+    HIP_CHECK_EXC(hipMemcpy(static_cast<uint8_t*>(const_cast<void*>(
+                                dynamic_cast<ContractionInputs const&>(*devices[0]->inputArr[0]).b))
+                                + segBytes,
+                            &bad,
+                            1,
+                            hipMemcpyHostToDevice));
+    EXPECT_EQ(validate(), "FAILED");
+    EXPECT_EQ(validator->error(), 1);
 }

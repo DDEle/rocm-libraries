@@ -3,12 +3,17 @@
 
 #include <gtest/gtest.h>
 
+#include "A2AGemmHost.hpp"
 #include "DeviceContext.hpp"
 #include "TimingEvents.hpp"
 
+#include <Tensile/ContractionProblem.hpp>
+
 #include <hip/hip_runtime.h>
 
+#include <algorithm>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 using TensileLite::Client::DeviceContext;
@@ -90,4 +95,77 @@ TEST(TimingEvents, CreatesEachCardsEventsOnItsDevice)
         EXPECT_EQ(hipEventRecord(events.card(d)[2][1], devices[d]->stream), hipSuccess);
         EXPECT_EQ(hipEventSynchronize(events.card(d)[2][1]), hipSuccess);
     }
+}
+
+TEST(DeviceContext, ArmA2AGemmPoisonsEverySlot)
+{
+    if(deviceCount() < 1)
+        GTEST_SKIP() << "needs a device";
+    using namespace TensileLite;
+    using namespace TensileLite::Client;
+    ASSERT_EQ(hipSetDevice(0), hipSuccess);
+    DeviceContext ctx(0, true, fusedA2ACommFlagsBytes(FusedA2A::A2AGemm));
+
+    constexpr size_t bBytes = 4096;
+    std::vector<void*> bufs(2);
+    for(auto& p : bufs)
+    {
+        ASSERT_EQ(hipMalloc(&p, bBytes), hipSuccess);
+        ASSERT_EQ(hipMemset(p, 0x11, bBytes), hipSuccess);
+        auto in = std::make_shared<ContractionInputs>();
+        in->b   = p;
+        ctx.inputArr.push_back(in);
+    }
+    ASSERT_EQ(hipMemset(ctx.commFlags, 0x55, ctx.commFlagsBytes), hipSuccess);
+
+    auto layout = a2aGemmCounterLayout(3072, 2048, 256, 256, 256, 4, 1);
+    ctx.launches = 7;
+    ctx.armA2AGemm(layout.allocBytes, layout.payloadBytes, bBytes);
+
+    for(auto p : bufs)
+    {
+        std::vector<uint8_t> host(bBytes);
+        ASSERT_EQ(hipMemcpy(host.data(), p, bBytes, hipMemcpyDeviceToHost), hipSuccess);
+        EXPECT_EQ(std::count(host.begin(), host.end(), uint8_t(A2A_GEMM_POISON_BYTE)), (long)bBytes);
+        static_cast<void>(hipFree(p));
+    }
+    std::vector<uint8_t> comm(ctx.commFlagsBytes);
+    ASSERT_EQ(hipMemcpy(comm.data(), ctx.commFlags, comm.size(), hipMemcpyDeviceToHost), hipSuccess);
+    EXPECT_EQ(std::count(comm.begin(), comm.end(), uint8_t(0)), (long)comm.size());
+
+    std::vector<uint8_t> counter(layout.allocBytes);
+    ASSERT_GE(ctx.a2aCounterBytes, layout.allocBytes);
+    ASSERT_EQ(hipMemcpy(counter.data(), ctx.a2aCounter, counter.size(), hipMemcpyDeviceToHost),
+              hipSuccess);
+    EXPECT_EQ(std::count(counter.begin(), counter.begin() + layout.payloadBytes, uint8_t(0)),
+              (long)layout.payloadBytes);
+    EXPECT_EQ(fusedA2ACounterSentinelFirstBad(
+                  reinterpret_cast<uint32_t const*>(counter.data() + layout.payloadBytes)),
+              -1);
+    EXPECT_EQ(ctx.a2aPayloadBytes, layout.payloadBytes);
+    EXPECT_EQ(ctx.launches, 0u);
+}
+
+TEST(DeviceContext, SdmaRotateWalksTheEvenXgmiEngines)
+{
+    using TensileLite::Client::sdmaRotateEngine;
+    for(uint32_t e : {0u, 1u, 2u, 14u, 16u})
+        EXPECT_EQ(sdmaRotateEngine(e, 0), e);
+    EXPECT_EQ(sdmaRotateEngine(2, -1), 14u);
+    EXPECT_EQ(sdmaRotateEngine(4, -1), 2u);
+    EXPECT_EQ(sdmaRotateEngine(14, -1), 12u);
+    EXPECT_EQ(sdmaRotateEngine(14, 1), 2u);
+    EXPECT_EQ(sdmaRotateEngine(6, 7), 6u);
+    EXPECT_EQ(sdmaRotateEngine(6, -8), 4u);
+    for(uint32_t e : {0u, 3u, 16u})
+        EXPECT_THROW(sdmaRotateEngine(e, -1), std::runtime_error);
+}
+
+TEST(DeviceContext, SdmaRotateDefaultsByMode)
+{
+    using namespace TensileLite;
+    using namespace TensileLite::Client;
+    EXPECT_EQ(fusedA2ASdmaRotateDefault(FusedA2A::A2AGemm), -1);
+    EXPECT_EQ(fusedA2ASdmaRotateDefault(FusedA2A::GemmA2A), 0);
+    EXPECT_EQ(fusedA2ASdmaRotateDefault(FusedA2A::Disabled), 0);
 }

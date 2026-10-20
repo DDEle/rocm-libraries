@@ -15,7 +15,7 @@ Full documentation for hipBLASLt is available at [rocm.docs.amd.com/projects/hip
   `HIPBLASLT_CHECK_NUMERICS`, each covered call pays a stream sync and a
   device-to-host copy, so this is single-threaded debugging use only, not for
   concurrent-stream workloads.
-* `FusedA2A` TensileLite problem-type parameter (default `Disabled`). `GemmA2A` fuses an all-to-all redistribution into the GEMM store path using SDMA, avoiding a separate collective kernel and staging buffer; currently limited to gfx950 and bf16. Device libraries built with the `FusedGemmA2A` key must be regenerated.
+* `FusedA2A` TensileLite problem-type parameter (default `Disabled`); `GemmA2A` fuses an all-to-all redistribution into the GEMM store path using SDMA, avoiding a separate collective kernel and staging buffer; currently limited to gfx950 and bf16.
 * Tensor swizzling (pre-swizzled/pre-tiled A/B tensors) support for gfx11 (WMMA) architectures.
 * Batch-offset support for General Batched GEMM on gfx1250.
 * gfx1250 v0 ASIC revision support, modeled as a separate `gfx1250v0` architecture identity (selectable via `--architecture=gfx1250v0`, `--gpu-targets gfx1250v0`, or `GlobalParameters.Architecture: gfx1250v0`) that shares ISA `{12,5,0}` and compiler target `gfx1250` but disables TDM multicast and the FP4 32x16 WMMA path, with a dedicated tuned GEMM library subtree selected at runtime by device `asicRevision`; use `install.sh --asic-revision <v0|v1>` or the `HIPBLASLT_ASIC_REVISION` CMake cache variable to build a specific revision, or leave it unset to build both.

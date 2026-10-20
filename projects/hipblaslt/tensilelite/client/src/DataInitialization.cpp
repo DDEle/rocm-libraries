@@ -1209,6 +1209,13 @@ namespace TensileLite
                 {
                     m_vdata[i].init = args[initName].as<InitMode>();
                 }
+                else if(m_vdata[i].name == "a2aBuf" && args.count("fused-a2a")
+                        && args.count("init-b")
+                        && fusedA2AFromString(args["fused-a2a"].as<std::string>())
+                               == FusedA2A::A2AGemm)
+                {
+                    m_vdata[i].init = args["init-b"].as<InitMode>();
+                }
                 else if(m_vdata[i].name == "Synchronizer")
                 {
                     m_vdata[i].init = InitMode::Zero;
@@ -1261,7 +1268,7 @@ namespace TensileLite
                         for(size_t i = 0; i < problem.tensors().size(); i++)
                         {
                             if(i > ContractionProblemGemm::TENSOR::METADATA
-                               && i != ContractionProblemGemm::TENSOR::A2A_RECV)
+                               && i != ContractionProblemGemm::TENSOR::A2A_BUF)
                                 continue;
                             auto dataType = problem.tensors()[i].dataType();
                             auto  it      = m_vdata[i].pristine.find(dataType);
@@ -1296,7 +1303,7 @@ namespace TensileLite
                             for(size_t i = 0; i < problem.tensors().size(); i++)
                             {
                                 if(i > ContractionProblemGemm::TENSOR::METADATA
-                                   && i != ContractionProblemGemm::TENSOR::A2A_RECV)
+                                   && i != ContractionProblemGemm::TENSOR::A2A_BUF)
                                     continue;
                                 auto dataType = problem.tensors()[i].dataType();
                                 auto  it      = m_vdata[i].pristine.find(dataType);
@@ -3067,7 +3074,7 @@ namespace TensileLite
             inputs->Synchronizer  = (void*)ptrs[ContractionProblemGemm::TENSOR::Synchronizer];
             inputs->amaxD         = (void*)ptrs[ContractionProblemGemm::TENSOR::AMAXD];
             inputs->compressed    = (void*)ptrs[ContractionProblemGemm::TENSOR::COMPRESSED];
-            inputs->a2aRecv       = (void*)ptrs[ContractionProblemGemm::TENSOR::A2A_RECV];
+            inputs->a2aBuf        = (void*)ptrs[ContractionProblemGemm::TENSOR::A2A_BUF];
 
             inputs->batchA    = (void**)batchPtrs[ContractionProblemGemm::TENSOR::A];
             inputs->batchB    = (void**)batchPtrs[ContractionProblemGemm::TENSOR::B];
@@ -3306,9 +3313,9 @@ namespace TensileLite
                 rotatingSize += problem.tensors()[ContractionProblemGemm::TENSOR::METADATA]
                                     .totalAllocatedBytes();
             }
-            if(inputs.a2aRecv != nullptr)
+            if(inputs.a2aBuf != nullptr)
             {
-                rotatingSize += problem.tensors()[ContractionProblemGemm::TENSOR::A2A_RECV]
+                rotatingSize += problem.tensors()[ContractionProblemGemm::TENSOR::A2A_BUF]
                                     .totalAllocatedBytes();
             }
             return rotatingSize;
@@ -3394,10 +3401,10 @@ namespace TensileLite
                 problem.tensors()[ContractionProblemGemm::TENSOR::METADATA].totalAllocatedBytes(),
                 offset,
                 stream);
-            newInputs.a2aRecv = copyRotatingInput(
-                newInputs.a2aRecv,
+            newInputs.a2aBuf = copyRotatingInput(
+                newInputs.a2aBuf,
                 rotatingPtr,
-                problem.tensors()[ContractionProblemGemm::TENSOR::A2A_RECV].totalAllocatedBytes(),
+                problem.tensors()[ContractionProblemGemm::TENSOR::A2A_BUF].totalAllocatedBytes(),
                 offset,
                 stream);
             for(auto t : {ContractionProblemGemm::TENSOR::D,

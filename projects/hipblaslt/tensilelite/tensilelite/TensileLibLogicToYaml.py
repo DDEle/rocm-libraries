@@ -27,7 +27,7 @@ from . import LibraryIO
 from .Common.GlobalParameters import defaultInternalSupportParams, defaultSolution
 from .Common.Constants import HR
 from .CustomKernels import isCustomKernelConfig
-from .SolutionStructs.Problem import ProblemSizesMock, ProblemType
+from .SolutionStructs.Problem import ProblemSizesMock, ProblemType, isFusedA2A
 from .SolutionStructs.Problem import _defaultProblemType as defaultProblemType
 from .Common.GlobalParameters import globalParameters
 from .Common.Architectures import gfxToIsa, isaToGfx, steppingArchOf, tuningArchOf
@@ -657,7 +657,7 @@ def formProblemSize(
         temp["ProblemSizes"] = [{"Exact": FlowList([1, 1, 1, 1])}]
     else:
         problems = ProblemSizesMock(
-            exactLogic, problemTypeStat.get("FusedGemmA2A", False)
+            exactLogic, isFusedA2A(problemTypeStat)
         ).problems
         for problem, (_, mapping) in zip(problems, exactLogic):
             if mapping[0] != solutionIndex:
@@ -665,15 +665,9 @@ def formProblemSize(
             if problem.world is None:
                 temp["ProblemSizes"] = [{"Exact": FlowList(problem.sizes)}]
             else:
-                temp["ProblemSizes"] = [
-                    {
-                        "Exact": {
-                            "sizes": FlowList(problem.sizes),
-                            "world": problem.world,
-                            "a2aExtent": problem.a2aExtent,
-                        }
-                    }
-                ]
+                exact = {"sizes": FlowList(problem.sizes), "world": problem.world,
+                         "a2aExtent": problem.a2aExtent}
+                temp["ProblemSizes"] = [{"Exact": exact}]
         if "ProblemSizes" not in temp:
             tPrint(
                 1,

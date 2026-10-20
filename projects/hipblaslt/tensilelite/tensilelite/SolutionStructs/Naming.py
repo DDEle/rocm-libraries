@@ -243,6 +243,11 @@ def _getName(state, requiredParameters: frozenset, splitGSU: bool, ignoreInterna
   else:
     requiredParametersTemp.discard("TDMFuse")
 
+  if pt.get("FusedA2A") == "A2AGemm":
+    requiredParametersTemp.add("A2ASubRounds")
+  else:
+    requiredParametersTemp.discard("A2ASubRounds")
+
   for key in sorted(requiredParametersTemp):
     if key not in state or key == "CustomKernel":
       continue

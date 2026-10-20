@@ -2306,9 +2306,6 @@ class Solution(collections.abc.Mapping):
       return
 
     if state["ProblemType"]["FusedA2A"] == "A2AGemm":
-      if state["ProblemType"]["Sparse"]:
-        reject(state, printRejectionReason, "FusedA2A=A2AGemm does not support sparse problems")
-        return
       if state["GlobalSplitU"] != 1:
         reject(state, printRejectionReason, "FusedA2A=A2AGemm requires GlobalSplitU=1")
         return

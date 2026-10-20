@@ -1,0 +1,13 @@
+# serializer version: 1
+# name: test_a2a_gemm_gfx950_golden
+  list([
+    dict({
+      'basename': 'Cijk_Alik_Bljk_BBS_BH_A2AGemm_UserArgs_MT256x256OdmC-63lF-vzsVDpnlFMnetmS7YPv96cCtDLj5Sg9r8=',
+      'err': 0,
+    }),
+    dict({
+      'basename': 'Cijk_Alik_Bljk_BBS_BH_A2AGemm_UserArgs_MT256x256ohCgC1vBULz3awQcqRk7FrKFpO6PiYqv3SNp560e31I=',
+      'err': 0,
+    }),
+  ])
+# ---

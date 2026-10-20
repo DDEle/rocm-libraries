@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from config_helpers import configMarks, findConfigs
+from config_helpers import configMarks, findConfigs, missingProblems
 
 _COMMON_DIR = os.path.dirname(os.path.abspath(__file__))
 _TESTS_ROOT = os.path.dirname(_COMMON_DIR)
@@ -64,3 +64,18 @@ def test_find_configs_keeps_one_param_when_not_splitting(tmp_path):
 
     assert [p.id for p in params] == ["multi.yaml"]
     assert _worldMarks(params[0].marks) == [(2, 4)]
+
+
+def test_missing_problems_needs_a_positive_result_per_world_problem(tmp_path):
+    path = _write(tmp_path, "multi.yaml", ["{sizes: [256, 256, 1, 256], world: 2}",
+                                           "{sizes: [512, 256, 1, 256], world: 4}",
+                                           "[128, 128, 1, 128]"])
+    (tmp_path / "2_BenchmarkData").mkdir()
+    (tmp_path / "2_BenchmarkData" / "a.csv").write_text(
+        "GFlops, SizeI, SizeJ, SizeK, SizeL, World, Cijk_A, Cijk_B\n"
+        "1, 256, 256, 1, 256, 2, , 10.5\n"
+        "1, 512, 256, 1, 256, 4, -1, \n")
+
+    assert missingProblems(str(path), str(tmp_path)) == {(512, 256, 1, 256, 4)}
+    assert missingProblems(str(path), str(tmp_path), (2,)) == set()
+

@@ -36,6 +36,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <iostream>
 #include <sstream>
 
@@ -43,6 +44,25 @@ namespace TensileLite
 {
     namespace Client
     {
+        namespace
+        {
+            // sends[s]: rank s's W chunks of chunkBytes, chunk d bound for rank d.
+            // Returns each rank d's W chunks, chunk s from rank s.
+            std::vector<std::vector<uint8_t>>
+                referenceAllToAll(std::vector<void const*> const& sends, size_t chunkBytes)
+            {
+                const size_t                      world = sends.size();
+                std::vector<std::vector<uint8_t>> recvs(world,
+                                                        std::vector<uint8_t>(world * chunkBytes));
+                for(size_t d = 0; d < world; d++)
+                    for(size_t s = 0; s < world; s++)
+                        std::memcpy(recvs[d].data() + s * chunkBytes,
+                                    static_cast<char const*>(sends[s]) + d * chunkBytes,
+                                    chunkBytes);
+                return recvs;
+            }
+        }
+
         ReferenceValidator::ReferenceValidator(po::variables_map const& args)
         {
             m_elementsToValidate = args["num-elements-to-validate"].as<int>();
@@ -122,6 +142,10 @@ namespace TensileLite
                     });
                 }
 
+                if(auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(problem);
+                   gemm != nullptr && gemm->fusedA2A() == FusedA2A::A2AGemm)
+                    interleaveA2AGemmReferences(*gemm);
+
                 {
                     ScopedTimer timer("cpu_reference_gemm");
                     for(auto const& reference : m_referenceInputs)
@@ -135,7 +159,7 @@ namespace TensileLite
             m_validatedSolution = false;
             m_errorInSolution   = false;
             m_executedSolution  = false;
-            m_fusedA2A          = solution != nullptr && solution->problemType.fusedGemmA2A;
+            m_fusedA2A = solution != nullptr ? solution->problemType.fusedA2A : FusedA2A::Disabled;
 
             // Re-run CPU reference after DataInitialization refreshes MX inputs.
             if(!m_enabled || m_problem == nullptr || m_referenceInputs.empty()
@@ -257,13 +281,38 @@ namespace TensileLite
                 {
                     auto const& inputs = (*m_devices)[d]->inputArr[slot];
                     validateSolution(d, inputs);
-                    if(m_fusedA2A && m_elementsToValidate != 0
+                    if(m_fusedA2A == FusedA2A::GemmA2A && m_elementsToValidate != 0
                        && !recvMatches(d, dynamic_cast<ContractionInputs const&>(*inputs)))
                     {
                         m_errorInSolution = true;
                         m_error           = true;
                     }
                 }
+            }
+        }
+
+        void ReferenceValidator::interleaveA2AGemmReferences(ContractionProblemGemm const& problem)
+        {
+            const size_t world  = m_referenceInputs.size();
+            const size_t N      = problem.freeSizeB(0);
+            const size_t K      = problem.boundSize(0);
+            const size_t elem   = problem.b().elementBytes();
+            const size_t kLocal = K / world;
+
+            // x: {K/W, N, W}; B: [N, K] with segment s from rank s.
+            std::vector<void const*> xs;
+            for(auto const& ref : m_referenceInputs)
+                xs.push_back(dynamic_cast<ContractionInputs const&>(*ref).a2aBuf);
+            auto recvs = referenceAllToAll(xs, N * kLocal * elem);
+            m_a2aGemmB.assign(world, std::vector<uint8_t>(N * K * elem));
+            for(size_t d = 0; d < world; d++)
+            {
+                for(size_t n = 0; n < N; n++)
+                    for(size_t s = 0; s < world; s++)
+                        std::memcpy(m_a2aGemmB[d].data() + (n * K + s * kLocal) * elem,
+                                    recvs[d].data() + (s * N + n) * kLocal * elem,
+                                    kLocal * elem);
+                dynamic_cast<ContractionInputs&>(*m_referenceInputs[d]).b = m_a2aGemmB[d].data();
             }
         }
 
@@ -281,7 +330,7 @@ namespace TensileLite
             // card src's golden, for every token.
             std::vector<BFloat16> host(W * N * nShard);
             HIP_CHECK_EXC(hipMemcpy(host.data(),
-                                    inputs.a2aRecv,
+                                    inputs.a2aBuf,
                                     host.size() * sizeof(BFloat16),
                                     hipMemcpyDeviceToHost));
             size_t mismatches = 0;

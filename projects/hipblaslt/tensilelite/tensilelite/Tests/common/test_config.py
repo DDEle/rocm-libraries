@@ -61,6 +61,7 @@ import py
 import pytest
 
 from artifact_helpers import artifact_name_for_config
+from config_helpers import missingProblems
 
 _COMMON_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -92,7 +93,8 @@ def _call_helper_in_subprocess(
     )
 
 
-def test_config(tensile_args: list[str], config: str, tmpdir: py.path.local, pytestconfig: pytest.Config) -> None:
+def test_config(tensile_args: list[str], config: str, tmpdir: py.path.local, pytestconfig: pytest.Config,
+                request: pytest.FixtureRequest) -> None:
     """Pytest wrapper: run the full build→artifact→run round-trip on a single machine.
 
     Activated in the default mode (no ``--build-only`` / ``--use-cache`` flags).
@@ -112,3 +114,6 @@ def test_config(tensile_args: list[str], config: str, tmpdir: py.path.local, pyt
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.remove(artifact_path)
+    if request.node.get_closest_marker("comm"):
+        world = request.node.get_closest_marker("world")
+        assert not missingProblems(config, output_dir, world.args if world else None)

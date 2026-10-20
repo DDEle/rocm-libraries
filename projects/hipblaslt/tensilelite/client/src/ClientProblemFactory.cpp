@@ -99,7 +99,7 @@ namespace TensileLite
             , m_padMXScaleTensorFreeDim(false)
             , m_swizzleTensorA(false)
             , m_swizzleTensorB(false)
-            , m_fusedGemmA2A(args["fused-gemm-a2a"].as<bool>())
+            , m_fusedA2A(fusedA2AFromString(args["fused-a2a"].as<std::string>()))
             , m_worlds(args.count("world") ? args["world"].as<std::vector<int>>()
                                            : std::vector<int>())
             , m_fusedA2AExtents(args.count("fused-a2a-extent")
@@ -129,13 +129,15 @@ namespace TensileLite
             if(pointerArrayBatch && m_sparse)
                 throw std::invalid_argument("batch-mode=1 does not support sparse GEMM");
 
-            if(m_fusedGemmA2A)
+            if(m_fusedA2A != FusedA2A::Disabled)
             {
                 if(m_worlds.size() != m_problemSizes.size()
                    || m_fusedA2AExtents.size() != m_problemSizes.size())
                     throw std::invalid_argument(
-                        concatenate("fused-gemm-a2a needs one world and one fused-a2a-extent per "
-                                    "problem-size; got ",
+                        concatenate("fused-a2a ",
+                                    ToString(m_fusedA2A),
+                                    " needs one world and one fused-a2a-extent per problem-size; "
+                                    "got ",
                                     m_worlds.size(),
                                     " and ",
                                     m_fusedA2AExtents.size(),
@@ -146,13 +148,15 @@ namespace TensileLite
                         throw std::invalid_argument(concatenate(
                             "world=", world, " is out of range [1, ", FUSED_A2A_MAX_RANKS, "]"));
                 for(int extent : m_fusedA2AExtents)
-                    if(extent < 1)
-                        throw std::invalid_argument(
-                            concatenate("fused-a2a-extent=", extent, " must be >= 1"));
+                    if(m_fusedA2A == FusedA2A::GemmA2A ? extent < 1 : extent != 0)
+                        throw std::invalid_argument(concatenate("fused-a2a-extent=",
+                                                                extent,
+                                                                m_fusedA2A == FusedA2A::GemmA2A
+                                                                    ? " must be >= 1"
+                                                                    : " must be 0 for A2AGemm"));
             }
             else if(!m_worlds.empty() || !m_fusedA2AExtents.empty())
-                throw std::invalid_argument(
-                    "world and fused-a2a-extent apply only with fused-gemm-a2a");
+                throw std::invalid_argument("world and fused-a2a-extent apply only with fused-a2a");
 
             if(m_mxBlockA || m_mxBlockB)
             {
@@ -487,12 +491,19 @@ namespace TensileLite
                                 rv.back().setWorkspaceSize(m_maxWorkspaceSize);
                                 rv.back().setSwizzleTensorA(m_swizzleTensorA);
                                 rv.back().setSwizzleTensorB(m_swizzleTensorB);
-                                rv.back().setFusedGemmA2A(m_fusedGemmA2A);
-                                if(m_fusedGemmA2A)
+                                rv.back().setFusedA2A(m_fusedA2A);
+                                if(m_fusedA2A != FusedA2A::Disabled)
                                 {
                                     rv.back().setWorld(m_worlds[i]);
                                     rv.back().setFusedA2AExtent(m_fusedA2AExtents[i]);
-                                    rv.back().setA2ARecv();
+                                    if(m_fusedA2A == FusedA2A::A2AGemm
+                                       && rv.back().boundSize(0) % m_worlds[i] != 0)
+                                        throw std::invalid_argument(
+                                            concatenate("K=",
+                                                        rv.back().boundSize(0),
+                                                        " is not a multiple of world=",
+                                                        m_worlds[i]));
+                                    rv.back().setA2ABuf();
                                 }
                                 if(k < m_biasTypeArgs.size())
                                 {

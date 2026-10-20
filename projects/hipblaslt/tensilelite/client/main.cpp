@@ -27,6 +27,7 @@
 #include <Tensile/Contractions.hpp>
 #include <Tensile/DataTypes.hpp>
 #include <Tensile/EmbeddedLibrary.hpp>
+#include <Tensile/FusedA2A.hpp>
 #include <Tensile/MasterSolutionLibrary.hpp>
 #include <Tensile/Tensile.hpp>
 #include <Tensile/hip/HipHardware.hpp>
@@ -228,7 +229,7 @@ namespace TensileLite
                 ("mx-b-type",                po::value<rocisa::DataType>()->default_value(rocisa::DataType::E8), "type of mx datatype input matrix B")
                 ("swizzle-tensor-a",         po::value<bool>()->default_value(false), "Swizzle input tensor A.")
                 ("swizzle-tensor-b",         po::value<bool>()->default_value(false), "Swizzle input tensor B.")
-                ("fused-gemm-a2a",           po::value<bool>()->default_value(false), "Fuse an all-to-all PUSH into the GEMM epilogue.")
+                ("fused-a2a",                po::value<std::string>()->default_value("Disabled"), "Fused A2A mode: Disabled, GemmA2A (all-to-all PUSH from the GEMM epilogue) or A2AGemm (B gathered from the peers one K shard at a time).")
                 ("mx-scale-format",          po::value<int>()->default_value(0), "MX scale data format (0=none, 1=pre-swizzle for GPU kernel layout)")
                 ("activation-compute-type",  po::value<rocisa::DataType>()->default_value(rocisa::DataType::None), "Activation compute type.")
                 ("high-precision-accumulate", po::value<bool>()->default_value(false), "Use high-precision accumulate.")
@@ -843,12 +844,13 @@ int main(int argc, const char* argv[])
     initTimingBuffer();
     calibrateTimingOverhead();
 
-    bool fusedA2A = args["fused-gemm-a2a"].as<bool>();
+    const FusedA2A fusedMode = fusedA2AFromString(args["fused-a2a"].as<std::string>());
+    bool           fusedA2A  = fusedMode != FusedA2A::Disabled;
     if(fusedA2A)
         checkFusedA2AArgs(args);
     auto const& worldFilter = args["world-filter"].as<std::vector<int>>();
     if(!fusedA2A && !worldFilter.empty())
-        throw std::runtime_error("--world-filter applies only with --fused-gemm-a2a");
+        throw std::runtime_error("--world-filter applies only with --fused-a2a");
 
     auto problems        = problemFactory.problems();
     int  firstProblemIdx = args["problem-start-idx"].as<int>();
@@ -889,7 +891,7 @@ int main(int argc, const char* argv[])
             devices.push_back(
                 std::make_shared<DeviceContext>(id,
                                                 args["use-default-stream"].as<bool>(),
-                                                fusedA2A ? kCommFlagsBytes : 0,
+                                                fusedA2ACommFlagsBytes(fusedMode),
                                                 fusedA2A ? deviceIds : std::vector<int>{}));
     }
     std::shared_ptr<DeviceContext>              device0 = devices[0];
@@ -1225,7 +1227,7 @@ int main(int argc, const char* argv[])
                     {
                         try
                         {
-                            clearRecvBuffers(*problem, active);
+                            resetA2ABuffers(*problem, *solution, *hardware, active);
                             while(listeners.needMoreRunsInSolution())
                             {
                                 if(resetInput)
@@ -1241,7 +1243,7 @@ int main(int argc, const char* argv[])
                                 {
                                     ScopedTimer  timer("kernel_solving");
                                     const size_t slots    = device0->inputArr.size();
-                                    const size_t channels = fusedA2A ? kCommChannels : 1;
+                                    const size_t channels = fusedA2ACommChannels(fusedMode);
                                     kernels.assign(
                                         std::lcm(slots, channels),
                                         std::vector<std::vector<KernelInvocation>>(active.size()));
@@ -1314,6 +1316,7 @@ int main(int argc, const char* argv[])
                                         else
                                             HIP_CHECK_EXC(ctx.adapter->launchKernels(
                                                 launch[d], ctx.stream, nullptr, nullptr));
+                                        ctx.launches++;
                                     }
                                 };
 

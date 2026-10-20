@@ -29,6 +29,7 @@
 #include "ResultReporter.hpp"
 #include "TimingInstrumentation.hpp"
 
+#include "A2AGemmHost.hpp"
 #include "Reference.hpp"
 
 #include <Tensile/DataTypes.hpp>
@@ -122,6 +123,10 @@ namespace TensileLite
                     });
                 }
 
+                if(auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(problem);
+                   gemm != nullptr && gemm->fusedA2A() == FusedA2A::A2AGemm)
+                    interleaveA2AGemmReferences(*gemm);
+
                 {
                     ScopedTimer timer("cpu_reference_gemm");
                     for(auto const& reference : m_referenceInputs)
@@ -135,7 +140,7 @@ namespace TensileLite
             m_validatedSolution = false;
             m_errorInSolution   = false;
             m_executedSolution  = false;
-            m_fusedA2A          = solution != nullptr && solution->problemType.fusedGemmA2A;
+            m_fusedA2A = solution != nullptr ? solution->problemType.fusedA2A : FusedA2A::Disabled;
 
             // Re-run CPU reference after DataInitialization refreshes MX inputs.
             if(!m_enabled || m_problem == nullptr || m_referenceInputs.empty()
@@ -257,14 +262,70 @@ namespace TensileLite
                 {
                     auto const& inputs = (*m_devices)[d]->inputArr[slot];
                     validateSolution(d, inputs);
-                    if(m_fusedA2A && m_elementsToValidate != 0
-                       && !recvMatches(d, dynamic_cast<ContractionInputs const&>(*inputs)))
+                    auto const& in = dynamic_cast<ContractionInputs const&>(*inputs);
+                    const bool  ok
+                        = m_elementsToValidate == 0
+                          || (m_fusedA2A == FusedA2A::GemmA2A && recvMatches(d, in))
+                          || (m_fusedA2A == FusedA2A::A2AGemm
+                              && (m_devices->size() < 2 || gatheredMatches(d, in)))
+                          || m_fusedA2A == FusedA2A::Disabled;
+                    if(!ok)
                     {
                         m_errorInSolution = true;
                         m_error           = true;
                     }
                 }
             }
+        }
+
+        void ReferenceValidator::interleaveA2AGemmReferences(ContractionProblemGemm const& problem)
+        {
+            const size_t world = m_referenceInputs.size();
+            const size_t N     = problem.freeSizeB(0);
+            const size_t K     = problem.boundSize(0);
+            const size_t elem  = problem.b().elementBytes();
+
+            std::vector<void const*> xs;
+            for(auto const& ref : m_referenceInputs)
+                xs.push_back(dynamic_cast<ContractionInputs const&>(*ref).a2aBuf);
+            m_a2aGemmB.assign(world, std::vector<uint8_t>(N * K * elem));
+            for(size_t d = 0; d < world; d++)
+            {
+                a2aGemmInterleaveB(m_a2aGemmB[d].data(), xs, d, N, K, elem);
+                dynamic_cast<ContractionInputs&>(*m_referenceInputs[d]).b = m_a2aGemmB[d].data();
+            }
+        }
+
+        bool ReferenceValidator::gatheredMatches(size_t rank, ContractionInputs const& inputs)
+        {
+            auto const&  problem  = dynamic_cast<ContractionProblemGemm const&>(*m_problem);
+            const size_t world    = m_devices->size();
+            const size_t N        = problem.freeSizeB(0);
+            const size_t kLocal   = problem.boundSize(0) / world;
+            const size_t elem     = static_cast<size_t>(problem.b().elementBytes());
+            const size_t segBytes = N * kLocal * elem;
+
+            std::vector<uint8_t> host(world * segBytes);
+            HIP_CHECK_EXC(hipMemcpy(host.data(), inputs.b, host.size(), hipMemcpyDeviceToHost));
+            for(size_t j = 1; j < world; j++)
+            {
+                const size_t src = a2aGemmSegmentSource(rank, j, world);
+                auto const*  want
+                    = static_cast<uint8_t const*>(
+                          dynamic_cast<ContractionInputs const&>(*m_referenceInputs[src]).a2aBuf)
+                      + rank * segBytes;
+                auto const* got = host.data() + j * segBytes;
+                auto        bad = std::mismatch(got, got + segBytes, want);
+                if(bad.first != got + segBytes)
+                {
+                    std::cerr << "[a2a-gemm] GATHERED MISMATCH card=" << rank << " segment=" << j
+                              << " src=" << src
+                              << " element=" << static_cast<size_t>(bad.first - got) / elem
+                              << "\n";
+                    return false;
+                }
+            }
+            return true;
         }
 
         bool ReferenceValidator::recvMatches(size_t dst, ContractionInputs const& inputs)
@@ -281,7 +342,7 @@ namespace TensileLite
             // card src's golden, for every token.
             std::vector<BFloat16> host(W * N * nShard);
             HIP_CHECK_EXC(hipMemcpy(host.data(),
-                                    inputs.a2aRecv,
+                                    inputs.a2aBuf,
                                     host.size() * sizeof(BFloat16),
                                     hipMemcpyDeviceToHost));
             size_t mismatches = 0;

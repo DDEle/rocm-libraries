@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "SynchronizerValidator.hpp"
+#include "A2AGemmHost.hpp"
 
 #include "ResultReporter.hpp"
 
@@ -60,6 +61,7 @@ namespace TensileLite
         void SynchronizerValidator::preSolution(ContractionSolution* const solution)
         {
             m_failedInSolution = false;
+            m_fusedA2A = solution != nullptr ? solution->problemType.fusedA2A : FusedA2A::Disabled;
             // Covers the possible uses of the pointer: Flags in singleCallArgs
             // for StreamK, the dstD/Synchronizer block for MBSK, AmaxSync for
             // amaxD, and the AddressFlags/AddressSynchronizer/AmaxSync args of
@@ -100,22 +102,31 @@ namespace TensileLite
                      });
             m_mayUseSynchronizer = partialReduction || customStreamK || mbsk || customArg
                                    || solution->problemType.outputAmaxD
-                                   || solution->problemType.fusedGemmA2A;
+                                   || solution->problemType.fusedA2A != FusedA2A::Disabled;
         }
 
         void SynchronizerValidator::postSolution()
         {
             try
             {
-                for(auto const& device : *m_devices)
-                    if(active() && device->commFlags != nullptr
-                       && !checkRegion(device->deviceId,
-                                       device->commFlags,
-                                       device->commFlagsBytes,
-                                       concatenate("fused-A2A flag block left dirty (device ",
-                                                   device->deviceId,
-                                                   ")")))
+                for(size_t rank = 0; rank < m_devices->size(); rank++)
+                {
+                    auto& device = *(*m_devices)[rank];
+                    if(!active() || device.commFlags == nullptr)
+                        continue;
+                    if(m_fusedA2A == FusedA2A::A2AGemm)
+                    {
+                        if(!checkA2AGemm(device, rank))
+                            m_failedInSolution = true;
+                    }
+                    else if(!checkRegion(device.deviceId,
+                                         device.commFlags,
+                                         device.commFlagsBytes,
+                                         concatenate("fused-A2A flag block left dirty (device ",
+                                                     device.deviceId,
+                                                     ")")))
                         m_failedInSolution = true;
+                }
             }
             catch(std::exception const& err)
             {
@@ -258,6 +269,34 @@ namespace TensileLite
                 deviceSynchronizer,
                 bytes,
                 concatenate("Synchronizer left dirty after ", stage, " (gemm ", gemmIdx, ")"));
+        }
+
+        bool SynchronizerValidator::checkA2AGemm(DeviceContext& device, size_t rank)
+        {
+            std::string what = a2aGemmCommResidue(
+                reinterpret_cast<uint32_t const*>(
+                    readBuffer(device.deviceId, device.commFlags, FUSED_A2A_FLAG_BLOCK_BYTES)),
+                rank,
+                m_devices->size(),
+                device.launches);
+            if(what.empty() && device.a2aCounter != nullptr)
+            {
+                const int bad = fusedA2ACounterSentinelFirstBad(reinterpret_cast<uint32_t const*>(
+                    readBuffer(device.deviceId,
+                               static_cast<char*>(device.a2aCounter) + device.a2aPayloadBytes,
+                               FUSED_A2A_COUNTER_SENTINEL_BYTES)));
+                if(bad >= 0)
+                    what = concatenate("counter guard word ", bad, " overwritten");
+            }
+            if(what.empty())
+                return true;
+            m_reporter->log(LogLevel::Error,
+                            concatenate("A2A+GEMM state wrong after the solution (device ",
+                                        device.deviceId,
+                                        "): ",
+                                        what,
+                                        "\n"));
+            return false;
         }
 
         bool SynchronizerValidator::checkRegion(int                deviceId,

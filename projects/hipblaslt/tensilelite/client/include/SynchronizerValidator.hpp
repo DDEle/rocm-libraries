@@ -146,6 +146,10 @@ namespace TensileLite
             /// Returns false when dirty.
             bool checkRegion(int deviceId, void* device, size_t bytes, std::string const& what);
 
+            /// Checks one rank's mode-1 flag block and counter guard tail.
+            /// Returns false when either is wrong.
+            bool checkA2AGemm(DeviceContext& device, size_t rank);
+
             /// Pinned host staging buffer of at least *bytes*, grown on demand
             /// and reused across launches.
             uint8_t* stagingBuffer(size_t bytes);
@@ -154,6 +158,7 @@ namespace TensileLite
             // One narrow-alpha warning per run, not one per solution.
             bool                m_narrowAlphaWarned = false;
             ContractionProblem* m_problem      = nullptr;
+            FusedA2A            m_fusedA2A     = FusedA2A::Disabled;
             uint8_t*            m_staging      = nullptr;
             size_t              m_stagingBytes = 0;
 

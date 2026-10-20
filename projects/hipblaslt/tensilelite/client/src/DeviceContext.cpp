@@ -3,6 +3,9 @@
 
 #include "DeviceContext.hpp"
 
+#include "A2AGemmHost.hpp"
+
+#include <Tensile/AMDGPU.hpp>
 #include <Tensile/ContractionProblem.hpp>
 #include <Tensile/ContractionSolution.hpp>
 #include <Tensile/Utils.hpp>
@@ -39,7 +42,8 @@ namespace TensileLite
         DeviceContext::DeviceContext(int                     deviceId,
                                      bool                    useDefaultStream,
                                      size_t                  commFlagsBytes,
-                                     std::vector<int> const& sdmaPeers)
+                                     std::vector<int> const& sdmaPeers,
+                                     int                     sdmaRotate)
             : deviceId(deviceId)
             , adapter(std::make_shared<hip::SolutionAdapter>())
             , commFlagsBytes(commFlagsBytes)
@@ -73,8 +77,11 @@ namespace TensileLite
                     }
                     const uint32_t node = sdmaNodeIdForDevice(deviceId);
                     for(int peer : sdmaPeers)
+                    {
+                        const uint32_t engine = sdmaSelectEngine(node, sdmaNodeIdForDevice(peer));
                         sdmaQueues.push_back(std::make_shared<SdmaQueue>(
-                            node, sdmaSelectEngine(node, sdmaNodeIdForDevice(peer))));
+                            node, peer == deviceId ? engine : sdmaRotateEngine(engine, sdmaRotate)));
+                    }
 #else
                     throw std::runtime_error(
                         "DeviceContext: SDMA queues requested, but this client was built without "
@@ -98,22 +105,103 @@ namespace TensileLite
         {
             if(commFlags != nullptr)
                 static_cast<void>(hipFree(commFlags));
+            if(a2aCounter != nullptr)
+                static_cast<void>(hipFree(a2aCounter));
             if(stream != nullptr)
                 static_cast<void>(hipStreamDestroy(stream));
         }
 
-        void clearRecvBuffers(ContractionProblem const&                          problem,
-                              std::vector<std::shared_ptr<DeviceContext>> const& devices)
+        void DeviceContext::armA2AGemm(size_t counterAllocBytes,
+                                       size_t counterPayloadBytes,
+                                       size_t bBytes)
+        {
+            ScopedDevice guard(deviceId);
+            if(a2aCounterBytes < counterAllocBytes)
+            {
+                if(a2aCounter != nullptr)
+                    HIP_CHECK_EXC(hipFree(a2aCounter));
+                a2aCounter      = nullptr;
+                a2aCounterBytes = 0;
+                HIP_CHECK_EXC(hipExtMallocWithFlags(
+                    &a2aCounter, counterAllocBytes, hipDeviceMallocFinegrained));
+                a2aCounterBytes = counterAllocBytes;
+            }
+            HIP_CHECK_EXC(hipMemset(a2aCounter, 0, counterPayloadBytes));
+            std::vector<uint32_t> tail(FUSED_A2A_COUNTER_SENTINEL_WORDS);
+            fusedA2ACounterSentinelFill(tail.data());
+            HIP_CHECK_EXC(hipMemcpy(static_cast<char*>(a2aCounter) + counterPayloadBytes,
+                                    tail.data(),
+                                    FUSED_A2A_COUNTER_SENTINEL_BYTES,
+                                    hipMemcpyHostToDevice));
+            a2aPayloadBytes = counterPayloadBytes;
+            if(commFlags != nullptr)
+                HIP_CHECK_EXC(hipMemset(commFlags, 0, commFlagsBytes));
+            for(auto const& slot : inputArr)
+                HIP_CHECK_EXC(hipMemset(
+                    const_cast<void*>(dynamic_cast<ContractionInputs const&>(*slot).b),
+                    A2A_GEMM_POISON_BYTE,
+                    bBytes));
+            launches = 0;
+            HIP_CHECK_EXC(hipDeviceSynchronize());
+        }
+
+        void resetA2ABuffers(ContractionProblem const&                          problem,
+                             ContractionSolution const&                         solution,
+                             Hardware const&                                    hardware,
+                             std::vector<std::shared_ptr<DeviceContext>> const& devices)
         {
             auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
-            if(gemm == nullptr || !gemm->fusedGemmA2A())
+            if(gemm == nullptr || gemm->fusedA2A() == FusedA2A::Disabled)
                 return;
-            const size_t bytes
-                = gemm->tensors()[ContractionProblemGemm::TENSOR::A2A_RECV].totalAllocatedBytes();
+            if(gemm->fusedA2A() == FusedA2A::GemmA2A)
+            {
+                const size_t bytes
+                    = gemm->tensors()[ContractionProblemGemm::TENSOR::A2A_BUF]
+                          .totalAllocatedBytes();
+                forEachDevice(devices, [&](DeviceContext& ctx) {
+                    for(auto const& slot : ctx.inputArr)
+                        HIP_CHECK_EXC(hipMemset(
+                            dynamic_cast<ContractionInputs const&>(*slot).a2aBuf, 0, bytes));
+                });
+                return;
+            }
+
+            auto const* amd = dynamic_cast<AMDGPU const*>(&hardware);
+            if(amd == nullptr || amd->computeUnitCount == 0)
+                throw std::runtime_error("[a2a-gemm] no CU count to size the counter.");
+            if(gemm->transposeC01())
+                throw std::runtime_error("[a2a-gemm] transposeC01 is not supported.");
+            const size_t M      = gemm->freeSizeA(0);
+            const size_t N      = gemm->freeSizeB(0);
+            const size_t mt0    = solution.sizeMapping.macroTile.x;
+            const size_t mt1    = solution.sizeMapping.macroTile.y;
+            const auto   layout = a2aGemmCounterLayout(M,
+                                                     N,
+                                                     mt0,
+                                                     mt1,
+                                                     amd->computeUnitCount,
+                                                     gemm->world(),
+                                                     (uint32_t)solution.sizeMapping.a2aSubRounds);
+            auto const&  probeInputs
+                = dynamic_cast<ContractionInputs const&>(*devices[0]->inputArr[0]);
+            auto         probe = solution.solve(*gemm, probeInputs, hardware, nullptr, 0, nullptr);
+            const size_t launched
+                = probe.size() != 1 ? 0
+                                    : (size_t)probe[0].numWorkGroups.x * probe[0].numWorkGroups.y
+                                          * probe[0].numWorkGroups.z;
+            if(launched != layout.featureBlocks * layout.tokenBlocks)
+                throw std::runtime_error(concatenate("[a2a-gemm] ",
+                                                     probe.size(),
+                                                     " kernel(s) launching ",
+                                                     launched,
+                                                     " work-groups; the counter was sized for ",
+                                                     layout.featureBlocks,
+                                                     "*",
+                                                     layout.tokenBlocks));
+            const size_t bBytes
+                = gemm->tensors()[ContractionProblemGemm::TENSOR::B].totalAllocatedBytes();
             forEachDevice(devices, [&](DeviceContext& ctx) {
-                for(auto const& slot : ctx.inputArr)
-                    HIP_CHECK_EXC(hipMemset(
-                        dynamic_cast<ContractionInputs const&>(*slot).a2aRecv, 0, bytes));
+                ctx.armA2AGemm(layout.allocBytes, layout.payloadBytes, bBytes);
             });
         }
 
@@ -127,23 +215,27 @@ namespace TensileLite
         {
             const size_t slot = launch % devices[rank]->inputArr.size();
             auto const*  gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
-            if(gemm == nullptr || !gemm->fusedGemmA2A())
+            if(gemm == nullptr || gemm->fusedA2A() == FusedA2A::Disabled)
                 return devices[rank]->inputArr[slot].get();
 
-            const size_t world        = devices.size();
-            const size_t channel      = launch % kCommChannels;
-            const size_t macroTileN   = solution.sizeMapping.macroTile.y;
-            const size_t tokenTiles   = (gemm->freeSizeB(0) + macroTileN - 1) / macroTileN;
-            const size_t counterBytes = kCounter1Offset + world * tokenTiles * sizeof(uint32_t);
-            const size_t synchronizerBytes
-                = gemm->tensors()[ContractionProblemGemm::TENSOR::Synchronizer]
-                      .totalAllocatedBytes();
-            if(counterBytes > synchronizerBytes)
-                throw std::runtime_error(concatenate("[fused-a2a] the counter needs ",
-                                                     counterBytes,
-                                                     " bytes; the Synchronizer holds ",
-                                                     synchronizerBytes,
-                                                     "."));
+            const FusedA2A mode    = gemm->fusedA2A();
+            const size_t   world   = devices.size();
+            const size_t   channel = launch % fusedA2ACommChannels(mode);
+            if(mode == FusedA2A::GemmA2A)
+            {
+                const size_t macroTileN   = solution.sizeMapping.macroTile.y;
+                const size_t tokenTiles   = (gemm->freeSizeB(0) + macroTileN - 1) / macroTileN;
+                const size_t counterBytes = kCounter1Offset + world * tokenTiles * sizeof(uint32_t);
+                const size_t synchronizerBytes
+                    = gemm->tensors()[ContractionProblemGemm::TENSOR::Synchronizer]
+                          .totalAllocatedBytes();
+                if(counterBytes > synchronizerBytes)
+                    throw std::runtime_error(concatenate("[fused-a2a] the counter needs ",
+                                                         counterBytes,
+                                                         " bytes; the Synchronizer holds ",
+                                                         synchronizerBytes,
+                                                         "."));
+            }
             if(solution.requiredWorkspaceSize(*gemm, hardware) != 0)
                 throw std::runtime_error(
                     "[fused-a2a] solutions that need a workspace are not supported.");
@@ -167,14 +259,15 @@ namespace TensileLite
                 const HsaQueueResource& q     = queue.queueResource();
                 scratch.fusedA2APeers.push_back(
                     {(char*)devices[j]->commFlags + channel * FUSED_A2A_FLAG_BLOCK_BYTES,
-                     peer.a2aRecv,
+                     peer.a2aBuf,
                      queue.ringBase(),
                      (void*)q.Queue_read_ptr_aql,
                      (void*)q.Queue_write_ptr_aql,
                      (void*)q.Queue_DoorBell_aql});
             }
 #endif
-            scratch.fusedA2ACounter = scratch.Synchronizer;
+            scratch.fusedA2ACounter = mode == FusedA2A::GemmA2A ? scratch.Synchronizer
+                                                                : devices[rank]->a2aCounter;
             scratch.fusedA2AMyRank  = (uint32_t)rank;
             scratch.fusedA2ADrain   = FUSED_A2A_DRAIN_RECV | FUSED_A2A_DRAIN_SEND;
             return &scratch;

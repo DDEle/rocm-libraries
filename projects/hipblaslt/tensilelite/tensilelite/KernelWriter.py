@@ -502,7 +502,7 @@ class StateValues:
 
     self.nonPostLoopSgpr = []
 
-    # FusedGemmA2A store dispatch mode (codegen-time): "BOTH" emits the per-store
+    # FusedA2A=GemmA2A store dispatch mode (codegen-time): "BOTH" emits the per-store
     # runtime gate + both push/local versions (default, unchanged behavior);
     # "PUSH"/"LOCAL" emit only that single version (gate hoisted to caller).
     self.fusedA2ADispatchMode = "BOTH"
@@ -3283,6 +3283,7 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
           module.add(self.calculateLoopNumIter(kernel, tensorParametersA, tensorParametersB, i))
           if self.states.actualSummationLoops>1:
             module.add(self.openLoop(kernel, tensorParametersA, tensorParametersB, i))
+        module.add(self.openA2AShardLoop(kernel, tensorParametersA, tensorParametersB))
         module.add(self.calculateLoopNumIter(kernel, tensorParametersA, tensorParametersB, self.states.unrollIdx))
 
       if deferInitC:
@@ -7021,6 +7022,10 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
         self._dcpAdvanceTokens("Tensor")
       module.add(self.closeLoop(kernel, tensorParametersA, tensorParametersB, i, True))
 
+    module.add(self.a2aTransitionPhase(kernel, tensorParametersA, tensorParametersB))
+    module.add(self.closeA2AShardLoop(kernel))
+    module.add(self.a2aExitTally(kernel))
+
     # Drop GlobalReadIncs* from the free pool so endSummation's store-phase SRDs don't
     # re-check-out an already-grabbed slot.
     for grIncName in ("GlobalReadIncsA", "GlobalReadIncsB", "GlobalReadIncsMXSA", "GlobalReadIncsMXSB"):
@@ -7471,7 +7476,8 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
 
     # doShadowInit performs initialization in the 'shadow' of the global mem prefetch
     # TODO re-enable..
-    if not kernel["ForceDisableShadowInit"] and not kernel["UseSubtileImpl"]:
+    if not kernel["ForceDisableShadowInit"] and not kernel["UseSubtileImpl"] \
+       and kernel["ProblemType"]["FusedA2A"] != "A2AGemm":
       if kernel["PrefetchGlobalRead"]:
         if self.states.actualSummationLoops == 1:
           self.states.doShadowInit = 2 # 2 is both store setup and initC
@@ -9858,6 +9864,15 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
     for i in range(kernel["ProblemType"]["NumIndicesSummation"]):
       self.defineSgpr(self.loopCounterName(kernel,i), 1)
 
+    if kernel["ProblemType"]["FusedA2A"] == "A2AGemm":
+      self.defineSgpr("A2AShardCounter", 1)
+      self.defineSgpr("A2AShardIdx", 1)
+      self.defineSgpr("A2AFeatIdx", 1)
+      self.defineSgpr("A2AKLocal", 1)
+      self.defineSgpr("A2ABlockLo", 1)
+      self.defineSgpr("A2ABlockCount", 1)
+      self.defineSgpr("A2ACounterPtr", 2, 2)
+
     self.defineSgpr("OrigLoopCounter", 1)
 
     if self.debugConfig.debugKernel:
@@ -9875,7 +9890,7 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
 
     # Persistent copy of the grid-wide WG count for the counter3 last-WG election;
     # latched in graWorkGroup because NumWorkGroups0/1 can be borrowed as temps later.
-    if kernel["ProblemType"]["FusedGemmA2A"]:
+    if kernel["ProblemType"]["FusedA2A"] == "GemmA2A":
       self.defineSgpr("FusedTotalWGs", 1)
       # Counter-block base, loaded once in the prologue. Every region is reached
       # from it by immediate offset (client/src/DeviceContext.cpp).
@@ -10952,6 +10967,34 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
                 finalLoop, emitEndLabelOnly=False, oddLabel=False, \
                 skipCondJumpCounter=-1, NLLlast=False, \
                 nta=0, ntb=0, loopCopy=-1):
+    return ""
+
+  ##############################################################################
+  # Open A2A-GEMM Shard Loop
+  ##############################################################################
+  @abc.abstractmethod
+  def openA2AShardLoop(self, kernel, tPA, tPB):
+    return ""
+
+  ##############################################################################
+  # Close A2A-GEMM Shard Loop
+  ##############################################################################
+  @abc.abstractmethod
+  def closeA2AShardLoop(self, kernel):
+    return ""
+
+  ##############################################################################
+  # A2A-GEMM Transition Phase
+  ##############################################################################
+  @abc.abstractmethod
+  def a2aTransitionPhase(self, kernel, tPA, tPB):
+    return ""
+
+  ##############################################################################
+  # A2A-GEMM Exit Tally
+  ##############################################################################
+  @abc.abstractmethod
+  def a2aExitTally(self, kernel):
     return ""
 
   ##############################################################################

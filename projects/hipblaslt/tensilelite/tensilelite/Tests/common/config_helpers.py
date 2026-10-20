@@ -28,6 +28,8 @@ For artifact compression/extraction utilities (no pytest dependency),
 see artifact_helpers.py.
 """
 
+import csv
+import glob
 import os
 import re
 
@@ -305,3 +307,26 @@ def findConfigs(rootDir=None, availableArchs=None, splitWorlds=True):
                                                    marks=others + [pytest.mark.world(w)],
                                                    id=f"{relpath}-world{w}"))
     return params
+
+
+def missingProblems(config, outputDir, worlds=None):
+    """
+    Returns (SizeI, SizeJ, SizeK, SizeL, World) for each world-tagged Exact
+    problem of config, in worlds if given, with no positive solution result in
+    outputDir/2_BenchmarkData.
+    """
+    with open(config) as f:
+        doc = yaml.load(f, DEFAULT_YAML_LOADER)  # nosec B506
+    exacts = [obj["Exact"] for obj, _ in walkDict(doc)
+              if isinstance(obj, dict) and isinstance(obj.get("Exact"), dict)]
+    expected = {(*e["sizes"][:4], e["world"]) for e in exacts
+                if "world" in e and (worlds is None or e["world"] in worlds)}
+    for path in glob.glob(os.path.join(outputDir, "2_BenchmarkData", "*.csv")):
+        with open(path) as f:
+            header, *rows = csv.reader(f, skipinitialspace=True)
+        sols = [i for i, h in enumerate(header) if h.startswith("Cijk_")]
+        sizes = [header.index(h) for h in ("SizeI", "SizeJ", "SizeK", "SizeL", "World")]
+        for row in rows:
+            if any(float(row[i] or 0) > 0 for i in sols):
+                expected.discard(tuple(int(row[i]) for i in sizes))
+    return expected

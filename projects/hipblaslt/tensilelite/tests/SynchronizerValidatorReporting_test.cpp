@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include "A2AGemmHost.hpp"
 #include "DeviceContext.hpp"
 #include "MetaRunListener.hpp"
 #include "ResultReporter.hpp"
@@ -464,7 +465,7 @@ TEST_P(SynchronizerValidatorFlagBlock, DirtyBlockFailsTheSolutionWithoutAWarmup)
     validator.setReporter(reporter);
     validator.setDevices(&devices);
     TensileLite::ContractionSolution solution;
-    solution.problemType.fusedGemmA2A = true;
+    solution.problemType.fusedA2A = TensileLite::FusedA2A::GemmA2A;
 
     validator.preSolution(&solution);
     validator.failure = GetParam();
@@ -492,3 +493,71 @@ INSTANTIATE_TEST_SUITE_P(Transfers,
                          ::testing::Values(TransferFailure::None,
                                            TransferFailure::Readback,
                                            TransferFailure::Clear));
+
+namespace
+{
+    constexpr size_t A2A_WORLD    = 2;
+    constexpr size_t A2A_LAUNCHES = 3;
+    constexpr size_t A2A_PAYLOAD  = 128;
+
+    struct A2AGemmRank
+    {
+        std::vector<uint32_t>         flags;
+        std::vector<uint32_t>         counter;
+        std::shared_ptr<DeviceContext> device;
+
+        A2AGemmRank(size_t rank)
+            : flags(TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES / sizeof(uint32_t), 0)
+            , counter((A2A_PAYLOAD + FUSED_A2A_COUNTER_SENTINEL_BYTES) / sizeof(uint32_t), 0)
+            , device(std::make_shared<DeviceContext>(0, true))
+        {
+            flags[FUSED_A2A_MODE1_SEQ_OFFSET / sizeof(uint32_t)] = A2A_LAUNCHES;
+            for(size_t s = 0; s < A2A_WORLD; s++)
+                if(s != rank)
+                    flags[FUSED_A2A_MODE1_DONE_OFFSET / sizeof(uint32_t) + s] = A2A_LAUNCHES;
+            fusedA2ACounterSentinelFill(counter.data() + A2A_PAYLOAD / sizeof(uint32_t));
+            device->commFlags       = flags.data();
+            device->commFlagsBytes  = TensileLite::FUSED_A2A_FLAG_BLOCK_BYTES;
+            device->a2aCounter      = counter.data();
+            device->a2aCounterBytes = counter.size() * sizeof(uint32_t);
+            device->a2aPayloadBytes = A2A_PAYLOAD;
+            device->launches        = A2A_LAUNCHES;
+        }
+
+        // Not HIP allocations.
+        ~A2AGemmRank()
+        {
+            device->commFlags  = nullptr;
+            device->a2aCounter = nullptr;
+        }
+    };
+
+    // Runs one A2AGemm solution over two host-backed ranks and returns the error count.
+    int a2aGemmErrors(A2AGemmRank& r0, A2AGemmRank& r1)
+    {
+        auto                                        reporter = std::make_shared<FakeResultReporter>();
+        std::vector<std::shared_ptr<DeviceContext>> devices{r0.device, r1.device};
+        HostBufferValidator                         validator;
+        validator.setReporter(reporter);
+        validator.setDevices(&devices);
+        TensileLite::ContractionSolution solution;
+        solution.problemType.fusedA2A = TensileLite::FusedA2A::A2AGemm;
+        validator.preSolution(&solution);
+        validator.postSolution();
+        return validator.error();
+    }
+}
+
+TEST(SynchronizerValidatorReporting, A2AGemmStaleSeqFails)
+{
+    A2AGemmRank r0(0), r1(1);
+    r1.flags[FUSED_A2A_MODE1_SEQ_OFFSET / sizeof(uint32_t)] = A2A_LAUNCHES - 1;
+    EXPECT_EQ(a2aGemmErrors(r0, r1), 1);
+}
+
+TEST(SynchronizerValidatorReporting, A2AGemmOverwrittenGuardFails)
+{
+    A2AGemmRank r0(0), r1(1);
+    r0.counter[A2A_PAYLOAD / sizeof(uint32_t) + 2] = 7;
+    EXPECT_EQ(a2aGemmErrors(r0, r1), 1);
+}

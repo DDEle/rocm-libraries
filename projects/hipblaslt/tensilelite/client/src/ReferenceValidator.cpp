@@ -29,6 +29,7 @@
 #include "ResultReporter.hpp"
 #include "TimingInstrumentation.hpp"
 
+#include "A2AGemmHost.hpp"
 #include "Reference.hpp"
 
 #include <Tensile/DataTypes.hpp>
@@ -122,6 +123,10 @@ namespace TensileLite
                     });
                 }
 
+                if(auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(problem);
+                   gemm != nullptr && gemm->fusedA2A() == FusedA2A::A2AGemm)
+                    interleaveA2AGemmReferences(*gemm);
+
                 {
                     ScopedTimer timer("cpu_reference_gemm");
                     for(auto const& reference : m_referenceInputs)
@@ -135,7 +140,7 @@ namespace TensileLite
             m_validatedSolution = false;
             m_errorInSolution   = false;
             m_executedSolution  = false;
-            m_fusedA2A          = solution != nullptr && solution->problemType.fusedGemmA2A;
+            m_fusedA2A = solution != nullptr ? solution->problemType.fusedA2A : FusedA2A::Disabled;
 
             // Re-run CPU reference after DataInitialization refreshes MX inputs.
             if(!m_enabled || m_problem == nullptr || m_referenceInputs.empty()
@@ -257,13 +262,31 @@ namespace TensileLite
                 {
                     auto const& inputs = (*m_devices)[d]->inputArr[slot];
                     validateSolution(d, inputs);
-                    if(m_fusedA2A && m_elementsToValidate != 0
+                    if(m_fusedA2A == FusedA2A::GemmA2A && m_elementsToValidate != 0
                        && !recvMatches(d, dynamic_cast<ContractionInputs const&>(*inputs)))
                     {
                         m_errorInSolution = true;
                         m_error           = true;
                     }
                 }
+            }
+        }
+
+        void ReferenceValidator::interleaveA2AGemmReferences(ContractionProblemGemm const& problem)
+        {
+            const size_t world = m_referenceInputs.size();
+            const size_t N     = problem.freeSizeB(0);
+            const size_t K     = problem.boundSize(0);
+            const size_t elem  = problem.b().elementBytes();
+
+            std::vector<void const*> xs;
+            for(auto const& ref : m_referenceInputs)
+                xs.push_back(dynamic_cast<ContractionInputs const&>(*ref).a2aBuf);
+            m_a2aGemmB.assign(world, std::vector<uint8_t>(N * K * elem));
+            for(size_t d = 0; d < world; d++)
+            {
+                a2aGemmInterleaveB(m_a2aGemmB[d].data(), xs, d, N, K, elem);
+                dynamic_cast<ContractionInputs&>(*m_referenceInputs[d]).b = m_a2aGemmB[d].data();
             }
         }
 
@@ -281,7 +304,7 @@ namespace TensileLite
             // card src's golden, for every token.
             std::vector<BFloat16> host(W * N * nShard);
             HIP_CHECK_EXC(hipMemcpy(host.data(),
-                                    inputs.a2aRecv,
+                                    inputs.a2aBuf,
                                     host.size() * sizeof(BFloat16),
                                     hipMemcpyDeviceToHost));
             size_t mismatches = 0;

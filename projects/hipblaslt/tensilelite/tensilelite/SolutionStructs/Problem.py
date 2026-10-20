@@ -196,7 +196,9 @@ class Problem:
     if self.stridesGate:
       rv += ", stridesGate: " + str(list(self.stridesGate))
     if self.world is not None:
-      rv += ", world: %d, a2aExtent: %d" % (self.world, self.a2aExtent)
+      rv += ", world: %d" % self.world
+      if self.a2aExtent:
+        rv += ", a2aExtent: %d" % self.a2aExtent
     rv += " }"
     return rv
 
@@ -266,20 +268,28 @@ class ExactDict(Problem):
         raise RuntimeError ("specified size=%s does not have enough indices for problem (expected %d, got %d)" \
                 % (self.sizes, problemType["TotalIndices"], len(self.sizes)))
 
-    if problemType and problemType["FusedGemmA2A"]:
+    if problemType and isFusedA2A(problemType):
       from ..Components.Signature import FUSED_A2A_MAX_RANKS
+      mode = problemType["FusedA2A"]
       if self.world is None:
-        raise RuntimeError("FusedGemmA2A problem %s must set 'world'" % list(self.sizes))
+        raise RuntimeError("FusedA2A=%s problem %s must set 'world'" % (mode, list(self.sizes)))
       if not 1 <= self.world <= FUSED_A2A_MAX_RANKS:
         raise RuntimeError("world=%d must be in [1, %d]" % (self.world, FUSED_A2A_MAX_RANKS))
-      if self.a2aExtent is None:
-        self.a2aExtent = self.sizes[0]
-      if not 1 <= self.a2aExtent <= self.sizes[0]:
-        raise RuntimeError("a2aExtent=%d must be in [1, M=%d]" % (self.a2aExtent, self.sizes[0]))
       if self.sizes[2] != 1:
-        raise RuntimeError("FusedGemmA2A problem %s has batch=%d; must be 1" % (list(self.sizes), self.sizes[2]))
+        raise RuntimeError("FusedA2A=%s problem %s has batch=%d; must be 1" % (mode, list(self.sizes), self.sizes[2]))
+      if mode == "GemmA2A":
+        if self.a2aExtent is None:
+          self.a2aExtent = self.sizes[0]
+        if not 1 <= self.a2aExtent <= self.sizes[0]:
+          raise RuntimeError("a2aExtent=%d must be in [1, M=%d]" % (self.a2aExtent, self.sizes[0]))
+      else:
+        if self.a2aExtent is not None:
+          raise RuntimeError("a2aExtent applies only to FusedA2A=GemmA2A problems")
+        self.a2aExtent = 0
+        if self.sizes[3] % self.world != 0:
+          raise RuntimeError("K=%d is not a multiple of world=%d" % (self.sizes[3], self.world))
     elif self.world is not None or self.a2aExtent is not None:
-      raise RuntimeError("'world' and 'a2aExtent' apply only to FusedGemmA2A problems")
+      raise RuntimeError("'world' and 'a2aExtent' apply only to fused A2A problems")
 
 
 ################################################################################
@@ -290,8 +300,8 @@ Adapter class for class `ProblemSizes`. It satisfies the implicit usage requirem
 of ClientWriter.writeClientConfig() by converting ExactLogic to list of `Problem` objects
 """
 class ProblemSizesMock:
-  def __init__(self, exactLogic, fusedGemmA2A=False):
-    if fusedGemmA2A:
+  def __init__(self, exactLogic, fusedA2A=False):
+    if fusedA2A:
       self.problems = [Problem(sizes[:-2], world=sizes[-2], a2aExtent=sizes[-1]) for sizes, solution in exactLogic]
     else:
       self.problems = [Problem(problem) for problem, solution in exactLogic]
@@ -313,15 +323,15 @@ class ProblemSizes:
         for sizeTypeKey in dictionary:
           #print ("PROBLEM parsed:", sizeTypeKey, dictionary[sizeTypeKey])
           if sizeTypeKey == "Range":
-            if problemType["FusedGemmA2A"]:
-              raise RuntimeError("FusedGemmA2A problems must use Exact dicts, not Range")
+            if isFusedA2A(problemType):
+              raise RuntimeError("fused A2A problems must use Exact dicts, not Range")
             psr = ProblemSizeRange(problemType, dictionary[sizeTypeKey])
             self.ranges.append( psr )
           elif sizeTypeKey == "Exact":
             e= dictionary[sizeTypeKey]
             if isinstance(e,list):
-              if problemType["FusedGemmA2A"]:
-                raise RuntimeError("FusedGemmA2A problem %s must be an Exact dict with 'world'" % e)
+              if isFusedA2A(problemType):
+                raise RuntimeError("fused A2A problem %s must be an Exact dict with 'world'" % e)
               self.exacts.append(ExactList(e, problemType))
             elif isinstance(e,dict):
               self.exacts.append(ExactDict(e, problemType))
@@ -522,9 +532,9 @@ _defaultProblemType = {
     "ActivationNoGuard": False,
     # AmaxD
     "OutputAmaxD": False,
-    # PUSHes the first AM feature columns to remote peer recv slots from the
-    # GEMM epilogue; the remaining columns store locally.
-    "FusedGemmA2A": False,
+    # GemmA2A: the GEMM epilogue PUSHes the first AM feature columns to the peers.
+    # A2AGemm: B arrives from the peers one K shard at a time.
+    "FusedA2A": "Disabled",
     # For kernels putting arguments in workspaces instead of kernel arguments, they can choose to support user arguments input instead.
     "SupportUserArgs": True,
     "SwizzleTensorA": False,
@@ -537,6 +547,13 @@ _defaultProblemType = {
     "DataTypeMXSA": "E8",
     "DataTypeMXSB": "E8",
 }
+
+FUSED_A2A_MODES = ("Disabled", "GemmA2A", "A2AGemm")
+
+
+def isFusedA2A(problemType):
+  """problemType: a ProblemType or a raw logic ProblemType dict."""
+  return (problemType or {}).get("FusedA2A", "Disabled") != "Disabled"
 
 # The supported typed GEMM, each entry is (Ti, To, Tc).
 # DataType (Ti)        = The data-type of the input matrices: A/B
@@ -871,6 +888,11 @@ class ProblemType(Mapping):
     for key in _defaultProblemType:
       assignParameterWithDefault(self.state, key, config, _defaultProblemType)
 
+    if "FusedGemmA2A" in config and config["FusedGemmA2A"]:
+      raise Exception("ProblemType key FusedGemmA2A is retired; write FusedA2A: GemmA2A")
+    if self["FusedA2A"] not in FUSED_A2A_MODES:
+      raise Exception("FusedA2A=%s; must be one of %s" % (self["FusedA2A"], ", ".join(FUSED_A2A_MODES)))
+
     # Validate parameter types against the _defaultProblemType registry
     validateProblemTypeParameterTypes(
         self.state,
@@ -1103,7 +1125,7 @@ class ProblemType(Mapping):
           printWarning("ActivationNoGuard is set to False cause Gradient is off.")
           self["ActivationNoGuard"] = False
 
-    if self["FusedGemmA2A"]:
+    if self["FusedA2A"] != "Disabled":
       unsupported = [name for name, used in (
           ("UseBias", self["UseBias"]),
           ("UseE", self["UseE"]),
@@ -1114,9 +1136,11 @@ class ProblemType(Mapping):
           ("OutputAmaxD", self["OutputAmaxD"]),
           ("Sparse", self["Sparse"]),
           ("GroupedGemm", self["GroupedGemm"]),
-          ("Activation", self["ActivationType"] != 'none')) if used]
+          ("Activation", self["ActivationType"] != 'none'),
+          ("TransposeB", self["FusedA2A"] == "A2AGemm" and self["TransposeB"]),
+          ("UseInitialStridesAB", self["FusedA2A"] == "A2AGemm" and self["UseInitialStridesAB"])) if used]
       if unsupported:
-        raise Exception("FusedGemmA2A does not support %s" % ", ".join(unsupported))
+        raise Exception("FusedA2A=%s does not support %s" % (self["FusedA2A"], ", ".join(unsupported)))
 
   ################################################################################
    # Function checkIfSupportedGEMMType:
@@ -1393,8 +1417,10 @@ class ProblemType(Mapping):
         name.append(f"Aux{self['DataTypeE'].toChar()}")
     if self["OutputAmaxD"]:
       name.append("AmaxD")
-    if self["FusedGemmA2A"]:
+    if self["FusedA2A"] == "GemmA2A":
       name.append("FusedA2A")
+    if self["FusedA2A"] == "A2AGemm":
+      name.append("A2AGemm")
     if self["Sparse"]:
       if self["Sparse"] == 2:
         name.append("SPBML%d"%(self["MetadataLayout"]))

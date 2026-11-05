@@ -3066,6 +3066,8 @@ namespace TensileLite
         // The fused GEMM+A2A segment follows batchOffsets in the kernel signature.
         if(problemType.fusedA2A != FusedA2A::Disabled)
         {
+            if(problemType.fusedA2A == FusedA2A::A2AGemm)
+                checkA2AGemmBufAligned(inputs.fusedA2APeers, inputs.fusedA2AMyRank);
             AMDGPU const* pAMDGPU = dynamic_cast<AMDGPU const*>(&hardware);
             appendFusedSegment(rv.args,
                                inputs.fusedA2APeers,
@@ -4029,6 +4031,8 @@ namespace TensileLite
                     break;
                 case CustomArgSemantic::FusedA2ASegment:
                 {
+                    if(problemType.fusedA2A == FusedA2A::A2AGemm)
+                        checkA2AGemmBufAligned(inputs.fusedA2APeers, inputs.fusedA2AMyRank);
                     AMDGPU const* pAMDGPU = dynamic_cast<AMDGPU const*>(&hardware);
                     appendFusedSegment(
                         rv.args,

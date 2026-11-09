@@ -10054,7 +10054,7 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SCBranchSCC1(labelName=clrLbl.getLabelName(), comment="clear the next stride"))
     self.sgprPool.checkIn(old)
     self.sgprPool.checkIn(flagBytes)
-    SdmaRingEmitter.emitClearCursors(module, self, "FusedCounterPtr", FUSED_A2A_CURSOR_BYTES)
+    SdmaRingEmitter().emitClearCursors(module, self, "FusedCounterPtr", FUSED_A2A_CURSOR_BYTES)
 
     module.add(self.argLoader.loadKernArg(tmp, "KernArgAddress",
                                           sgprOffset=hex(base + layout["FusedDrain"]), dword=1))

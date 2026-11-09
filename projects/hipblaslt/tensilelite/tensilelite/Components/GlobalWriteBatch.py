@@ -3329,10 +3329,18 @@ class GlobalWriteBatchWriter:
 
     # Second packet into the same block, below the placement above
     # (emitPlacePacket, BLOCK REUSE); the wrap padding went out with it.
-    module.add(SMovB32(dst=sgpr(offSgpr), src=0, comment="outbound ATOMIC follows the flag ATOMIC: no further padding"))
+    #
+    # gfx1250: the block of lane 1, built and placed inside one narrow-EXEC span.
+    if gfx1250:
+      module.add(self.getEdgeMovInstType()(EXEC(), 2, "fused-A2A: the outbound ATOMIC lane"))
+    else:
+      module.add(SMovB32(dst=sgpr(offSgpr), src=0, comment="outbound ATOMIC follows the flag ATOMIC: no further padding"))
     self._emitFusedA2ABuildAtomic(module, pkt, pktBlock, selfBaseSgpr)
     ring.emitPlacePacket(module, kw, "FusedPeerGroupPtr", pktBlock, ATOMIC_PACKET_DWORDS,
-                         pendSgpr, offSgpr)
+                         pendSgpr, None if gfx1250 else offSgpr)
+    if gfx1250:
+      module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: end of the outbound ATOMIC lane"))
+      module.add(self.getEdgeMovInstType()(EXEC(), 1, "fused-A2A: back to lane 0"))
     ring.emitSubmitPacket(module, kw, "FusedPeerGroupPtr", "FusedCounterPtr", cursorOffSgpr,
                           curSgpr, pendSgpr)
 
@@ -3346,7 +3354,7 @@ class GlobalWriteBatchWriter:
 
   def _emitFusedA2ABuildAtomic(self, module, pkt, pktBlock, dstAddrSgpr):
     """The ATOMIC packet raising the 2-SGPR target, into pktBlock: SGPRs, or on
-    gfx1250 lane-uniform VGPRs."""
+    gfx1250 the VGPRs of the active lanes."""
     if not pkt.gfx1250:
       pkt.emitBuildAtomicPacket(module, pktBlock, dstAddrSgpr)
       return
@@ -3359,8 +3367,8 @@ class GlobalWriteBatchWriter:
 
   def _emitFusedA2ABuildCopyV(self, module, pkt, vPkt, srcBaseSgpr, dstBaseSgpr,
                               srcPitchS, sliceS, dstPitchS, rectYS):
-    """emitBuildCopyPacket's fields as a lane-uniform VGPR packet; dstPitchS is
-    also rect_x."""
+    """emitBuildCopyPacket's fields as a VGPR packet in the active lanes;
+    dstPitchS is also rect_x."""
     from .SdmaPacketEmitter import COPY_DW_SRC, COPY_DW_DST
     kw = self.parentWriter
     vFld = kw.vgprPool.checkOut(4, tag="fusedA2A_sdmaFields")

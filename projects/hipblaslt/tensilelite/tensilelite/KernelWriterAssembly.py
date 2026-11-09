@@ -21775,7 +21775,8 @@ class KernelWriterAssembly(KernelWriter):
 
     CompactLoopStore: elementIdx lets elt0 (rowInc==0) seed incrementToNextRow.
     overrideAfterPrimerRows is the next emitting elt's rowInc (0 = no override).
-    forceSlc forces slc on the D store regardless of NonTemporalD; tc == 'D' only.
+    forceSlc sets NonTemporalD bit 1 on the D store (slc, or at least SCOPE_DEV
+    on gfx1250); tc == 'D' only.
     """
     module = Module("addStore sumIdx %s"%(str(sumIdx)))
     if self.do["GlobalWrite"]:
@@ -21792,8 +21793,8 @@ class KernelWriterAssembly(KernelWriter):
 
       if tc == 'D':
         isGlc, isSlc, isNT, scope, th, nv = decodeNonTemporal(
-            self.states.asmCaps, kernel["NonTemporalD"], _temporalHint(kernel, "D"), _nonVolatile(kernel, "D"))
-        isSlc = bool(isSlc or forceSlc)
+            self.states.asmCaps, kernel["NonTemporalD"] | (0x2 if forceSlc else 0),
+            _temporalHint(kernel, "D"), _nonVolatile(kernel, "D"))
         bps = self.states.bpeCexternal * ss.cfg.gwvw
         rpv = self.states.bpeCexternal * ss.cfg.gwvw / self.states.bpr
 

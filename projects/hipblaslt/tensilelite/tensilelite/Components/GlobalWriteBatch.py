@@ -3445,7 +3445,7 @@ class GlobalWriteBatchWriter:
     # Each wave retires its own stores, THEN the barrier joins them. The other order
     # lets the SDMA engine read a band that is not yet in HBM.
     syncModule.add(SWaitCnt(vscnt=0, comment="fused-A2A: my A2A stores (sc1) are in HBM before the counter (spec 2.3 step 2)"))
-    syncModule.add(SBarrier(comment="fused-A2A: all waves done before counter election"))
+    syncModule.add(SBarrier(comment="fused-A2A SDMA handshake sync: all waves done before counter election"))
     self._emitFusedA2AWave0Election(syncModule, afterLabel.getLabelName())
 
     # The local path takes the same election, minus the store wait and the barrier:

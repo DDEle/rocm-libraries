@@ -12248,7 +12248,8 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
           keptItems.append(item)
         elif isinstance(item, SBarrier) \
              and "-3" not in str(item).split("//", 1)[0] \
-             and "PGR bypass sync" not in item.comment:
+             and "PGR bypass sync" not in item.comment \
+             and "SDMA handshake sync" not in item.comment:
           # Pass-2 rebuilds only workgroup-scope barriers from token-state
           # transitions, so only those are cleared here. Cluster-scope split
           # barriers (s_barrier_signal/wait -3), e.g. the StreamKMulticast

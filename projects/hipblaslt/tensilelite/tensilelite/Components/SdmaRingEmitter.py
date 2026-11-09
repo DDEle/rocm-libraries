@@ -388,11 +388,11 @@ class SdmaRingEmitter:
         dwords into the ring, all with s_store...glc. Advances pendingWptrS
         (2 SGPRs) by offset then by the packet size. `packetDwordsS` is the base
         SGPR of the already-built packet (SdmaPacketEmitter fills it);
-        `numDwords` is compile-time.
+        `numDwords` is compile-time. With `offsetS` None there is no padding
+        and no label.
 
-        On gfx1250 `packetDwordsS` is a 4-aligned VGPR block, and the stores
-        are VMEM from the active lanes with lane-uniform addresses and data, so
-        the ring contents do not depend on EXEC.
+        On gfx1250 `packetDwordsS` is a 4-aligned VGPR block, and every active
+        lane stores its copy of it at the same ring address.
 
         BLOCK REUSE. The caller may pass the SAME packetDwordsS block for a
         later packet, but only AFTER this call has emitted the first one's
@@ -427,35 +427,36 @@ class SdmaRingEmitter:
             module.add(SMovB32(dst=sgpr(zeroS), src=0, comment="padding NOP value = 0"))
 
         # ---- padding: store `offset` bytes of zero at WrapIntoRing(pending). ----
-        padLoop = Label(w.labels.getNameInc("sdma_pp_padloop"), "placePacket: zero-pad ring tail")
-        padDone = Label(w.labels.getNameInc("sdma_pp_paddone"), "placePacket: padding done")
-        module.add(SLShiftRightB32(dst=sgpr(cntS), src=sgpr(offsetS), shiftHex=2,
-                                   comment="numOffsetDwords = offset / 4"))
-        module.add(SCmpEQU32(src0=sgpr(cntS), src1=0, comment="no padding?"))
-        module.add(SCBranchSCC1(labelName=padDone.getLabelName(), comment="offset==0 -> skip pad"))
-        module.add(padLoop)
-        if self.gfx1250:
-            self.emitLaneRingAddrV(module, w, vAddr, vQBuf, pendingWptrS, vZero)
-            module.add(GlobalStoreB32(vaddr=vgpr(vAddr, 2), src=vgpr(vZero),
-                                      saddr=vgpr("off", 1, False, False, True),
-                                      modifier=self._ringStoreModifier(),
-                                      comment="ring[wrap] = 0 padding NOP"))
-        else:
-            module.add(SAndB32(dst=sgpr(wrapS), src0=sgpr(pendingWptrS + 0), src1=self.ringMask,
-                               comment="WrapIntoRing(pending) (pad)"))
-            self._emitRingByteAddr(module, addrS, queueBufPtrS, wrapS)
-            # glc on every ring store: past the scalar data cache and L2.
-            module.add(SStoreB32(
-                src=sgpr(zeroS), base=sgpr(addrS, 2), soffset=hex(0),
-                smem=SMEMModifiers(glc=True, isStore=True),
-                comment="ring[wrap] = 0 padding NOP"))
-        module.add(SAddU32(dst=sgpr(pendingWptrS + 0), src0=sgpr(pendingWptrS + 0), src1=4,
-                           comment="pending += 4 (one padded dword)"))
-        module.add(SAddCU32(dst=sgpr(pendingWptrS + 1), src0=sgpr(pendingWptrS + 1), src1=0, comment="pending hi carry"))
-        module.add(SSubU32(dst=sgpr(cntS), src0=sgpr(cntS), src1=1, comment="numOffsetDwords -= 1"))
-        module.add(SCmpEQU32(src0=sgpr(cntS), src1=0, comment="pad done?"))
-        module.add(SCBranchSCC0(labelName=padLoop.getLabelName(), comment="more padding"))
-        module.add(padDone)
+        if offsetS is not None:
+            padLoop = Label(w.labels.getNameInc("sdma_pp_padloop"), "placePacket: zero-pad ring tail")
+            padDone = Label(w.labels.getNameInc("sdma_pp_paddone"), "placePacket: padding done")
+            module.add(SLShiftRightB32(dst=sgpr(cntS), src=sgpr(offsetS), shiftHex=2,
+                                       comment="numOffsetDwords = offset / 4"))
+            module.add(SCmpEQU32(src0=sgpr(cntS), src1=0, comment="no padding?"))
+            module.add(SCBranchSCC1(labelName=padDone.getLabelName(), comment="offset==0 -> skip pad"))
+            module.add(padLoop)
+            if self.gfx1250:
+                self.emitLaneRingAddrV(module, w, vAddr, vQBuf, pendingWptrS, vZero)
+                module.add(GlobalStoreB32(vaddr=vgpr(vAddr, 2), src=vgpr(vZero),
+                                          saddr=vgpr("off", 1, False, False, True),
+                                          modifier=self._ringStoreModifier(),
+                                          comment="ring[wrap] = 0 padding NOP"))
+            else:
+                module.add(SAndB32(dst=sgpr(wrapS), src0=sgpr(pendingWptrS + 0), src1=self.ringMask,
+                                   comment="WrapIntoRing(pending) (pad)"))
+                self._emitRingByteAddr(module, addrS, queueBufPtrS, wrapS)
+                # glc on every ring store: past the scalar data cache and L2.
+                module.add(SStoreB32(
+                    src=sgpr(zeroS), base=sgpr(addrS, 2), soffset=hex(0),
+                    smem=SMEMModifiers(glc=True, isStore=True),
+                    comment="ring[wrap] = 0 padding NOP"))
+            module.add(SAddU32(dst=sgpr(pendingWptrS + 0), src0=sgpr(pendingWptrS + 0), src1=4,
+                               comment="pending += 4 (one padded dword)"))
+            module.add(SAddCU32(dst=sgpr(pendingWptrS + 1), src0=sgpr(pendingWptrS + 1), src1=0, comment="pending hi carry"))
+            module.add(SSubU32(dst=sgpr(cntS), src0=sgpr(cntS), src1=1, comment="numOffsetDwords -= 1"))
+            module.add(SCmpEQU32(src0=sgpr(cntS), src1=0, comment="pad done?"))
+            module.add(SCBranchSCC0(labelName=padLoop.getLabelName(), comment="more padding"))
+            module.add(padDone)
 
         # ---- packet: store numDwords packet dwords at WrapIntoRing(pending). ----
         if self.gfx1250:

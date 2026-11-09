@@ -1267,6 +1267,109 @@ TEST_F(AsmEmitterTest, GLOBALModifierScopeAndTh) {
     EXPECT_NE(assembly.find("scope:SCOPE_SE"), std::string::npos);
 }
 
+TEST_F(AsmEmitterTest, GlobalStoreB32NullSaddrScope) {
+    StinkyInstruction* inst = createInstruction("global_store_b32");
+    ASSERT_NE(inst, nullptr);
+    inst->addSrcReg(StinkyRegister("v", 0, 2));  // vaddr
+    inst->addSrcReg(StinkyRegister("v", 2, 1));  // vdata
+    inst->addSrcReg(StinkyRegister("off"));      // saddr
+    inst->addModifier(GLOBALModifiers(/*offset=*/0, TemporalHint::TH_NONE, MUBUFScope::SCOPE_SYS));
+
+    AsmEmitterOptions options;
+    options.emitComments = false;
+    options.emitCycleInfo = false;
+    options.indent = 0;
+    options.emitBlankLines = false;
+
+    StinkyAsmEmitter emitter(options);
+    EXPECT_EQ(emitter.emit(*inst), "global_store_b32 v[0:1], v2, off scope:SCOPE_SYS\n");
+}
+
+TEST_F(AsmEmitterTest, GlobalLoadB32SaddrOffsetScope) {
+    StinkyInstruction* inst = createInstruction("global_load_b32");
+    ASSERT_NE(inst, nullptr);
+    inst->addDestReg(StinkyRegister("v", 1, 1));
+    inst->addSrcReg(StinkyRegister("v", 0, 1));  // vaddr
+    inst->addSrcReg(StinkyRegister("s", 2, 2));  // saddr
+    inst->addModifier(GLOBALModifiers(/*offset=*/4, TemporalHint::TH_NONE, MUBUFScope::SCOPE_SYS));
+
+    AsmEmitterOptions options;
+    options.emitComments = false;
+    options.emitCycleInfo = false;
+    options.indent = 0;
+    options.emitBlankLines = false;
+
+    StinkyAsmEmitter emitter(options);
+    EXPECT_EQ(emitter.emit(*inst), "global_load_b32 v1, v0, s[2:3] offset:4 scope:SCOPE_SYS\n");
+}
+
+TEST_F(AsmEmitterTest, GlobalAtomicCmpswapB64SaddrReturns) {
+    StinkyInstruction* inst = createInstruction("global_atomic_cmpswap_b64");
+    ASSERT_NE(inst, nullptr);
+    inst->addDestReg(StinkyRegister("v", 0, 2));
+    inst->addSrcReg(StinkyRegister("v", 2, 1));  // vaddr
+    inst->addSrcReg(StinkyRegister("v", 4, 4));  // {src, cmp}
+    inst->addSrcReg(StinkyRegister("s", 0, 2));  // saddr
+    inst->addModifier(GLOBALModifiers(/*offset=*/0, TemporalHint::TH_NONE, MUBUFScope::SCOPE_DEV));
+
+    AsmEmitterOptions options;
+    options.emitComments = false;
+    options.emitCycleInfo = false;
+    options.indent = 0;
+    options.emitBlankLines = false;
+
+    StinkyAsmEmitter emitter(options);
+    EXPECT_EQ(emitter.emit(*inst),
+              "global_atomic_cmpswap_b64 v[0:1], v2, v[4:7], s[0:1] scope:SCOPE_DEV "
+              "th:TH_ATOMIC_RETURN\n");
+}
+
+TEST_F(AsmEmitterTest, GlobalAtomicMaxU64SaddrReturns) {
+    StinkyInstruction* inst = createInstruction("global_atomic_max_u64");
+    ASSERT_NE(inst, nullptr);
+    inst->addDestReg(StinkyRegister("v", 0, 2));
+    inst->addSrcReg(StinkyRegister("v", 2, 1));  // vaddr
+    inst->addSrcReg(StinkyRegister("v", 4, 2));  // data
+    inst->addSrcReg(StinkyRegister("s", 0, 2));  // saddr
+    inst->addModifier(GLOBALModifiers(/*offset=*/0, TemporalHint::TH_NONE, MUBUFScope::SCOPE_DEV));
+
+    AsmEmitterOptions options;
+    options.emitComments = false;
+    options.emitCycleInfo = false;
+    options.indent = 0;
+    options.emitBlankLines = false;
+
+    StinkyAsmEmitter emitter(options);
+    EXPECT_EQ(emitter.emit(*inst),
+              "global_atomic_max_u64 v[0:1], v2, v[4:5], s[0:1] scope:SCOPE_DEV "
+              "th:TH_ATOMIC_RETURN\n");
+}
+
+// ============================================================================
+// SMEM Modifier Tests
+// ============================================================================
+
+TEST_F(AsmEmitterTest, SMEMModifierScope) {
+    StinkyInstruction* inst = createInstruction("s_load_b64");
+    ASSERT_NE(inst, nullptr);
+    inst->addDestReg(StinkyRegister("s", 0, 2));
+    inst->addSrcReg(StinkyRegister("s", 4, 2));
+    inst->addModifier(SMEMModifiers(/*glc=*/true, /*nv=*/false, /*offset=*/0,
+                                    /*hasSCOPEModifier=*/true, MUBUFScope::SCOPE_SYS));
+
+    AsmEmitterOptions options;
+    options.emitComments = false;
+    options.emitCycleInfo = false;
+    options.indent = 0;
+    options.emitBlankLines = false;
+
+    StinkyAsmEmitter emitter(options);
+    std::string assembly = emitter.emit(*inst);
+
+    EXPECT_NE(assembly.find(" scope:SCOPE_SYS"), std::string::npos) << assembly;
+    EXPECT_EQ(assembly.find("glc"), std::string::npos) << assembly;
+}
+
 // ============================================================================
 // VOP3P Modifier Tests
 // ============================================================================

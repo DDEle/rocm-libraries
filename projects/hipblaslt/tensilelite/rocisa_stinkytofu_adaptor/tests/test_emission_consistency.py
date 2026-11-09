@@ -1868,6 +1868,101 @@ class TestTensorLoadToLdsCachePolicyFourGroups(unittest.TestCase, _ThreePathEqua
     """)
 
 
+# ===========================================================================
+# Cache scope on SMEM loads and on global load / store / atomic
+# ===========================================================================
+
+
+class TestSLoadB64ScopeSys(AdaptorTestCase, _ThreePathEqualityCase):
+    """``s_load_b64 ... scope:SCOPE_SYS``."""
+
+    BUILD_MODULE_SNIPPET = textwrap.dedent("""\
+        from rocisa.code import Module
+        from rocisa.container import SMEMModifiers, sgpr
+        from rocisa.enum import CacheScope
+        from rocisa.instruction import SLoadB64
+        module = Module("k")
+        module.add(SLoadB64(dst=sgpr(0, 2), base=sgpr(4, 2), soffset=0,
+                            smem=SMEMModifiers(scope=CacheScope.SCOPE_SYS)))
+    """)
+
+
+class TestGlobalLoadB32SaddrOffsetScope(AdaptorTestCase, _ThreePathEqualityCase):
+    """``global_load_b32 v1, v0, s[2:3] offset:4 scope:SCOPE_SYS``."""
+
+    BUILD_MODULE_SNIPPET = textwrap.dedent("""\
+        from rocisa.code import Module
+        from rocisa.container import GLOBALModifiers, sgpr, vgpr
+        from rocisa.enum import CacheScope
+        from rocisa.instruction import GlobalLoadB32
+        module = Module("k")
+        module.add(GlobalLoadB32(dst=vgpr(1), vaddr=vgpr(0), saddr=sgpr(2, 2),
+                                 modifier=GLOBALModifiers(offset=4,
+                                                          scope=CacheScope.SCOPE_SYS)))
+    """)
+
+
+class TestGlobalStoreB32SaddrScope(AdaptorTestCase, _ThreePathEqualityCase):
+    """``global_store_b32 v0, v1, s[2:3] scope:SCOPE_SYS``."""
+
+    BUILD_MODULE_SNIPPET = textwrap.dedent("""\
+        from rocisa.code import Module
+        from rocisa.container import GLOBALModifiers, sgpr, vgpr
+        from rocisa.enum import CacheScope
+        from rocisa.instruction import GlobalStoreB32
+        module = Module("k")
+        module.add(GlobalStoreB32(vaddr=vgpr(0), src=vgpr(1), saddr=sgpr(2, 2),
+                                  modifier=GLOBALModifiers(scope=CacheScope.SCOPE_SYS)))
+    """)
+
+
+class TestGlobalStoreB128NullSaddrOffsetScope(AdaptorTestCase, _ThreePathEqualityCase):
+    """``global_store_b128 v[0:1], v[4:7], off offset:16 scope:SCOPE_DEV``."""
+
+    BUILD_MODULE_SNIPPET = textwrap.dedent("""\
+        from rocisa.code import Module
+        from rocisa.container import GLOBALModifiers, vgpr
+        from rocisa.enum import CacheScope
+        from rocisa.instruction import GlobalStoreB128
+        module = Module("k")
+        module.add(GlobalStoreB128(vaddr=vgpr(0, 2), src=vgpr(4, 4),
+                                   saddr=vgpr("off", 1, False, False, True),
+                                   modifier=GLOBALModifiers(offset=16,
+                                                            scope=CacheScope.SCOPE_DEV)))
+    """)
+
+
+class TestGlobalAtomicSaddrReturning(AdaptorTestCase):
+    """64-bit returning SADDR atomics; native rocisa has no such classes."""
+
+    def _emit(self, cls_name, data):
+        snippet = textwrap.dedent(f"""\
+            from rocisa.code import Module
+            from rocisa.container import GLOBALModifiers, sgpr, vgpr
+            from rocisa.enum import CacheScope
+            from rocisa.instruction import {cls_name}
+            module = Module("k")
+            module.add({cls_name}(dst=vgpr(0, 2), vaddr=vgpr(2), data={data},
+                                  saddr=sgpr(0, 2),
+                                  modifier=GLOBALModifiers(scope=CacheScope.SCOPE_DEV)))
+        """)
+        return emit_path3_adapter_logical(snippet)
+
+    @unittest.skipUnless(_PATHS_OK, "needs the stinkytofu binding and an assembler")
+    def test_cmpswap_b64(self):
+        self.assertEqual(
+            self._emit("GlobalAtomicCmpswapB64Saddr", "vgpr(4, 4)"),
+            "global_atomic_cmpswap_b64 v[0:1], v2, v[4:7], s[0:1] scope:SCOPE_DEV"
+            " th:TH_ATOMIC_RETURN\n")
+
+    @unittest.skipUnless(_PATHS_OK, "needs the stinkytofu binding and an assembler")
+    def test_max_u64(self):
+        self.assertEqual(
+            self._emit("GlobalAtomicMaxU64Saddr", "vgpr(4, 2)"),
+            "global_atomic_max_u64 v[0:1], v2, v[4:5], s[0:1] scope:SCOPE_DEV"
+            " th:TH_ATOMIC_RETURN\n")
+
+
 ## DSBPermuteB32 emission consistency is skipped: native rocisa path-1 toString()
 ## and path-2 toStinkyTofuModule produce different asm for this instruction
 ## (mismatch unrelated to our adaptor), so three-path equality is not achievable.

@@ -1134,7 +1134,8 @@ class TestSLoadB32Construction(AdaptorTestCase):
     def test_smem_modifier_reaches_logical_bridge(self):
         m = SLoadB32(
             sgpr(0), sgpr(2, 2), 0,
-            smem=SMEMModifiers(glc=True, offset=4, nv=NonVolatile.NV),
+            smem=SMEMModifiers(glc=True, offset=4, nv=NonVolatile.NV,
+                               scope=CacheScope.SCOPE_DEV),
         )
         logical = unittest.mock.Mock()
         fake_st = unittest.mock.Mock()
@@ -1152,6 +1153,7 @@ class TestSLoadB32Construction(AdaptorTestCase):
         self.assertIs(out, logical)
         logical.set_smem.assert_called_once_with(
             glc=True, nv=True, offset=4, has_scope_modifier=True,
+            scope=int(CacheScope.SCOPE_DEV),
         )
 
     def test_deepcopy(self):
@@ -3714,7 +3716,7 @@ class TestSmemForwarding(AdaptorTestCase):
         dec = self._lower(
             SAtomicDec(sgpr(1), sgpr(2, 2), smem=smem), "SAtomicDec", caps,
         )
-        expected = dict(glc=True, nv=True, offset=8, has_scope_modifier=False)
+        expected = dict(glc=True, nv=True, offset=8, has_scope_modifier=False, scope=0)
         store.set_smem.assert_called_once_with(**expected)
         dec.set_smem.assert_called_once_with(**expected)
 
@@ -3732,7 +3734,7 @@ class TestSmemForwarding(AdaptorTestCase):
             {"HasSCOPEModifier": 1},
         )
         logical.set_smem.assert_called_once_with(
-            glc=False, nv=False, offset=0, has_scope_modifier=True,
+            glc=False, nv=False, offset=0, has_scope_modifier=True, scope=0,
         )
 
 

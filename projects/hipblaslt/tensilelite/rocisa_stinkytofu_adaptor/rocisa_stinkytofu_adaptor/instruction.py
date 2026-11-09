@@ -985,9 +985,9 @@ def _smem_has_nv(nv: Any) -> bool:
 def _apply_smem(inst: Any, smem: Any) -> None:
     """Match ``convertSMEMModifiers()``. A missing modifier stays unset.
 
-    Only ``glc``, ``nv`` (as a bool), ``offset``, and ``hasSCOPEModifier``
-    from the asm caps are copied. ``dlc``, ``isStore``, ``scope``, and ``th``
-    are not fields of stinkytofu ``SMEMModifiers``.
+    Only ``glc``, ``nv`` (as a bool), ``offset``, ``scope``, and
+    ``hasSCOPEModifier`` from the asm caps are copied. ``dlc``, ``isStore``,
+    and ``th`` are not fields of stinkytofu ``SMEMModifiers``.
     """
     if smem is None:
         return
@@ -999,6 +999,7 @@ def _apply_smem(inst: Any, smem: Any) -> None:
         nv=_smem_has_nv(getattr(smem, "nv", None)),
         offset=int(getattr(smem, "offset", 0) or 0),
         has_scope_modifier=bool(caps.get("HasSCOPEModifier", 0)),
+        scope=_enum_value(getattr(smem, "scope", None)),
     )
 
 
@@ -4158,17 +4159,17 @@ class FlatAtomicDecU32(CommonInstruction):
 
 
 # ==========================================================================
-# GlobalAtomicIncU32Saddr -- SADDR-returning global atomic increment (StreamK).
+# SADDR-returning global atomics: ``<mnemonic> dst, vaddr, data, saddr``.
 # ==========================================================================
-class GlobalAtomicIncU32Saddr(CommonInstruction):
-    """``global_atomic_inc_u32 dst, vaddr, data, saddr`` -- SADDR atomic inc."""
-
+class _GlobalAtomicSaddr(CommonInstruction):
     _stinky_mods = ("global_glob",)
+    _mnemonic = ""
+    _inst_type = InstType.INST_NOTYPE
 
     def __init__(self, dst: Any, vaddr: Any, data: Any, saddr: Any,
                  modifier: Any = None, comment: str = ""):
         super().__init__(
-            instType=InstType.INST_B32,
+            instType=self._inst_type,
             dst=dst,
             srcs=[vaddr, data, saddr],
             dpp=None,
@@ -4176,7 +4177,7 @@ class GlobalAtomicIncU32Saddr(CommonInstruction):
             vop3=None,
             comment=comment,
         )
-        self.setInst("global_atomic_inc_u32")
+        self.setInst(self._mnemonic)
         self.glob = modifier
 
     @staticmethod
@@ -4189,13 +4190,28 @@ class GlobalAtomicIncU32Saddr(CommonInstruction):
         vaddr_reg = _to_stinky_register(self.srcs[0])
         data_reg = _to_stinky_register(self.srcs[1])
         saddr_reg = _to_stinky_register(self.srcs[2])
-        inst = _st.GlobalAtomicIncU32Saddr(
+        inst = getattr(_st, type(self).__name__)(
             dst_reg, vaddr_reg, data_reg, saddr_reg, comment=self.comment)
         return _apply_modifiers(self, inst)
 
     def __deepcopy__(self, memo):
         clone = CommonInstruction.__deepcopy__(self, memo)
         return clone
+
+
+class GlobalAtomicIncU32Saddr(_GlobalAtomicSaddr):
+    _mnemonic = "global_atomic_inc_u32"
+    _inst_type = InstType.INST_B32
+
+
+class GlobalAtomicCmpswapB64Saddr(_GlobalAtomicSaddr):
+    _mnemonic = "global_atomic_cmpswap_b64"
+    _inst_type = InstType.INST_B64
+
+
+class GlobalAtomicMaxU64Saddr(_GlobalAtomicSaddr):
+    _mnemonic = "global_atomic_max_u64"
+    _inst_type = InstType.INST_U64
 
 
 # --- Gfx1250 vector conversions ---
@@ -4882,11 +4898,12 @@ def _make_global_store_class(class_name: str, mnemonic: str, latency: int = 1, b
     def to_stinky_logical(self) -> Any:
         import stinkytofu as _st
         factory = getattr(_st, class_name)
-        return factory(
-            _to_stinky_register(self.dst),
+        inst = factory(
             _to_stinky_register(self.srcs[0]),
+            _to_stinky_register(self.dst),
             _to_stinky_register(self.srcs[1]),
             comment=self.comment)
+        return _apply_modifiers(self, inst)
 
     def __deepcopy__(self, memo):
         return CommonInstruction.__deepcopy__(self, memo)
@@ -4901,6 +4918,7 @@ def _make_global_store_class(class_name: str, mnemonic: str, latency: int = 1, b
         **_mem_issue_latency(latency),
     })
     cls.__qualname__ = class_name
+    cls._stinky_mods = ("global_modifier",)
     return cls
 
 

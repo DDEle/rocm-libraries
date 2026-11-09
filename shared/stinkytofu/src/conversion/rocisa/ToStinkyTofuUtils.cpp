@@ -226,7 +226,8 @@ stinkytofu::SMEMModifiers convertSMEMModifiers(const rocisa::SMEMModifiers& rocM
                                                const std::map<std::string, int>& asmCaps) {
     bool hasSCOPEModifier = asmCaps.count("HasSCOPEModifier") && asmCaps.at("HasSCOPEModifier");
     return stinkytofu::SMEMModifiers(rocMod.glc, rocMod.nv != rocisa::NonVolatile::NV_NONE,
-                                     rocMod.offset, hasSCOPEModifier);
+                                     rocMod.offset, hasSCOPEModifier,
+                                     convertMUBUFScope(rocMod.scope));
 }
 
 stinkytofu::GLOBALModifiers convertGLOBALModifiers(const rocisa::GLOBALModifiers& rocMod,
@@ -770,12 +771,15 @@ void addModifiersToInstruction(StinkyInstruction* stinkyInst, const rocisa::Inst
             stinkyInst->addModifier<stinkytofu::MUBUFModifiers>(
                 buildMUBUFModifiersForBufferOp(typed->mubuf, typed->vaddr.get(), asmCaps));
         }
-        else if (auto typed = dynamic_cast<const GlobalAtomicIncU32Saddr*>(inst)) {
-            // GlobalAtomicIncU32Saddr carries cache scope / temporal hint / offset as rocisa
-            // GLOBALModifiers; translate so the emitter prints them (the returning-atomic
-            // th:TH_ATOMIC_RETURN is added separately by the emitter). Scoped to the atomic
-            // specifically -- the GLOBALStoreInstruction base also covers global_store_*,
-            // whose modifier handling must not change here.
+        else if (auto typed = dynamic_cast<const GLOBALStoreInstruction*>(inst);
+                 typed && (dynamic_cast<const GlobalAtomicIncU32Saddr*>(inst) ||
+                           dynamic_cast<const GlobalStoreB32*>(inst) ||
+                           dynamic_cast<const GlobalStoreB64*>(inst) ||
+                           dynamic_cast<const GlobalStoreB128*>(inst))) {
+            // GlobalAtomicIncU32Saddr and global_store_b32/b64/b128 carry cache scope /
+            // temporal hint / offset as rocisa GLOBALModifiers; translate so the emitter
+            // prints them (the returning-atomic th:TH_ATOMIC_RETURN is added separately by
+            // the emitter). The global_store_async_from_lds_* subclasses are not handled here.
             if (typed->modifier.has_value()) {
                 const auto& gm = typed->modifier.value();
                 stinkyInst->addModifier<stinkytofu::GLOBALModifiers>(

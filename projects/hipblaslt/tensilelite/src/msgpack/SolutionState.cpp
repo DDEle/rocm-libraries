@@ -1455,8 +1455,14 @@ namespace TensileLite
             if(problemType.record.mxBlockA || problemType.record.mxBlockB)
                 rv.push_back(withValue<MXScaleFormatEquals>(mxScaleFormatId(state)));
 
+            // copyFieldBits in Tensile/Components/SdmaPacketEmitter.py.
             if(problemType.record.fusedA2A == FusedA2A::GemmA2A)
-                rv.push_back(withValue<GemmA2AShape>(state.integer("MacroTile0")));
+            {
+                auto const isa     = state["ISA"].list();
+                bool const gfx1250 = isa[0].integer() == 12 && isa[1].integer() == 5;
+                rv.push_back(withValue<GemmA2AShape>(std::array<int64_t, 3>{
+                    state.integer("MacroTile0"), gfx1250 ? 16 : 19, gfx1250 ? 16 : 14}));
+            }
 
             // Exact-size custom kernels record the M/N/K window they won.
             if(auto const* bounds = state.find("CustomKernelSizePredicate"))

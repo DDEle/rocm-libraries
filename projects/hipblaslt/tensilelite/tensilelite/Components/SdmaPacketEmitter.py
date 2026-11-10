@@ -68,6 +68,11 @@ ATOMIC_HEADER_DW0_GFX1250 = ATOMIC_HEADER_DW0 | (SDMA_SCOPE_SYS << 20)
 COPY_DW12_GFX1250 = (SDMA_SCOPE_SYS << 18) | (SDMA_SCOPE_SYS << 26)
 
 
+def copyFieldBits(gfx1250: bool):
+    """(pitch, rect_x) widths in bits of COPY_SUBWIN."""
+    return (16, 16) if gfx1250 else (19, 14)
+
+
 class SdmaPacketEmitter:
     """Builds the COPY_SUBWIN + ATOMIC packet dword arrays in SGPRs or VGPRs, in the
     layout documented at the top of this file.
@@ -99,7 +104,7 @@ class SdmaPacketEmitter:
             "packet element size %r is not hardware-validated; only %r is"
             % (packetElementBytes, VALIDATED_PACKET_ELEMENT_BYTES))
         self.gfx1250 = gfx1250
-        self.pitchShift = 16 if gfx1250 else 13
+        self.pitchShift = 32 - copyFieldBits(gfx1250)[0]
         # Published so the caller can scale its X-direction counts to match.
         self.packetElementLog2 = packetElementBytes.bit_length() - 1
         self.copyHeaderDw0 = (_COPY_HEADER_DW0_BASE

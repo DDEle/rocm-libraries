@@ -33,6 +33,7 @@ from .Common import state, state_key_ordering, IsaInfo
 from .Common.Architectures import gfxToIsa
 from .Common.DataType import DataType
 from .Common.GlobalParameters import internalParameters
+from .Components.SdmaPacketEmitter import copyFieldBits
 from .SolutionStructs import Solution as OriginalSolution
 from .SolutionStructs.Problem import getBiasDataTypeListDefault, getGateResidualDataTypeListDefault
 from .Toolchain.Component import Assembler
@@ -692,7 +693,8 @@ class ProblemPredicate(Properties.Predicate):
             rv += [cls('SwizzleTensorB', value=state['ProblemType']['SwizzleTensorB'])]
 
         if state['ProblemType']['FusedA2A'] == 'GemmA2A':
-            rv += [cls('GemmA2AShape', value=state['MacroTile0'])]
+            rv += [cls('GemmA2AShape', value=[state['MacroTile0'],
+                                              *copyFieldBits(tuple(state['ISA'][:2]) == (12, 5))])]
 
         # Exact-size custom kernels record the M/N/K window they won. Without
         # it, a multi-solution lookup also accepts the neighboring tile.

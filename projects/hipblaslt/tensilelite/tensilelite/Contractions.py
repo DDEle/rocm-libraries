@@ -39,6 +39,7 @@ from .Common.ValidParameters import (
     checkAssertMultipleMapIsValid,
     checkAssertSizeMapIsValid,
 )
+from .Components.SdmaPacketEmitter import copyFieldBits
 from .SolutionStructs import Solution as OriginalSolution
 from .SolutionStructs.Problem import getBiasDataTypeListDefault, getGateResidualDataTypeListDefault
 from .Toolchain.Component import Assembler
@@ -804,7 +805,8 @@ class ProblemPredicate(Properties.Predicate):
         fusedA2A = state['ProblemType'].get('FusedA2A')
         fusedGemm = state['ProblemType'].get('FusedGemmA2A')
         if fusedA2A == 'GemmA2A' or fusedGemm is True:
-            rv += [cls('GemmA2AShape', value=state['MacroTile0'])]
+            rv += [cls('GemmA2AShape', value=[state['MacroTile0'],
+                                              *copyFieldBits(tuple(state['ISA'][:2]) == (12, 5))])]
 
         # A rocRoller custom kernel is a pre-assembled object captured at one tile.
         # It carries no generated edge handling in M and no partial-k-tile drain, so

@@ -172,6 +172,22 @@ def test_fused_a2a_off_leaves_user_gsu_alone(_gp_gfx942, gfx942_iim, assembler, 
     assert sol["InternalSupportParams"]["SupportUserGSU"] is True
 
 
+@pytest.mark.parametrize("isa, bits", [((9, 4, 2), [19, 14]), ((12, 5, 0), [16, 16])])
+def test_gemm_a2a_shape_predicate_carries_packet_field_widths(
+    _gp_gfx942, gfx942_iim, assembler, capsys, isa, bits
+):
+    """GemmA2AShape is {MacroTile0, COPY_SUBWIN pitch bits, rect_x bits}."""
+    import tensilelite.Contractions as C
+
+    sol, out = _derive(gfx942_iim, assembler, capsys)
+    assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
+    state = dict(sol._state)
+    state["ISA"] = isa
+    preds = C.ProblemPredicate.CompoundPredicates(
+        state, C.ProblemType.FromOriginalState(sol["ProblemType"]))
+    assert [p.value for p in preds if p.tag == "GemmA2AShape"] == [[128] + bits]
+
+
 # ---------------------------------------------------------------------------
 # Guard 1: non-gfx94x/gfx95x ISA -> rejected (SDMA packet layout is gfx9-only
 # and pre-GFX12).

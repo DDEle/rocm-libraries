@@ -43,7 +43,7 @@ def _remap_body(src):
     return [ln for ln in body if ln and not ln.startswith(_SKIPPED)]
 
 
-def _run_remap(body, n0, n1, am, wg0, wg1, xcc=0):
+def _run_remap(body, n0, n1, am, wg0, wg1):
     """One lane of the remap: (WorkGroup0, WorkGroup1) after `body`."""
     reg = {"s[sgprNumWorkGroups0]": n0, "s[sgprNumWorkGroups1]": n1,
            "s[sgprWorkGroup0]": wg0, "s[sgprWorkGroup1]": wg1, "exec_lo": 1}
@@ -69,16 +69,10 @@ def _run_remap(body, n0, n1, am, wg0, wg1, xcc=0):
             reg[a[0]] = u32(scalar[op](val(a[1]), val(a[2])))
         elif op == "s_load_b32":
             reg[a[0]] = am
-        elif op == "s_sendmsg_rtn_b32":
-            reg[a[0]] = xcc << 16 | 0xA5
         elif op == "s_cmp_eq_u32":
             scc = int(val(a[0]) == val(a[1]))
         elif op == "s_cmp_lt_u32":
             scc = int(val(a[0]) < val(a[1]))
-        elif op == "s_cmp_ge_i32":
-            scc = int((val(a[0]) ^ 0x80000000) >= (val(a[1]) ^ 0x80000000))
-        elif op == "s_branch":
-            pc = labels[a[0]]
         elif op == "s_cselect_b32":
             reg[a[0]] = val(a[1]) if scc else val(a[2])
         elif op == "s_cbranch_scc0":
@@ -101,42 +95,26 @@ def _run_remap(body, n0, n1, am, wg0, wg1, xcc=0):
     return reg["s[sgprWorkGroup0]"], reg["s[sgprWorkGroup1]"]
 
 
-def _check_remap(base, src, cs, ck, aid=False):
-    """`aid`: clusters are dispatched round-robin over 8 XCCs, 4 per AID."""
+def _check_remap(base, src, cs, ck):
     body = _remap_body(src)
     mt0 = int(re.search(r"FusedAM >> log2\(MT0=(\d+)\)", src).group(1))
-    remapped = halved = 0
+    remapped = 0
     for n0, n1, a in _GRIDS:
-        for first_xcc in (0, 5) if aid else (0,):
-            cluster = lambda wg0, wg1: wg0 // cs + (wg1 // ck) * (n0 // cs)
-            xcc = lambda wg0, wg1: (cluster(wg0, wg1) + first_xcc) % 8
-            out = {(wg0, wg1): _run_remap(body, n0, n1, a * mt0, wg0, wg1, xcc(wg0, wg1))
-                   for wg1 in range(n1) for wg0 in range(n0)}
-            where = f"Kernel {base!r} grid {(n0, n1, a)} first XCC {first_xcc}"
-            assert sorted(out.values()) == sorted(out), f"{where}: not a bijection"
-            if (n0 | a) % cs or n1 % ck:
-                assert all(k == v for k, v in out.items()), f"{where}: partial clusters must keep their tiles"
-                continue
-            remapped += any(k != v for k, v in out.items())
-            for (wg0, wg1), tile in out.items():
-                m, j = out[(wg0 - wg0 % cs, wg1 - wg1 % ck)]
-                assert (m % cs, j % ck) == (0, 0) and tile == (m + wg0 % cs, j + wg1 % ck), (
-                    f"{where}: work-group {(wg0, wg1)} left its cluster's tile block: {tile}")
-            split = aid and (n0 // cs) * (n1 // ck) % 8 == 0 and (a // cs | n0 // cs) % 2 == 0
-            halved += split
-            streams = {}
-            for wg1 in range(0, n1, ck):
-                for wg0 in range(0, n0, cs):
-                    key = (cluster(wg0, wg1) // 8, xcc(wg0, wg1) % 4) if split else cluster(wg0, wg1)
-                    streams.setdefault(xcc(wg0, wg1) // 4 if split else 0, []).append((key, out[(wg0, wg1)][0]))
-            for tiles in streams.values():
-                push = [m < a for _key, m in sorted(tiles)]
-                assert push == sorted(push, reverse=True), f"{where}: PUSH clusters are not dispatched first"
-            if split:
-                cols = [{m for _key, m in tiles} for tiles in streams.values()]
-                assert len(cols) == 2 and not cols[0] & cols[1], f"{where}: the two AIDs share M tiles"
+        out = {(wg0, wg1): _run_remap(body, n0, n1, a * mt0, wg0, wg1)
+               for wg1 in range(n1) for wg0 in range(n0)}
+        where = f"Kernel {base!r} grid {(n0, n1, a)}"
+        assert sorted(out.values()) == sorted(out), f"{where}: not a bijection"
+        if (n0 | a) % cs or n1 % ck:
+            assert all(k == v for k, v in out.items()), f"{where}: partial clusters must keep their tiles"
+            continue
+        remapped += any(k != v for k, v in out.items())
+        for (wg0, wg1), tile in out.items():
+            m, j = out[(wg0 - wg0 % cs, wg1 - wg1 % ck)]
+            assert (m % cs, j % ck) == (0, 0) and tile == (m + wg0 % cs, j + wg1 % ck), (
+                f"{where}: work-group {(wg0, wg1)} left its cluster's tile block: {tile}")
+        push = [out[(wg0, wg1)][0] < a for wg1 in range(0, n1, ck) for wg0 in range(0, n0, cs)]
+        assert push == sorted(push, reverse=True), f"{where}: PUSH clusters are not dispatched first"
     assert remapped, f"Kernel {base!r}: no grid was remapped"
-    assert halved or not aid, f"Kernel {base!r}: no grid was split between the AIDs"
 
 
 def test_fused_a2a_gfx1250_wg_remap():
@@ -151,14 +129,14 @@ def test_fused_a2a_gfx1250_wg_remap():
 def test_fused_a2a_gfx1250_cluster_wg_remap(cluster_dim, snapshot):
     results = emit_kernels_from_config(_CLUSTER, limit=8, arch=_ARCH, cluster_dim=cluster_dim)
     assert len(results) == 2, [b for (b, _s, _e) in results]
-    aids = []
+    assert results[0][0] != results[1][0], "ClusterAIDMapping=-2 shares the -1 kernel name"
     for base, src, err in results:
         assert err == 0
         assert_assembles(src, base)
         epilogue = src[src.index(_PUSH_GATE):]
         assert not re.search(r"^s_barrier_\w+ -3", epilogue, re.M), (
             f"Kernel {base!r}: cluster barrier past the PUSH/local gate")
-        aids.append(len(re.findall(r"^s_sendmsg_rtn_b32", src, re.M)))
-        _check_remap(base, src, *cluster_dim, aid=bool(aids[-1]))
-    assert sorted(aids) == [0, 1]
+        assert not re.search(r"^s_sendmsg_rtn_b32", src, re.M), f"Kernel {base!r}: reads the XCC"
+        _check_remap(base, src, *cluster_dim)
+    assert _remap_body(results[0][1]) == _remap_body(results[1][1]), "ClusterAIDMapping changes the remap"
     assert sorted(b for (b, _s, _e) in results) == snapshot

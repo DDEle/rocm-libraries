@@ -1415,6 +1415,7 @@ validParameters = { # we need to make sure this matches develop
     "ClusterDim": validClusterDimensions,
     # Remap clusters onto the two AIDs (4 XCCs and one GL2 each) so that each GL2 reads
     # one operand once and only the other operand is duplicated across GL2s.
+    # Ignored for FusedA2A=GemmA2A.
     # -2: Read each cluster's XCC from MSG_RTN_GET_SE_AID_ID (requires strict round-robin dispatch)
     # -1: Disabled
     "ClusterAIDMapping": list(range(-2, 0)),

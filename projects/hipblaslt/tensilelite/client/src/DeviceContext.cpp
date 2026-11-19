@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "DeviceContext.hpp"
+#include "ViewTransport.hpp"
 
 #include <Tensile/AMDGPU.hpp>
 #include <Tensile/ContractionProblem.hpp>
@@ -73,6 +74,20 @@ namespace TensileLite
             }
 
             constexpr int kA2AGemmPoisonByte = 0xC7;
+
+            size_t viewBlockBytes(ContractionProblemGemm const& gemm,
+                                  ContractionSolution const&    solution)
+            {
+                const size_t mt1        = solution.sizeMapping.macroTile.y;
+                const size_t tokenTiles = (gemm.freeSizeB(0) + mt1 - 1) / mt1;
+                return fusedA2AViewBlockBytes(gemm.fusedA2A() == FusedA2A::GemmA2A ? tokenTiles
+                                                                                   : 0);
+            }
+        }
+
+        bool fusedA2AViewTransport(ContractionSolution const& solution)
+        {
+            return solution.sizeMapping.fusedA2ATransport == FUSED_A2A_TRANSPORT_VIEW;
         }
 
         DeviceContext::DeviceContext(int                     deviceId,
@@ -143,6 +158,11 @@ namespace TensileLite
         {
             if(commFlags != nullptr)
                 static_cast<void>(hipFree(commFlags));
+            // A view block that queues may still access is not freed.
+            if(viewBlock != nullptr && viewDrainQueues(*this))
+                static_cast<void>(hipFree(viewBlock));
+            if(viewStats != nullptr && viewDrainQueues(*this))
+                static_cast<void>(hipFree(viewStats));
             if(stream != nullptr)
                 static_cast<void>(hipStreamDestroy(stream));
         }
@@ -157,8 +177,10 @@ namespace TensileLite
                 return;
             const size_t macroTileN = solution.sizeMapping.macroTile.y;
             const size_t tokenTiles = (gemm->freeSizeB(0) + macroTileN - 1) / macroTileN;
+            // View solutions keep no counters in the Synchronizer.
             const size_t counterBytes
-                = gemm->fusedA2A() == FusedA2A::GemmA2A
+                = fusedA2AViewTransport(solution) ? 0
+                  : gemm->fusedA2A() == FusedA2A::GemmA2A
                       ? kCounter1Offset + world * tokenTiles * sizeof(uint32_t)
                       : a2aGemmCounterBytes(*gemm, solution, hardware, world);
             const size_t synchronizerBytes
@@ -176,7 +198,9 @@ namespace TensileLite
         }
 
         void resetCommBuffers(ContractionProblem const&                          problem,
-                              std::vector<std::shared_ptr<DeviceContext>> const& devices)
+                              ContractionSolution const&                         solution,
+                              std::vector<std::shared_ptr<DeviceContext>> const& devices,
+                              int                                                viewDebug)
         {
             auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
             if(gemm == nullptr || gemm->fusedA2A() == FusedA2A::Disabled)
@@ -187,8 +211,38 @@ namespace TensileLite
                 = tensors[ContractionProblemGemm::TENSOR::A2A_BUF].totalAllocatedBytes();
             const size_t synchronizerBytes
                 = tensors[ContractionProblemGemm::TENSOR::Synchronizer].totalAllocatedBytes();
+            const size_t viewBytes
+                = fusedA2AViewTransport(solution) ? viewBlockBytes(*gemm, solution) : 0;
+            for(auto const& ctx : devices)
+                if(!viewDrainQueues(*ctx))
+                    throw std::runtime_error(
+                        concatenate("[fused-a2a] SDMA queues of device ",
+                                    ctx->deviceId,
+                                    " did not drain after a FusedA2ATransport=View solution."));
             forEachDevice(devices, [&](DeviceContext& ctx) {
                 HIP_CHECK_EXC(hipMemset(ctx.commFlags, 0, ctx.commFlagsBytes));
+                if(viewBytes != 0)
+                {
+                    ctx.viewQueuesArmed = true;
+                    if(ctx.viewBlockBytes < viewBytes)
+                    {
+                        if(ctx.viewBlock != nullptr)
+                            HIP_CHECK_EXC(hipFree(ctx.viewBlock));
+                        ctx.viewBlock      = nullptr;
+                        ctx.viewBlockBytes = 0;
+                        HIP_CHECK_EXC(hipExtMallocWithFlags(
+                            &ctx.viewBlock, viewBytes, hipDeviceMallocFinegrained));
+                        ctx.viewBlockBytes = viewBytes;
+                    }
+                    HIP_CHECK_EXC(hipMemset(ctx.viewBlock, 0, ctx.viewBlockBytes));
+                    if((viewDebug & VIEW_DEBUG_TIMELINE) != 0)
+                    {
+                        if(ctx.viewStats == nullptr)
+                            HIP_CHECK_EXC(hipExtMallocWithFlags(
+                                &ctx.viewStats, VIEW_STATS_BYTES, hipDeviceMallocFinegrained));
+                        HIP_CHECK_EXC(hipMemset(ctx.viewStats, 0, VIEW_STATS_BYTES));
+                    }
+                }
                 for(auto const& slot : ctx.inputArr)
                 {
                     auto const& inputs = dynamic_cast<ContractionInputs const&>(*slot);
@@ -203,7 +257,8 @@ namespace TensileLite
                                         ContractionProblem const&                          problem,
                                         std::vector<std::shared_ptr<DeviceContext>> const& devices,
                                         size_t                                             rank,
-                                        size_t                                             launch)
+                                        size_t                                             launch,
+                                        bool viewTransport)
         {
             const size_t slot = launch % devices[rank]->inputArr.size();
             auto const*  gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
@@ -241,7 +296,11 @@ namespace TensileLite
                      (void*)q.Queue_DoorBell_aql});
             }
 #endif
-            scratch.fusedA2ACounter = scratch.Synchronizer;
+            if(viewTransport && devices[rank]->viewBlock == nullptr)
+                throw std::runtime_error(concatenate(
+                    "[fused-a2a] no view block on device ", devices[rank]->deviceId, "."));
+            scratch.fusedA2ACounter
+                = viewTransport ? devices[rank]->viewBlock : scratch.Synchronizer;
             scratch.fusedA2AMyRank  = (uint32_t)rank;
             scratch.fusedA2ADrain   = FUSED_A2A_DRAIN_RECV | FUSED_A2A_DRAIN_SEND;
             return &scratch;

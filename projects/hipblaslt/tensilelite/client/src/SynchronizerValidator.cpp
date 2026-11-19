@@ -4,6 +4,7 @@
 #include "SynchronizerValidator.hpp"
 #include "TimingInstrumentation.hpp"
 #include "ClientProblemFactory.hpp"
+#include "ViewTransport.hpp"
 
 #include "ResultReporter.hpp"
 
@@ -12,6 +13,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 
@@ -54,6 +57,9 @@ namespace TensileLite
             : m_enabled(args["check-synchronizer"].as<bool>())
             , m_validateAfterEnqueues(args.count("validate-after-enqueues")
                                       && args["validate-after-enqueues"].as<bool>())
+            , m_viewDebug(args.count("fused-a2a-view-debug")
+                              ? args["fused-a2a-view-debug"].as<int>()
+                              : 0)
         {
         }
 
@@ -65,6 +71,8 @@ namespace TensileLite
         void SynchronizerValidator::preSolution(ContractionSolution* const solution)
         {
             m_failedInSolution = false;
+            m_viewTransport    = solution != nullptr && fusedA2AViewTransport(*solution);
+            m_solutionName     = solution != nullptr ? solution->name() : std::string();
             // Covers the possible uses of the pointer: Flags in singleCallArgs
             // for StreamK, the dstD/Synchronizer block for MBSK, AmaxSync for
             // amaxD, and the AddressFlags/AddressSynchronizer/AmaxSync args of
@@ -148,6 +156,43 @@ namespace TensileLite
                             m_failedInSolution = true;
                     }
             });
+            if(m_viewTransport)
+                guarded([&] {
+                    for(auto const& device : *m_devices)
+                    {
+                        if(device->viewBlock == nullptr)
+                            continue;
+                        void*    errorWord = static_cast<uint8_t*>(device->viewBlock)
+                                             + FUSED_A2A_VIEW_ERROR_OFFSET;
+                        uint32_t error     = 0;
+                        std::memcpy(&error,
+                                    readBuffer(device->deviceId, errorWord, sizeof(error)),
+                                    sizeof(error));
+                        if(error == 0)
+                            continue;
+                        m_reporter->log(LogLevel::Error,
+                                        concatenate("fused-A2A view transport error word ",
+                                                    error,
+                                                    " (device ",
+                                                    device->deviceId,
+                                                    ")\n"));
+                        clearBuffer(device->deviceId, errorWord, sizeof(error));
+                        m_failedInSolution = true;
+                    }
+                });
+            if(m_viewTransport && (m_viewDebug & VIEW_DEBUG_TIMELINE) != 0)
+                guarded([&] {
+                    std::cout << "VIEWSTAT_SOLUTION " << m_solutionName << std::endl;
+                    for(auto const& device : *m_devices)
+                    {
+                        if(device->viewStats == nullptr)
+                            continue;
+                        auto const* ring = reinterpret_cast<uint64_t const*>(
+                            readBuffer(device->deviceId, device->viewStats, VIEW_STATS_BYTES));
+                        std::cout << viewStatsLine(device->deviceId, ring) << std::endl;
+                        clearBuffer(device->deviceId, device->viewStats, VIEW_STATS_BYTES);
+                    }
+                });
 
             if(m_failedInSolution)
             {

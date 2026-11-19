@@ -243,6 +243,13 @@ namespace TensileLite
 
             bool                m_enabled      = false;
             bool                m_validateAfterEnqueues = false;
+            // The solution in hand is FusedA2ATransport=View: postSolution reads every
+            // device's view-block error word, whether or not the check is enabled.
+            bool m_viewTransport = false;
+            // --fused-a2a-view-debug; with VIEW_DEBUG_TIMELINE postSolution prints the
+            // VIEWSTAT lines of a View solution.
+            int         m_viewDebug = 0;
+            std::string m_solutionName;
             // One narrow-alpha warning per run, not one per solution.
             bool                m_narrowAlphaWarned = false;
             ContractionProblem* m_problem      = nullptr;

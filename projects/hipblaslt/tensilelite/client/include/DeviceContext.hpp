@@ -68,6 +68,13 @@ namespace TensileLite
             size_t                                      commFlagsBytes;
             void*                                       commFlags = nullptr;
             std::vector<std::shared_ptr<SdmaQueue>>     sdmaQueues;
+            // FusedA2ATransport=View block, fine-grained, sized by resetCommBuffers.
+            void*  viewBlock      = nullptr;
+            size_t viewBlockBytes = 0;
+            // VIEW_DEBUG_TIMELINE ring, VIEW_STATS_BYTES, fine-grained.
+            void* viewStats = nullptr;
+            // Set by resetCommBuffers for a View solution, cleared by viewDrainQueues.
+            bool viewQueuesArmed = false;
 
         private:
             void release();
@@ -95,15 +102,24 @@ namespace TensileLite
                                    Hardware const&            hardware,
                                    size_t                     world);
 
+        // First runs viewDrainQueues on every device and throws if one fails. Also sizes and
+        // zeroes every device's view block for a FusedA2ATransport=View solution, and with
+        // VIEW_DEBUG_TIMELINE in viewDebug its viewStats ring.
         void resetCommBuffers(ContractionProblem const&                          problem,
-                              std::vector<std::shared_ptr<DeviceContext>> const& devices);
+                              ContractionSolution const&                         solution,
+                              std::vector<std::shared_ptr<DeviceContext>> const& devices,
+                              int                                                viewDebug = 0);
+
+        bool fusedA2AViewTransport(ContractionSolution const& solution);
 
         // Copies devices[rank]'s inputs into scratch and adds the peers of the launch's slot
-        // and channel.
+        // and channel. viewTransport: counter_ptr is devices[rank]'s view block instead of the
+        // Synchronizer.
         ProblemInputs const* rankInputs(ContractionInputs&                                 scratch,
                                         ContractionProblem const&                          problem,
                                         std::vector<std::shared_ptr<DeviceContext>> const& devices,
                                         size_t                                             rank,
-                                        size_t                                             launch);
+                                        size_t                                             launch,
+                                        bool viewTransport = false);
     } // namespace Client
 } // namespace TensileLite

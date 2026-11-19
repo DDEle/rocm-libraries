@@ -47,6 +47,7 @@
 #include "SynchronizerValidator.hpp"
 #include "TimingEvents.hpp"
 #include "TimingInstrumentation.hpp"
+#include "ViewTransport.hpp"
 
 #include "LibraryUpdateReporter.hpp"
 #include "LogReporter.hpp"
@@ -296,6 +297,9 @@ namespace TensileLite
                 ("world-filter",             po::value<std::vector<int>>()->default_value(std::vector<int>()), "Fused GEMM+A2A: run only the problems whose world is listed; empty runs all.")
                 ("fused-a2a-drain-recv",     po::value<int>()->default_value(1), "Runtime drainRecv flag passed to the fused kernel (1=on): the kernel exits only once this card's recv buffer is complete.")
                 ("fused-a2a-drain-send",     po::value<int>()->default_value(1), "Runtime drainSend flag passed to the fused kernel (1=on): the kernel exits only once this card's engines have finished reading D[0:AM), so D can be reused on stream order alone. Independent of --fused-a2a-drain-recv.")
+                ("fused-a2a-view-arm",       po::value<int>()->default_value(VIEW_ARM_DEVICE), "Fused A2A, FusedA2ATransport=View solutions: who writes the SDMA chains before each launch. 0: a kernel on the device's stream; 1: the host thread, after synchronizing that stream.")
+                ("fused-a2a-view-coalesce",  po::value<int>()->default_value(1), "Fused A2A, A2AGemm FusedA2ATransport=View solutions: COPY units per arrival ATOMIC on each queue; the last ATOMIC carries the remainder.")
+                ("fused-a2a-view-debug",     po::value<int>()->default_value(0), "Fused A2A debug bitmask. 1: View solutions record a per-launch timeline (arm kernel, GEMM end, wait kernel, and a TIMESTAMP at the start and end of each queue's chain) and print VIEWSTAT lines per solution; 2: GemmA2A View chains are built without their POLLs (data is wrong); 4: InKernel solutions launch an empty kernel right before and right after the fused GEMM.")
                 ("fused-a2a-sdma-rotate",    po::value<int>(), "Fused A2A, gfx942 and gfx950: move each remote peer SDMA queue this many steps along the even xGMI engines 2,4,...,14 from its KFD recommendation; nonzero requires 14 xGMI SDMA engines. Ignored on other architectures, which spread the remote peer queues over the recommended engines. The loopback queue uses engine 0. Defaults to -1.")
                 ("use-default-stream",       po::value<bool>()->default_value(false), "Use default Hip stream to run kernels.")
 
@@ -820,6 +824,17 @@ namespace TensileLite
             if(args["fused-a2a-drain-send"].as<int>() == 0)
                 throw std::runtime_error(
                     "[fused-a2a] --fused-a2a-drain-send=0 is not supported; leave it at 1.");
+            const int arm = args["fused-a2a-view-arm"].as<int>();
+            if(arm != VIEW_ARM_DEVICE && arm != VIEW_ARM_HOST)
+                throw std::runtime_error(
+                    concatenate("[fused-a2a] --fused-a2a-view-arm must be 0 or 1; got ", arm, "."));
+            if(args["fused-a2a-view-coalesce"].as<int>() < 1)
+                throw std::runtime_error(
+                    "[fused-a2a] --fused-a2a-view-coalesce must be at least 1.");
+            const int viewDebug = args["fused-a2a-view-debug"].as<int>();
+            if(viewDebug < 0 || viewDebug > VIEW_DEBUG_ALL)
+                throw std::runtime_error(concatenate(
+                    "[fused-a2a] --fused-a2a-view-debug must be in [0, 7]; got ", viewDebug, "."));
             if(args["use-user-args"].as<bool>())
                 throw std::runtime_error("[fused-a2a] --use-user-args is not supported.");
             if(!args["library-update-file"].as<std::string>().empty())
@@ -908,6 +923,9 @@ int main(int argc, const char* argv[])
     bool           fusedA2A  = fusedMode != FusedA2A::Disabled;
     if(fusedA2A)
         checkFusedA2AArgs(args);
+    const int      viewArmMode  = args["fused-a2a-view-arm"].as<int>();
+    const uint32_t viewCoalesce = (uint32_t)args["fused-a2a-view-coalesce"].as<int>();
+    const int      viewDebug    = args["fused-a2a-view-debug"].as<int>();
     auto const& worldFilter = args["world-filter"].as<std::vector<int>>();
     if(!fusedA2A && !worldFilter.empty())
         throw std::runtime_error("--world-filter applies only with --fused-a2a");
@@ -1336,7 +1354,11 @@ int main(int argc, const char* argv[])
                         try
                         {
                             checkFusedA2ASolution(*problem, *solution, *hardware, active.size());
-                            resetCommBuffers(*problem, active);
+                            resetCommBuffers(*problem, *solution, active, viewDebug);
+                            const bool viewTransport = fusedA2A && fusedA2AViewTransport(*solution);
+                            const bool inKernelNoops
+                                = fusedA2A && !viewTransport
+                                  && (viewDebug & VIEW_DEBUG_INKERNEL_NOOPS) != 0;
                             while(listeners.needMoreRunsInSolution())
                             {
                                 ScopedTimer        runIterTotalTimer("run_iteration_total");
@@ -1357,6 +1379,7 @@ int main(int argc, const char* argv[])
                                 synchronizerValidator->beginRunIteration();
 
                                 std::vector<std::vector<std::vector<KernelInvocation>>> kernels;
+                                std::vector<std::vector<ViewArmArgs>>                   viewArgs;
                                 {
                                     ScopedTimer  timer("kernel_solving");
                                     const size_t slots    = device0->inputArr.size();
@@ -1364,17 +1387,26 @@ int main(int argc, const char* argv[])
                                     kernels.assign(
                                         std::lcm(slots, channels),
                                         std::vector<std::vector<KernelInvocation>>(active.size()));
+                                    if(viewTransport)
+                                        viewArgs.assign(kernels.size(),
+                                                        std::vector<ViewArmArgs>(active.size()));
                                     for(size_t k = 0; k < kernels.size(); k++)
                                         for(size_t d = 0; d < active.size(); d++)
                                         {
                                             auto&                ctx = *active[d];
                                             ScopedDevice         device(ctx.deviceId);
                                             ContractionInputs    scratch;
-                                            ProblemInputs const* inputs = rankInputs(scratch,
-                                                                                     *problem,
-                                                                                     active,
-                                                                                     d,
-                                                                                     k);
+                                            ProblemInputs const* inputs = rankInputs(
+                                                scratch, *problem, active, d, k, viewTransport);
+                                            if(viewTransport)
+                                                viewArgs[k][d] = makeViewArmArgs(*problem,
+                                                                                 *solution,
+                                                                                 active,
+                                                                                 d,
+                                                                                 k,
+                                                                                 viewCoalesce,
+                                                                                 *hardware,
+                                                                                 viewDebug);
                                             kernels[k][d]
                                                 = useUserArgs
                                                       ? solution->solveTensileGPU(*problem,
@@ -1417,14 +1449,58 @@ int main(int argc, const char* argv[])
                                 // One counter across warmups, the profiler run and every sync.
                                 size_t launchIdx = 0;
                                 auto   launchAll = [&](TimingEvents const* startEvents,
-                                                     TimingEvents const* stopEvents,
-                                                     size_t              invocation) {
-                                    auto const& launch = kernels[launchIdx++ % kernels.size()];
+                                                       TimingEvents const* stopEvents,
+                                                       size_t              invocation) {
+                                    const size_t launchSlot = launchIdx++ % kernels.size();
+                                    auto const&  launch     = kernels[launchSlot];
                                     for(size_t d = 0; d < active.size(); d++)
                                     {
                                         auto&        ctx = *active[d];
                                         ScopedDevice device(ctx.deviceId);
-                                        if(startEvents)
+                                        if(viewTransport)
+                                        {
+                                            // The events bracket the arm, the GEMM and the
+                                            // wait.
+                                            auto const& view = viewArgs[launchSlot][d];
+                                            if(startEvents)
+                                                HIP_CHECK_EXC(hipEventRecord(
+                                                    startEvents->card(d)[invocation].front(),
+                                                    ctx.stream));
+                                            try
+                                            {
+                                                viewArm(view, ctx.stream, viewArmMode);
+                                                HIP_CHECK_EXC(ctx.adapter->launchKernels(
+                                                    launch[d], ctx.stream, nullptr, nullptr));
+                                            }
+                                            catch(...)
+                                            {
+                                                viewAbort(view, ctx.stream);
+                                                throw;
+                                            }
+                                            viewWait(view, ctx.stream);
+                                            if(stopEvents)
+                                                HIP_CHECK_EXC(hipEventRecord(
+                                                    stopEvents->card(d)[invocation].back(),
+                                                    ctx.stream));
+                                        }
+                                        else if(inKernelNoops)
+                                        {
+                                            // The events bracket both empty kernels and the
+                                            // GEMM.
+                                            if(startEvents)
+                                                HIP_CHECK_EXC(hipEventRecord(
+                                                    startEvents->card(d)[invocation].front(),
+                                                    ctx.stream));
+                                            viewNoop(ctx.stream);
+                                            HIP_CHECK_EXC(ctx.adapter->launchKernels(
+                                                launch[d], ctx.stream, nullptr, nullptr));
+                                            viewNoop(ctx.stream);
+                                            if(stopEvents)
+                                                HIP_CHECK_EXC(hipEventRecord(
+                                                    stopEvents->card(d)[invocation].back(),
+                                                    ctx.stream));
+                                        }
+                                        else if(startEvents)
                                             HIP_CHECK_EXC(ctx.adapter->launchKernels(
                                                 launch[d],
                                                 ctx.stream,
@@ -1601,6 +1677,18 @@ int main(int argc, const char* argv[])
                             }
                             static_cast<void>(hipSetDevice(device0->deviceId));
                         }
+                        for(auto const& ctx : devices)
+                            if(!viewDrainQueues(*ctx))
+                            {
+                                deviceLost = true;
+                                reporters->log(
+                                    LogLevel::Error,
+                                    concatenate("SDMA queues of device ",
+                                                ctx->deviceId,
+                                                " did not drain after a FusedA2ATransport=View "
+                                                "solution, aborting.\n"));
+                            }
+                        static_cast<void>(hipSetDevice(device0->deviceId));
                     }
 
                     {

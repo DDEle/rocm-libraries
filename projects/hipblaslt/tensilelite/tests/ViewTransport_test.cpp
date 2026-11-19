@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -192,6 +193,83 @@ namespace
     {
         return kDst + b * 128 * 1024 + h * 512;
     }
+
+    constexpr uint64_t kBlockStride = 1ull << 20;
+    constexpr uint64_t kSubStride   = 1ull << 8;
+    constexpr uint32_t kAll         = 1u << 30;
+
+    // A2AGemm with one-row token blocks and every queue's flag at kFlag + 4 * q.
+    ViewArmArgs chainArgs(uint32_t world,
+                          uint32_t blocks,
+                          uint32_t features,
+                          uint32_t numCu,
+                          uint32_t subRounds,
+                          uint32_t coalesce)
+    {
+        ViewArmArgs a{};
+        a.mode           = VIEW_MODE_A2A_GEMM;
+        a.world          = world;
+        a.numQueues      = world - 1;
+        a.subRounds      = subRounds;
+        a.tokenBlocks    = blocks;
+        a.featureTiles   = features;
+        a.numCu          = numCu;
+        a.mt1            = 1;
+        a.nTokens        = blocks;
+        a.srcPitch       = 1;
+        a.dstPitch       = 1;
+        a.slice          = 1;
+        a.rectX          = 1;
+        a.srcBlockStride = kBlockStride;
+        a.dstBlockStride = kBlockStride;
+        a.subRoundStride = kSubStride;
+        a.coalesce       = coalesce;
+        a.view           = fakePointer<uint32_t>(kView);
+        for(uint32_t q = 0; q + 1 < world; q++)
+        {
+            a.queues[q].srcBase = kSrc;
+            a.queues[q].dstBase = kDst;
+            a.queues[q].flag    = fakePointer<uint32_t>(kFlag + 4 * q);
+        }
+        return a;
+    }
+
+    // Queue q's A2AGemm chain: C<b>[.<h>] per COPY, A+<addend> per ATOMIC.
+    std::string chainText(ViewArmArgs const& a, uint32_t q)
+    {
+        ViewRingWriter count{nullptr, 1ull << 40, 0};
+        viewBuildUnits(a, q, 0, count);
+        uint64_t dwords = 1;
+        while(dwords <= count.pos)
+            dwords *= 2;
+        std::vector<uint32_t> ring(dwords, 0xDEADBEEFu);
+        ViewRingWriter        w{ring.data(), dwords, 0};
+        viewBuildUnits(a, q, 0, w);
+        std::string out;
+        for(uint64_t at = 0; at < w.pos;)
+        {
+            out += out.empty() ? "" : " ";
+            if(ring[at] == VIEW_COPY_HEADER)
+            {
+                const uint64_t off = ((uint64_t)ring[at + 2] << 32 | ring[at + 1]) - a.queues[q].srcBase;
+                out += "C" + std::to_string(off / a.srcBlockStride);
+                if(a.subRounds > 1)
+                    out += "." + std::to_string(off % a.srcBlockStride / a.subRoundStride);
+                at += VIEW_COPY_DWORDS;
+            }
+            else if(ring[at] == VIEW_ATOMIC_HEADER)
+            {
+                out += "A+" + std::to_string(ring[at + 3]);
+                at += VIEW_ATOMIC_DWORDS;
+            }
+            else
+            {
+                ADD_FAILURE() << "dword " << at << " is no COPY or ATOMIC header";
+                break;
+            }
+        }
+        return out;
+    }
 }
 
 TEST(ViewTransport, A2AGemmOneAtomicPerUnit)
@@ -209,21 +287,24 @@ TEST(ViewTransport, A2AGemmOneAtomicPerUnit)
         }
 }
 
-TEST(ViewTransport, A2AGemmCoalescedFlushesEachRound)
+// W=3, B=2, S=2, coalesce 3: groups {0} {1}; coalescing stops at every sub-round.
+TEST(ViewTransport, A2AGemmCoalescedFlushesEachSubRound)
 {
     auto const r = build(a2aGemmArgs(3), 0, 0);
-    ASSERT_EQ(r.size(), 4 * VIEW_COPY_DWORDS + 2 * VIEW_ATOMIC_DWORDS);
-    expectCopy(r, 0, a2aGemmSrc(0, 0), a2aGemmDst(0, 0), 64, 64, 8192, 32, 128);
-    expectCopy(r, 13, a2aGemmSrc(0, 1), a2aGemmDst(0, 1), 64, 64, 8192, 32, 128);
-    expectAtomic(r, 26, kFlag, 2);
-    expectCopy(r, 34, a2aGemmSrc(1, 0), a2aGemmDst(1, 0), 64, 64, 8192, 32, 72);
-    expectCopy(r, 47, a2aGemmSrc(1, 1), a2aGemmDst(1, 1), 64, 64, 8192, 32, 72);
-    expectAtomic(r, 60, kFlag, 2);
+    ASSERT_EQ(r.size(), 4 * (VIEW_COPY_DWORDS + VIEW_ATOMIC_DWORDS));
+    size_t at = 0;
+    for(uint32_t b = 0; b < 2; b++)
+        for(uint32_t h = 0; h < 2; h++)
+        {
+            expectCopy(r, at, a2aGemmSrc(b, h), a2aGemmDst(b, h), 64, 64, 8192, 32, b ? 72 : 128);
+            at += VIEW_COPY_DWORDS;
+            expectAtomic(r, at, kFlag, 1);
+            at += VIEW_ATOMIC_DWORDS;
+        }
 }
 
-// W=3, B=3, S=1, Q=2: queue 1 serves block 1 in round 0, whose ATOMIC also carries the
-// missing unit, then blocks 0 and 2; queue 0 serves blocks 0 and 2, then block 1, whose ATOMIC
-// ends the chain.
+// W=3, B=3, S=1, Qb=2: groups {0, 1} {2}. Queue 1 serves group 1, whose ATOMIC also carries the
+// missing unit, then group 0; queue 0 serves group 0, then group 1, whose ATOMIC ends the chain.
 TEST(ViewTransport, A2AGemmStaggersQueuesAndPadsShortRounds)
 {
     ViewArmArgs a    = a2aGemmArgs(1);
@@ -243,16 +324,12 @@ TEST(ViewTransport, A2AGemmStaggersQueuesAndPadsShortRounds)
             at += VIEW_ATOMIC_DWORDS;
         }
     };
-    expectSteps(build(a, 1, 0), {{1, 2}, {0, 1}, {2, 1}});
-    expectSteps(build(a, 0, 0), {{0, 1}, {2, 1}, {1, 2}});
+    expectSteps(build(a, 1, 0), {{2, 2}, {0, 1}, {1, 1}});
+    expectSteps(build(a, 0, 0), {{0, 1}, {1, 1}, {2, 2}});
 
     a.tokenBlocks = 1;
     a.nTokens     = 128;
-    auto const e  = build(a, 1, 0);
-    ASSERT_EQ(e.size(), VIEW_ATOMIC_DWORDS + VIEW_COPY_DWORDS + VIEW_ATOMIC_DWORDS);
-    expectAtomic(e, 0, kFlag, 1);
-    expectCopy(e, VIEW_ATOMIC_DWORDS, a2aGemmSrc(0, 0), a2aGemmDst(0, 0), 64, 64, 8192, 32, 128);
-    expectAtomic(e, VIEW_ATOMIC_DWORDS + VIEW_COPY_DWORDS, kFlag, 1);
+    expectSteps(build(a, 1, 0), {{0, 2}});
 }
 
 // W=8, B=1, S=2, coalesce 1: queue 0 copies block 0 in round 0; the ATOMIC after its last
@@ -280,82 +357,199 @@ TEST(ViewTransport, A2AGemmFoldsTrailingEmptyRoundsIntoTheLastAtomic)
     expectAtomic(r, 2 * VIEW_COPY_DWORDS + VIEW_ATOMIC_DWORDS, kFlag, 7 * 2 - 1);
 }
 
+// W=8, B=16, F=16, S=1, coalesce >= Qb: groups {0,1,2} .. {12,13,14} {15} {} (GK=Qb=3). Queue q
+// serves groups q, q-1, .., 0, 6, .., q+1 with one ATOMIC each; the empty group's Qb rides on the
+// ATOMIC before it, on queue 6 on the first one.
+TEST(ViewTransport, A2AGemmServesContiguousGroupsInInKernelOrder)
+{
+    ViewArmArgs const a = chainArgs(8, 16, 16, 256, 1, kAll);
+    EXPECT_EQ(chainText(a, 0),
+              "C0 C1 C2 A+6 C15 A+3 C12 C13 C14 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3 C3 C4 C5 A+3");
+    EXPECT_EQ(chainText(a, 1),
+              "C3 C4 C5 A+3 C0 C1 C2 A+6 C15 A+3 C12 C13 C14 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3");
+    EXPECT_EQ(chainText(a, 5),
+              "C15 A+3 C12 C13 C14 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3 C3 C4 C5 A+3 C0 C1 C2 A+6");
+    EXPECT_EQ(chainText(a, 6),
+              "C15 A+6 C12 C13 C14 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3 C3 C4 C5 A+3 C0 C1 C2 A+3");
+}
+
+// W=4, B=4, S=2: groups {0, 1} {2, 3} {} (Qb=2), each sent once per sub-round, sub-round outer.
+TEST(ViewTransport, A2AGemmSendsEachGroupPerSubRoundAndFoldsEmptyGroups)
+{
+    ViewArmArgs const a = chainArgs(4, 4, 1, 256, 2, kAll);
+    EXPECT_EQ(chainText(a, 0), "C0.0 C1.0 A+2 C0.1 C1.1 A+6 C2.0 C3.0 A+2 C2.1 C3.1 A+2");
+    EXPECT_EQ(chainText(a, 1), "C2.0 C3.0 A+2 C2.1 C3.1 A+2 C0.0 C1.0 A+2 C0.1 C1.1 A+6");
+    EXPECT_EQ(chainText(a, 2), "C2.0 C3.0 A+6 C2.1 C3.1 A+2 C0.0 C1.0 A+2 C0.1 C1.1 A+2");
+}
+
+// W=4, B=4, S=1: queue 2's first round has no block; its Qb rides on the chain's first ATOMIC,
+// also when that ATOMIC comes before the group's last unit.
+TEST(ViewTransport, A2AGemmLeadingEmptyRoundRidesOnTheFirstAtomic)
+{
+    EXPECT_EQ(chainText(chainArgs(4, 4, 1, 256, 1, kAll), 2), "C2 C3 A+4 C0 C1 A+2");
+    EXPECT_EQ(chainText(chainArgs(4, 4, 1, 256, 1, 1), 2), "C2 A+3 C3 A+1 C0 A+1 C1 A+1");
+    EXPECT_EQ(chainText(chainArgs(4, 4, 1, 256, 2, 1), 2),
+              "C2.0 A+5 C3.0 A+1 C2.1 A+1 C3.1 A+1 C0.0 A+1 C1.0 A+1 C0.1 A+1 C1.1 A+1");
+}
+
+// numCu = 256: InKernel's batches where numCu / F does not divide, and F > numCu.
+TEST(ViewTransport, A2AGemmBatchesFollowTheInKernelPartition)
+{
+    struct Case
+    {
+        uint32_t                                   world, blocks, features, numCu, qb;
+        std::vector<std::pair<uint32_t, uint32_t>> spans;
+    };
+    const std::vector<Case> cases = {{3, 64, 4, 256, 32, {{0, 64}}},
+                                     {8, 44, 12, 256, 4, {{0, 22}, {22, 43}, {43, 44}}},
+                                     {4, 16, 24, 256, 4, {{0, 11}, {11, 16}}},
+                                     {2, 3, 300, 256, 1, {{0, 1}, {1, 2}, {2, 3}}}};
+    for(auto const& c : cases)
+    {
+        SCOPED_TRACE(testing::Message() << "W=" << c.world << " B=" << c.blocks << " F=" << c.features);
+        ViewArmArgs const a = chainArgs(c.world, c.blocks, c.features, c.numCu, 1, 1);
+        ASSERT_EQ(viewA2AGemmBatches(a), c.spans.size());
+        EXPECT_EQ(viewA2AGemmBatchBlocksMax(a), c.spans[0].second);
+        EXPECT_EQ(viewA2AGemmRoundUnits(a), c.qb);
+        for(uint32_t iB = 0; iB < c.spans.size(); iB++)
+        {
+            EXPECT_EQ(viewA2AGemmBatchLo(a, iB), c.spans[iB].first) << "batch " << iB;
+            EXPECT_EQ(viewA2AGemmBatchHi(a, iB), c.spans[iB].second) << "batch " << iB;
+        }
+    }
+}
+
+// B = 0: no batch, no packet, nothing booked.
+TEST(ViewTransport, A2AGemmEmptyTokensBuildsNothing)
+{
+    ViewArmArgs a = a2aGemmArgs(1);
+    a.tokenBlocks = 0;
+    a.nTokens     = 0;
+    for(uint32_t features : {1u, 12u, 300u})
+    {
+        SCOPED_TRACE(testing::Message() << "F=" << features);
+        a.featureTiles = features;
+        EXPECT_EQ(viewA2AGemmBatches(a), 0u);
+        EXPECT_EQ(viewA2AGemmChainUnits(a), 0u);
+        EXPECT_TRUE(build(a, 0, 0).empty());
+        Adds adds;
+        viewBookSkipped(a, 0, recordTo(adds));
+        EXPECT_EQ(adds, (Adds{{kFlag, 0u}}));
+    }
+}
+
+TEST(ViewTransport, A2AGemmEmptyFeaturesBuildsNothing)
+{
+    ViewArmArgs a  = a2aGemmArgs(1);
+    a.featureTiles = 0;
+    for(uint32_t blocks : {0u, 1u, 5u, 300u})
+    {
+        SCOPED_TRACE(testing::Message() << "B=" << blocks);
+        a.tokenBlocks = blocks;
+        a.nTokens     = blocks * a.mt1;
+        EXPECT_EQ(viewA2AGemmBatches(a), 0u);
+        EXPECT_EQ(viewA2AGemmBatchBlocksMax(a), 0u);
+        EXPECT_EQ(viewA2AGemmRoundUnits(a), 0u);
+        EXPECT_EQ(viewA2AGemmChainUnits(a), 0u);
+        EXPECT_TRUE(build(a, 0, 0).empty());
+        Adds adds;
+        viewBookSkipped(a, 0, recordTo(adds));
+        EXPECT_EQ(adds, (Adds{{kFlag, 0u}}));
+    }
+}
+
 // Walks every queue's chain for many (W, B, S, coalesce, F, numCu) and follows each work-group's
-// segment switches as the kernel does: queue i = A2AShardIdx - 1 starting at b mod G, ordinal K
-// starting at S * (iB * G * Qb + (b - iB * nb) / G) and stepping by 1 within a segment, by
-// S*Qb - (S-1) to the next one; nb = clamp(numCu / F, 1, B), iB = b / nb, Qb = ceil(nb / G).
+// segment switches as the kernel does: F' = min(F, numCu), batch iB = b * F' / numCu, groups of
+// GK = ceil(n / G) blocks of the batch, Gb = (b - bLo) / GK, pos = (b - bLo) % GK; queue
+// i = A2AShardIdx - 1 starting at Gb, ordinal K starting at S * iB * G * Qb + pos and stepping
+// by Qb at every switch. Against InKernel's a2aEnqueue order (per non-empty group, per h, the
+// group's COPYs, then one ATOMIC) no unit is released after more COPYs of its queue; with
+// coalesce >= Qb each one after as many. Each unit is released within coalesce - 1 COPYs after
+// its own, and each queue issues ceil(|group| / coalesce) ATOMICs per non-empty (group, h).
 TEST(ViewTransport, A2AGemmChainReleasesEveryUnitAfterItsCopy)
 {
-    constexpr uint64_t kBlockStride = 1ull << 20;
-    constexpr uint64_t kSubStride   = 1ull << 8;
-    constexpr uint32_t kNone        = ~0u;
-    // (F, numCu / F): batches of 1, 2, 3 and 8 blocks, of B (kNone) and of more than B
-    // (kNone - 1), and numCu < F.
-    const std::vector<std::pair<uint32_t, uint32_t>> grids
-        = {{8, 1}, {8, 2}, {8, 3}, {8, 8}, {8, kNone}, {8, kNone - 1}, {32, 0}};
-    for(uint32_t world : {2u, 3u, 4u, 5u, 8u})
-        for(uint32_t blocks : {1u, 2u, 3u, 5u, 7u, 16u, 37u})
+    // (F, numCu): numCu / F of 1, 2, 3 and 8 blocks, not dividing, numCu = 256 and numCu < F.
+    const std::vector<std::pair<uint32_t, uint32_t>> grids = {{8, 8},
+                                                              {8, 16},
+                                                              {8, 24},
+                                                              {8, 64},
+                                                              {3, 4},
+                                                              {3, 7},
+                                                              {3, 17},
+                                                              {7, 31},
+                                                              {4, 256},
+                                                              {11, 256},
+                                                              {12, 256},
+                                                              {16, 256},
+                                                              {24, 256},
+                                                              {32, 31},
+                                                              {7, 3}};
+    for(uint32_t world : {2u, 3u, 4u, 5u, 6u, 7u, 8u})
+        for(uint32_t blocks : {0u, 1u, 2u, 3u, 5u, 7u, 11u, 16u, 37u, 44u, 64u})
+        {
+            auto fn = grids;
+            fn.push_back({8, 8 * std::max(blocks, 1u)});
+            fn.push_back({8, 8 * (blocks + 5)});
             for(uint32_t subRounds : {1u, 2u, 4u})
-                for(uint32_t coalesce : {1u, 3u, 4u})
-                    for(auto [features, perBatch] : grids)
+                for(uint32_t coalesce : {1u, 3u, 4u, kAll})
+                    for(auto [features, numCu] : fn)
                     {
-                        const uint32_t numCu
-                            = features
-                              * (perBatch == kNone       ? blocks
-                                 : perBatch == kNone - 1 ? blocks + 5
-                                 : perBatch == 0         ? 0
-                                                         : perBatch)
-                              + (perBatch == 0 ? features - 1 : 0);
                         SCOPED_TRACE(testing::Message()
                                      << "W=" << world << " B=" << blocks << " S=" << subRounds
                                      << " c=" << coalesce << " F=" << features
                                      << " numCu=" << numCu);
-                        const uint32_t g     = world - 1;
-                        const uint32_t nb    = std::max(1u, std::min(numCu / features, blocks));
-                        const uint32_t qb    = (nb + g - 1) / g;
-                        const uint32_t nBat  = (blocks + nb - 1) / nb;
-                        const uint32_t total = nBat * g * qb * subRounds;
-                        ViewArmArgs    a{};
-                        a.mode           = VIEW_MODE_A2A_GEMM;
-                        a.world          = world;
-                        a.numQueues      = g;
-                        a.subRounds      = subRounds;
-                        a.tokenBlocks    = blocks;
-                        a.featureTiles   = features;
-                        a.numCu          = numCu;
-                        a.mt1            = 1;
-                        a.nTokens        = blocks;
-                        a.srcPitch       = 1;
-                        a.dstPitch       = 1;
-                        a.slice          = 1;
-                        a.rectX          = 1;
-                        a.srcBlockStride = kBlockStride;
-                        a.dstBlockStride = kBlockStride;
-                        a.subRoundStride = kSubStride;
-                        a.coalesce       = coalesce;
-                        a.view           = fakePointer<uint32_t>(kView);
-                        ASSERT_EQ(viewA2AGemmBatchBlocks(a), nb);
-                        ASSERT_EQ(viewA2AGemmBatches(a), nBat);
+                        const uint32_t g  = world - 1;
+                        const uint32_t fp = std::min(features, numCu);
+                        // InKernel's batches, a2aBatchSpan on F.
+                        std::vector<std::pair<uint32_t, uint32_t>> spans;
+                        uint32_t                                   nbMax = 0;
+                        for(uint32_t b = 0; b < blocks; b++)
+                        {
+                            const uint32_t iB = b * features / numCu;
+                            const uint32_t lo = (iB * numCu + features - 1) / features;
+                            const uint32_t hi = std::min(
+                                (iB * numCu + numCu + features - 1) / features, blocks);
+                            ASSERT_TRUE(lo <= b && b < hi);
+                            if(spans.empty() || spans.back().first != lo)
+                                spans.push_back({lo, hi});
+                            nbMax = std::max(nbMax, hi - lo);
+                        }
+                        const uint32_t qb    = (nbMax + g - 1) / g;
+                        const uint32_t total = spans.size() * g * qb * subRounds;
+                        ViewArmArgs    a
+                            = chainArgs(world, blocks, features, numCu, subRounds, coalesce);
+                        ASSERT_EQ(viewA2AGemmBatches(a), spans.size());
+                        ASSERT_EQ(viewA2AGemmBatchBlocksMax(a), nbMax);
+                        for(uint32_t iB = 0; iB < spans.size(); iB++)
+                        {
+                            ASSERT_EQ(viewA2AGemmBatchLo(a, iB), spans[iB].first);
+                            ASSERT_EQ(viewA2AGemmBatchHi(a, iB), spans[iB].second);
+                        }
                         ASSERT_EQ(viewA2AGemmRoundUnits(a), qb * subRounds);
                         ASSERT_EQ(viewA2AGemmChainUnits(a), total);
 
-                        // Per queue: packet index of each unit's COPY, and the (packet index,
-                        // flag[i] after it) of each ATOMIC.
-                        std::vector<std::vector<size_t>> copyAt(g);
-                        std::vector<std::vector<std::pair<size_t, uint32_t>>> atomics(g);
-                        std::vector<size_t>                                   packets(g, 0);
+                        // Per queue: packet index and COPY count through each unit's COPY, and
+                        // the (packet index, flag[i] after it, COPYs before it) of each ATOMIC.
+                        struct Atomic
+                        {
+                            size_t   at;
+                            uint32_t flag;
+                            uint32_t copies;
+                        };
+                        std::vector<std::vector<size_t>>   copyAt(g);
+                        std::vector<std::vector<uint32_t>> copyNo(g);
+                        std::vector<std::vector<Atomic>>   atomics(g);
+                        std::vector<size_t>                packets(g, 0);
                         for(uint32_t i = 0; i < g; i++)
                         {
-                            a.queues[i].srcBase = kSrc;
-                            a.queues[i].dstBase = kDst;
-                            a.queues[i].flag    = fakePointer<uint32_t>(kFlag + 4 * i);
                             std::vector<uint32_t> ring(16384, 0xDEADBEEFu);
                             ViewRingWriter        w{ring.data(), ring.size(), 0};
                             viewBuildChain(a, i, 0, w);
                             ASSERT_LT(w.pos, ring.size());
                             std::vector<uint32_t> copied(blocks * subRounds, 0);
                             copyAt[i].assign(blocks * subRounds, 0);
-                            uint32_t counter = 0;
+                            copyNo[i].assign(blocks * subRounds, 0);
+                            uint32_t counter = 0, copies = 0;
                             for(uint64_t at = 0; at < w.pos; packets[i]++)
                             {
                                 if(ring[at] == VIEW_COPY_HEADER)
@@ -369,6 +563,8 @@ TEST(ViewTransport, A2AGemmChainReleasesEveryUnitAfterItsCopy)
                                     ASSERT_LT(h, subRounds);
                                     copied[b * subRounds + h]++;
                                     copyAt[i][b * subRounds + h] = packets[i];
+                                    copies++;
+                                    copyNo[i][b * subRounds + h] = copies;
                                     at += VIEW_COPY_DWORDS;
                                 }
                                 else
@@ -378,7 +574,7 @@ TEST(ViewTransport, A2AGemmChainReleasesEveryUnitAfterItsCopy)
                                               kFlag + 4 * i);
                                     ASSERT_GT(ring[at + 3], 0u);
                                     counter += ring[at + 3];
-                                    atomics[i].push_back({packets[i], counter});
+                                    atomics[i].push_back({packets[i], counter, copies});
                                     at += VIEW_ATOMIC_DWORDS;
                                 }
                             }
@@ -390,40 +586,91 @@ TEST(ViewTransport, A2AGemmChainReleasesEveryUnitAfterItsCopy)
                         Adds booked;
                         viewBookSkipped(a, 0, recordTo(booked));
                         EXPECT_EQ(booked, (Adds{{kFlag, total}}));
+                        if(blocks == 0)
+                        {
+                            for(uint32_t i = 0; i < g; i++)
+                                EXPECT_EQ(packets[i], 0u) << "queue " << i;
+                            continue;
+                        }
+
+                        // InKernel's release position (COPYs on queue i up to the unit's ATOMIC)
+                        // and ATOMIC count, a2aEnqueue's ring order per batch; the ATOMIC count
+                        // with one ATOMIC per coalesce units of each (group, h).
+                        std::vector<std::vector<uint32_t>> inkRelease(
+                            g, std::vector<uint32_t>(blocks * subRounds, 0));
+                        std::vector<uint32_t> inkAtomics(g, 0), coalescedAtomics(g, 0);
+                        for(uint32_t i = 0; i < g; i++)
+                        {
+                            uint32_t copies = 0;
+                            for(auto [lo, hi] : spans)
+                            {
+                                const int64_t n  = hi - lo;
+                                const int64_t gk = (n + g - 1) / g;
+                                int64_t       left = n, row = lo + i * gk;
+                                while(left > 0)
+                                {
+                                    if(row < lo + n)
+                                    {
+                                        const int64_t nBlk = std::min<int64_t>(lo + n - row, gk);
+                                        for(uint32_t h = 0; h < subRounds; h++)
+                                        {
+                                            copies += nBlk;
+                                            for(int64_t b = row; b < row + nBlk; b++)
+                                                inkRelease[i][b * subRounds + h] = copies;
+                                            inkAtomics[i]++;
+                                            coalescedAtomics[i] += (nBlk + coalesce - 1) / coalesce;
+                                        }
+                                        left -= nBlk;
+                                    }
+                                    row -= gk;
+                                    if(row < lo)
+                                        row += g * gk;
+                                }
+                            }
+                        }
 
                         std::vector<size_t> lastRelease(g, 0);
                         for(uint32_t b = 0; b < blocks; b++)
                         {
-                            const uint32_t iB    = b / nb;
-                            const uint32_t bLo   = iB * nb;
-                            uint32_t       shard = b % g + 1;
-                            uint32_t       k     = subRounds * (iB * g * qb + (b - bLo) / g);
-                            const uint32_t step  = subRounds * qb - (subRounds - 1);
+                            const uint32_t iB = b * fp / numCu;
+                            ASSERT_LT(iB, spans.size());
+                            const uint32_t bLo = spans[iB].first;
+                            ASSERT_TRUE(bLo <= b && b < spans[iB].second);
+                            const uint32_t gk    = (spans[iB].second - bLo + g - 1) / g;
+                            const uint32_t gb    = (b - bLo) / gk;
+                            const uint32_t pos   = (b - bLo) % gk;
+                            uint32_t       shard = gb + 1;
+                            uint32_t       k     = subRounds * iB * g * qb + pos;
                             for(uint32_t j = 0; j < g; j++)
                                 for(uint32_t h = 0; h < subRounds; h++)
                                 {
                                     SCOPED_TRACE(testing::Message()
                                                  << "b=" << b << " j=" << j << " h=" << h);
                                     const uint32_t i = shard - 1;
-                                    ASSERT_EQ(i, (b % g + j) % g);
-                                    ASSERT_EQ(k,
-                                              subRounds * (iB * g * qb + j * qb + (b - bLo) / g)
-                                                  + h);
+                                    ASSERT_EQ(i, (gb + j) % g);
+                                    ASSERT_EQ(k, qb * (subRounds * (iB * g + j) + h) + pos);
                                     const size_t copy = copyAt[i][b * subRounds + h];
                                     auto const&  at   = atomics[i];
                                     auto const   next = std::find_if(
                                         at.begin(), at.end(), [&](auto const& e) {
-                                            return e.first > copy;
+                                            return e.at > copy;
                                         });
                                     ASSERT_NE(next, at.end()) << "no ATOMIC after the COPY";
-                                    ASSERT_GE(next->second, k + 1);
+                                    ASSERT_GE(next->flag, k + 1);
                                     auto const release = std::find_if(
                                         at.begin(), at.end(), [&](auto const& e) {
-                                            return e.second >= k + 1;
+                                            return e.flag >= k + 1;
                                         });
-                                    EXPECT_GT(release->first, copy) << "released before its COPY";
-                                    lastRelease[i] = std::max(lastRelease[i], release->first);
-                                    k += h == subRounds - 1 ? step : 1;
+                                    EXPECT_GT(release->at, copy) << "released before its COPY";
+                                    const uint32_t ink = inkRelease[i][b * subRounds + h];
+                                    ASSERT_LE(release->copies, ink) << "released after InKernel";
+                                    if(coalesce >= qb)
+                                        ASSERT_EQ(release->copies, ink) << "released before InKernel";
+                                    ASSERT_LE(release->copies - copyNo[i][b * subRounds + h],
+                                              coalesce - 1)
+                                        << "released more than coalesce - 1 COPYs late";
+                                    lastRelease[i] = std::max(lastRelease[i], release->at);
+                                    k += qb;
                                     if(h == subRounds - 1)
                                         shard = shard + 1 < world ? shard + 1 : 1;
                                 }
@@ -433,10 +680,16 @@ TEST(ViewTransport, A2AGemmChainReleasesEveryUnitAfterItsCopy)
                             EXPECT_EQ(lastRelease[i] + 1, packets[i])
                                 << "queue " << i << ": packets after the last awaited ATOMIC";
                             ASSERT_FALSE(atomics[i].empty());
-                            EXPECT_EQ(atomics[i].back().first + 1, packets[i])
+                            EXPECT_EQ(atomics[i].back().at + 1, packets[i])
                                 << "queue " << i << ": the chain does not end with an ATOMIC";
+                            if(coalesce >= qb)
+                                EXPECT_EQ(atomics[i].size(), inkAtomics[i])
+                                    << "queue " << i << ": ATOMICs against InKernel";
+                            EXPECT_EQ(atomics[i].size(), coalescedAtomics[i])
+                                << "queue " << i << ": ATOMICs against one per coalesce units";
                         }
                     }
+        }
 }
 
 TEST(ViewTransport, A2AGemmBooksRoundedRoundsAndAdvancesOnlyTheEpoch)
@@ -621,6 +874,51 @@ TEST(ViewTransport, ArmQueueSkipsWhenTheRingIsFull)
     EXPECT_EQ(wptr, 0u);
     EXPECT_EQ(doorbell, 0u);
     EXPECT_EQ(ring, std::vector<uint32_t>(64, 0xDEADBEEFu));
+}
+
+// A 512-byte ring; the chain is 4 * (COPY + ATOMIC) = 336 bytes, from wptr 512 (ring offset 0) to 848.
+TEST(ViewTransport, ArmQueueFitsOnlyWhileTheEndStaysBelowRptrPlusTheRing)
+{
+    const uint64_t chainBytes = 4 * (VIEW_COPY_DWORDS + VIEW_ATOMIC_DWORDS) * 4;
+    for(uint64_t gap : {0u, 4u})
+    {
+        SCOPED_TRACE(testing::Message() << "end - rptr = ringBytes - " << gap);
+        FakeQueue   queue(128, 512);
+        ViewArmArgs a = a2aGemmArgs(1);
+        queue.attach(a, 0);
+        queue.rptr = 512 + chainBytes + gap - queue.ring.size() * sizeof(uint32_t);
+        EXPECT_EQ(viewQueueFits(a, 0, 0), gap != 0);
+        EXPECT_EQ(viewArmQueue(a, 0, 0), gap != 0);
+        if(gap == 0)
+        {
+            EXPECT_EQ(queue.wptr, 512u);
+            EXPECT_EQ(queue.doorbell, 0u);
+            EXPECT_EQ(queue.ring, std::vector<uint32_t>(128, 0xDEADBEEFu));
+        }
+        else
+        {
+            EXPECT_EQ(queue.wptr, 512 + chainBytes);
+            EXPECT_EQ(queue.doorbell, queue.wptr);
+            expectCopy(queue.ring, 0, a2aGemmSrc(0, 0), a2aGemmDst(0, 0), 64, 64, 8192, 32, 128);
+        }
+    }
+}
+
+// A COPY that ends exactly at the ring end is not padded.
+TEST(ViewTransport, PacketEndingAtTheRingEndIsNotPadded)
+{
+    ViewArmArgs a = a2aGemmArgs(1);
+    a.world       = 2;
+    a.numQueues   = 1;
+    a.tokenBlocks = 1;
+    a.subRounds   = 1;
+    std::vector<uint32_t> ring(64, 0xDEADBEEFu);
+    const uint64_t        start = 64 - VIEW_COPY_DWORDS;
+    ViewRingWriter        w{ring.data(), ring.size(), start};
+    viewBuildChain(a, 0, 0, w);
+    EXPECT_EQ(w.pos - start, VIEW_COPY_DWORDS + VIEW_ATOMIC_DWORDS);
+    expectCopy(ring, start, a2aGemmSrc(0, 0), a2aGemmDst(0, 0), 64, 64, 8192, 32, 128);
+    expectAtomic(ring, 0, kFlag, 1);
 }
 
 TEST(ViewTransport, AdvanceMovesBaseToExpected)

@@ -9484,15 +9484,10 @@ class KernelWriterAssembly(KernelWriter):
                            comment="W - 1"))
         module.add(SMaxU32(dst=sgpr(tmpSgprInfo.idx), src0=sgpr(tmpSgprInfo.idx), src1=1,
                            comment="peer queue count, at least 1"))
-        module.add(scalarUInt24DivideAndRemainder(
-            qReg=-1, dReg="WorkGroup1", divReg=tmpSgprInfo.idx,
-            rReg="A2AShardIdx", tmpVgprRes=vgprRes, wavewidth=kernel["WavefrontSize"],
-            doRemainder=True, doQuotient=False,
-            comment="this block's first peer queue = b % (W-1)"))
         module.add(self.a2aViewOrdinals(kernel, tmpSgprInfo.idx, tmpSgprInfo.idx + 1, vgprRes))
     if view:
       module.add(SAddU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=1,
-                         comment="gathered segment = peer queue + 1"))
+                         comment="first gathered segment = Gb + 1"))
     self.vgprPool.checkIn(tmpVgpr)
     # AddressA and AddressB carry the unshifted tile bases from here on; A2ATileBaseA
     # holds B's tile offset until the gathered buffer is known.
@@ -9524,48 +9519,75 @@ class KernelWriterAssembly(KernelWriter):
 
   def a2aViewOrdinals(self, kernel, gSgpr, tmpSgpr, vgprRes):
     """With A2AViewStep = FusedNumCu on entry, G = gSgpr peer queues, B = NumWorkGroups1 token
-    blocks, F = NumWorkGroups0 feature tiles and b = WorkGroup1:
-    nb = clamp(numCu / F, 1, B) token blocks per batch, Qb = ceil(nb / G), iB = b / nb,
-    A2AViewK := S * (iB * G * Qb + (b - iB * nb) / G), the ordinal of this work-group's first
-    unit on its first queue, and A2AViewStep := S * Qb - (S-1), from a segment's last sub-round
-    to the next segment."""
+    blocks, F = NumWorkGroups0 feature tiles, b = WorkGroup1 and F' = min(F, numCu):
+    b is in batch iB = b * F' / numCu, blocks [bLo, bHi) with bLo = ceil(iB * numCu / F') and
+    bHi = min(ceil((iB+1) * numCu / F'), B), split into groups of GK = ceil((bHi - bLo) / G);
+    Gb = (b - bLo) / GK, pos = (b - bLo) % GK, Qb = ceil(min(ceil(numCu / F'), B) / G).
+    A2AShardIdx := Gb, A2AViewK := S * iB * G * Qb + pos, the ordinal of this work-group's
+    first unit on its first queue, and A2AViewStep := Qb. tmpSgpr and A2AShardCounter are
+    scratch."""
     module    = Module("a2aViewOrdinals")
     subRounds = kernel["A2ASubRounds"]
     ww        = kernel["WavefrontSize"]
-    module.add(scalarUInt24DivideAndRemainder(
-        qReg="A2AViewStep", dReg="A2AViewStep", divReg="NumWorkGroups0", rReg=-1,
-        tmpVgprRes=vgprRes, wavewidth=ww, doRemainder=False, comment="numCu / F"))
-    module.add(SMinU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr("NumWorkGroups1"),
-                       comment="at most B"))
-    module.add(SMaxU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=1,
-                       comment="nb = token blocks per batch, at least 1"))
-    module.add(scalarUInt24DivideAndRemainder(
-        qReg="A2AViewK", dReg="WorkGroup1", divReg="A2AViewStep", rReg=tmpSgpr,
-        tmpVgprRes=vgprRes, wavewidth=ww, doRemainder=True,
-        comment="iB = b / nb, b - bLo = b % nb"))
-    module.add(scalarUInt24DivideAndRemainder(
-        qReg=tmpSgpr, dReg=tmpSgpr, divReg=gSgpr, rReg=-1,
-        tmpVgprRes=vgprRes, wavewidth=ww, doRemainder=False, comment="(b - bLo) / (W-1)"))
-    module.add(SAddU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr(gSgpr),
-                       comment="nb + (W-1)"))
+    def div(q, d, dv, comment):
+      module.add(scalarUInt24DivideAndRemainder(qReg=q, dReg=d, divReg=dv, rReg=-1,
+          tmpVgprRes=vgprRes, wavewidth=ww, doRemainder=False, comment=comment))
+    module.add(SMinU32(dst=sgpr(tmpSgpr), src0=sgpr("NumWorkGroups0"), src1=sgpr("A2AViewStep"),
+                       comment="F' = min(F, numCu)"))
+    module.add(SMulI32(dst=sgpr("A2AViewK"), src0=sgpr("WorkGroup1"), src1=sgpr(tmpSgpr), comment="b * F'"))
+    div("A2AViewK", "A2AViewK", "A2AViewStep", "iB = b * F' / numCu")
+    module.add(SMulI32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AViewK"), src1=sgpr("A2AViewStep"),
+                       comment="iB * numCu"))
+    module.add(SAddU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardCounter"), src1=sgpr(tmpSgpr),
+                       comment="iB * numCu + F'"))
+    module.add(SSubU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardCounter"), src1=1,
+                       comment="iB * numCu + F' - 1"))
+    div("A2AShardCounter", "A2AShardCounter", tmpSgpr, "bLo = ceil(iB * numCu / F')")
+    module.add(SAddU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AViewK"), src1=1, comment="iB + 1"))
+    module.add(SMulI32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=sgpr("A2AViewStep"),
+                       comment="(iB+1) * numCu"))
+    module.add(SAddU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=sgpr(tmpSgpr),
+                       comment="(iB+1) * numCu + F'"))
+    module.add(SSubU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=1,
+                       comment="(iB+1) * numCu + F' - 1"))
+    div("A2AShardIdx", "A2AShardIdx", tmpSgpr, "ceil((iB+1) * numCu / F')")
+    module.add(SMinU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=sgpr("NumWorkGroups1"),
+                       comment="bHi = min(ceil((iB+1) * numCu / F'), B)"))
+    module.add(SSubU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=sgpr("A2AShardCounter"),
+                       comment="n = bHi - bLo"))
+    module.add(SAddU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr(tmpSgpr),
+                       comment="numCu + F'"))
     module.add(SSubU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=1,
-                       comment="nb + (W-1) - 1"))
-    module.add(scalarUInt24DivideAndRemainder(
-        qReg="A2AViewStep", dReg="A2AViewStep", divReg=gSgpr, rReg=-1,
-        tmpVgprRes=vgprRes, wavewidth=ww, doRemainder=False, comment="Qb = ceil(nb / (W-1))"))
-    module.add(SMulI32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr(gSgpr),
-                       comment="iB * (W-1)"))
+                       comment="numCu + F' - 1"))
+    div("A2AViewStep", "A2AViewStep", tmpSgpr, "ceil(numCu / F')")
+    module.add(SMinU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr("NumWorkGroups1"),
+                       comment="nbMax = min(ceil(numCu / F'), B)"))
+    module.add(SAddU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr(gSgpr),
+                       comment="nbMax + G"))
+    module.add(SSubU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=1,
+                       comment="nbMax + G - 1"))
+    div("A2AViewStep", "A2AViewStep", gSgpr, "Qb = ceil(nbMax / G)")
+    module.add(SSubU32(dst=sgpr(tmpSgpr), src0=sgpr("WorkGroup1"), src1=sgpr("A2AShardCounter"),
+                       comment="b - bLo"))
+    module.add(SAddU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardIdx"), src1=sgpr(gSgpr),
+                       comment="n + G"))
+    module.add(SSubU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardCounter"), src1=1,
+                       comment="n + G - 1"))
+    div("A2AShardCounter", "A2AShardCounter", gSgpr, "GK = ceil(n / G)")
+    # Two SALU between the GK v_readfirstlane and the next VALU read of A2AShardCounter.
+    module.add(SMulI32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr(gSgpr), comment="iB * G"))
     module.add(SMulI32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr("A2AViewStep"),
-                       comment="iB * (W-1) * Qb"))
-    module.add(SAddU32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr(tmpSgpr),
-                       comment="+ (b - bLo) / (W-1)"))
+                       comment="iB * G * Qb"))
+    div("A2AShardIdx", tmpSgpr, "A2AShardCounter", "Gb = (b - bLo) / GK")
+    module.add(SMulI32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardIdx"), src1=sgpr("A2AShardCounter"),
+                       comment="Gb * GK"))
+    module.add(SSubU32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr), src1=sgpr("A2AShardCounter"),
+                       comment="pos = b - bLo - Gb * GK"))
     if subRounds > 1:
       module.add(SLShiftLeftB32(dst=sgpr("A2AViewK"), shiftHex=log2(subRounds), src=sgpr("A2AViewK"),
-                                comment="K = S * (iB * (W-1) * Qb + (b - bLo) / (W-1))"))
-      module.add(SLShiftLeftB32(dst=sgpr("A2AViewStep"), shiftHex=log2(subRounds),
-                                src=sgpr("A2AViewStep"), comment="S * Qb"))
-      module.add(SSubU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=subRounds - 1,
-                         comment="step = S * Qb - (S-1)"))
+                                comment="S * iB * G * Qb"))
+    module.add(SAddU32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr(tmpSgpr),
+                       comment="K = S * iB * G * Qb + pos"))
     return module
 
   def a2aPrePadB(self, kernel, tPB):
@@ -10409,7 +10431,7 @@ class KernelWriterAssembly(KernelWriter):
     The flag polled is flag[gLo][A2AShardIdx - 1], gLo being the first block of b's
     group and the last one placed. Under FusedA2ATransport=View it waits instead until
     flag[i] >= A2AViewK + 1 in the view block, i = A2AShardIdx - 1, and advances
-    A2AViewK by A2AViewStep after a segment's last sub-round, else by 1.
+    A2AViewK by A2AViewStep.
     Lane 0 of Serial carries the poll and is restored; no other VGPR is touched.
     """
     module    = Module("a2aSwitchSegment")
@@ -10430,7 +10452,7 @@ class KernelWriterAssembly(KernelWriter):
       rank   = prod + 5
       h      = prod + 6
       serial = prod + 7
-      # View: iters ends as k + 1, prod takes flag[i], rank (nxt) the A2AViewK step when S > 1.
+      # View: iters ends as k + 1, prod takes flag[i].
       if view:
         module.add(SSubU32(dst=sgpr(slot), src0=sgpr("A2AShardIdx"), src1=1,
                            comment="i = segment - 1"))
@@ -10536,9 +10558,6 @@ class KernelWriterAssembly(KernelWriter):
         module.add(SCmpEQU32(src0=sgpr(h), src1=subRounds - 1, comment="last sub-round?"))
         module.add(SCSelectB32(dst=sgpr("A2AShardIdx"), src0=sgpr(nxt), src1=sgpr("A2AShardIdx"),
                                comment="step to the next segment after its last sub-round"))
-        if view:
-          module.add(SCSelectB32(dst=sgpr(nxt), src0=sgpr("A2AViewStep"), src1=1,
-                                 comment="K step: next segment after the last sub-round, else + 1"))
       else:
         module.add(SMovB32(dst=sgpr("A2AShardIdx"), src=sgpr(nxt),
                            comment="step to the next peer queue"))
@@ -10546,8 +10565,7 @@ class KernelWriterAssembly(KernelWriter):
                          comment="segments left"))
       if view:
         module.add(SAddU32(dst=sgpr(iters), src0=sgpr("A2AViewK"), src1=1, comment="k + 1"))
-        module.add(SAddU32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"),
-                           src1=sgpr(nxt) if subRounds > 1 else sgpr("A2AViewStep"),
+        module.add(SAddU32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr("A2AViewStep"),
                            comment="K of the next unit"))
 
       def readFlag(cmp, inKernelComment, viewComment):

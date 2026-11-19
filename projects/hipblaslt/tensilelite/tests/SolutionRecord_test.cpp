@@ -213,6 +213,7 @@ namespace
         add("sizeMapping.enableLDSTrA", jsonBool(size.enableLDSTrA));
         add("sizeMapping.enableLDSTrB", jsonBool(size.enableLDSTrB));
         add("sizeMapping.ExpertSchedulingMode", jsonNumber(size.expertSchedulingMode));
+        add("sizeMapping.fusedA2ATransport", jsonNumber(size.fusedA2ATransport));
         add("sizeMapping.clusterDim", jsonDim(size.clusterDim, 2));
         add("sizeMapping.BufferLoad", jsonBool(size.BufferLoad));
         add("sizeMapping.BufferStore", jsonBool(size.BufferStore));

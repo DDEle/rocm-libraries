@@ -83,7 +83,7 @@ from .Components.ClusterLoad import ClusterLoadTDM
 from .Components.GlobalWriteBatch import GlobalWriteBatchWriter, emitFusedA2AGate
 from .Components.Signature import FUSED_A2A_A2AGEMM_DONE_OFFSET, FUSED_A2A_A2AGEMM_FLAG_OFFSET, \
     FUSED_A2A_CURSOR_BYTES, FUSED_A2A_DRAIN_SEND, FUSED_A2A_LINE_BYTES, FUSED_A2A_MAX_RANKS, \
-    PEER_GROUP_BYTES, fusedA2AKernArgLayout
+    FUSED_A2A_VIEW_FLAG_OFFSET, PEER_GROUP_BYTES, fusedA2AKernArgLayout
 from .Components.SdmaPacketEmitter import ATOMIC_PACKET_DWORDS, COPY_DW_DST, COPY_DW_SRC, \
     COPY_PACKET_DWORDS, SdmaPacketEmitter
 from .Components.SdmaRingEmitter import CURSOR_PAIR_BYTES, OFF_bufPtr, OFF_flagPtr, OFF_queueBuf, \
@@ -4612,9 +4612,10 @@ class KernelWriterAssembly(KernelWriter):
       from .Components.GlobalWriteBatch import emitFusedA2ACounterPtrLatch, \
         emitFusedA2ANShardLatch
       module.add(FusedA2AWgRemap(self, kernel))
-      module.add(SMulI32(dst=sgpr("FusedTotalWGs"), src0=sgpr("NumWorkGroups0"),
-                         src1=sgpr("NumWorkGroups1"),
-                         comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
+      if kernel["FusedA2ATransport"] != "View":
+        module.add(SMulI32(dst=sgpr("FusedTotalWGs"), src0=sgpr("NumWorkGroups0"),
+                           src1=sgpr("NumWorkGroups1"),
+                           comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
       emitFusedA2ACounterPtrLatch(module, self, "FusedCounterPtr", "FusedTokenTiles")
       emitFusedA2ANShardLatch(module, self, "FusedNShard")
 
@@ -9473,22 +9474,41 @@ class KernelWriterAssembly(KernelWriter):
       "A2AGemm segment switches need AdaptiveGemmNTAB=0 with UnrollLoopSwapGlobalReadOrder"
     layout = fusedA2AKernArgLayout()
     base   = self.states.fusedA2AKernArgBase
+    view   = kernel["FusedA2ATransport"] == "View"
     module.add(self.argLoader.loadKernArg("A2AW", "KernArgAddress",
                                           sgprOffset=hex(base + layout["FusedW"]), dword=1))
     # Round 0 takes this rank's own feature shard, not shard 0.
     module.add(self.argLoader.loadKernArg("A2AFeatIdx", "KernArgAddress",
                                           sgprOffset=hex(base + layout["FusedMyRank"]),
                                           dword=1))
-    module.add(SWaitCnt(kmcnt=0, comment="wait FusedW and FusedMyRank"))
+    if view:
+      module.add(self.argLoader.loadKernArg("A2AViewStep", "KernArgAddress",
+                                            sgprOffset=hex(base + layout["FusedNumCu"]), dword=1))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedW, FusedMyRank and FusedNumCu" if view
+                                         else "wait FusedW and FusedMyRank"))
     tmpVgpr = self.vgprPool.checkOutAligned(4, 2, tag="a2aSetupSegments_divide")
     vgprRes = ContinuousRegister(idx=tmpVgpr, size=4)
-    with self.allocTmpSgpr(1, tag="a2aSetupSegments_tmpSgprInfo") as tmpSgprInfo:
+    with self.allocTmpSgpr(2 if view else 1, tag="a2aSetupSegments_tmpSgprInfo") as tmpSgprInfo:
       module.add(scalarUInt32DivideAndRemainder(
           qReg="A2AKLocal", dReg="SizesSum+%u" % self.states.unrollIdx,
           divReg="A2AW", rReg=tmpSgprInfo.idx,
           tmpVgprRes=vgprRes,
           wavewidth=kernel["WavefrontSize"], doRemainder=False,
           comment="k_local = K / W"))
+      if view:
+        module.add(SSubU32(dst=sgpr(tmpSgprInfo.idx), src0=sgpr("A2AW"), src1=1,
+                           comment="W - 1"))
+        module.add(SMaxU32(dst=sgpr(tmpSgprInfo.idx), src0=sgpr(tmpSgprInfo.idx), src1=1,
+                           comment="peer queue count, at least 1"))
+        module.add(scalarUInt24DivideAndRemainder(
+            qReg=-1, dReg="WorkGroup1", divReg=tmpSgprInfo.idx,
+            rReg="A2AShardIdx", tmpVgprRes=vgprRes, wavewidth=kernel["WavefrontSize"],
+            doRemainder=True, doQuotient=False,
+            comment="this block's first peer queue = b % (W-1)"))
+        module.add(self.a2aViewOrdinals(kernel, tmpSgprInfo.idx, tmpSgprInfo.idx + 1, vgprRes))
+    if view:
+      module.add(SAddU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=1,
+                         comment="gathered segment = peer queue + 1"))
     self.vgprPool.checkIn(tmpVgpr)
     # AddressA and AddressB carry the unshifted tile bases from here on; A2ATileBaseA
     # holds B's tile offset until the gathered buffer is known.
@@ -9516,6 +9536,52 @@ class KernelWriterAssembly(KernelWriter):
                          comment="rounds = 1 + (W-1) * S"))
     else:
       module.add(SMovB32(dst=sgpr("A2AShardCounter"), src=sgpr("A2AW"), comment="rounds = W"))
+    return module
+
+  def a2aViewOrdinals(self, kernel, gSgpr, tmpSgpr, vgprRes):
+    """With A2AViewStep = FusedNumCu on entry, G = gSgpr peer queues, B = NumWorkGroups1 token
+    blocks, F = NumWorkGroups0 feature tiles and b = WorkGroup1:
+    nb = clamp(numCu / F, 1, B) token blocks per batch, Qb = ceil(nb / G), iB = b / nb,
+    A2AViewK := S * (iB * G * Qb + (b - iB * nb) / G), the ordinal of this work-group's first
+    unit on its first queue, and A2AViewStep := S * Qb - (S-1), from a segment's last sub-round
+    to the next segment."""
+    module    = Module("a2aViewOrdinals")
+    subRounds = kernel["A2ASubRounds"]
+    ww        = kernel["WavefrontSize"]
+    module.add(scalarUInt24DivideAndRemainder(
+        qReg="A2AViewStep", dReg="A2AViewStep", divReg="NumWorkGroups0", rReg=-1,
+        tmpVgprRes=vgprRes, wavewidth=ww, doRemainder=False, comment="numCu / F"))
+    module.add(SMinU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr("NumWorkGroups1"),
+                       comment="at most B"))
+    module.add(SMaxU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=1,
+                       comment="nb = token blocks per batch, at least 1"))
+    module.add(scalarUInt24DivideAndRemainder(
+        qReg="A2AViewK", dReg="WorkGroup1", divReg="A2AViewStep", rReg=tmpSgpr,
+        tmpVgprRes=vgprRes, wavewidth=ww, doRemainder=True,
+        comment="iB = b / nb, b - bLo = b % nb"))
+    module.add(scalarUInt24DivideAndRemainder(
+        qReg=tmpSgpr, dReg=tmpSgpr, divReg=gSgpr, rReg=-1,
+        tmpVgprRes=vgprRes, wavewidth=ww, doRemainder=False, comment="(b - bLo) / (W-1)"))
+    module.add(SAddU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr(gSgpr),
+                       comment="nb + (W-1)"))
+    module.add(SSubU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=1,
+                       comment="nb + (W-1) - 1"))
+    module.add(scalarUInt24DivideAndRemainder(
+        qReg="A2AViewStep", dReg="A2AViewStep", divReg=gSgpr, rReg=-1,
+        tmpVgprRes=vgprRes, wavewidth=ww, doRemainder=False, comment="Qb = ceil(nb / (W-1))"))
+    module.add(SMulI32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr(gSgpr),
+                       comment="iB * (W-1)"))
+    module.add(SMulI32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr("A2AViewStep"),
+                       comment="iB * (W-1) * Qb"))
+    module.add(SAddU32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr(tmpSgpr),
+                       comment="+ (b - bLo) / (W-1)"))
+    if subRounds > 1:
+      module.add(SLShiftLeftB32(dst=sgpr("A2AViewK"), shiftHex=log2(subRounds), src=sgpr("A2AViewK"),
+                                comment="K = S * (iB * (W-1) * Qb + (b - bLo) / (W-1))"))
+      module.add(SLShiftLeftB32(dst=sgpr("A2AViewStep"), shiftHex=log2(subRounds),
+                                src=sgpr("A2AViewStep"), comment="S * Qb"))
+      module.add(SSubU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=subRounds - 1,
+                         comment="step = S * Qb - (S-1)"))
     return module
 
   def a2aPrePadB(self, kernel, tPB):
@@ -9556,6 +9622,11 @@ class KernelWriterAssembly(KernelWriter):
     A2AShardIdx := G + 1 and A2AFlagRow := gLo * (W-1)."""
     module = Module("a2aBatchSpan")
     layout = fusedA2AKernArgLayout()
+    if kernel["FusedA2ATransport"] == "View":
+      module.add(self.argLoader.loadKernArg("FusedCounterPtr", "KernArgAddress",
+          sgprOffset=hex(self.states.fusedA2AKernArgBase + layout["counter_ptr"]), dword=2))
+      module.add(SWaitCnt(kmcnt=0, comment="wait counter_ptr and this rank's gathered buffer"))
+      return module
     numCu  = self.sgprPool.checkOut(1, tag="a2aBatchSpan_numCu", preventOverflow=False)
     module.add(self.argLoader.loadKernArg(numCu, "KernArgAddress",
         sgprOffset=hex(self.states.fusedA2AKernArgBase + layout["FusedNumCu"]), dword=1))
@@ -10252,7 +10323,7 @@ class KernelWriterAssembly(KernelWriter):
     myRank and A2ADrainFlagPtr = this rank's flagPtr.
     """
     module = Module("a2aExitTally")
-    if kernel["ProblemType"]["FusedA2A"] != "A2AGemm":
+    if kernel["ProblemType"]["FusedA2A"] != "A2AGemm" or kernel["FusedA2ATransport"] == "View":
       return module
     layout  = fusedA2AKernArgLayout()
     base    = self.states.fusedA2AKernArgBase
@@ -10371,7 +10442,7 @@ class KernelWriterAssembly(KernelWriter):
   def a2aDrainSendWait(self, kernel):
     """If a2aExitTally armed it, spin until every peer's done slot is set, then clear it."""
     module = Module("a2aDrainSendWait")
-    if kernel["ProblemType"]["FusedA2A"] != "A2AGemm":
+    if kernel["ProblemType"]["FusedA2A"] != "A2AGemm" or kernel["FusedA2ATransport"] == "View":
       return module
     endLbl  = Label(self.labels.getNameInc("a2a_drain_send_end"), "")
     spinLbl = Label(self.labels.getNameInc("a2a_drain_send_spin"), "")
@@ -10417,10 +10488,13 @@ class KernelWriterAssembly(KernelWriter):
     follows. SrdA/SrdB go to the next segment's start, one GlobalReadIncs (DepthU
     under UseSubtileImpl) back when stepBack, and LoopCounterL gains its iterations.
     The flag polled is flag[gLo][A2AShardIdx - 1], gLo being the first block of b's
-    group and the last one placed.
+    group and the last one placed. Under FusedA2ATransport=View it waits instead until
+    flag[i] >= A2AViewK + 1 in the view block, i = A2AShardIdx - 1, and advances
+    A2AViewK by A2AViewStep after a segment's last sub-round, else by 1.
     Lane 0 of Serial carries the poll and is restored; no other VGPR is touched.
     """
     module    = Module("a2aSwitchSegment")
+    view      = kernel["FusedA2ATransport"] == "View"
     layout    = fusedA2AKernArgLayout()
     base      = self.states.fusedA2AKernArgBase
     subRounds = kernel["A2ASubRounds"]
@@ -10437,24 +10511,34 @@ class KernelWriterAssembly(KernelWriter):
       rank   = prod + 5
       h      = prod + 6
       serial = prod + 7
-      module.add(SAddU32(dst=sgpr(slot), src0=sgpr("A2AFlagRow"), src1=sgpr("A2AShardIdx"),
-                         comment="flag slot = flag row + segment"))
-      module.add(SSubU32(dst=sgpr(slot), src0=sgpr(slot), src1=1, comment="i = segment - 1"))
-      if subRounds > 1:
-        module.add(self.a2aSubRoundIdx(kernel, h))
-        module.add(SLShiftLeftB32(dst=sgpr(slot), shiftHex=log2(subRounds), src=sgpr(slot),
-                                  comment="slot * S"))
-        module.add(SAddU32(dst=sgpr(slot), src0=sgpr(slot), src1=sgpr(h), comment="+ sub-round"))
-      module.add(SLShiftLeftB32(dst=sgpr(slot), shiftHex=2, src=sgpr(slot),
-                                comment="flag slot byte offset"))
+      # View: iters ends as k + 1, prod takes flag[i], rank (nxt) the A2AViewK step when S > 1.
+      if view:
+        module.add(SSubU32(dst=sgpr(slot), src0=sgpr("A2AShardIdx"), src1=1,
+                           comment="i = segment - 1"))
+        if subRounds > 1:
+          module.add(self.a2aSubRoundIdx(kernel, h))
+        module.add(SLShiftLeftB32(dst=sgpr(slot), shiftHex=2, src=sgpr(slot),
+                                  comment="flag[i] byte offset"))
+      else:
+        module.add(SAddU32(dst=sgpr(slot), src0=sgpr("A2AFlagRow"), src1=sgpr("A2AShardIdx"),
+                           comment="flag slot = flag row + segment"))
+        module.add(SSubU32(dst=sgpr(slot), src0=sgpr(slot), src1=1, comment="i = segment - 1"))
+        if subRounds > 1:
+          module.add(self.a2aSubRoundIdx(kernel, h))
+          module.add(SLShiftLeftB32(dst=sgpr(slot), shiftHex=log2(subRounds), src=sgpr(slot),
+                                    comment="slot * S"))
+          module.add(SAddU32(dst=sgpr(slot), src0=sgpr(slot), src1=sgpr(h), comment="+ sub-round"))
+        module.add(SLShiftLeftB32(dst=sgpr(slot), shiftHex=2, src=sgpr(slot),
+                                  comment="flag slot byte offset"))
       def pollFlag():
         poll = Module("a2aPollFlag")
         poll.add(VMovB32(dst=vgpr("Serial"), src=sgpr(slot), comment="poll offset"))
         poll.add(GlobalLoadB32(dst=vgpr("Serial"), vaddr=vgpr("Serial"),
             saddr=sgpr("FusedCounterPtr", 2),
-            modifier=GLOBALModifiers(offset=FUSED_A2A_A2AGEMM_FLAG_OFFSET, glc=True, slc=True,
+            modifier=GLOBALModifiers(offset=FUSED_A2A_VIEW_FLAG_OFFSET if view else FUSED_A2A_A2AGEMM_FLAG_OFFSET,
+                                     glc=True, slc=True,
                                      scope=CacheScope.SCOPE_NONE, isStore=False),
-            comment="poll flag[b][i] at system scope"))
+            comment="poll flag[i] at system scope" if view else "poll flag[b][i] at system scope"))
         return poll
       module.add(SMovB64(dst=EXEC(), src=1, comment="lane 0 polls"))
       module.add(VReadfirstlaneB32(dst=sgpr(serial), src=vgpr("Serial"), comment="save Serial lane 0"))
@@ -10533,22 +10617,34 @@ class KernelWriterAssembly(KernelWriter):
         module.add(SCmpEQU32(src0=sgpr(h), src1=subRounds - 1, comment="last sub-round?"))
         module.add(SCSelectB32(dst=sgpr("A2AShardIdx"), src0=sgpr(nxt), src1=sgpr("A2AShardIdx"),
                                comment="step to the next segment after its last sub-round"))
+        if view:
+          module.add(SCSelectB32(dst=sgpr(nxt), src0=sgpr("A2AViewStep"), src1=1,
+                                 comment="K step: next segment after the last sub-round, else + 1"))
       else:
         module.add(SMovB32(dst=sgpr("A2AShardIdx"), src=sgpr(nxt),
                            comment="step to the next peer queue"))
       module.add(SSubU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardCounter"), src1=1,
                          comment="segments left"))
+      if view:
+        module.add(SAddU32(dst=sgpr(iters), src0=sgpr("A2AViewK"), src1=1, comment="k + 1"))
+        module.add(SAddU32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"),
+                           src1=sgpr(nxt) if subRounds > 1 else sgpr("A2AViewStep"),
+                           comment="K of the next unit"))
 
-      module.add(SWaitCnt(vlcnt=0, comment="wait the flag poll"))
-      module.add(VReadfirstlaneB32(dst=sgpr(flag), src=vgpr("Serial"), comment="flag"))
-      module.add(SCmpGeU32(src0=sgpr(flag), src1=1, comment="segment landed?"))
+      def readFlag(cmp, inKernelComment, viewComment):
+        module.add(SWaitCnt(vlcnt=0, comment="wait the flag poll"))
+        if view:
+          module.add(VReadfirstlaneB32(dst=sgpr(prod), src=vgpr("Serial"), comment="flag[i]"))
+          module.add(cmp(src0=sgpr(prod), src1=sgpr(iters), comment=viewComment))
+        else:
+          module.add(VReadfirstlaneB32(dst=sgpr(flag), src=vgpr("Serial"), comment="flag"))
+          module.add(cmp(src0=sgpr(flag), src1=1, comment=inKernelComment))
+      readFlag(SCmpGeU32, "segment landed?", "unit k landed?")
       module.add(SCBranchSCC1(labelName=readyLabel.getLabelName(), comment="yes"))
       module.add(pollLabel)
       module.add(SSleep(simm16=1, comment="back off between polls"))
       module.add(pollFlag())
-      module.add(SWaitCnt(vlcnt=0, comment="wait the flag poll"))
-      module.add(VReadfirstlaneB32(dst=sgpr(flag), src=vgpr("Serial"), comment="flag"))
-      module.add(SCmpLtU32(src0=sgpr(flag), src1=1, comment="flag < 1?"))
+      readFlag(SCmpLtU32, "flag < 1?", "flag[i] < k + 1?")
       module.add(SCBranchSCC1(labelName=pollLabel.getLabelName(), comment="segment short -> poll again"))
       module.add(readyLabel)
       module.add(VMovB32(dst=vgpr("Serial"), src=sgpr(serial), comment="restore Serial lane 0"))

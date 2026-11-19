@@ -2955,6 +2955,12 @@ class GlobalWriteBatchWriter:
       nShardSgpr:   persistent SGPR holding n_shard (element units).
       tmpSgpr:      2 scratch SGPRs; tmpSgpr+0 = n_col_base_wg, tmpSgpr+1 = candidate.
     """
+    self._fusedA2AScanDstRank(module, dstRankSgpr, nShardSgpr, tmpSgpr)
+    self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, dstRankSgpr, "FusedPeerGroupPtr")
+
+  def _fusedA2AScanDstRank(self, module, dstRankSgpr, nShardSgpr, tmpSgpr):
+    """dst_rank = highest j with j*n_shard <= WorkGroup0*MT0, into dstRankSgpr.
+    tmpSgpr is 2 scratch SGPRs."""
     from .Signature import FUSED_A2A_MAX_RANKS
     mt0 = self.kernel["MacroTile0"]
     module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr), src=sgpr("WorkGroup0"), shiftHex=int(log2(mt0)),
@@ -2967,7 +2973,6 @@ class GlobalWriteBatchWriter:
                            comment=f"shard_lo <= n_col_base_wg? (WG at or above rank {j})"))
       module.add(SCSelectB32(dst=sgpr(dstRankSgpr), src0=j, src1=sgpr(dstRankSgpr),
                              comment=f"dst_rank = {j} if so, else keep the current winner"))
-    self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, dstRankSgpr, "FusedPeerGroupPtr")
 
   def _fusedA2ALoadFlagBaseByRank(self, module, flagBaseSgpr, rankSgpr, groupOffSgpr):
     """Compute peer group offset for rankSgpr into groupOffSgpr, then load that
@@ -3358,12 +3363,65 @@ class GlobalWriteBatchWriter:
     module.add(self.getEdgeMovInstType()(EXEC(), 1,
                "fused-A2A: isolate lane 0 so the atomic fires once per WG"))
 
+  def _fusedA2ABandCounterAddr(self, module, addrSgpr, baseLo, baseHi, dstRankSgpr, tmpSgpr):
+    """addrSgpr pair = base + (dst_rank*FusedTokenTiles + WorkGroup1)*4. Clobbers tmpSgpr."""
+    module.add(SMulI32(dst=sgpr(tmpSgpr), src0=sgpr(dstRankSgpr), src1=sgpr("FusedTokenTiles"),
+                       comment="dst_rank * tokenTiles"))
+    module.add(SAddU32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr), src1=sgpr("WorkGroup1"),
+                       comment="counter index = dst_rank*tokenTiles + j (j = WorkGroup1)"))
+    module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr), src=sgpr(tmpSgpr), shiftHex=2,
+                              comment="* 4 (u32 counter byte offset)"))
+    module.add(SAddU32(dst=sgpr(addrSgpr), src0=baseLo, src1=sgpr(tmpSgpr),
+                       comment="counter[dst_rank][j] lo = counter_ptr + (dst_rank*tokenTiles+j)*4"))
+    module.add(SAddCU32(dst=sgpr(addrSgpr + 1), src0=baseHi, src1=0,
+                        comment="counter[dst_rank][j] hi (carry)"))
+
+  def _emitFusedA2ASignalView(self, module: Module):
+    """FusedA2ATransport=View: wave 0 lane 0 of every PUSH work-group adds 1 to
+    sig[dst_rank*tokenTiles + j] at FusedCounterPtr + FUSED_A2A_VIEW_SIG_OFFSET.
+    The LOCAL pass emits nothing."""
+    kw = self.parentWriter
+    mode = kw.states.fusedA2ADispatchMode
+    if mode == "LOCAL":
+      return
+    assert mode == "PUSH", mode
+    from .Signature import FUSED_A2A_VIEW_SIG_OFFSET
+    module.addComment2("fused-A2A SignalView: sig[dst_rank*tokenTiles + j] += 1")
+    afterLabel = Label(kw.labels.getNameInc("fusedA2A_signal_after"),
+                       "fused-A2A: after SignalView")
+    module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: full exec before wave-0 election"))
+    module.add(SWaitCnt(vscnt=0, comment="fused-A2A: wait this wave's D stores"))
+    module.add(SBarrier(comment="fused-A2A: join all waves"))
+    self._emitFusedA2AWave0Election(module, afterLabel.getLabelName())
+
+    dstRankSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_svDstRank", preventOverflow=False)
+    tmpSgpr     = kw.sgprPool.checkOut(2, tag="fusedA2A_svTmp", preventOverflow=False)
+    sigAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_svSigAddr", preventOverflow=False)
+    self._fusedA2AScanDstRank(module, dstRankSgpr, "FusedNShard", tmpSgpr)
+    self._fusedA2ABandCounterAddr(module, sigAddrSgpr, sgpr("FusedCounterPtr"), sgpr("FusedCounterPtr+1"),
+                                  dstRankSgpr, tmpSgpr)
+    module.add(SMovB32(dst=sgpr(tmpSgpr), src=-1, comment="SDATA in = wrap limit 0xFFFFFFFF"))
+    module.add(SAtomicInc(dst=sgpr(tmpSgpr), base=sgpr(sigAddrSgpr, 2),
+                          soffset=hex(FUSED_A2A_VIEW_SIG_OFFSET),
+                          smem=SMEMModifiers(glc=True),
+                          comment="sig[dst_rank*tokenTiles + j] += 1"))
+    module.add(SWaitCnt(kmcnt=0, comment="fused-A2A: wait sig atomic return"))
+    kw.sgprPool.checkIn(sigAddrSgpr)
+    kw.sgprPool.checkIn(tmpSgpr)
+    kw.sgprPool.checkIn(dstRankSgpr)
+
+    module.add(afterLabel)
+    module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: restore full exec after single-lane handshake"))
+
   def _emitFusedA2AHandshake(self, module: Module):
     """Emit the once-per-WG cross-card handshake for PUSH work-groups: wait for
     this WG's stores, elect one lane, bump the per-(dst_rank, token-tile) counter,
     submit the SDMA packet pair on election, then the grid-wide counter3 tally
     elects the DRAIN owner.  See the inline comments at each step below for the
     per-step invariants."""
+    if self.kernel["FusedA2ATransport"] == "View":
+      self._emitFusedA2ASignalView(module)
+      return
     kw = self.parentWriter
     module.addComment2("fused-A2A cross-card handshake: counter election + SDMA packet submit + DRAIN")
 
@@ -3469,16 +3527,8 @@ class GlobalWriteBatchWriter:
     # finer grain matters for overlap: the 10 producer WGs of one (p,j) packet are
     # consecutive in the WG launch order (linear id = WG0 + WG1*mTiles, WGM=1), so slot
     # (p,j) completes early instead of only at grid drain as the per-peer counter did.
-    module.add(SMulI32(dst=sgpr(tmpSgpr2), src0=sgpr(dstRankSgpr), src1=sgpr(tokenTilesSgpr),
-                       comment="dst_rank * tokenTiles"))
-    module.add(SAddU32(dst=sgpr(tmpSgpr2), src0=sgpr(tmpSgpr2), src1=sgpr("WorkGroup1"),
-                       comment="counter index = dst_rank*tokenTiles + j (j = WorkGroup1)"))
-    module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr2), src=sgpr(tmpSgpr2), shiftHex=2,
-                              comment="* 4 (u32 counter byte offset)"))
-    module.add(SAddU32(dst=sgpr(counterPtrSgpr), src0=sgpr(counterPtrSgpr), src1=sgpr(tmpSgpr2),
-                       comment="counter[dst_rank][j] lo = counter_ptr + (dst_rank*tokenTiles+j)*4"))
-    module.add(SAddCU32(dst=sgpr(counterPtrSgpr + 1), src0=sgpr(counterPtrSgpr + 1), src1=0,
-                        comment="counter[dst_rank][j] hi (carry)"))
+    self._fusedA2ABandCounterAddr(module, counterPtrSgpr, sgpr(counterPtrSgpr), sgpr(counterPtrSgpr + 1),
+                                  dstRankSgpr, tmpSgpr2)
     module.add(SMovB32(dst=sgpr(tmpSgpr2), src=sgpr(targetSgpr),
                        comment="SDATA in = limit; the atomic overwrites it with the pre-op value"))
     module.add(SAtomicInc(dst=sgpr(tmpSgpr2), base=sgpr(counterPtrSgpr, 2),

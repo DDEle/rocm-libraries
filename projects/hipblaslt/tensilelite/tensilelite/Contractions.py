@@ -924,6 +924,11 @@ class CustomKernel:
         for (key, value) in list(kwargs.items()):
             setattr(self, key, value)
 
+FUSED_A2A_TRANSPORT_IDS = {
+    "InKernel": 0,
+    "View": 1,
+}
+
 class SizeMapping:
     StateKeys = ['a2aSubRounds',
                  'activationFused',
@@ -943,6 +948,7 @@ class SizeMapping:
                  'enableLDSTrA',
                  'enableLDSTrB',
                  'ExpertSchedulingMode',
+                 'fusedA2ATransport',
                  'globalAccumulation',
                  'globalSplitU',
                  'globalSplitUCoalesced',
@@ -1066,6 +1072,7 @@ class SizeMapping:
                    enableLDSTrA             = bool(d.get('enableLDSTrA', False)),
                    enableLDSTrB             = bool(d.get('enableLDSTrB', False)),
                    ExpertSchedulingMode     = d.get('ExpertSchedulingMode', 0),
+                   fusedA2ATransport        = FUSED_A2A_TRANSPORT_IDS[d.get('FusedA2ATransport', 'InKernel')],
                    globalAccumulation       = globalAccum,
                    globalSplitU             = d['GlobalSplitU'],
                    globalSplitUCoalesced    = d['GlobalSplitUCoalesced'],

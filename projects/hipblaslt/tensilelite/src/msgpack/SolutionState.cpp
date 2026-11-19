@@ -11,6 +11,7 @@
 #include <Tensile/ContractionSolution.hpp>
 #include <Tensile/ContractionTaskPredicates.hpp>
 #include <Tensile/DataTypes.hpp>
+#include <Tensile/FusedA2AKernArg.hpp>
 #include <Tensile/KernelLanguageTypes.hpp>
 
 #include <Tensile/msgpack/MessagePack.hpp>
@@ -930,6 +931,16 @@ namespace TensileLite
             throw std::runtime_error("FusedA2A must be Disabled, GemmA2A or A2AGemm");
         }
 
+        // Contractions.FUSED_A2A_TRANSPORT_IDS, a missing key as InKernel.
+        int fusedA2ATransport(Dict const& d)
+        {
+            if(!d.has("FusedA2ATransport") || d["FusedA2ATransport"].isText("InKernel"))
+                return FUSED_A2A_TRANSPORT_IN_KERNEL;
+            if(d["FusedA2ATransport"].isText("View"))
+                return FUSED_A2A_TRANSPORT_VIEW;
+            throw std::runtime_error("FusedA2ATransport must be InKernel or View");
+        }
+
         // Contractions.ProblemType.FromOriginalState.
         ProblemType problemTypeFromState(Dict const& d)
         {
@@ -1692,6 +1703,7 @@ namespace TensileLite
             s.workspaceSizePerElemC    = d.integer("_WorkspaceSizePerElemC");
             s.workspaceSizePerElemBias = d.integer("_WorkspaceSizePerElemBias");
             s.a2aSubRounds             = int(d.integer("A2ASubRounds", 1));
+            s.fusedA2ATransport        = fusedA2ATransport(d);
             s.activationFused          = d.truthy("ActivationFused");
             s.workGroupMappingXCC      = int(d.integer("WorkGroupMappingXCC"));
             s.workGroupMappingXCCGroup = int(d.integer("WorkGroupMappingXCCGroup"));

@@ -327,3 +327,44 @@ def test_a2a_peer_groups_rejected_without_a2a_gemm(_gp_gfx942, request, assemble
     )
     assert sol.get("Valid") is False
     assert "A2APeerGroups > 0 requires FusedA2A=A2AGemm" in out
+
+
+# ---------------------------------------------------------------------------
+# FusedA2ATransport.
+# ---------------------------------------------------------------------------
+def _derive_mode(request, assembler, capsys, mode, **overrides):
+    if mode == "A2AGemm":
+        return _derive_a2a_gemm(request, assembler, capsys, **overrides)
+    return _derive(request.getfixturevalue("gfx942_iim"), assembler, capsys, mode=mode,
+                   **overrides)
+
+
+@pytest.mark.parametrize("mode", ["GemmA2A", "A2AGemm"])
+def test_fused_a2a_transport_view_accepted(_gp_gfx942, request, assembler, capsys, mode):
+    from tensilelite.Common.Utilities import state as serialize
+    from tensilelite.Contractions import SizeMapping
+    from tensilelite.SolutionStructs.Naming import getKernelNameMin
+
+    view, out = _derive_mode(request, assembler, capsys, mode, FusedA2ATransport="View")
+    assert view.get("Valid") is True, f"expected accept, rejected with: {out!r}"
+    base, out = _derive_mode(request, assembler, capsys, mode)
+    assert base.get("Valid") is True, f"expected accept, rejected with: {out!r}"
+    assert base["FusedA2ATransport"] == "InKernel"
+
+    viewName = getKernelNameMin(view, False)
+    baseName = getKernelNameMin(base, False)
+    assert "_FAATV_" in viewName
+    assert "FAAT" not in baseName
+    assert viewName.replace("_FAATV", "") == baseName
+
+    assert serialize(SizeMapping.FromOriginalState(view._state))["fusedA2ATransport"] == 1
+    assert serialize(SizeMapping.FromOriginalState(base._state))["fusedA2ATransport"] == 0
+
+
+def test_fused_a2a_transport_view_rejected_without_fused_a2a(
+    _gp_gfx942, gfx942_iim, assembler, capsys
+):
+    sol, out = _derive(gfx942_iim, assembler, capsys, ProblemType={"FusedA2A": "Disabled"},
+                       FusedA2ATransport="View")
+    assert sol.get("Valid") is False
+    assert "FusedA2ATransport=View requires FusedA2A != Disabled" in out

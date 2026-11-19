@@ -2773,6 +2773,11 @@ class Solution(collections.abc.Mapping):
       reject(state, printRejectionReason, "A2APeerGroups > 0 requires FusedA2A=A2AGemm")
       return
 
+    if state["FusedA2ATransport"] != "InKernel" and fusedA2A == "Disabled":
+      reject(state, printRejectionReason,
+             "FusedA2ATransport=%s requires FusedA2A != Disabled" % state["FusedA2ATransport"])
+      return
+
     if fusedA2A == "A2AGemm":
       _disableRuntimeStaggerU(state)
       if not state["ProblemType"]["DataTypeB"].isBFloat16():

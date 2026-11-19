@@ -1408,6 +1408,7 @@
     'ExtraLatencyForLR',
     'ExtraMiLatencyLeft',
     'ForceDisableShadowInit',
+    'FusedA2ATransport',
     'GlobalReadPerMfma',
     'GlobalReadVectorWidthA',
     'GlobalReadVectorWidthB',
@@ -1921,6 +1922,14 @@
       'head': list([
         False,
         True,
+      ]),
+      'len': 2,
+      'type': 'list',
+    }),
+    'FusedA2ATransport': dict({
+      'head': list([
+        'InKernel',
+        'View',
       ]),
       'len': 2,
       'type': 'list',

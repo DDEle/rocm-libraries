@@ -18,6 +18,7 @@ sizeMapping.DirectToVgprB=false
 sizeMapping.enableLDSTrA=false
 sizeMapping.enableLDSTrB=false
 sizeMapping.ExpertSchedulingMode=0
+sizeMapping.fusedA2ATransport=0
 sizeMapping.globalAccumulation=4
 sizeMapping.globalSplitU=0
 sizeMapping.globalSplitUCoalesced=false

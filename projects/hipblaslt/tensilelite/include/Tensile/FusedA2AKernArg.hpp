@@ -51,6 +51,30 @@ namespace TensileLite
     constexpr uint32_t FUSED_A2A_DRAIN_RECV = 1u;
     constexpr uint32_t FUSED_A2A_DRAIN_SEND = 2u;
 
+    // SizeMapping::fusedA2ATransport values, twinned with Contractions.py
+    // FUSED_A2A_TRANSPORT_IDS.
+    constexpr int FUSED_A2A_TRANSPORT_IN_KERNEL = 0;
+    constexpr int FUSED_A2A_TRANSPORT_VIEW      = 1;
+
+    // u32 fields of the FusedA2ATransport=View block at counter_ptr, twinned
+    // with their namesakes in tensilelite/Components/Signature.py.
+    constexpr size_t FUSED_A2A_VIEW_FLAG_OFFSET          = 0;
+    constexpr size_t FUSED_A2A_VIEW_BASE_OFFSET          = 64;
+    constexpr size_t FUSED_A2A_VIEW_EXPECTED_OFFSET      = 128;
+    constexpr size_t FUSED_A2A_VIEW_OUTBOUND_OFFSET      = 192;
+    constexpr size_t FUSED_A2A_VIEW_OUTBOUND_BASE_OFFSET = 196;
+    constexpr size_t FUSED_A2A_VIEW_EPOCH_OFFSET         = 200;
+    constexpr size_t FUSED_A2A_VIEW_ERROR_OFFSET         = 204;
+    constexpr size_t FUSED_A2A_VIEW_SIG_OFFSET           = 256;
+
+    // View block bytes: sig[FUSED_A2A_MAX_RANKS * tokenTiles] u32 after the fixed
+    // header; tokenTiles = 0 for A2AGemm.
+    constexpr size_t fusedA2AViewBlockBytes(size_t tokenTiles)
+    {
+        return FUSED_A2A_VIEW_SIG_OFFSET
+               + fusedA2AAlignLine((size_t)FUSED_A2A_MAX_RANKS * tokenTiles * sizeof(uint32_t));
+    }
+
     // One group per peer: flag base, buffer base, then the queue pointers.
     // Order is the contract with SdmaRingEmitter.py FUSED_A2A_PEER_FIELDS.
     enum FusedA2APeerSlot : size_t

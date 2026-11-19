@@ -257,6 +257,7 @@ namespace TensileLite
                 iot::mapOptional(io, "TDMInst", s.TDMInst);
                 iot::mapOptional(io, "Multicast", s.Multicast);
                 iot::mapOptional(io, "a2aSubRounds", s.a2aSubRounds);
+                iot::mapOptional(io, "fusedA2ATransport", s.fusedA2ATransport);
             }
 
             const static bool flow = false;

@@ -10587,8 +10587,13 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
       self.defineSgpr("A2AShardIdx", 1)
       self.defineSgpr("A2AFeatIdx", 1)
       self.defineSgpr("A2AKLocal", 1)
-      self.defineSgpr("A2ABlockLo", 1)
-      self.defineSgpr("A2ABlockCount", 1)
+      if kernel["FusedA2ATransport"] == "View":
+        # Ordinal of the next unit waited for, and its step to the next segment.
+        self.defineSgpr("A2AViewK", 1)
+        self.defineSgpr("A2AViewStep", 1)
+      else:
+        self.defineSgpr("A2ABlockLo", 1)
+        self.defineSgpr("A2ABlockCount", 1)
       self.defineSgpr("FusedCounterPtr", 2, 2)
 
     self.defineSgpr("OrigLoopCounter", 1)
@@ -10649,7 +10654,8 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
     # Persistent copy of the grid-wide WG count for the counter3 last-WG election;
     # latched in graWorkGroup because NumWorkGroups0/1 can be borrowed as temps later.
     if kernel["ProblemType"]["FusedA2A"] == "GemmA2A":
-      self.defineSgpr("FusedTotalWGs", 1)
+      if kernel["FusedA2ATransport"] != "View":
+        self.defineSgpr("FusedTotalWGs", 1)
       # Counter-block base, loaded once in the prologue. Every region is reached
       # from it by immediate offset (client/src/DeviceContext.cpp).
       # Aligned to 2 because S_ATOMIC_INC takes SBASE as an SGPR pair with the low
@@ -10664,7 +10670,8 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
       # Offset of this WG's peer group within the kernarg segment. Every pointer
       # the epilogue needs for that peer is an immediate off it, so the SDMA
       # emitters do no address arithmetic of their own.
-      self.defineSgpr("FusedPeerGroupPtr", 1)
+      if kernel["FusedA2ATransport"] != "View":
+        self.defineSgpr("FusedPeerGroupPtr", 1)
 
     # Calculate numSgpr preload
     self.states.preloadGuard = []

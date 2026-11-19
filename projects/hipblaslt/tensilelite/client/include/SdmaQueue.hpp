@@ -21,6 +21,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -114,15 +115,22 @@ namespace TensileLite
                     CHK_KMT(hsaKmtAcquireSystemProperties(&props));
 
                     // Reindex HSA's enumeration into HIP device order, keyed on
-                    // PCI domain+bus+device so the result does not depend on how
-                    // either runtime filters. Agents HIP cannot see are dropped.
+                    // PCI domain+bus+device+function so the result does not depend
+                    // on how either runtime filters. Agents HIP cannot see are dropped.
                     int hipCount = 0;
                     CHK_HIP(hipGetDeviceCount(&hipCount));
                     gGpuAgentsByHipDevice.reserve(hipCount);
                     for(int d = 0; d < hipCount; ++d)
                     {
-                        hipDeviceProp_t prop{};
-                        CHK_HIP(hipGetDeviceProperties(&prop, d));
+                        char busId[64] = {};
+                        CHK_HIP(hipDeviceGetPCIBusId(busId, sizeof(busId), d));
+                        unsigned pciDomain = 0, pciBus = 0, pciDevice = 0, pciFunction = 0;
+                        if(std::sscanf(
+                               busId, "%x:%x:%x.%x", &pciDomain, &pciBus, &pciDevice, &pciFunction)
+                           != 4)
+                            throw std::runtime_error("ensureHsaKfd: cannot parse PCI bus id '"
+                                                     + std::string(busId) + "' of HIP device "
+                                                     + std::to_string(d));
 
                         const hsa_agent_t* match = nullptr;
                         for(const hsa_agent_t& agent : hsaOrder)
@@ -132,10 +140,9 @@ namespace TensileLite
                                 agent, (hsa_agent_info_t)HSA_AMD_AGENT_INFO_BDFID, &bdfid));
                             CHK_HSA(hsa_agent_get_info(
                                 agent, (hsa_agent_info_t)HSA_AMD_AGENT_INFO_DOMAIN, &domain));
-                            // BDFID packs bus into [15:8] and device into [7:3].
-                            if((int)domain == prop.pciDomainID
-                               && (int)((bdfid >> 8) & 0xFF) == prop.pciBusID
-                               && (int)((bdfid >> 3) & 0x1F) == prop.pciDeviceID)
+                            // BDFID packs bus into [15:8], device into [7:3], function into [2:0].
+                            if(domain == pciDomain
+                               && bdfid == ((pciBus << 8) | (pciDevice << 3) | pciFunction))
                             {
                                 match = &agent;
                                 break;
@@ -144,10 +151,7 @@ namespace TensileLite
                         if(!match)
                             throw std::runtime_error(
                                 "ensureHsaKfd: no HSA GPU agent matches HIP device "
-                                + std::to_string(d) + " at PCI domain "
-                                + std::to_string(prop.pciDomainID) + " bus "
-                                + std::to_string(prop.pciBusID) + " device "
-                                + std::to_string(prop.pciDeviceID) + " ("
+                                + std::to_string(d) + " at PCI " + busId + " ("
                                 + std::to_string(hsaOrder.size()) + " GPU agents visible to HSA)");
                         gGpuAgentsByHipDevice.push_back(*match);
                     }

@@ -91,6 +91,18 @@ FUSED_A2A_A2AGEMM_FLAG_OFFSET = FUSED_A2A_CURSOR_BYTES
 FUSED_A2A_A2AGEMM_DONE_OFFSET = 0
 FUSED_A2A_DRAIN_RECV = 1
 FUSED_A2A_DRAIN_SEND = 2
+# FusedA2ATransport=View: u32 fields of the per-device view block at counter_ptr,
+# twinned with their namesakes in include/Tensile/FusedA2AKernArg.hpp.
+#   flag[FUSED_A2A_MAX_RANKS], base[..], expected[..], outbound, outboundBase,
+#   epoch, error, then sig[FUSED_A2A_MAX_RANKS * NumWorkGroups1] (GemmA2A only).
+FUSED_A2A_VIEW_FLAG_OFFSET = 0
+FUSED_A2A_VIEW_BASE_OFFSET = 64
+FUSED_A2A_VIEW_EXPECTED_OFFSET = 128
+FUSED_A2A_VIEW_OUTBOUND_OFFSET = 192
+FUSED_A2A_VIEW_OUTBOUND_BASE_OFFSET = 196
+FUSED_A2A_VIEW_EPOCH_OFFSET = 200
+FUSED_A2A_VIEW_ERROR_OFFSET = 204
+FUSED_A2A_VIEW_SIG_OFFSET = 256
 
 # (argName, byteSize) in addArg() order. Both the offset map and the segment
 # size derive from this one list, so an arg added to the segment cannot reach

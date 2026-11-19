@@ -451,6 +451,7 @@ namespace TensileLite
         bool                   enableLDSTrA                           = false;
         bool                   enableLDSTrB                           = false;
         int                    expertSchedulingMode                   = 0;
+        int                    fusedA2ATransport                      = 0;
         int                    globalAccumulation                     = 0;
         int16_t                globalSplitU                           = 0;
         bool                   globalSplitUCoalesced                  = false;

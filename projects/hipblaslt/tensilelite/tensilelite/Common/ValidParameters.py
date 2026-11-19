@@ -601,6 +601,9 @@ validParameters = { # we need to make sure this matches develop
     "UseSubtileImpl": [False, True],
     # FusedA2A=A2AGemm: K sub-rounds per peer shard, each with its own flag.
     "A2ASubRounds": [1, 2, 4],
+    # FusedA2A transport. View: the kernel waits on / signals a per-device view
+    # block at counter_ptr and builds no SDMA packets.
+    "FusedA2ATransport": ["InKernel", "View"],
     # Load options:
     # (GRO = Global Read Offset)
     # BufferLoad=0:

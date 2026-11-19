@@ -266,28 +266,51 @@ namespace TensileLite
             return (uint64_t)(uintptr_t)p;
         }
 
-        // A2AGemm: nb = clamp(numCu / F, 1, B) token blocks per dispatch batch.
-        __host__ __device__ inline uint32_t viewA2AGemmBatchBlocks(ViewArmArgs const& a)
+        // A2AGemm: F' = min(F, numCu); batch iB holds token blocks
+        // [ceil(iB * numCu / F'), min(ceil((iB+1) * numCu / F'), B)). The non-empty batches are
+        // InKernel's a2aBatchSpan spans; the indices differ from InKernel's when F > numCu.
+        __host__ __device__ inline uint32_t viewA2AGemmFeatures(ViewArmArgs const& a)
         {
-            const uint32_t nb = a.numCu / a.featureTiles;
-            const uint32_t lo = nb < a.tokenBlocks ? nb : a.tokenBlocks;
-            return lo > 1 ? lo : 1;
+            return a.featureTiles < a.numCu ? a.featureTiles : a.numCu;
         }
 
-        // A2AGemm: NB = ceil(B / nb) dispatch batches.
+        __host__ __device__ inline uint32_t viewA2AGemmBatchLo(ViewArmArgs const& a, uint32_t iB)
+        {
+            const uint32_t f = viewA2AGemmFeatures(a);
+            return (iB * a.numCu + f - 1) / f;
+        }
+
+        __host__ __device__ inline uint32_t viewA2AGemmBatchHi(ViewArmArgs const& a, uint32_t iB)
+        {
+            const uint32_t hi = viewA2AGemmBatchLo(a, iB + 1);
+            return hi < a.tokenBlocks ? hi : a.tokenBlocks;
+        }
+
+        // A2AGemm: nbMax = min(ceil(numCu / F'), B), the size of batch 0 and of the largest one;
+        // 0 when F = 0.
+        __host__ __device__ inline uint32_t viewA2AGemmBatchBlocksMax(ViewArmArgs const& a)
+        {
+            if(a.featureTiles == 0)
+                return 0;
+            const uint32_t nb = viewA2AGemmBatchLo(a, 1);
+            return nb < a.tokenBlocks ? nb : a.tokenBlocks;
+        }
+
+        // A2AGemm: NB = (B-1) * F' / numCu + 1 dispatch batches; 0 when B = 0 or F = 0.
         __host__ __device__ inline uint32_t viewA2AGemmBatches(ViewArmArgs const& a)
         {
-            const uint32_t nb = viewA2AGemmBatchBlocks(a);
-            return (a.tokenBlocks + nb - 1) / nb;
+            if(a.tokenBlocks == 0 || a.featureTiles == 0)
+                return 0;
+            return (a.tokenBlocks - 1) * viewA2AGemmFeatures(a) / a.numCu + 1;
         }
 
-        // A2AGemm: Qb * S, Qb = ceil(nb / G), G = numQueues; 0 when G = 0. Each of the NB * G
-        // (batch, round) pairs of a queue's chain adds this much to its flag.
+        // A2AGemm: Qb * S, Qb = ceil(nbMax / G), G = numQueues; 0 when G = 0. The ordinal span of
+        // one (batch, round) pair.
         __host__ __device__ inline uint32_t viewA2AGemmRoundUnits(ViewArmArgs const& a)
         {
             if(a.numQueues == 0)
                 return 0;
-            return (viewA2AGemmBatchBlocks(a) + a.numQueues - 1) / a.numQueues * a.subRounds;
+            return (viewA2AGemmBatchBlocksMax(a) + a.numQueues - 1) / a.numQueues * a.subRounds;
         }
 
         // A2AGemm: NB * G * Qb * S, what one launch adds to each flag[i].
@@ -296,24 +319,29 @@ namespace TensileLite
             return viewA2AGemmBatches(a) * a.numQueues * viewA2AGemmRoundUnits(a);
         }
 
-        // A2AGemm: the first token block of batch iB served by queue q in round j, the first
-        // b in [iB * nb, ...) with b mod G == (q - j) mod G.
-        __host__ __device__ inline uint32_t
-            viewA2AGemmFirstBlock(ViewArmArgs const& a, uint32_t q, uint32_t iB, uint32_t j)
+        // A2AGemm: [lo, hi), the token blocks queue q serves in pair t = iB * G + j: group
+        // (q - j) mod G of batch iB, whose blocks split into G groups of ceil(n / G). Returns
+        // whether the group is non-empty.
+        __host__ __device__ inline bool viewA2AGemmGroup(
+            ViewArmArgs const& a, uint32_t q, uint32_t t, uint32_t& lo, uint32_t& hi)
         {
             const uint32_t g   = a.numQueues;
-            const uint32_t bLo = iB * viewA2AGemmBatchBlocks(a);
-            return bLo + ((q + g - j) % g + g - bLo % g) % g;
+            const uint32_t bLo = viewA2AGemmBatchLo(a, t / g);
+            const uint32_t bHi = viewA2AGemmBatchHi(a, t / g);
+            const uint32_t gk  = (bHi - bLo + g - 1) / g;
+            lo                 = bLo + (q + g - t % g) % g * gk;
+            hi                 = lo + gk < bHi ? lo + gk : bHi;
+            return lo < hi;
         }
 
         // Queue q's chain for the launch whose view-block epoch is `epoch`, without the
         // VIEW_DEBUG_TIMELINE TIMESTAMPs.
-        // A2AGemm: for batch iB = 0..NB-1 (blocks [iB * nb, min(iB * nb + nb, B))), round
-        // j = 0..G-1 copies the batch's token blocks b with b mod G == (q - j) mod G ascending,
-        // each for h = 0..S-1, with one ATOMIC per `coalesce` units. The ATOMIC after the last
-        // unit of pair t = iB * G + j brings the flag to (t+1) * Qb * S; after the chain's last
-        // unit, to NB * G * Qb * S, so no ATOMIC follows it. A pair without a block before that
-        // emits one ATOMIC of Qb * S. GemmA2A: no POLL under VIEW_DEBUG_NO_POLL.
+        // A2AGemm: for pair t = 0..NB*G-1 with a non-empty group [lo, hi) (viewA2AGemmGroup), for
+        // h = 0..S-1, sub (t, h) copies units (b, h), b = lo..hi-1, with one ATOMIC per
+        // `coalesce` units and one after its last unit, which brings the flag to Qb * (S*t + h + 1),
+        // or for h = S-1 to Qb * S * t', t' the next non-empty pair (NB * G * Qb * S when none).
+        // The first ATOMIC also carries the Qb * S of every pair before the first non-empty one.
+        // GemmA2A: no POLL under VIEW_DEBUG_NO_POLL.
         __host__ __device__ inline void
             viewBuildUnits(ViewArmArgs const& a, uint32_t q, uint32_t epoch, ViewRingWriter& w)
         {
@@ -321,24 +349,25 @@ namespace TensileLite
             const uint64_t       flag = viewAddress(qa.flag);
             if(a.mode == VIEW_MODE_A2A_GEMM)
             {
-                const uint32_t g     = a.numQueues;
-                const uint32_t nb    = viewA2AGemmBatchBlocks(a);
                 const uint32_t round = viewA2AGemmRoundUnits(a);
-                const uint32_t pairs = viewA2AGemmBatches(a) * g;
-                if(pairs == 0)
-                    return;
-                uint32_t last = pairs - 1;
-                while(viewA2AGemmFirstBlock(a, q, last / g, last % g) >= a.tokenBlocks)
-                    last--;
-                uint32_t pending = 0;
-                uint32_t added   = 0;
-                for(uint32_t t = 0; t <= last; t++)
+                const uint32_t qb    = round / a.subRounds;
+                const uint32_t pairs = viewA2AGemmBatches(a) * a.numQueues;
+                uint32_t       lo = 0, hi = 0, t = 0;
+                while(t < pairs && !viewA2AGemmGroup(a, q, t, lo, hi))
+                    t++;
+                uint32_t added = 0;
+                uint32_t lead  = t * round;
+                while(t < pairs)
                 {
-                    const uint32_t target = t == last ? pairs * round : (t + 1) * round;
-                    const uint32_t bEnd   = t / g * nb + nb;
-                    const uint32_t bHi    = bEnd < a.tokenBlocks ? bEnd : a.tokenBlocks;
-                    for(uint32_t b = viewA2AGemmFirstBlock(a, q, t / g, t % g); b < bHi; b += g)
-                        for(uint32_t h = 0; h < a.subRounds; h++)
+                    uint32_t nLo = 0, nHi = 0, next = t + 1;
+                    while(next < pairs && !viewA2AGemmGroup(a, q, next, nLo, nHi))
+                        next++;
+                    for(uint32_t h = 0; h < a.subRounds; h++)
+                    {
+                        const uint32_t target
+                            = h + 1 < a.subRounds ? qb * (a.subRounds * t + h + 1) : next * round;
+                        uint32_t pending = 0;
+                        for(uint32_t b = lo; b < hi; b++)
                         {
                             viewPutCopy(w,
                                         qa.srcBase + b * a.srcBlockStride + h * a.subRoundStride,
@@ -349,24 +378,24 @@ namespace TensileLite
                                         a.rectX,
                                         viewRectY(a, b));
                             ++pending;
-                            if(b + g >= bHi && h + 1 == a.subRounds)
+                            if(b + 1 == hi)
                             {
                                 viewPutAtomic(w, flag, target - added);
-                                added   = target;
-                                pending = 0;
+                                added = target;
+                                lead  = 0;
                             }
                             else if(pending == a.coalesce)
                             {
-                                viewPutAtomic(w, flag, pending);
-                                added += pending;
+                                viewPutAtomic(w, flag, pending + lead);
+                                added += pending + lead;
+                                lead    = 0;
                                 pending = 0;
                             }
                         }
-                    if(added != target)
-                    {
-                        viewPutAtomic(w, flag, target - added);
-                        added = target;
                     }
+                    t  = next;
+                    lo = nLo;
+                    hi = nHi;
                 }
                 return;
             }
@@ -399,7 +428,7 @@ namespace TensileLite
                 viewPutTimestamp(
                     w, viewAddress(a.stats + viewStatsIndex(epoch, VIEW_STATS_TS_START + 2 * q)));
             viewBuildUnits(a, q, epoch, w);
-            // Ends an A2AGemm chain in place of its last ATOMIC; it touches no counter.
+            // Follows the last ATOMIC of an A2AGemm chain; it touches no counter.
             if(a.stats != nullptr)
                 viewPutTimestamp(
                     w, viewAddress(a.stats + viewStatsIndex(epoch, VIEW_STATS_TS_END + 2 * q)));

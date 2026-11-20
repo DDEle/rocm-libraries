@@ -127,6 +127,16 @@ namespace TensileLite
                 return m_referenceInputs[card];
             }
 
+            bool validatedSolution() const
+            {
+                return m_validatedSolution;
+            }
+
+            bool errorInSolution() const
+            {
+                return m_errorInSolution;
+            }
+
         protected:
             // Allow lifecycle tests to observe validation without device transfers.
             virtual void validateSlots(std::vector<size_t> const& slots);

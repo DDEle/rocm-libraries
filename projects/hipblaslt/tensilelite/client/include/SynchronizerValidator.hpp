@@ -30,6 +30,7 @@
 
 #include "DeviceContext.hpp"
 #include "RunListener.hpp"
+#include "ViewVerify.hpp"
 
 #include "ProgramOptions.hpp"
 
@@ -201,6 +202,10 @@ namespace TensileLite
             /// the check throws, and rethrows.
             void checkLaunches(char const* stage, CheckTimers const& timers);
 
+            /// With --fused-a2a-verify: synchronizes every device's stream, then reads and
+            /// resets each check block; marks the solution failed on a mismatch.
+            void checkVerify(char const* stage);
+
             /// Checks the iteration's inputs after launches, marking the solution
             /// failed and rethrowing if the check throws. A launch with no captured
             /// inputs is an error: beginRunIteration() was not called.
@@ -241,6 +246,12 @@ namespace TensileLite
             // VIEWSTAT lines of a View solution.
             int         m_viewDebug = 0;
             std::string m_solutionName;
+            // --fused-a2a-verify; checkRunIteration and postSolution read and reset every
+            // device's check block, and the solution fails on a mismatch.
+            // postSolution prints VERIFY_TOTAL for a solution with a run iteration.
+            int          m_verify = 0;
+            VerifyCounts m_verifyTotal;
+            uint32_t     m_verifyIterations = 0;
             // One narrow-alpha warning per run, not one per solution.
             bool                m_narrowAlphaWarned = false;
             ContractionProblem* m_problem      = nullptr;

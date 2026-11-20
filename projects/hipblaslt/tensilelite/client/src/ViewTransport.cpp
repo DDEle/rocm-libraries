@@ -47,7 +47,8 @@ namespace TensileLite
 
         // One thread per queue, then thread 0 advances the header. With a.stats: thread 0
         // stamps VIEW_STATS_ARM_IN, and each queue's thread raises VIEW_STATS_ARM_OUT to the
-        // clock after its doorbell.
+        // clock after its doorbell. Faults: as viewBuildUnits.
+        template <uint32_t Faults>
         __global__ void viewArmKernel(ViewArmArgs a)
         {
             const uint64_t  armIn = a.stats != nullptr ? (uint64_t)wall_clock64() : 0;
@@ -65,7 +66,8 @@ namespace TensileLite
             __syncthreads();
             if(q < a.numQueues)
             {
-                const uint32_t bits = viewArmOrBook(a, q, epoch, halt, viewAdd32, viewStore32);
+                const uint32_t bits
+                    = viewArmOrBook<Faults>(a, q, epoch, halt, viewAdd32, viewStore32);
                 if(bits != 0)
                     __hip_atomic_fetch_or(error, bits, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
                 if(a.stats != nullptr)
@@ -349,7 +351,15 @@ namespace TensileLite
                 viewArmHost(args, stream);
             else
             {
-                hipLaunchKernelGGL(viewArmKernel, ::dim3(1), ::dim3(64), 0, stream, args);
+                if((args.debug & VIEW_DEBUG_COPY_FAULTS) != 0)
+                    hipLaunchKernelGGL(viewArmKernel<VIEW_DEBUG_COPY_FAULTS>,
+                                       ::dim3(1),
+                                       ::dim3(64),
+                                       0,
+                                       stream,
+                                       args);
+                else
+                    hipLaunchKernelGGL(viewArmKernel<0>, ::dim3(1), ::dim3(64), 0, stream, args);
                 HIP_CHECK_EXC(hipGetLastError());
             }
         }

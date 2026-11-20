@@ -4,6 +4,7 @@
 #include "SynchronizerValidator.hpp"
 #include "TimingInstrumentation.hpp"
 #include "ViewTransport.hpp"
+#include "ViewVerify.hpp"
 
 #include "ResultReporter.hpp"
 
@@ -56,9 +57,9 @@ namespace TensileLite
             : m_enabled(args["check-synchronizer"].as<bool>())
             , m_validateAfterEnqueues(args.count("validate-after-enqueues")
                                       && args["validate-after-enqueues"].as<bool>())
-            , m_viewDebug(args.count("fused-a2a-view-debug")
-                              ? args["fused-a2a-view-debug"].as<int>()
-                              : 0)
+            , m_viewDebug(
+                  args.count("fused-a2a-view-debug") ? args["fused-a2a-view-debug"].as<int>() : 0)
+            , m_verify(args.count("fused-a2a-verify") ? args["fused-a2a-verify"].as<int>() : 0)
         {
         }
 
@@ -70,6 +71,8 @@ namespace TensileLite
         void SynchronizerValidator::preSolution(ContractionSolution* const solution)
         {
             m_failedInSolution = false;
+            m_verifyTotal      = VerifyCounts{};
+            m_verifyIterations = 0;
             m_viewTransport    = solution != nullptr && fusedA2AViewTransport(*solution);
             m_solutionName     = solution != nullptr ? solution->name() : std::string();
             // Covers the possible uses of the pointer: Flags in singleCallArgs
@@ -139,6 +142,13 @@ namespace TensileLite
                 }
             };
             guarded([&] { checkLaunches("interrupted run iteration", postSolutionTimers); });
+            guarded([&] { checkVerify("interrupted run iteration"); });
+            if(m_verify != 0 && m_verifyIterations != 0)
+                std::cout << "VERIFY_TOTAL checked=" << m_verifyTotal.checked
+                          << " d_mismatches=" << m_verifyTotal.dMismatches
+                          << " recv_mismatches=" << m_verifyTotal.recvMismatches
+                          << " first_bad_launch=" << (int64_t)(int32_t)m_verifyTotal.firstBad
+                          << " name=" << m_solutionName << std::endl;
             // The fused-A2A flag blocks are not tied to a launch: checked here regardless.
             guarded([&] {
                 for(auto const& device : *m_devices)
@@ -208,6 +218,7 @@ namespace TensileLite
 
         void SynchronizerValidator::beginRunIteration()
         {
+            m_verifyIterations++;
             m_iterationInputs.clear();
             for(auto const& device : *m_devices)
                 m_iterationInputs.push_back({device->deviceId, device->inputArr});
@@ -215,7 +226,45 @@ namespace TensileLite
 
         void SynchronizerValidator::checkRunIteration()
         {
+            checkVerify("run iteration");
             checkLaunches("run iteration", runIterationTimers);
+        }
+
+        void SynchronizerValidator::checkVerify(char const* stage)
+        {
+            if(m_verify == 0 || m_devices == nullptr
+               || std::none_of(m_devices->begin(), m_devices->end(), [](auto const& device) {
+                      return device->verifyBlock != nullptr;
+                  }))
+                return;
+            syncAll(*m_devices);
+            for(auto const& device : *m_devices)
+            {
+                if(device->verifyBlock == nullptr)
+                    continue;
+                ScopedDevice             guard(device->deviceId);
+                const VerifyCounts       c       = verifyReadBlock(*device);
+                const VerifyBlockVerdict verdict = verifyTakeBlock(m_verifyTotal, c);
+                if(!verdict.report)
+                    continue;
+                std::cout << "VERIFY dev=" << device->deviceId << " stage=" << stage
+                          << " checked=" << c.checked << " d_mismatches=" << c.dMismatches
+                          << " recv_mismatches=" << c.recvMismatches
+                          << " first_bad_launch=" << (int64_t)(int32_t)c.firstBad << std::endl;
+                if(!verdict.failed)
+                    continue;
+                m_reporter->log(LogLevel::Error,
+                                concatenate("verify: D mismatches ",
+                                            c.dMismatches,
+                                            ", recv mismatches ",
+                                            c.recvMismatches,
+                                            ", first bad launch ",
+                                            c.firstBad,
+                                            " (device ",
+                                            device->deviceId,
+                                            ")\n"));
+                m_failedInSolution = true;
+            }
         }
 
         void SynchronizerValidator::validateEnqueues(std::vector<size_t> const& slots,

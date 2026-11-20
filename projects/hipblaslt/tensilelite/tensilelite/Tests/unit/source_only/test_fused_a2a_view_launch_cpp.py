@@ -98,7 +98,7 @@ def test_arm_kernel_books_halted_and_skipped_queues():
         arm,
         "viewLoad32(error)",
         "__syncthreads()",
-        "viewArmOrBook(a,q,epoch,halt,viewAdd32,viewStore32)",
+        "viewArmOrBook<Faults>(a,q,epoch,halt,viewAdd32,viewStore32)",
     )
     host = _squash(_block(_read("src/ViewTransport.cpp"), "void viewArmHost("))
     _in_order(

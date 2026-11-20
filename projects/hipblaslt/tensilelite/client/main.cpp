@@ -48,6 +48,7 @@
 #include "TimingEvents.hpp"
 #include "TimingInstrumentation.hpp"
 #include "ViewTransport.hpp"
+#include "ViewVerify.hpp"
 
 #include "LibraryUpdateReporter.hpp"
 #include "LogReporter.hpp"
@@ -299,7 +300,11 @@ namespace TensileLite
                 ("fused-a2a-drain-send",     po::value<int>()->default_value(1), "Runtime drainSend flag passed to the fused kernel (1=on): the kernel exits only once this card's engines have finished reading D[0:AM), so D can be reused on stream order alone. Independent of --fused-a2a-drain-recv.")
                 ("fused-a2a-view-arm",       po::value<int>()->default_value(VIEW_ARM_DEVICE), "Fused A2A, FusedA2ATransport=View solutions: who writes the SDMA chains before each launch. 0: a kernel on the device's stream; 1: the host thread, after synchronizing that stream.")
                 ("fused-a2a-view-coalesce",  po::value<int>()->default_value(1), "Fused A2A, A2AGemm FusedA2ATransport=View solutions: COPY units per arrival ATOMIC on each queue; the last ATOMIC carries the remainder.")
-                ("fused-a2a-view-debug",     po::value<int>()->default_value(0), "Fused A2A debug bitmask. 1: View solutions record a per-launch timeline (arm kernel, GEMM end, wait kernel, and a TIMESTAMP at the start and end of each queue's chain) and print VIEWSTAT lines per solution; 2: GemmA2A View chains are built without their POLLs (data is wrong); 4: InKernel solutions launch an empty kernel right before and right after the fused GEMM.")
+                ("fused-a2a-view-debug",     po::value<int>()->default_value(0), "Fused A2A debug bitmask. 1: View solutions record a per-launch timeline (arm kernel, GEMM end, wait kernel, and a TIMESTAMP at the start and end of each queue's chain) and print VIEWSTAT lines per solution; 2: GemmA2A View chains are built without their POLLs (data is wrong); 4: InKernel solutions launch an empty kernel right before and right after the fused GEMM; 8: View queue 0 omits its first COPY; 16: View queue 0's first COPY moves to just before its chain's last ATOMIC.")
+                ("fused-a2a-verify",         po::value<int>()->default_value(VERIFY_OFF), "Fused A2A: 0 off; 1 before every launch e a producer rewrites the inputs from copies taken before the problem's first launch, each element negated by bit (its shard coordinate mod 32) of e * 0x9E3779B1, and poisons D and the a2aBuf peer segments (A2AGemm: A and B along K, so D equals the launch-0 D bitwise; GemmA2A: A along M, all of a2aBuf); after the launch a kernel compares D (GemmA2A: and the received a2aBuf) with the launch-0 result under the same pattern. Launch 0 has no pattern. 2 as 1, and from launch 1 on rank (e mod W) spins --fused-a2a-verify-skew-us before its producer.")
+                ("fused-a2a-verify-barrier", po::value<int>()->default_value(1), "Fused A2A, --fused-a2a-verify: 1 synchronizes every device's stream before and after the producers of each launch; 0 does not.")
+                ("fused-a2a-verify-skew-us", po::value<int>()->default_value(1000), "Fused A2A, --fused-a2a-verify 2: the spin, in microseconds.")
+                ("fused-a2a-verify-fence",   po::value<int>()->default_value(1), "Fused A2A, --fused-a2a-verify: 1 the A2AGemm producer of A and B ends with __threadfence_system(); 0 it does not.")
                 ("fused-a2a-sdma-rotate",    po::value<int>(), "Fused A2A, gfx942 and gfx950: move each remote peer SDMA queue this many steps along the even xGMI engines 2,4,...,14 from its KFD recommendation; nonzero requires 14 xGMI SDMA engines. Ignored on other architectures, which spread the remote peer queues over the recommended engines. The loopback queue uses engine 0. Defaults to -1.")
                 ("use-default-stream",       po::value<bool>()->default_value(false), "Use default Hip stream to run kernels.")
 
@@ -794,6 +799,32 @@ namespace TensileLite
         }
 #endif // defined(__linux__)
 
+        void checkFusedA2AVerifyArgs(po::variables_map const& args)
+        {
+            VerifyArgs v;
+            v.verify                = args["fused-a2a-verify"].as<int>();
+            v.barrier               = args["fused-a2a-verify-barrier"].as<int>();
+            v.fence                 = args["fused-a2a-verify-fence"].as<int>();
+            v.skewUs                = args["fused-a2a-verify-skew-us"].as<int>();
+            v.numElementsToValidate = args["num-elements-to-validate"].as<int>();
+            v.numWarmups            = args["num-warmups"].as<int>();
+            v.cEqualD               = args["c-equal-d"].as<bool>();
+            v.sparse                = args["sparse"].as<int>() != 0;
+            v.boundsCheckNaN = args["bounds-check"].as<BoundsCheckMode>() == BoundsCheckMode::NaN;
+            v.scales = !args["use-scaleAB"].as<std::string>().empty()
+                       || args["use-scaleCD"].as<bool>() || args["use-scaleAlphaVec"].as<int>() != 0
+                       || args["mx-a-block"].as<int>() != 0 || args["mx-b-block"].as<int>() != 0;
+            v.swizzled = args["swizzle-tensor-a"].as<bool>() || args["swizzle-tensor-b"].as<bool>();
+            v.gemmA2A  = args["fused-a2a"].as<FusedA2A>() == FusedA2A::GemmA2A;
+            v.betaZero = args["init-beta"].as<InitMode>() == InitMode::Zero;
+            v.activation = args["activation-type"].as<ActivationType>() != ActivationType::None;
+            v.bias       = args["use-bias"].as<int>() != 0;
+            v.fusedA2A   = args["fused-a2a"].as<FusedA2A>() != FusedA2A::Disabled;
+            const std::string error = verifyArgsError(v);
+            if(!error.empty())
+                throw std::runtime_error("[fused-a2a] " + error);
+        }
+
         void checkFusedA2AArgs(po::variables_map const& args)
         {
             const int toValidate = args["num-elements-to-validate"].as<int>();
@@ -834,7 +865,7 @@ namespace TensileLite
             const int viewDebug = args["fused-a2a-view-debug"].as<int>();
             if(viewDebug < 0 || viewDebug > VIEW_DEBUG_ALL)
                 throw std::runtime_error(concatenate(
-                    "[fused-a2a] --fused-a2a-view-debug must be in [0, 7]; got ", viewDebug, "."));
+                    "[fused-a2a] --fused-a2a-view-debug must be in [0, 31]; got ", viewDebug, "."));
             if(args["use-user-args"].as<bool>())
                 throw std::runtime_error("[fused-a2a] --use-user-args is not supported.");
             if(!args["library-update-file"].as<std::string>().empty())
@@ -923,9 +954,15 @@ int main(int argc, const char* argv[])
     bool           fusedA2A  = fusedMode != FusedA2A::Disabled;
     if(fusedA2A)
         checkFusedA2AArgs(args);
+    checkFusedA2AVerifyArgs(args);
     const int      viewArmMode  = args["fused-a2a-view-arm"].as<int>();
     const uint32_t viewCoalesce = (uint32_t)args["fused-a2a-view-coalesce"].as<int>();
     const int      viewDebug    = args["fused-a2a-view-debug"].as<int>();
+    VerifyOptions  verifyOptions;
+    verifyOptions.mode      = args["fused-a2a-verify"].as<int>();
+    verifyOptions.barrier   = args["fused-a2a-verify-barrier"].as<int>() != 0;
+    verifyOptions.skewUs    = (uint32_t)args["fused-a2a-verify-skew-us"].as<int>();
+    verifyOptions.fence     = args["fused-a2a-verify-fence"].as<int>() != 0;
     auto const& worldFilter = args["world-filter"].as<std::vector<int>>();
     if(!fusedA2A && !worldFilter.empty())
         throw std::runtime_error("--world-filter applies only with --fused-a2a");
@@ -1093,6 +1130,7 @@ int main(int argc, const char* argv[])
     MetaRunListener listeners;
     std::shared_ptr<BenchmarkTimer>        benchmarkTimer;
     std::shared_ptr<SynchronizerValidator> synchronizerValidator;
+    std::shared_ptr<ReferenceValidator>    referenceValidator;
     float                                  flushTimeMs{};
 
     {
@@ -1113,7 +1151,8 @@ int main(int argc, const char* argv[])
             // one rather than being overwritten by it.
             synchronizerValidator = std::make_shared<SynchronizerValidator>(args);
             listeners.addListener(synchronizerValidator);
-            listeners.addListener(std::make_shared<ReferenceValidator>(args));
+            referenceValidator = std::make_shared<ReferenceValidator>(args);
+            listeners.addListener(referenceValidator);
             benchmarkTimer = std::make_shared<BenchmarkTimer>(args, *hardware, flushTimeMs * 1000);
             listeners.addListener(benchmarkTimer);
             listeners.addListener(std::make_shared<HardwareMonitorListener>(args));
@@ -1320,6 +1359,8 @@ int main(int argc, const char* argv[])
                 // upload layout for MX scale tensors. The extra upload is a no-op
                 // cost on non-MX problems.
                 bool resetInput = true;
+                // --fused-a2a-verify: goldenA and goldenB are taken once per problem.
+                bool verifyInputsCaptured = false;
                 while(solutionIterator->moreSolutionsInProblem())
                 {
                     ScopedTimer        solutionTotalTimer("solution_total");
@@ -1345,6 +1386,10 @@ int main(int argc, const char* argv[])
                     }
                     bool deviceLost = false;
                     bool runThisSolution = false;
+                    VerifyLayout verifyLayoutOf;
+                    VerifyState  verifyState;
+                    // Set by the first producer; the inputs are restored after the solution.
+                    bool verifyProduced = false;
                     {
                         ScopedTimer timer("run_current_solution_check");
                         runThisSolution = solutionIterator->runCurrentSolution() && runKernels;
@@ -1354,7 +1399,17 @@ int main(int argc, const char* argv[])
                         try
                         {
                             checkFusedA2ASolution(*problem, *solution, *hardware, active.size());
-                            resetCommBuffers(*problem, *solution, active, viewDebug);
+                            const bool verify = fusedA2A && verifyOptions.mode != VERIFY_OFF;
+                            if(verify)
+                            {
+                                verifyLayoutOf = verifyLayout(*problem, active.size());
+                                verifyState.reset(device0->inputArr.size());
+                            }
+                            resetCommBuffers(*problem,
+                                             *solution,
+                                             active,
+                                             viewDebug,
+                                             verify ? &verifyLayoutOf : nullptr);
                             const bool viewTransport = fusedA2A && fusedA2AViewTransport(*solution);
                             const bool inKernelNoops
                                 = fusedA2A && !viewTransport
@@ -1363,8 +1418,11 @@ int main(int argc, const char* argv[])
                             {
                                 ScopedTimer        runIterTotalTimer("run_iteration_total");
                                 ScopeTeardownTimer runIterTeardownTimer("run_iteration_teardown");
+                                verifyState.iterations++;
                                 if(resetInput)
                                 {
+                                    if(verify)
+                                        syncAll(active);
                                     ScopedTimer timer("gpu_input_reset");
                                     struct ResetScope
                                     {
@@ -1453,6 +1511,37 @@ int main(int argc, const char* argv[])
                                                        size_t              invocation) {
                                     const size_t launchSlot = launchIdx++ % kernels.size();
                                     auto const&  launch     = kernels[launchSlot];
+                                    const size_t dataSlot
+                                        = verify ? launchSlot % device0->inputArr.size() : 0;
+                                    uint32_t verifyLaunch = 0;
+                                    if(verify)
+                                    {
+                                        verifyLaunch = verifyState.beginLaunch(dataSlot);
+                                        const bool barrier
+                                            = verifyBarrier(verifyOptions, verifyLaunch);
+                                        if(barrier)
+                                            syncAll(active);
+                                        if(!verifyInputsCaptured)
+                                        {
+                                            forEachDevice(active, [&](DeviceContext& ctx) {
+                                                verifyCaptureInputs(ctx, verifyLayoutOf);
+                                            });
+                                            verifyInputsCaptured = true;
+                                        }
+                                        verifyProduced = true;
+                                        for(size_t d = 0; d < active.size(); d++)
+                                        {
+                                            ScopedDevice device(active[d]->deviceId);
+                                            verifyState.addSkew(verifyProduce(*active[d],
+                                                                              verifyLayoutOf,
+                                                                              dataSlot,
+                                                                              verifyLaunch,
+                                                                              verifyOptions,
+                                                                              (uint32_t)d));
+                                        }
+                                        if(barrier)
+                                            syncAll(active);
+                                    }
                                     for(size_t d = 0; d < active.size(); d++)
                                     {
                                         auto&        ctx = *active[d];
@@ -1461,7 +1550,10 @@ int main(int argc, const char* argv[])
                                         {
                                             // The events bracket the arm, the GEMM and the
                                             // wait.
-                                            auto const& view = viewArgs[launchSlot][d];
+                                            ViewArmArgs view = viewArgs[launchSlot][d];
+                                            if(verify)
+                                                view.debug
+                                                    = verifyViewDebug(view.debug, verifyLaunch);
                                             if(startEvents)
                                                 HIP_CHECK_EXC(hipEventRecord(
                                                     startEvents->card(d)[invocation].front(),
@@ -1509,6 +1601,9 @@ int main(int argc, const char* argv[])
                                         else
                                             HIP_CHECK_EXC(ctx.adapter->launchKernels(
                                                 launch[d], ctx.stream, nullptr, nullptr));
+                                        if(verify && verifyState.checks())
+                                            verifyCheck(
+                                                ctx, verifyLayoutOf, dataSlot, verifyLaunch);
                                     }
                                 };
 
@@ -1541,6 +1636,21 @@ int main(int argc, const char* argv[])
                                         ScopedTimer timer("validate_warmups");
                                         listeners.validateWarmups(
                                             {0}, warmupStartEvents, warmupStopEvents);
+                                    }
+                                    if(verify && verifyState.golden == VerifyGolden::Pending)
+                                    {
+                                        verifyState.golden = verifyGoldenAfterValidation(
+                                            verifyState.golden,
+                                            referenceValidator->validatedSolution(),
+                                            referenceValidator->errorInSolution());
+                                        if(verifyState.golden == VerifyGolden::Captured)
+                                            forEachDevice(active, [&](DeviceContext& ctx) {
+                                                verifyCaptureGolden(ctx, verifyLayoutOf);
+                                            });
+                                        else if(verifyState.golden == VerifyGolden::Disabled)
+                                            reporters->log(LogLevel::Error,
+                                                           "fused-A2A verify: golden not captured, "
+                                                           "verify is off for this solution.\n");
                                     }
 
                                     {
@@ -1613,6 +1723,18 @@ int main(int argc, const char* argv[])
                                             {
                                                 ScopedTimer validateEnqueuesTimer(
                                                     "benchmark_validate_enqueues");
+                                                if(verify)
+                                                {
+                                                    syncAll(active);
+                                                    for(auto const& [slot, e] :
+                                                        verifyState.takeLaunched())
+                                                        forEachDevice(
+                                                            active, [&](DeviceContext& ctx) {
+                                                                verifyNormalize(
+                                                                    ctx, verifyLayoutOf, slot, e);
+                                                            });
+                                                    syncAll(active);
+                                                }
                                                 listeners.validateEnqueues(
                                                     slots, startEvents, stopEvents);
                                             }
@@ -1651,6 +1773,18 @@ int main(int argc, const char* argv[])
                                 synchronizerValidator->checkRunIteration();
                                 runIterTeardownTimer.mark();
                             }
+                            if(verify)
+                                std::cout
+                                    << "VERIFY_SOLUTION world=" << active.size()
+                                    << " launches=" << verifyState.launches << " golden="
+                                    << (verifyState.golden == VerifyGolden::Captured   ? "captured"
+                                        : verifyState.golden == VerifyGolden::Disabled ? "disabled"
+                                                                                       : "pending")
+                                    << " slots=" << verifyState.last.size()
+                                    << " iterations=" << verifyState.iterations
+                                    << " skewed=" << verifyState.skewed
+                                    << " skew_ticks=" << verifyState.skewTicks
+                                    << " name=" << solution->name() << std::endl;
                             forEachDevice(active, [](DeviceContext&) {
                                 HIP_CHECK_EXC(hipDeviceSynchronize());
                             });
@@ -1688,6 +1822,25 @@ int main(int argc, const char* argv[])
                                                 " did not drain after a FusedA2ATransport=View "
                                                 "solution, aborting.\n"));
                             }
+                        if(verifyProduced && !deviceLost)
+                        {
+                            try
+                            {
+                                syncAll(active);
+                                forEachDevice(active, [&](DeviceContext& ctx) {
+                                    verifyRestore(ctx, verifyLayoutOf);
+                                });
+                                syncAll(active);
+                            }
+                            catch(std::runtime_error const& err)
+                            {
+                                reporters->log(
+                                    LogLevel::Error,
+                                    concatenate("fused-A2A verify: inputs not restored: ",
+                                                err.what(),
+                                                "\n"));
+                            }
+                        }
                         static_cast<void>(hipSetDevice(device0->deviceId));
                     }
 

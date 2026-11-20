@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "ViewVerify.hpp"
+
 #include <Tensile/ContractionProblem_fwd.hpp>
 #include <Tensile/ContractionSolution_fwd.hpp>
 #include <Tensile/FusedA2A.hpp>
@@ -75,6 +77,10 @@ namespace TensileLite
             void* viewStats = nullptr;
             // Set by resetCommBuffers for a View solution, cleared by viewDrainQueues.
             bool viewQueuesArmed = false;
+            // --fused-a2a-verify, sized by resetCommBuffers: the check block (VERIFY_BLOCK_BYTES,
+            // fine-grained) and the goldens.
+            void*               verifyBlock = nullptr;
+            VerifyGoldenBuffers golden;
 
         private:
             void release();
@@ -104,11 +110,13 @@ namespace TensileLite
 
         // First runs viewDrainQueues on every device and throws if one fails. Also sizes and
         // zeroes every device's view block for a FusedA2ATransport=View solution, and with
-        // VIEW_DEBUG_TIMELINE in viewDebug its viewStats ring.
+        // VIEW_DEBUG_TIMELINE in viewDebug its viewStats ring. With a verify layout, grows the
+        // goldens to it and resets the check block.
         void resetCommBuffers(ContractionProblem const&                          problem,
                               ContractionSolution const&                         solution,
                               std::vector<std::shared_ptr<DeviceContext>> const& devices,
-                              int                                                viewDebug = 0);
+                              int                                                viewDebug = 0,
+                              VerifyLayout const*                                verify = nullptr);
 
         bool fusedA2AViewTransport(ContractionSolution const& solution);
 

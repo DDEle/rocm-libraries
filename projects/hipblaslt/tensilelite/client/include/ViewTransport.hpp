@@ -58,7 +58,12 @@ namespace TensileLite
         constexpr int VIEW_DEBUG_TIMELINE       = 1;
         constexpr int VIEW_DEBUG_NO_POLL        = 2;
         constexpr int VIEW_DEBUG_INKERNEL_NOOPS = 4;
-        constexpr int VIEW_DEBUG_ALL            = 7;
+        // Queue 0 omits its first COPY and keeps every ATOMIC.
+        constexpr int VIEW_DEBUG_DROP_COPY = 8;
+        // Queue 0's first COPY moves to just before the chain's last ATOMIC.
+        constexpr int VIEW_DEBUG_EARLY_RELEASE = 16;
+        constexpr int VIEW_DEBUG_COPY_FAULTS   = VIEW_DEBUG_DROP_COPY | VIEW_DEBUG_EARLY_RELEASE;
+        constexpr int VIEW_DEBUG_ALL           = 31;
 
         // VIEW_DEBUG_TIMELINE ring: record (epoch % VIEW_STATS_RECORDS) of VIEW_STATS_FIELDS
         // u64 slots, one slot per VIEW_STATS_SLOT_U64 u64s (32 B). Fields are wall-clock ticks.
@@ -342,11 +347,39 @@ namespace TensileLite
         // or for h = S-1 to Qb * S * t', t' the next non-empty pair (NB * G * Qb * S when none).
         // The first ATOMIC also carries the Qb * S of every pair before the first non-empty one.
         // GemmA2A: no POLL under VIEW_DEBUG_NO_POLL.
+        // The bits of VIEW_DEBUG_COPY_FAULTS in both a.debug and Faults change queue 0's first COPY.
+        template <uint32_t Faults = VIEW_DEBUG_COPY_FAULTS>
         __host__ __device__ inline void
             viewBuildUnits(ViewArmArgs const& a, uint32_t q, uint32_t epoch, ViewRingWriter& w)
         {
-            ViewQueueArgs const& qa   = a.queues[q];
-            const uint64_t       flag = viewAddress(qa.flag);
+            ViewQueueArgs const& qa    = a.queues[q];
+            const uint64_t       flag  = viewAddress(qa.flag);
+            const uint32_t       fault = q == 0 ? a.debug & Faults & VIEW_DEBUG_COPY_FAULTS : 0u;
+            bool                 first = true, held = false;
+            uint64_t             heldSrc = 0, heldDst = 0;
+            uint32_t             heldRectY = 0;
+            auto                 copy      = [&](uint64_t src, uint64_t dst, uint32_t rectY) {
+                if(first && fault != 0)
+                {
+                    first = false;
+                    if((fault & VIEW_DEBUG_DROP_COPY) == 0)
+                    {
+                        held      = true;
+                        heldSrc   = src;
+                        heldDst   = dst;
+                        heldRectY = rectY;
+                    }
+                    return;
+                }
+                first = false;
+                viewPutCopy(w, src, dst, a.srcPitch, a.dstPitch, a.slice, a.rectX, rectY);
+            };
+            auto putHeld = [&]() {
+                if(held)
+                    viewPutCopy(
+                        w, heldSrc, heldDst, a.srcPitch, a.dstPitch, a.slice, a.rectX, heldRectY);
+                held = false;
+            };
             if(a.mode == VIEW_MODE_A2A_GEMM)
             {
                 const uint32_t round = viewA2AGemmRoundUnits(a);
@@ -369,17 +402,14 @@ namespace TensileLite
                         uint32_t pending = 0;
                         for(uint32_t b = lo; b < hi; b++)
                         {
-                            viewPutCopy(w,
-                                        qa.srcBase + b * a.srcBlockStride + h * a.subRoundStride,
-                                        qa.dstBase + b * a.dstBlockStride + h * a.subRoundStride,
-                                        a.srcPitch,
-                                        a.dstPitch,
-                                        a.slice,
-                                        a.rectX,
-                                        viewRectY(a, b));
+                            copy(qa.srcBase + b * a.srcBlockStride + h * a.subRoundStride,
+                                 qa.dstBase + b * a.dstBlockStride + h * a.subRoundStride,
+                                 viewRectY(a, b));
                             ++pending;
                             if(b + 1 == hi)
                             {
+                                if(h + 1 == a.subRounds && next == pairs)
+                                    putHeld();
                                 viewPutAtomic(w, flag, target - added);
                                 added = target;
                                 lead  = 0;
@@ -406,28 +436,25 @@ namespace TensileLite
             {
                 if((a.debug & VIEW_DEBUG_NO_POLL) == 0)
                     viewPutPoll(w, viewAddress(sig + j), ref);
-                viewPutCopy(w,
-                            qa.srcBase + j * a.srcBlockStride,
-                            qa.dstBase + j * a.dstBlockStride,
-                            a.srcPitch,
-                            a.dstPitch,
-                            a.slice,
-                            a.rectX,
-                            viewRectY(a, j));
+                copy(qa.srcBase + j * a.srcBlockStride,
+                     qa.dstBase + j * a.dstBlockStride,
+                     viewRectY(a, j));
                 viewPutAtomic(w, flag, 1u);
             }
+            putHeld();
             viewPutAtomic(
                 w, viewAddress(a.view + FUSED_A2A_VIEW_OUTBOUND_OFFSET / sizeof(uint32_t)), 1u);
         }
 
-        // viewBuildUnits between a leading and a trailing TIMESTAMP when a.stats is set.
+        // viewBuildUnits<Faults> between a leading and a trailing TIMESTAMP when a.stats is set.
+        template <uint32_t Faults = VIEW_DEBUG_COPY_FAULTS>
         __host__ __device__ inline void
             viewBuildChain(ViewArmArgs const& a, uint32_t q, uint32_t epoch, ViewRingWriter& w)
         {
             if(a.stats != nullptr)
                 viewPutTimestamp(
                     w, viewAddress(a.stats + viewStatsIndex(epoch, VIEW_STATS_TS_START + 2 * q)));
-            viewBuildUnits(a, q, epoch, w);
+            viewBuildUnits<Faults>(a, q, epoch, w);
             // Follows the last ATOMIC of an A2AGemm chain; it touches no counter.
             if(a.stats != nullptr)
                 viewPutTimestamp(
@@ -435,27 +462,29 @@ namespace TensileLite
         }
 
         // Whether queue q's chain fits between *wptr and *rptr + ringBytes.
+        template <uint32_t Faults = VIEW_DEBUG_COPY_FAULTS>
         __host__ __device__ inline bool
             viewQueueFits(ViewArmArgs const& a, uint32_t q, uint32_t epoch)
         {
             ViewQueueArgs const& qa   = a.queues[q];
             const uint64_t       wptr = viewLoad64(qa.wptr);
             ViewRingWriter w{nullptr, qa.ringBytes / sizeof(uint32_t), wptr / sizeof(uint32_t)};
-            viewBuildChain(a, q, epoch, w);
+            viewBuildChain<Faults>(a, q, epoch, w);
             return w.pos * sizeof(uint32_t) - viewLoad64(qa.rptr) < qa.ringBytes;
         }
 
         // Appends queue q's chain after *wptr, then stores *wptr and the doorbell. Returns
         // false, writing nothing, when the chain does not fit in front of *rptr.
+        template <uint32_t Faults = VIEW_DEBUG_COPY_FAULTS>
         __host__ __device__ inline bool
             viewArmQueue(ViewArmArgs const& a, uint32_t q, uint32_t epoch)
         {
-            if(!viewQueueFits(a, q, epoch))
+            if(!viewQueueFits<Faults>(a, q, epoch))
                 return false;
             ViewQueueArgs const& qa = a.queues[q];
             ViewRingWriter       w{
                 qa.ring, qa.ringBytes / sizeof(uint32_t), viewLoad64(qa.wptr) / sizeof(uint32_t)};
-            viewBuildChain(a, q, epoch, w);
+            viewBuildChain<Faults>(a, q, epoch, w);
             const uint64_t end = w.pos * sizeof(uint32_t);
             viewPublish64(qa.wptr, end);
             viewPublish64(qa.doorbell, end);
@@ -502,7 +531,7 @@ namespace TensileLite
 
         // viewResetFlag, then arms queue q, or books it through viewBookSkipped when the arm
         // is halted, the queue is stuck or the chain does not fit. Returns the error bits to set.
-        template <typename Add, typename Store>
+        template <uint32_t Faults = VIEW_DEBUG_COPY_FAULTS, typename Add, typename Store>
         __host__ __device__ inline uint32_t viewArmOrBook(ViewArmArgs const& a,
                                                           uint32_t           q,
                                                           uint32_t           epoch,
@@ -512,7 +541,7 @@ namespace TensileLite
         {
             const bool     halted = viewArmHalted(a, error);
             const uint32_t stuck  = viewResetFlag(a, q, store);
-            if(!halted && stuck == 0 && viewArmQueue(a, q, epoch))
+            if(!halted && stuck == 0 && viewArmQueue<Faults>(a, q, epoch))
                 return 0u;
             viewBookSkipped(a, q, add);
             return halted || stuck != 0 ? stuck : VIEW_ERROR_RING_FULL;
@@ -556,6 +585,32 @@ namespace TensileLite
                             epoch * a.world);
             }
             viewStore32(header + FUSED_A2A_VIEW_EPOCH_OFFSET / sizeof(uint32_t), epoch + 1u);
+        }
+
+        // The sign bit of every element of a u32 word of elementBytes-byte floats (1, 2 or 4).
+        __host__ __device__ inline uint32_t viewSignMask(uint32_t elementBytes)
+        {
+            return elementBytes == 1 ? 0x80808080u : elementBytes == 2 ? 0x80008000u : 0x80000000u;
+        }
+
+        // Whether `word` equals `golden` per element of sign bit `mask`; an element that is +0 or
+        // -0 in both matches.
+        __host__ __device__ inline bool
+            viewVerifyCompare(uint32_t word, uint32_t golden, uint32_t mask)
+        {
+            const uint32_t diff = word ^ golden;
+            if(diff == 0)
+                return true;
+            const uint32_t bits = mask == 0x80808080u ? 8u : mask == 0x80008000u ? 16u : 32u;
+            for(uint32_t lo = 0; lo < 32; lo += bits)
+            {
+                const uint32_t lane = (bits == 32 ? 0xFFFFFFFFu : (1u << bits) - 1u) << lo;
+                const uint32_t sign = 1u << (lo + bits - 1);
+                const uint32_t d    = diff & lane;
+                if(d != 0 && (d != sign || (word & lane & ~sign) != 0))
+                    return false;
+            }
+            return true;
         }
 
         // Fills the arm of devices[rank] for launch `launch` (its rotating slot), with

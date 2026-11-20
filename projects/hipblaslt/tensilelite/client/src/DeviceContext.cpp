@@ -3,6 +3,7 @@
 
 #include "DeviceContext.hpp"
 #include "ViewTransport.hpp"
+#include "ViewVerify.hpp"
 
 #include <Tensile/AMDGPU.hpp>
 #include <Tensile/ContractionProblem.hpp>
@@ -163,6 +164,9 @@ namespace TensileLite
                 static_cast<void>(hipFree(viewBlock));
             if(viewStats != nullptr && viewDrainQueues(*this))
                 static_cast<void>(hipFree(viewStats));
+            for(void* p : {verifyBlock, golden.a.p, golden.b.p, golden.d.p, golden.recv.p})
+                if(p != nullptr)
+                    static_cast<void>(hipFree(p));
             if(stream != nullptr)
                 static_cast<void>(hipStreamDestroy(stream));
         }
@@ -200,7 +204,8 @@ namespace TensileLite
         void resetCommBuffers(ContractionProblem const&                          problem,
                               ContractionSolution const&                         solution,
                               std::vector<std::shared_ptr<DeviceContext>> const& devices,
-                              int                                                viewDebug)
+                              int                                                viewDebug,
+                              VerifyLayout const*                                verify)
         {
             auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
             if(gemm == nullptr || gemm->fusedA2A() == FusedA2A::Disabled)
@@ -249,6 +254,22 @@ namespace TensileLite
                     HIP_CHECK_EXC(
                         hipMemset(inputs.a2aBuf, gemmA2A ? 0 : kA2AGemmPoisonByte, bufBytes));
                     HIP_CHECK_EXC(hipMemset(inputs.Synchronizer, 0, synchronizerBytes));
+                }
+                if(verify != nullptr)
+                {
+                    verifyGrowGoldens(
+                        ctx.golden,
+                        *verify,
+                        [](void* p) { HIP_CHECK_EXC(hipFree(p)); },
+                        [](size_t bytes) {
+                            void* p = nullptr;
+                            HIP_CHECK_EXC(hipMalloc(&p, bytes));
+                            return p;
+                        });
+                    if(ctx.verifyBlock == nullptr)
+                        HIP_CHECK_EXC(hipExtMallocWithFlags(
+                            &ctx.verifyBlock, VERIFY_BLOCK_BYTES, hipDeviceMallocFinegrained));
+                    verifyResetBlock(ctx.verifyBlock);
                 }
             });
         }

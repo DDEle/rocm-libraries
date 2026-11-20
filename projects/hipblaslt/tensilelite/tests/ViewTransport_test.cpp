@@ -4,10 +4,19 @@
 #include <gtest/gtest.h>
 
 #include "ViewTransport.hpp"
+#include "ViewVerify.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <functional>
+#include <map>
+#include <memory>
+#include <set>
+#include <stdexcept>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -1098,4 +1107,1680 @@ TEST(ViewTransport, NoPollDropsOnlyTheGemmA2APolls)
     auto const  a2aGemm = build(a, 0, 0);
     a.debug             = VIEW_DEBUG_NO_POLL;
     EXPECT_EQ(build(a, 0, 0), a2aGemm);
+}
+
+namespace
+{
+    struct Packet
+    {
+        uint32_t              header;
+        std::vector<uint32_t> words;
+    };
+
+    // The packets of a chain without TIMESTAMPs and zero padding.
+    std::vector<Packet> packets(std::vector<uint32_t> const& r)
+    {
+        std::vector<Packet> out;
+        for(size_t at = 0; at < r.size();)
+        {
+            const uint32_t header = r[at];
+            const uint32_t size   = header == VIEW_POLL_HEADER   ? VIEW_POLL_DWORDS
+                                    : header == VIEW_COPY_HEADER ? VIEW_COPY_DWORDS
+                                                                 : VIEW_ATOMIC_DWORDS;
+            EXPECT_TRUE(header == VIEW_POLL_HEADER || header == VIEW_COPY_HEADER
+                        || header == VIEW_ATOMIC_HEADER)
+                << "dword " << at;
+            out.push_back({header, std::vector<uint32_t>(r.begin() + at, r.begin() + at + size)});
+            at += size;
+        }
+        return out;
+    }
+
+    // build() with a ring that holds the whole chain.
+    std::vector<uint32_t> buildWhole(ViewArmArgs const& a, uint32_t q, uint32_t epoch)
+    {
+        ViewRingWriter count{nullptr, 1ull << 40, 0};
+        viewBuildChain(a, q, epoch, count);
+        uint64_t dwords = 1;
+        while(dwords <= count.pos)
+            dwords *= 2;
+        std::vector<uint32_t> ring(dwords, 0xDEADBEEFu);
+        ViewRingWriter        w{ring.data(), dwords, 0};
+        viewBuildChain(a, q, epoch, w);
+        ring.resize(w.pos);
+        return ring;
+    }
+
+    std::vector<Packet> only(std::vector<Packet> const& p, uint32_t header)
+    {
+        std::vector<Packet> out;
+        for(auto const& k : p)
+            if(k.header == header)
+                out.push_back(k);
+        return out;
+    }
+
+    bool operator==(Packet const& x, Packet const& y)
+    {
+        return x.words == y.words;
+    }
+
+    uint64_t fnv1a(std::vector<uint32_t> const& words)
+    {
+        uint64_t h = 0xcbf29ce484222325ull;
+        for(uint32_t w : words)
+            for(int b = 0; b < 4; b++)
+            {
+                h ^= (w >> (8 * b)) & 0xFFu;
+                h *= 0x100000001b3ull;
+            }
+        return h;
+    }
+
+    // The configs of the chain hashes DebugBitsZeroKeepTheBuilderBytes stores.
+    ViewArmArgs dumpedA2AGemmArgs()
+    {
+        ViewArmArgs a = chainArgs(4, 5, 3, 8, 2, 2);
+        a.rank        = 2;
+        return a;
+    }
+
+    ViewArmArgs dumpedGemmA2AArgs()
+    {
+        ViewArmArgs g = gemmA2AArgs();
+        for(uint32_t q = 0; q < 2; q++)
+        {
+            g.queues[q].srcBase = kSrc + q * 0x1000;
+            g.queues[q].dstBase = kDst + q * 0x1000;
+            g.queues[q].flag    = fakePointer<uint32_t>(kFlag + 4 * q);
+        }
+        return g;
+    }
+
+    std::vector<ViewArmArgs> faultCases()
+    {
+        std::vector<ViewArmArgs> cases = {a2aGemmArgs(1), a2aGemmArgs(3), dumpedGemmA2AArgs()};
+        for(uint32_t c : {1u, 2u, kAll})
+        {
+            cases.push_back(chainArgs(4, 5, 3, 8, 2, c));
+            cases.push_back(chainArgs(3, 7, 1, 64, 1, c));
+            cases.push_back(chainArgs(8, 16, 16, 256, 4, c));
+        }
+        return cases;
+    }
+
+    uint64_t atomicSum(std::vector<Packet> const& p)
+    {
+        uint64_t sum = 0;
+        for(auto const& k : only(p, VIEW_ATOMIC_HEADER))
+            sum += k.words[3];
+        return sum;
+    }
+}
+
+TEST(ViewTransport, DebugBitsZeroKeepTheBuilderBytes)
+{
+    ViewArmArgs const a = dumpedA2AGemmArgs();
+    ViewArmArgs const g = dumpedGemmA2AArgs();
+    const std::vector<std::pair<std::vector<uint32_t>, std::pair<size_t, uint64_t>>> cases
+        = {{build(a, 0, 0), {210, 0xabac02f7ed9f5213ull}},
+           {build(a, 1, 7), {210, 0x9897dc5c36713cfbull}},
+           {build(g, 0, 5), {62, 0xb2abe52fd03dbb4full}},
+           {build(g, 1, 5), {62, 0x50ae60652e042a97ull}}};
+    for(auto const& [ring, want] : cases)
+    {
+        EXPECT_EQ(ring.size(), want.first);
+        EXPECT_EQ(fnv1a(ring), want.second);
+    }
+}
+
+TEST(ViewTransport, DropCopyOmitsOnlyQueue0sFirstCopy)
+{
+    for(auto a : faultCases())
+    {
+        SCOPED_TRACE(testing::Message() << "mode " << a.mode << " W " << a.world << " B "
+                                        << a.tokenBlocks << " coalesce " << a.coalesce);
+        const uint32_t                     queues = a.mode == VIEW_MODE_A2A_GEMM ? a.numQueues : 2;
+        std::vector<std::vector<uint32_t>> plain;
+        for(uint32_t k = 0; k < queues; k++)
+            plain.push_back(buildWhole(a, k, 3));
+        a.debug = VIEW_DEBUG_DROP_COPY;
+        for(uint32_t k = 1; k < queues; k++)
+            EXPECT_EQ(buildWhole(a, k, 3), plain[k]) << "queue " << k;
+        auto const before = packets(plain[0]);
+        auto const after  = packets(buildWhole(a, 0, 3));
+        auto       copies = only(before, VIEW_COPY_HEADER);
+        ASSERT_FALSE(copies.empty());
+        copies.erase(copies.begin());
+        EXPECT_EQ(only(after, VIEW_COPY_HEADER), copies);
+        EXPECT_EQ(only(after, VIEW_ATOMIC_HEADER), only(before, VIEW_ATOMIC_HEADER));
+        EXPECT_EQ(only(after, VIEW_POLL_HEADER), only(before, VIEW_POLL_HEADER));
+        EXPECT_EQ(atomicSum(after), atomicSum(before));
+        EXPECT_EQ(after.size(), before.size() - 1);
+    }
+}
+
+TEST(ViewTransport, EarlyReleaseMovesQueue0sFirstCopyBeforeTheLastAtomic)
+{
+    for(auto a : faultCases())
+    {
+        SCOPED_TRACE(testing::Message() << "mode " << a.mode << " W " << a.world << " B "
+                                        << a.tokenBlocks << " coalesce " << a.coalesce);
+        const uint32_t                     queues = a.mode == VIEW_MODE_A2A_GEMM ? a.numQueues : 2;
+        std::vector<std::vector<uint32_t>> plain;
+        for(uint32_t k = 0; k < queues; k++)
+            plain.push_back(buildWhole(a, k, 3));
+        a.debug = VIEW_DEBUG_EARLY_RELEASE;
+        for(uint32_t k = 1; k < queues; k++)
+            EXPECT_EQ(buildWhole(a, k, 3), plain[k]) << "queue " << k;
+        auto       expected = packets(plain[0]);
+        auto const after    = packets(buildWhole(a, 0, 3));
+        auto       first    = std::find_if(expected.begin(), expected.end(), [](Packet const& k) {
+            return k.header == VIEW_COPY_HEADER;
+        });
+        ASSERT_NE(first, expected.end());
+        const Packet moved = *first;
+        expected.erase(first);
+        auto last = std::find_if(expected.rbegin(), expected.rend(), [](Packet const& k) {
+            return k.header == VIEW_ATOMIC_HEADER;
+        });
+        ASSERT_NE(last, expected.rend());
+        expected.insert(last.base() - 1, moved);
+        EXPECT_EQ(after, expected);
+        EXPECT_EQ(atomicSum(after), atomicSum(packets(plain[0])));
+    }
+}
+
+namespace
+{
+    // Value of a sign-magnitude float with `ebits` exponent and `mbits` mantissa bits; `ocp`
+    // is OCP E4M3 (NaN only at all-ones, no infinity).
+    double minifloat(uint32_t bits, int ebits, int mbits, bool ocp)
+    {
+        const int      bias = (1 << (ebits - 1)) - 1;
+        const uint32_t e    = (bits >> mbits) & ((1u << ebits) - 1);
+        const uint32_t m    = bits & ((1u << mbits) - 1);
+        const double   s    = (bits >> (ebits + mbits)) & 1u ? -1.0 : 1.0;
+        const uint32_t eMax = (1u << ebits) - 1;
+        if(ocp && e == eMax && m == (1u << mbits) - 1)
+            return std::nan("");
+        if(!ocp && e == eMax)
+            return m == 0 ? s * INFINITY : std::nan("");
+        if(e == 0)
+            return s * std::ldexp((double)m, 1 - bias - mbits);
+        return s * std::ldexp(1.0 + std::ldexp((double)m, -mbits), (int)e - bias);
+    }
+
+    double fp32(uint32_t bits)
+    {
+        float f;
+        std::memcpy(&f, &bits, sizeof(f));
+        return f;
+    }
+
+    // Whether lane value `negated` is -`value`, sign of zero included.
+    bool isNegation(double value, double negated)
+    {
+        if(std::isnan(value) || std::isnan(negated))
+            return std::isnan(value) && std::isnan(negated);
+        return negated == -value && std::signbit(negated) != std::signbit(value);
+    }
+}
+
+TEST(ViewTransport, SignMaskNegatesEveryElement)
+{
+    struct Format
+    {
+        const char*                     name;
+        uint32_t                        bytes;
+        std::function<double(uint32_t)> value;
+    };
+    const std::vector<Format> formats = {
+        {"bf16", 2, [](uint32_t b) { return fp32(b << 16); }},
+        {"fp16", 2, [](uint32_t b) { return minifloat(b, 5, 10, false); }},
+        {"fp8", 1, [](uint32_t b) { return minifloat(b, 4, 3, true); }},
+        {"bf8", 1, [](uint32_t b) { return minifloat(b, 5, 2, false); }},
+    };
+    for(auto const& f : formats)
+    {
+        const uint32_t mask  = viewSignMask(f.bytes);
+        const uint32_t bits  = 8 * f.bytes;
+        const uint32_t lanes = 4 / f.bytes;
+        uint32_t       bad   = 0;
+        for(uint32_t p = 0; p < (1u << bits); p++)
+            for(uint32_t lane = 0; lane < lanes; lane++)
+            {
+                const uint32_t other
+                    = (0x9E3779B9u * (p + 1)) & ~(((1u << bits) - 1) << (bits * lane));
+                const uint32_t word = other | (p << (bits * lane));
+                const uint32_t neg  = word ^ mask;
+                const uint32_t q    = (neg >> (bits * lane)) & ((1u << bits) - 1);
+                if(q == p || !isNegation(f.value(p), f.value(q)))
+                    bad++;
+                for(uint32_t l = 0; l < lanes; l++)
+                    if(l != lane
+                       && !isNegation(f.value((word >> (bits * l)) & ((1u << bits) - 1)),
+                                      f.value((neg >> (bits * l)) & ((1u << bits) - 1))))
+                        bad++;
+            }
+        EXPECT_EQ(bad, 0u) << f.name;
+    }
+    const uint32_t mask = viewSignMask(4);
+    EXPECT_EQ(mask, 0x80000000u);
+    for(uint32_t p : {0x00000000u,
+                      0x80000000u,
+                      0x00000001u,
+                      0x3F800000u,
+                      0xC0490FDBu,
+                      0x7F7FFFFFu,
+                      0x7F800000u,
+                      0xFF800000u,
+                      0x7FC00000u,
+                      0x00800000u,
+                      0x12345678u})
+    {
+        EXPECT_NE(p ^ mask, p);
+        EXPECT_TRUE(isNegation(fp32(p), fp32(p ^ mask))) << std::hex << p;
+    }
+}
+
+TEST(ViewTransport, FaultFreeBuilderIgnoresTheCopyFaultBits)
+{
+    for(auto a : faultCases())
+    {
+        SCOPED_TRACE(testing::Message() << "mode " << a.mode << " W " << a.world);
+        const auto plain = buildWhole(a, 0, 3);
+        a.debug          = VIEW_DEBUG_COPY_FAULTS;
+        ViewRingWriter count{nullptr, 1ull << 40, 0};
+        viewBuildUnits<0>(a, 0, 3, count);
+        std::vector<uint32_t> ring(count.pos + 1, 0xDEADBEEFu);
+        ViewRingWriter        w{ring.data(), 1ull << 40, 0};
+        viewBuildUnits<0>(a, 0, 3, w);
+        ring.resize(w.pos);
+        EXPECT_EQ(ring, plain);
+        EXPECT_NE(buildWhole(a, 0, 3), plain);
+    }
+}
+
+TEST(ViewTransport, VerifyCompareMatchesTheGoldenPerElement)
+{
+    for(uint32_t bytes : {1u, 2u, 4u})
+    {
+        SCOPED_TRACE(testing::Message() << "element bytes " << bytes);
+        const uint32_t mask   = viewSignMask(bytes);
+        const uint32_t golden = 0x3F7A1C42u;
+        EXPECT_TRUE(viewVerifyCompare(golden, golden, mask));
+        EXPECT_FALSE(viewVerifyCompare(golden ^ mask, golden, mask));
+        for(uint32_t bit = 0; bit < 32; bit++)
+            EXPECT_FALSE(viewVerifyCompare(golden ^ (1u << bit), golden, mask)) << bit;
+        EXPECT_FALSE(viewVerifyCompare(VERIFY_POISON_WORD, golden, mask));
+        // Zero elements match either sign; the others still compare.
+        const uint32_t lowLane = bytes == 4 ? 0xFFFFFFFFu : (1u << (8 * bytes)) - 1;
+        const uint32_t zeroLow = golden & ~lowLane;
+        const uint32_t sign    = mask & lowLane;
+        EXPECT_TRUE(viewVerifyCompare(zeroLow ^ sign, zeroLow, mask));
+        EXPECT_FALSE(viewVerifyCompare(zeroLow ^ sign ^ 1u, zeroLow, mask));
+        if(bytes != 4)
+            EXPECT_FALSE(viewVerifyCompare(zeroLow ^ mask, zeroLow, mask));
+        // verifyCheckWord: the golden with the flipped sign bits.
+        EXPECT_TRUE(verifyCheckWord(golden ^ sign, golden, bytes, sign));
+        EXPECT_FALSE(verifyCheckWord(golden, golden, bytes, sign));
+        EXPECT_TRUE(verifyCheckWord(zeroLow, zeroLow, bytes, sign));
+    }
+}
+
+TEST(ViewTransport, VerifyPatternMaskNegatesTheElementsOfTheSetBits)
+{
+    for(uint32_t bytes : {1u, 2u, 4u})
+        for(VerifyPattern p : {VerifyPattern{1, 0, 8, bytes},
+                               VerifyPattern{4, 0, 8, bytes},
+                               VerifyPattern{1, 12, 3, bytes},
+                               VerifyPattern{3, 48, 40, bytes},
+                               VerifyPattern{5, 0, 64, bytes}})
+            for(uint32_t e : {1u, 2u, 7u, 300u})
+            {
+                SCOPED_TRACE(testing::Message()
+                             << "bytes " << bytes << " stride " << p.stride << " period "
+                             << p.period << " shard " << p.shard << " e " << e);
+                const uint32_t bits  = verifyPatternBits(e);
+                const uint32_t lanes = 4 / bytes;
+                for(size_t word = 0; word < 64; word++)
+                {
+                    uint32_t want = 0;
+                    for(uint32_t l = 0; l < lanes; l++)
+                    {
+                        const uint64_t i = word * lanes + l;
+                        const uint64_t c = ((p.period ? i % p.period : i) / p.stride) % p.shard;
+                        if((bits >> (c % 32)) & 1u)
+                            want |= 1u << (8 * bytes * (l + 1) - 1);
+                    }
+                    EXPECT_EQ(verifyPatternMask(p, bits, word), want) << word;
+                    EXPECT_EQ(verifyPatternMask(p, bits, word) & ~viewSignMask(bytes), 0u);
+                }
+            }
+    EXPECT_EQ(verifyPatternBits(0), 0u);
+    EXPECT_EQ(verifyPatternMask(VerifyPattern{1, 0, 0, 4}, 0xFFFFFFFFu, 3), 0u);
+    EXPECT_EQ(verifyPatternMask(VerifyPattern{1, 0, 8, 4}, 0u, 3), 0u);
+    // The low b bits of the pattern bits of e = 0 .. 2^b - 1 are distinct.
+    for(uint32_t b = 1; b <= 10; b++)
+    {
+        std::set<uint32_t> seen;
+        for(uint32_t e = 0; e < (1u << b); e++)
+            seen.insert(verifyPatternBits(e) & ((1u << b) - 1));
+        EXPECT_EQ(seen.size(), 1u << b) << b;
+    }
+}
+
+TEST(ViewTransport, VerifyCheckBlockLayoutAndTotals)
+{
+    const std::set<uint32_t> index
+        = {VERIFY_D_MISMATCHES, VERIFY_RECV_MISMATCHES, VERIFY_FIRST_BAD, VERIFY_CHECKED};
+    EXPECT_EQ(index.size(), (size_t)VERIFY_BLOCK_WORDS);
+    EXPECT_LT(*index.rbegin(), VERIFY_BLOCK_WORDS);
+    EXPECT_LE(VERIFY_BLOCK_WORDS * sizeof(uint32_t), VERIFY_BLOCK_BYTES);
+
+    uint32_t words[VERIFY_BLOCK_WORDS];
+    std::fill(std::begin(words), std::end(words), 0xA5A5A5A5u);
+    verifyInitialBlock(words);
+    VerifyCounts c = verifyDecodeBlock(words);
+    EXPECT_EQ(c.dMismatches, 0u);
+    EXPECT_EQ(c.recvMismatches, 0u);
+    EXPECT_EQ(c.firstBad, VERIFY_NO_BAD_LAUNCH);
+    EXPECT_EQ(c.checked, 0u);
+    words[VERIFY_D_MISMATCHES]    = 11;
+    words[VERIFY_RECV_MISMATCHES] = 22;
+    words[VERIFY_FIRST_BAD]       = 3;
+    words[VERIFY_CHECKED]         = 44;
+    c                             = verifyDecodeBlock(words);
+    EXPECT_EQ(c.dMismatches, 11u);
+    EXPECT_EQ(c.recvMismatches, 22u);
+    EXPECT_EQ(c.firstBad, 3u);
+    EXPECT_EQ(c.checked, 44u);
+
+    VerifyCounts total, clean, later;
+    clean.checked     = 7;
+    later.dMismatches = 2;
+    later.firstBad    = 9;
+    later.checked     = 7;
+    for(auto const& x : {c, clean, later})
+        verifyAccumulate(total, x);
+    EXPECT_EQ(total.dMismatches, 13u);
+    EXPECT_EQ(total.recvMismatches, 22u);
+    EXPECT_EQ(total.firstBad, 3u);
+    EXPECT_EQ(total.checked, 58u);
+}
+
+TEST(ViewTransport, VerifyCheckPassesAccumulateAcrossThreadsAndLaunches)
+{
+    std::vector<uint32_t> golden(10, 0x3F800000u), data = golden;
+    data[2] = data[7] = 0x40000000u;
+    uint32_t block[VERIFY_BLOCK_WORDS];
+    verifyInitialBlock(block);
+    for(uint32_t launch : {5u, 3u})
+    {
+        VerifyOp op    = verifyOp(VerifyOpKind::Check, data.data(), golden.data(), data.size());
+        op.launch      = launch;
+        op.counter     = VERIFY_RECV_MISMATCHES;
+        op.countLaunch = true;
+        for(size_t t = 0; t < 2; t++)
+            verifyRunOp(op, t, 2, block, t == 0);
+    }
+    const VerifyCounts c = verifyDecodeBlock(block);
+    EXPECT_EQ(c.recvMismatches, 4u);
+    EXPECT_EQ(c.dMismatches, 0u);
+    EXPECT_EQ(c.firstBad, 3u);
+    EXPECT_EQ(c.checked, 2u);
+}
+
+namespace
+{
+    // A2AGemm: A [M, K] column-major, K = W * kL; B and a2aBuf [W][N][kL]; D [M, N].
+    // GemmA2A: A [M, kKg] column-major, M = W * kL; D [M, N]; recv [W][N][kL]. f32.
+    constexpr uint32_t kM  = 4;
+    constexpr uint32_t kN  = 3;
+    constexpr uint32_t kL  = 8;
+    constexpr uint32_t kKg = 2;
+
+    VerifyTensor f32Tensor(uint64_t elements, uint64_t stride = 1, uint64_t period = 0)
+    {
+        return {4, true, elements * 4, false, stride, period};
+    }
+
+    VerifyShape simShape(bool gemmA2A, uint32_t w)
+    {
+        VerifyShape s;
+        s.gemmA2A = gemmA2A;
+        s.world   = w;
+        s.extent  = w * kL;
+        s.tokens  = kN;
+        s.buf     = f32Tensor(w * kN * kL);
+        if(gemmA2A)
+        {
+            s.a = f32Tensor(w * kL * kKg, 1, w * kL);
+            s.b = f32Tensor(kKg * kN);
+            s.d = f32Tensor(w * kL * kN, 1, w * kL);
+        }
+        else
+        {
+            s.a = f32Tensor(kM * w * kL, kM);
+            s.b = f32Tensor(w * kN * kL);
+            s.d = f32Tensor(kM * kN, 1, kM);
+        }
+        return s;
+    }
+
+    void runOps(std::vector<VerifyOp> const& ops, uint32_t* block)
+    {
+        for(auto const& op : ops)
+            for(size_t t = 0; t < 3; t++)
+                verifyRunOp(op, t, 3, block, t == 0);
+    }
+}
+
+TEST(ViewTransport, VerifyLayoutPlacesThePeerSegments)
+{
+    for(uint32_t w = 2; w <= FUSED_A2A_MAX_RANKS; w++)
+    {
+        const VerifyLayout l = verifyLayoutOf(simShape(false, w));
+        EXPECT_EQ(l.peerLo, (size_t)kN * kL);
+        EXPECT_EQ(l.peerHi, (size_t)kN * kL * w);
+        EXPECT_EQ(l.peerHi, l.bufWords);
+        EXPECT_EQ(l.aWords, (size_t)kM * w * kL);
+        EXPECT_EQ(l.bWords, (size_t)w * kN * kL);
+        EXPECT_EQ(l.dWords, (size_t)kM * kN);
+        EXPECT_EQ(l.a.stride, kM);
+        EXPECT_EQ(l.a.shard, kL);
+        EXPECT_EQ(l.b.shard, kL);
+        EXPECT_EQ(l.d.shard, 0u);
+        const VerifyLayout g = verifyLayoutOf(simShape(true, w));
+        EXPECT_EQ(g.peerHi, 0u);
+        EXPECT_EQ(g.recv.shard, kL);
+        EXPECT_EQ(g.d.shard, kL);
+        EXPECT_EQ(g.d.period, (uint64_t)w * kL);
+        EXPECT_EQ(g.bufWords, (size_t)w * kN * kL);
+    }
+    auto rejects = [](VerifyShape s, char const* what) {
+        EXPECT_THROW(verifyLayoutOf(s), std::runtime_error) << what;
+    };
+    for(bool gemmA2A : {false, true})
+    {
+        VerifyShape s     = simShape(gemmA2A, 4);
+        auto        t     = s;
+        t.a.signMagnitude = false;
+        rejects(t, "A type");
+        t = s;
+        t.extent += 1;
+        rejects(t, "extent");
+        t = s;
+        t.d.allocatedBytes += 2;
+        rejects(t, "D bytes");
+        t = s;
+        t.buf.allocatedBytes -= 2;
+        rejects(t, "a2aBuf bytes");
+    }
+    VerifyShape t = simShape(false, 4);
+    t.b.allocatedBytes += 4;
+    rejects(t, "A2AGemm B size");
+    t                 = simShape(false, 4);
+    t.b.signMagnitude = false;
+    rejects(t, "A2AGemm B type");
+    t = simShape(false, 4);
+    t.buf.allocatedBytes -= 4;
+    rejects(t, "a2aBuf too small");
+    t          = simShape(true, 4);
+    t.d.padded = true;
+    rejects(t, "GemmA2A D padding");
+    t                 = simShape(true, 4);
+    t.d.signMagnitude = false;
+    rejects(t, "GemmA2A D type");
+    t          = simShape(false, 4);
+    t.d.padded = true;
+    EXPECT_NO_THROW(verifyLayoutOf(t));
+}
+
+TEST(ViewTransport, VerifyArgsErrorRejectsEachUnsupportedOption)
+{
+    VerifyArgs ok;
+    ok.verify = VERIFY_PRODUCE;
+    EXPECT_EQ(verifyArgsError(ok), "");
+    ok.verify = VERIFY_SKEW;
+    EXPECT_EQ(verifyArgsError(ok), "");
+    ok.gemmA2A = true;
+    EXPECT_EQ(verifyArgsError(ok), "");
+    std::vector<std::pair<const char*, std::function<void(VerifyArgs&)>>> bad = {
+        {"verify 3", [](VerifyArgs& a) { a.verify = 3; }},
+        {"verify -1", [](VerifyArgs& a) { a.verify = -1; }},
+        {"barrier 2", [](VerifyArgs& a) { a.barrier = 2; }},
+        {"fence -1", [](VerifyArgs& a) { a.fence = -1; }},
+        {"skew -1", [](VerifyArgs& a) { a.skewUs = -1; }},
+        {"validate 0", [](VerifyArgs& a) { a.numElementsToValidate = 0; }},
+        {"warmups 0", [](VerifyArgs& a) { a.numWarmups = 0; }},
+        {"c-equal-d", [](VerifyArgs& a) { a.cEqualD = true; }},
+        {"sparse", [](VerifyArgs& a) { a.sparse = true; }},
+        {"bounds-check 1", [](VerifyArgs& a) { a.boundsCheckNaN = true; }},
+        {"scales", [](VerifyArgs& a) { a.scales = true; }},
+        {"swizzle", [](VerifyArgs& a) { a.swizzled = true; }},
+        {"beta", [](VerifyArgs& a) { a.betaZero = false; }},
+        {"activation", [](VerifyArgs& a) { a.activation = true; }},
+        {"bias", [](VerifyArgs& a) { a.bias = true; }},
+        {"not fused", [](VerifyArgs& a) { a.fusedA2A = false; }},
+    };
+    const std::set<std::string> gemmA2AOnly = {"beta", "activation", "bias"};
+    const std::set<std::string> ranges
+        = {"verify 3", "verify -1", "barrier 2", "fence -1", "skew -1"};
+    for(auto const& [name, set] : bad)
+        for(int verify : {VERIFY_OFF, VERIFY_PRODUCE, VERIFY_SKEW})
+            for(bool gemmA2A : {false, true})
+            {
+                VerifyArgs a;
+                a.verify  = verify;
+                a.gemmA2A = gemmA2A;
+                set(a);
+                const bool want
+                    = ranges.count(name)
+                      || (verify != VERIFY_OFF && (gemmA2A || !gemmA2AOnly.count(name)));
+                EXPECT_EQ(!verifyArgsError(a).empty(), want)
+                    << name << " verify " << verify << " GemmA2A " << gemmA2A;
+            }
+    VerifyArgs warm;
+    warm.verify     = VERIFY_PRODUCE;
+    warm.numWarmups = 1;
+    EXPECT_EQ(verifyArgsError(warm), "");
+}
+
+TEST(ViewTransport, VerifyScheduleStateAndGoldenGate)
+{
+    using G = VerifyGolden;
+    EXPECT_EQ(verifyGoldenAfterValidation(G::Pending, true, false), G::Captured);
+    EXPECT_EQ(verifyGoldenAfterValidation(G::Pending, true, true), G::Disabled);
+    EXPECT_EQ(verifyGoldenAfterValidation(G::Pending, false, false), G::Pending);
+    EXPECT_EQ(verifyGoldenAfterValidation(G::Captured, true, true), G::Captured);
+    EXPECT_EQ(verifyGoldenAfterValidation(G::Disabled, true, false), G::Disabled);
+
+    VerifyState st;
+    st.reset(3);
+    EXPECT_FALSE(st.checks());
+    for(uint32_t e = 0; e < 5; e++)
+        EXPECT_EQ(st.beginLaunch(e % 3), e);
+    using L = std::vector<std::pair<size_t, uint32_t>>;
+    EXPECT_EQ(st.takeLaunched(), (L{{0, 3}, {1, 4}, {2, 2}}));
+    EXPECT_TRUE(st.takeLaunched().empty());
+    EXPECT_EQ(st.beginLaunch(1), 5u);
+    EXPECT_EQ(st.takeLaunched(), (L{{1, 5}}));
+    EXPECT_THROW(st.beginLaunch(3), std::out_of_range);
+    st.golden = G::Captured;
+    EXPECT_TRUE(st.checks());
+    st.reset(2);
+    EXPECT_EQ(st.launches, 0u);
+    EXPECT_EQ(st.golden, G::Pending);
+
+    // From launch 1 on, 2W + 6 launches make every rank the skew victim at least twice.
+    for(uint32_t w = 1; w <= FUSED_A2A_MAX_RANKS; w++)
+        for(uint32_t r = 0; r < w; r++)
+        {
+            EXPECT_FALSE(verifySkewVictim(0, r, w));
+            uint32_t hits = 0;
+            for(uint32_t e = 1; e < 2 * w + 6; e++)
+            {
+                EXPECT_EQ(verifySkewVictim(e, r, w), e % w == r);
+                hits += verifySkewVictim(e, r, w);
+            }
+            EXPECT_GE(hits, 2u) << "W " << w << " rank " << r;
+        }
+
+    VerifyOptions on, off;
+    off.barrier = false;
+    for(uint32_t e = 0; e < 4; e++)
+    {
+        EXPECT_TRUE(verifyBarrier(on, e));
+        EXPECT_EQ(verifyBarrier(off, e), e == 0);
+        for(uint32_t debug = 0; debug <= VIEW_DEBUG_ALL; debug++)
+            EXPECT_EQ(verifyViewDebug(debug, e),
+                      e == 0 ? debug
+                                   & ~(uint32_t)(VIEW_DEBUG_NO_POLL | VIEW_DEBUG_DROP_COPY
+                                                 | VIEW_DEBUG_EARLY_RELEASE)
+                             : debug);
+    }
+}
+
+TEST(ViewTransport, VerifyOpsTouchExactlyTheirRanges)
+{
+    for(bool gemmA2A : {false, true})
+        for(uint32_t w : {2u, 4u})
+        {
+            SCOPED_TRACE(testing::Message() << (gemmA2A ? "GemmA2A" : "A2AGemm") << " W " << w);
+            const VerifyLayout l      = verifyLayoutOf(simShape(gemmA2A, w));
+            auto               filled = [](size_t n, uint32_t base) {
+                std::vector<uint32_t> v(n);
+                for(size_t i = 0; i < n; i++)
+                    v[i] = base + (uint32_t)i;
+                return v;
+            };
+            auto gA = filled(l.aWords, 0x3F000000u), gB = filled(l.bWords, 0x3E000000u),
+                 gD = filled(l.dWords, 0x3D000000u), gR = filled(l.bufWords, 0x3C000000u);
+            auto a = filled(l.aWords, 1), b = filled(l.bWords, 2), d = filled(l.dWords, 3),
+                 buf = filled(l.bufWords, 4);
+            const VerifySlot    s{a.data(), b.data(), d.data(), buf.data()};
+            const VerifyGoldens g{gA.data(), gB.data(), gD.data(), gR.data()};
+            uint32_t            block[VERIFY_BLOCK_WORDS];
+            verifyInitialBlock(block);
+            const uint32_t e    = 5;
+            const uint32_t bits = verifyPatternBits(e);
+            const auto     b0 = b, buf0 = buf;
+            runOps(verifyProduceOps(l, s, g, e, true), block);
+            for(size_t i = 0; i < l.aWords; i++)
+                ASSERT_EQ(a[i], gA[i] ^ verifyPatternMask(l.a, bits, i)) << i;
+            for(auto x : d)
+                EXPECT_EQ(x, VERIFY_POISON_WORD);
+            if(!gemmA2A)
+            {
+                for(size_t i = 0; i < l.bWords; i++)
+                    ASSERT_EQ(b[i], gB[i] ^ verifyPatternMask(l.b, bits, i)) << i;
+                for(size_t i = 0; i < l.bufWords; i++)
+                    EXPECT_EQ(buf[i], i < l.peerLo ? buf0[i] : VERIFY_POISON_WORD) << i;
+            }
+            else
+            {
+                EXPECT_EQ(b, b0);
+                for(auto x : buf)
+                    EXPECT_EQ(x, VERIFY_POISON_WORD);
+            }
+            EXPECT_NE(a, gA);
+
+            // The expected outputs of launch e, then one bad last word of each checked buffer.
+            for(size_t i = 0; i < l.dWords; i++)
+                d[i] = gD[i] ^ verifyPatternMask(l.d, bits, i);
+            for(size_t i = 0; i < l.bufWords; i++)
+                buf[i] = gR[i] ^ verifyPatternMask(l.recv, bits, i);
+            runOps(verifyCheckOps(l, s, g, e), block);
+            VerifyCounts c = verifyDecodeBlock(block);
+            EXPECT_EQ(c.dMismatches + c.recvMismatches, 0u);
+            EXPECT_EQ(c.checked, 1u);
+            d.back() ^= 1u;
+            buf.back() ^= 1u;
+            runOps(verifyCheckOps(l, s, g, e), block);
+            c = verifyDecodeBlock(block);
+            EXPECT_EQ(c.dMismatches, 1u);
+            EXPECT_EQ(c.recvMismatches, gemmA2A ? 1u : 0u);
+            EXPECT_EQ(c.firstBad, e);
+            EXPECT_EQ(c.checked, 2u);
+            d.back() ^= 1u;
+            buf.back() ^= 1u;
+
+            for(size_t i = 0; i < l.bufWords; i++)
+                buf[i] ^= gemmA2A ? 0u : 1u;
+            const auto d1 = d, buf1 = buf;
+            runOps(verifyNormalizeOps(l, s, e), block);
+            EXPECT_EQ(d, gemmA2A ? gD : d1);
+            EXPECT_EQ(buf, gemmA2A ? gR : buf1);
+            runOps(verifyRestoreOps(l, s, g), block);
+            EXPECT_EQ(a, gA);
+            if(!gemmA2A)
+                EXPECT_EQ(b, gB);
+
+            auto a2 = filled(l.aWords, 9), b2 = filled(l.bWords, 8), d2 = filled(l.dWords, 7),
+                 r2 = filled(l.bufWords, 6);
+            const VerifySlot fresh{a2.data(), b2.data(), d2.data(), r2.data()};
+            runOps(verifyCaptureInputOps(l, fresh, g), block);
+            EXPECT_EQ(gA, a2);
+            if(!gemmA2A)
+                EXPECT_EQ(gB, b2);
+            runOps(verifyCaptureGoldenOps(l, fresh, g), block);
+            EXPECT_EQ(gD, d2);
+            if(gemmA2A)
+                EXPECT_EQ(gR, r2);
+            EXPECT_EQ(verifyDecodeBlock(block).checked, 2u);
+        }
+}
+
+TEST(ViewTransport, VerifyBlockVerdictReportsAndFailsPerDevice)
+{
+    struct Case
+    {
+        const char*  name;
+        VerifyCounts c;
+        bool         report, failed;
+    };
+    VerifyCounts dOnly, recvOnly, checkedOnly, clean;
+    dOnly.dMismatches       = 3;
+    dOnly.firstBad          = 4;
+    recvOnly.recvMismatches = 5;
+    recvOnly.firstBad       = 2;
+    checkedOnly.checked     = 7;
+    for(auto const& [name, c, report, failed] : {Case{"D only", dOnly, true, true},
+                                                 Case{"recv only", recvOnly, true, true},
+                                                 Case{"checked only", checkedOnly, true, false},
+                                                 Case{"clean", clean, false, false}})
+    {
+        VerifyCounts total;
+        total.checked                   = 1;
+        const VerifyBlockVerdict v      = verifyTakeBlock(total, c);
+        VerifyCounts             summed = {};
+        summed.checked                  = 1;
+        verifyAccumulate(summed, c);
+        EXPECT_EQ(v.report, report) << name;
+        EXPECT_EQ(v.failed, failed) << name;
+        EXPECT_EQ(total.dMismatches, summed.dMismatches) << name;
+        EXPECT_EQ(total.recvMismatches, summed.recvMismatches) << name;
+        EXPECT_EQ(total.checked, summed.checked) << name;
+        EXPECT_EQ(total.firstBad, summed.firstBad) << name;
+    }
+}
+
+TEST(ViewTransport, VerifySkewsOnlyInSkewModeWithTicksOfTheWallClock)
+{
+    for(int mode : {VERIFY_OFF, VERIFY_PRODUCE, VERIFY_SKEW})
+    {
+        VerifyOptions o;
+        o.mode = mode;
+        for(uint32_t w : {2u, 4u, 8u})
+            for(uint32_t e = 0; e < 3 * w; e++)
+                for(uint32_t r = 0; r < w; r++)
+                    EXPECT_EQ(verifySkews(o, e, r, w),
+                              mode == VERIFY_SKEW && verifySkewVictim(e, r, w))
+                        << mode << " " << w << " " << e << " " << r;
+    }
+    EXPECT_EQ(verifySkewTicks(1000, 100000), 100000u);
+    EXPECT_EQ(verifySkewTicks(1, 100000), 100u);
+    EXPECT_EQ(verifySkewTicks(5000, 25000), 125000u);
+    EXPECT_EQ(verifySkewTicks(0, 100000), 0u);
+
+    VerifyState st;
+    st.reset(2);
+    st.addSkew(0);
+    EXPECT_EQ(st.skewed, 0u);
+    st.addSkew(300);
+    st.addSkew(0);
+    st.addSkew(500);
+    EXPECT_EQ(st.skewed, 2u);
+    EXPECT_EQ(st.skewTicks, 500u);
+    st.iterations = 2;
+    st.reset(1);
+    EXPECT_EQ(st.skewed, 0u);
+    EXPECT_EQ(st.skewTicks, 0u);
+    EXPECT_EQ(st.iterations, 0u);
+}
+
+TEST(ViewTransport, VerifyKernelGridRunsEveryWordOnceAndCountsTheLaunchOnce)
+{
+    const size_t full = (size_t)VERIFY_THREADS * VERIFY_MAX_BLOCKS;
+    for(size_t count : {(size_t)1,
+                        (size_t)VERIFY_THREADS - 1,
+                        (size_t)VERIFY_THREADS,
+                        (size_t)VERIFY_THREADS + 1,
+                        (size_t)5 * VERIFY_THREADS + 3,
+                        full,
+                        full + 17})
+    {
+        SCOPED_TRACE(count);
+        const uint32_t blocks = verifyBlocks(count);
+        EXPECT_EQ(
+            blocks,
+            std::min<size_t>((count + VERIFY_THREADS - 1) / VERIFY_THREADS, VERIFY_MAX_BLOCKS));
+        std::vector<uint32_t> golden(count, 0x3F800000u), data(count, 0x40000000u);
+        std::vector<uint32_t> flip(count, 0x3F800000u);
+        VerifyOp check    = verifyOp(VerifyOpKind::Check, data.data(), golden.data(), count);
+        check.countLaunch = true;
+        check.launch      = 1;
+        VerifyOp pattern  = verifyOp(
+            VerifyOpKind::Pattern, flip.data(), flip.data(), count, VerifyPattern{1, 0, 1, 4}, 1u);
+        uint32_t block[VERIFY_BLOCK_WORDS];
+        verifyInitialBlock(block);
+        uint32_t leads = 0;
+        for(uint32_t b = 0; b < blocks; b++)
+            for(uint32_t t = 0; t < VERIFY_THREADS; t++)
+            {
+                const VerifySpan sp = verifySpan(b, t, blocks, VERIFY_THREADS);
+                leads += sp.lead;
+                verifyRunOp(check, sp.first, sp.step, block, sp.lead);
+                verifyRunOp(pattern, sp.first, sp.step, block, sp.lead);
+            }
+        const VerifyCounts c = verifyDecodeBlock(block);
+        EXPECT_EQ(leads, 1u);
+        EXPECT_EQ(c.dMismatches, count);
+        EXPECT_EQ(c.checked, 1u);
+        EXPECT_EQ(std::count(flip.begin(), flip.end(), 0xBF800000u), (std::ptrdiff_t)count);
+    }
+    EXPECT_EQ(verifyBlocks(0), 1u);
+}
+
+TEST(ViewTransport, VerifyStridePeriodPicksTheDimAndTheNextLargerStride)
+{
+    using P                            = std::pair<uint64_t, uint64_t>;
+    const std::vector<size_t> colMajor = {1, 4, 4 * 64, 4 * 64 * 2};
+    EXPECT_EQ(verifyStridePeriod(colMajor, 0), (P{1, 4}));
+    EXPECT_EQ(verifyStridePeriod(colMajor, 1), (P{4, 256}));
+    EXPECT_EQ(verifyStridePeriod(colMajor, 2), (P{256, 512}));
+    EXPECT_EQ(verifyStridePeriod(colMajor, 3), (P{512, 0}));
+    EXPECT_EQ(verifyStridePeriod(colMajor, 4), (P{1, 0}));
+    const std::vector<size_t> transposed = {64, 1, 64 * 4};
+    EXPECT_EQ(verifyStridePeriod(transposed, 1), (P{1, 64}));
+    EXPECT_EQ(verifyStridePeriod(transposed, 0), (P{64, 256}));
+    const std::vector<size_t> unitDims = {1, 1, 32, 32};
+    EXPECT_EQ(verifyStridePeriod(unitDims, 0), (P{1, 32}));
+    EXPECT_EQ(verifyStridePeriod(unitDims, 2), (P{32, 0}));
+    EXPECT_EQ(verifyStridePeriod({}, 0), (P{1, 0}));
+}
+
+TEST(ViewTransport, VerifyGoldensGrowToTheLayoutAndCoverEveryOp)
+{
+    std::map<void*, size_t>                 live;
+    std::vector<std::unique_ptr<uint8_t[]>> storage;
+    size_t                                  allocs = 0, frees = 0;
+    auto                                    release = [&](void* p) {
+        ASSERT_EQ(live.count(p), 1u);
+        live.erase(p);
+        frees++;
+    };
+    auto allocate = [&](size_t bytes) {
+        storage.emplace_back(new uint8_t[bytes]);
+        live[storage.back().get()] = bytes;
+        allocs++;
+        return static_cast<void*>(storage.back().get());
+    };
+    for(bool gemmA2A : {false, true})
+    {
+        SCOPED_TRACE(gemmA2A ? "GemmA2A" : "A2AGemm");
+        const VerifyLayout  small = verifyLayoutOf(simShape(gemmA2A, 2));
+        const VerifyLayout  large = verifyLayoutOf(simShape(gemmA2A, 4));
+        VerifyGoldenBuffers g;
+        EXPECT_THROW(verifyGoldensOf(g, small), std::runtime_error);
+        verifyGrowGoldens(g, small, release, allocate);
+        const VerifyGoldenBytes n = verifyGoldenBytes(small);
+        EXPECT_EQ(n.a, small.aWords * 4);
+        EXPECT_EQ(n.d, small.dWords * 4);
+        EXPECT_EQ(n.b, gemmA2A ? 0 : small.bWords * 4);
+        EXPECT_EQ(n.recv, gemmA2A ? small.bufWords * 4 : 0);
+        for(auto [buf, bytes] : {std::pair{g.a, n.a}, {g.b, n.b}, {g.d, n.d}, {g.recv, n.recv}})
+        {
+            EXPECT_EQ(buf.bytes, bytes);
+            EXPECT_EQ(buf.p != nullptr, bytes != 0);
+            if(buf.p != nullptr)
+                EXPECT_EQ(live.at(buf.p), bytes);
+        }
+        const size_t a0 = allocs;
+        verifyGrowGoldens(g, small, release, allocate);
+        EXPECT_EQ(allocs, a0);
+        const VerifyGoldens gs = verifyGoldensOf(g, small);
+        EXPECT_EQ(gs.b == nullptr, gemmA2A);
+        EXPECT_EQ(gs.recv == nullptr, !gemmA2A);
+        EXPECT_THROW(verifyGoldensOf(g, large), std::runtime_error);
+        const size_t f0 = frees;
+        verifyGrowGoldens(g, large, release, allocate);
+        EXPECT_EQ(frees - f0, (size_t)(gemmA2A ? 3 : 2));
+        EXPECT_EQ(g.a.bytes, large.aWords * 4);
+        EXPECT_NO_THROW(verifyGoldensOf(g, large));
+        const size_t a1 = allocs;
+        verifyGrowGoldens(g, small, release, allocate);
+        EXPECT_EQ(allocs, a1);
+        EXPECT_EQ(g.a.bytes, large.aWords * 4);
+        VerifyGoldenBuffers shortD = g;
+        shortD.d.bytes -= 4;
+        EXPECT_THROW(verifyGoldensOf(shortD, large), std::runtime_error);
+
+        // Every op that reads or writes a golden stays inside verifyGoldenBytes.
+        for(uint32_t w : {2u, 4u})
+        {
+            const VerifyLayout      l  = verifyLayoutOf(simShape(gemmA2A, w));
+            const VerifyGoldenBytes nb = verifyGoldenBytes(l);
+            std::vector<uint32_t>   a(l.aWords), b(l.bWords), d(l.dWords), buf(l.bufWords);
+            std::vector<uint32_t>   ga(nb.a / 4), gb(nb.b / 4), gd(nb.d / 4), gr(nb.recv / 4);
+            const VerifySlot        s{a.data(), b.data(), d.data(), buf.data()};
+            const VerifyGoldens     gg{ga.data(), gb.data(), gd.data(), gr.data()};
+            std::vector<VerifyOp>   ops;
+            for(auto const& v : {verifyProduceOps(l, s, gg, 3, true),
+                                 verifyCheckOps(l, s, gg, 3),
+                                 verifyRestoreOps(l, s, gg),
+                                 verifyCaptureInputOps(l, s, gg),
+                                 verifyCaptureGoldenOps(l, s, gg)})
+                ops.insert(ops.end(), v.begin(), v.end());
+            size_t touched = 0;
+            for(auto const& op : ops)
+                for(void const* p : {(void const*)op.dst, (void const*)op.src})
+                    for(auto [golden, bytes] : {std::pair{(void const*)ga.data(), nb.a},
+                                                {(void const*)gb.data(), nb.b},
+                                                {(void const*)gd.data(), nb.d},
+                                                {(void const*)gr.data(), nb.recv}})
+                        if(p != nullptr && p == golden && bytes != 0)
+                        {
+                            EXPECT_EQ(op.count * 4, bytes) << w;
+                            touched++;
+                        }
+            EXPECT_EQ(touched, (size_t)(gemmA2A ? 7 : 8)) << w;
+        }
+    }
+}
+
+// Host model of verify on exact f32 data with the real layout, ops, schedule helpers and state,
+// run in main.cpp's order. A2AGemm: D_r = A_r * gathered B, gathered segment j from rank
+// (r + j) mod W, segment 0 the own one. GemmA2A: D_s = A_s * B_s, recv_p segment s = rows
+// [p*kL, (p+1)*kL) of D_s. Faults hit receiver 0's COPY from rank 1 mod W.
+namespace
+{
+    enum class Fault
+    {
+        None,
+        Missing,
+        WrongSource,
+        Early, // A2AGemm: before the source's producer; GemmA2A: before the source's GEMM
+        EarlyRecv, // GemmA2A: before the receiver's producer
+        Late, // after the receiver's GEMM (A2AGemm) or check (GemmA2A)
+        NextProducer, // A2AGemm: after the source's producer of the slot's next use
+        Stale1, // A2AGemm: the slot at its previous use; GemmA2A: launch e-1
+        Stale2, // GemmA2A: launch e-2
+        NextSlot,
+        PrevSlot,
+        Slot0,
+        WrongSlotDest,
+        PinnedSlot0, // Slot0 at every launch from the fault launch on
+        DebugDrop, // Missing at every launch that arms VIEW_DEBUG_DROP_COPY
+        GemmSkipsD, // rank 0's GEMM does not write D
+        GemmWrongSlot, // rank 0's GEMM reads and writes slot (k + 1) mod S instead of k
+    };
+
+    const char* faultName(Fault f)
+    {
+        static const char* names[] = {"none",
+                                      "missing",
+                                      "wrong-source",
+                                      "early",
+                                      "early-recv",
+                                      "late",
+                                      "next-producer",
+                                      "stale-1",
+                                      "stale-2",
+                                      "next-slot",
+                                      "prev-slot",
+                                      "slot-0",
+                                      "wrong-slot-dest",
+                                      "pinned-slot-0",
+                                      "debug-drop",
+                                      "gemm-skips-d",
+                                      "gemm-wrong-slot"};
+        return names[(int)f];
+    }
+
+    using Words = std::vector<uint32_t>;
+
+    uint32_t bitsOf(float f)
+    {
+        uint32_t b;
+        std::memcpy(&b, &f, sizeof(b));
+        return b;
+    }
+
+    float floatOf(uint32_t b)
+    {
+        float f;
+        std::memcpy(&f, &b, sizeof(f));
+        return f;
+    }
+
+    struct SimConfig
+    {
+        uint32_t world;
+        uint32_t slots;
+        uint32_t launchesPerIteration;
+        uint32_t iterations;
+        uint32_t enqueuesPerSync;
+        bool     reset; // slow-path reset of slot 0's inputs before every later iteration
+        bool     gemmA2A;
+    };
+
+    struct SimResult
+    {
+        VerifyCounts total;
+        uint64_t     launches    = 0;
+        uint64_t     badLaunches = 0;
+        uint64_t     faulted     = 0; // launches the fault changed
+        bool         cpuOk       = true;
+        bool         applied     = false;
+        bool         differs     = false; // receiver 0's data at its consumer differed
+        bool         restored    = false; // every slot's inputs equal the pristine ones at the end
+        VerifyGolden golden      = VerifyGolden::Pending;
+    };
+
+    struct Block
+    {
+        uint32_t words[VERIFY_BLOCK_WORDS] = {};
+    };
+
+    class Sim
+    {
+    public:
+        Sim(SimConfig c, Fault fault = Fault::None, uint32_t faultLaunch = 0)
+            : c(c)
+            , w(c.world)
+            , fault(fault)
+            , faultLaunch(faultLaunch)
+            , l(verifyLayoutOf(simShape(c.gemmA2A, c.world)))
+            , seg(kN * kL)
+        {
+            for(uint32_t r = 0; r < w; r++)
+            {
+                Words a(l.aWords), b(c.gemmA2A ? kKg * kN : l.bWords);
+                for(size_t i = 0; i < a.size(); i++)
+                    a[i] = bitsOf(1.0f + (float)(((i + 1) * 2654435761u + r * 40503u) >> 28 & 3));
+                for(size_t i = 0; i < b.size(); i++)
+                    b[i] = bitsOf(1.0f
+                                  + (float)(((i + 7) * 2246822519u + r * 3266489917u) >> 28 & 3));
+                pristineA.push_back(a);
+                pristineB.push_back(b);
+            }
+            A.assign(w, std::vector<Words>(c.slots));
+            B.assign(w, std::vector<Words>(c.slots));
+            D.assign(w, std::vector<Words>(c.slots, Words(l.dWords, 0)));
+            buf.assign(w, std::vector<Words>(c.slots, Words(l.bufWords, 0)));
+            for(uint32_t r = 0; r < w; r++)
+                for(uint32_t k = 0; k < c.slots; k++)
+                {
+                    A[r][k] = pristineA[r];
+                    B[r][k] = c.gemmA2A ? Words() : pristineB[r];
+                }
+            gA.assign(w, Words(l.aWords));
+            gB.assign(w, Words(l.bWords));
+            gD.assign(w, Words(l.dWords));
+            gR.assign(w, Words(l.bufWords));
+            blocks.assign(w, Block{});
+            history.assign(w, std::map<uint32_t, Words>());
+            slotHistory.assign(w, std::vector<Words>(c.slots));
+        }
+
+        // One solution. The inputs of the problem stay in place for the next call.
+        SimResult run()
+        {
+            res = SimResult{};
+            for(auto& b : blocks)
+                verifyInitialBlock(b.words);
+            state.reset(c.slots);
+            for(uint32_t it = 0; it < c.iterations; it++)
+            {
+                if(it > 0 && c.reset)
+                    for(uint32_t r = 0; r < w; r++)
+                    {
+                        A[r][0] = pristineA[r];
+                        if(!c.gemmA2A)
+                            B[r][0] = pristineB[r];
+                    }
+                std::vector<size_t> synced;
+                for(uint32_t j = 0; j < c.launchesPerIteration; j++)
+                {
+                    const uint32_t k = j % c.slots;
+                    launch(k);
+                    synced.push_back(k);
+                    if(synced.size() == c.enqueuesPerSync || j + 1 == c.launchesPerIteration)
+                    {
+                        for(auto const& [slot, e] : state.takeLaunched())
+                            for(uint32_t r = 0; r < w; r++)
+                                runOps(verifyNormalizeOps(l, slotOf(r, slot), e), block(r));
+                        for(size_t s : synced)
+                            res.cpuOk = res.cpuOk && cpuValid(s);
+                        synced.clear();
+                    }
+                }
+            }
+            for(uint32_t r = 0; r < w; r++)
+                for(uint32_t k = 0; k < c.slots; k++)
+                    runOps(verifyRestoreOps(l, slotOf(r, k), goldensOf(r)), block(r));
+            res.restored = true;
+            for(uint32_t r = 0; r < w; r++)
+                for(uint32_t k = 0; k < c.slots; k++)
+                    res.restored = res.restored && A[r][k] == pristineA[r]
+                                   && (c.gemmA2A || B[r][k] == pristineB[r]);
+            for(auto const& b : blocks)
+                verifyAccumulate(res.total, verifyDecodeBlock(b.words));
+            res.golden = state.golden;
+            return res;
+        }
+
+        // The next problem: rotating slots copied from slot 0, goldens taken again.
+        void nextProblem()
+        {
+            for(uint32_t r = 0; r < w; r++)
+                for(uint32_t k = 1; k < c.slots; k++)
+                {
+                    A[r][k] = A[r][0];
+                    B[r][k] = B[r][0];
+                }
+            inputsCaptured = false;
+        }
+
+    private:
+        SimConfig                              c;
+        uint32_t                               w;
+        Fault                                  fault;
+        uint32_t                               faultLaunch;
+        VerifyLayout                           l;
+        size_t                                 seg;
+        std::vector<Words>                     pristineA, pristineB, gA, gB, gD, gR;
+        std::vector<std::vector<Words>>        A, B, D, buf; // [rank][slot]
+        std::vector<Block>                     blocks;
+        std::vector<std::map<uint32_t, Words>> history; // GemmA2A: D_s after launch e
+        std::vector<std::vector<Words>>        slotHistory; // A2AGemm: B_s after its last producer
+        VerifyState                            state;
+        SimResult                              res;
+        bool                                   inputsCaptured = false;
+
+        uint32_t* block(uint32_t r)
+        {
+            return blocks[r].words;
+        }
+
+        VerifySlot slotOf(uint32_t r, size_t k)
+        {
+            return {A[r][k].data(), B[r][k].data(), D[r][k].data(), buf[r][k].data()};
+        }
+
+        VerifyGoldens goldensOf(uint32_t r)
+        {
+            return {gA[r].data(), gB[r].data(), gD[r].data(), gR[r].data()};
+        }
+
+        static Words segment(Words const& v, size_t i, size_t n)
+        {
+            return Words(v.begin() + i * n, v.begin() + (i + 1) * n);
+        }
+
+        static void setSegment(Words& v, size_t i, Words const& x)
+        {
+            std::copy(x.begin(), x.end(), v.begin() + i * x.size());
+        }
+
+        Words a2aGemmD(Words const& a, std::vector<Words> const& gathered, uint32_t r) const
+        {
+            Words d(l.dWords);
+            for(uint32_t n = 0; n < kN; n++)
+                for(uint32_t m = 0; m < kM; m++)
+                {
+                    float sum = 0;
+                    for(uint32_t j = 0; j < w; j++)
+                        for(uint32_t kl = 0; kl < kL; kl++)
+                            sum += floatOf(a[m + (((r + j) % w) * kL + kl) * kM])
+                                   * floatOf(gathered[j][n * kL + kl]);
+                    d[m + n * kM] = bitsOf(sum);
+                }
+            return d;
+        }
+
+        Words gemmA2AD(Words const& a, uint32_t s) const
+        {
+            const uint32_t M = w * kL;
+            Words          d(l.dWords);
+            for(uint32_t n = 0; n < kN; n++)
+                for(uint32_t m = 0; m < M; m++)
+                {
+                    float sum = 0;
+                    for(uint32_t q = 0; q < kKg; q++)
+                        sum += floatOf(a[m + q * M]) * floatOf(pristineB[s][q + n * kKg]);
+                    d[m + n * M] = bitsOf(sum);
+                }
+            return d;
+        }
+
+        // Rows [p*kL, (p+1)*kL) of D as recv segment [N][kL].
+        Words shard(Words const& d, uint32_t p) const
+        {
+            const uint32_t M = w * kL;
+            Words          v(seg);
+            for(uint32_t n = 0; n < kN; n++)
+                for(uint32_t f = 0; f < kL; f++)
+                    v[n * kL + f] = d[p * kL + f + n * M];
+            return v;
+        }
+
+        Words referenceD(uint32_t r) const
+        {
+            if(c.gemmA2A)
+                return gemmA2AD(pristineA[r], r);
+            std::vector<Words> g;
+            for(uint32_t j = 0; j < w; j++)
+                g.push_back(segment(pristineB[(r + j) % w], r, seg));
+            return a2aGemmD(pristineA[r], g, r);
+        }
+
+        Words referenceRecv(uint32_t p) const
+        {
+            Words v(l.bufWords);
+            for(uint32_t s = 0; s < w; s++)
+                setSegment(v, s, shard(gemmA2AD(pristineA[s], s), p));
+            return v;
+        }
+
+        bool cpuValid(size_t k) const
+        {
+            for(uint32_t r = 0; r < w; r++)
+                if(D[r][k] != referenceD(r) || (c.gemmA2A && buf[r][k] != referenceRecv(r)))
+                    return false;
+            return true;
+        }
+
+        bool active(uint32_t e) const
+        {
+            if(fault == Fault::DebugDrop)
+                return (verifyViewDebug(VIEW_DEBUG_DROP_COPY, e) & VIEW_DEBUG_DROP_COPY) != 0;
+            if(fault == Fault::PinnedSlot0)
+                return e >= faultLaunch;
+            return fault != Fault::None && e == faultLaunch;
+        }
+
+        void launch(uint32_t k)
+        {
+            const uint32_t e = state.beginLaunch(k);
+            res.launches++;
+            if(!inputsCaptured)
+            {
+                for(uint32_t r = 0; r < w; r++)
+                    runOps(verifyCaptureInputOps(l, slotOf(r, 0), goldensOf(r)), block(r));
+                inputsCaptured = true;
+            }
+            std::vector<Words> before(w);
+            for(uint32_t r = 0; r < w; r++)
+            {
+                before[r] = c.gemmA2A ? D[r][k] : B[r][k];
+                runOps(verifyProduceOps(l, slotOf(r, k), goldensOf(r), e, true), block(r));
+            }
+            uint64_t bad = 0;
+            for(uint32_t r = 0; r < w; r++)
+                bad += block(r)[VERIFY_D_MISMATCHES] + block(r)[VERIFY_RECV_MISMATCHES];
+            if(c.gemmA2A)
+                launchGemmA2A(k, e, active(e));
+            else
+                launchA2AGemm(k, e, active(e), before);
+            uint64_t after = 0;
+            for(uint32_t r = 0; r < w; r++)
+                after += block(r)[VERIFY_D_MISMATCHES] + block(r)[VERIFY_RECV_MISMATCHES];
+            res.badLaunches += after != bad;
+            if(e == 0)
+            {
+                res.cpuOk    = res.cpuOk && cpuValid(0);
+                state.golden = verifyGoldenAfterValidation(state.golden, true, !cpuValid(0));
+                if(state.golden == VerifyGolden::Captured)
+                    for(uint32_t r = 0; r < w; r++)
+                        runOps(verifyCaptureGoldenOps(l, slotOf(r, 0), goldensOf(r)), block(r));
+            }
+        }
+
+        // Rank r's gathered B of slot k: its own segment, then a2aBuf segments 1..W-1.
+        std::vector<Words> gatheredOf(uint32_t r, uint32_t k) const
+        {
+            std::vector<Words> g = {segment(B[r][k], r, seg)};
+            for(uint32_t j = 1; j < w; j++)
+                g.push_back(segment(buf[r][k], j, seg));
+            return g;
+        }
+
+        bool gemmFaulty(bool faulty) const
+        {
+            return faulty && (fault == Fault::GemmSkipsD || fault == Fault::GemmWrongSlot);
+        }
+
+        // Rank 0's GEMM of a launch on slot k under GemmSkipsD or GemmWrongSlot; `right`: the D
+        // it should write, gemm(j): its D on slot j.
+        template <class Gemm>
+        void gemmFaultOnRank0(uint32_t k, Words const& right, Gemm gemm)
+        {
+            if(fault == Fault::GemmWrongSlot)
+            {
+                const uint32_t j = (k + 1) % c.slots;
+                if(j == k)
+                {
+                    D[0][k] = right;
+                    return;
+                }
+                D[0][j] = gemm(j);
+            }
+            res.applied  = true;
+            const bool d = D[0][k] != right;
+            res.differs  = res.differs || d;
+            res.faulted += d;
+        }
+
+        void check(uint32_t k, uint32_t e)
+        {
+            if(state.checks())
+                for(uint32_t r = 0; r < w; r++)
+                    runOps(verifyCheckOps(l, slotOf(r, k), goldensOf(r), e), block(r));
+        }
+
+        void launchA2AGemm(uint32_t k, uint32_t e, bool faulty, std::vector<Words> const& before)
+        {
+            const uint32_t src = 1 % w;
+            Words          late;
+            bool           lateCopy = false;
+            bool           applied  = false;
+            for(uint32_t r = 0; r < w; r++)
+                for(uint32_t i = 0; i + 1 < w; i++)
+                {
+                    const uint32_t s    = (r + 1 + i) % w;
+                    Words          data = segment(B[s][k], r, seg);
+                    uint32_t       dstK = k;
+                    if(faulty && r == 0 && i == 0)
+                    {
+                        applied = true;
+                        switch(fault)
+                        {
+                        case Fault::Missing:
+                        case Fault::DebugDrop:
+                            continue;
+                        case Fault::WrongSource:
+                            data = w > 2 ? segment(B[(src + 1) % w][k], 0, seg)
+                                         : segment(B[src][k], 1, seg);
+                            break;
+                        case Fault::Early:
+                            data = segment(before[s], r, seg);
+                            break;
+                        case Fault::Late:
+                            late     = data;
+                            lateCopy = true;
+                            continue;
+                        case Fault::NextProducer:
+                        {
+                            Words next(l.bWords);
+                            runOps({verifyOp(VerifyOpKind::Pattern,
+                                             next.data(),
+                                             gB[s].data(),
+                                             l.bWords,
+                                             l.b,
+                                             verifyPatternBits(e + c.slots))},
+                                   block(0));
+                            data = segment(next, r, seg);
+                            break;
+                        }
+                        case Fault::Stale1:
+                            if(slotHistory[s][k].empty())
+                                applied = false;
+                            else
+                                data = segment(slotHistory[s][k], r, seg);
+                            break;
+                        case Fault::NextSlot:
+                        case Fault::PrevSlot:
+                        case Fault::Slot0:
+                        case Fault::PinnedSlot0:
+                        {
+                            const uint32_t j = fault == Fault::NextSlot ? (k + 1) % c.slots
+                                               : fault == Fault::PrevSlot
+                                                   ? (k + c.slots - 1) % c.slots
+                                                   : 0;
+                            applied          = j != k;
+                            data             = segment(B[s][j], r, seg);
+                            break;
+                        }
+                        case Fault::WrongSlotDest:
+                            applied = c.slots > 1;
+                            dstK    = (k + 1) % c.slots;
+                            break;
+                        default:
+                            applied = false;
+                        }
+                    }
+                    setSegment(buf[r][dstK], i + 1, data);
+                }
+            for(uint32_t s = 0; s < w; s++)
+                slotHistory[s][k] = B[s][k];
+            std::vector<std::vector<Words>> gathered(w);
+            for(uint32_t r = 0; r < w; r++)
+                gathered[r] = gatheredOf(r, k);
+            if(applied)
+            {
+                res.applied  = true;
+                const bool d = gathered[0][1] != segment(B[src][k], 0, seg);
+                res.differs  = res.differs || d;
+                res.faulted += d;
+            }
+            const bool gemmFault = gemmFaulty(faulty);
+            for(uint32_t r = gemmFault ? 1 : 0; r < w; r++)
+                D[r][k] = a2aGemmD(A[r][k], gathered[r], r);
+            if(gemmFault)
+                gemmFaultOnRank0(k, a2aGemmD(A[0][k], gathered[0], 0), [&](uint32_t j) {
+                    return a2aGemmD(A[0][j], gatheredOf(0, j), 0);
+                });
+            if(lateCopy)
+                setSegment(buf[0][k], 1, late);
+            check(k, e);
+        }
+
+        void launchGemmA2A(uint32_t k, uint32_t e, bool faulty)
+        {
+            const uint32_t src = 1 % w;
+            Words          pending;
+            bool           late = false, earlyRecv = false, applied = false;
+            const Words    early = shard(D[src][k], 0);
+            const bool     gemmFault = gemmFaulty(faulty);
+            for(uint32_t s = gemmFault ? 1 : 0; s < w; s++)
+                D[s][k] = gemmA2AD(A[s][k], s);
+            if(gemmFault)
+                gemmFaultOnRank0(
+                    k, gemmA2AD(A[0][k], 0), [&](uint32_t j) { return gemmA2AD(A[0][j], 0); });
+            for(uint32_t s = 0; s < w; s++)
+                history[s][e] = D[s][k];
+            for(uint32_t s = 0; s < w; s++)
+                for(uint32_t p = 0; p < w; p++)
+                {
+                    Words    v    = shard(D[s][k], p);
+                    uint32_t dest = k;
+                    if(faulty && s == src && p == 0)
+                    {
+                        applied = true;
+                        switch(fault)
+                        {
+                        case Fault::Missing:
+                        case Fault::DebugDrop:
+                            continue;
+                        case Fault::WrongSource:
+                            v = shard(D[s][k], (p + 1) % w);
+                            break;
+                        case Fault::Early:
+                            v = early;
+                            break;
+                        case Fault::EarlyRecv:
+                            earlyRecv = true;
+                            break;
+                        case Fault::Late:
+                            pending = v;
+                            late    = true;
+                            continue;
+                        case Fault::Stale1:
+                        case Fault::Stale2:
+                        {
+                            const uint32_t back = fault == Fault::Stale1 ? 1 : 2;
+                            if(e < back)
+                                applied = false;
+                            else
+                                v = shard(history[s][e - back], p);
+                            break;
+                        }
+                        case Fault::NextSlot:
+                        case Fault::PrevSlot:
+                        case Fault::Slot0:
+                        case Fault::PinnedSlot0:
+                        {
+                            const uint32_t j = fault == Fault::NextSlot ? (k + 1) % c.slots
+                                               : fault == Fault::PrevSlot
+                                                   ? (k + c.slots - 1) % c.slots
+                                                   : 0;
+                            applied          = j != k;
+                            v                = shard(D[s][j], p);
+                            break;
+                        }
+                        case Fault::WrongSlotDest:
+                            applied = c.slots > 1;
+                            dest    = (k + 1) % c.slots;
+                            break;
+                        default:
+                            applied = false;
+                        }
+                    }
+                    setSegment(buf[p][dest], s, v);
+                }
+            if(earlyRecv)
+                setSegment(buf[0][k], src, Words(seg, VERIFY_POISON_WORD));
+            if(applied)
+            {
+                res.applied  = true;
+                const bool d = segment(buf[0][k], src, seg) != shard(D[src][k], 0);
+                res.differs  = res.differs || d;
+                res.faulted += d;
+            }
+            check(k, e);
+            if(late)
+                setSegment(buf[0][k], src, pending);
+        }
+    };
+
+    std::vector<SimConfig> simConfigs(bool gemmA2A)
+    {
+        std::vector<SimConfig> out;
+        for(uint32_t w : {2u, 3u, 4u})
+            for(uint32_t slots : {1u, 2u, 5u})
+                for(bool reset : {false, true})
+                    out.push_back({w, slots, 7, 2, 3, reset, gemmA2A});
+        return out;
+    }
+}
+
+TEST(ViewTransport, VerifySimCleanRunsHaveNoMismatch)
+{
+    for(bool gemmA2A : {false, true})
+        for(auto const& c : simConfigs(gemmA2A))
+        {
+            SCOPED_TRACE(testing::Message() << (gemmA2A ? "GemmA2A" : "A2AGemm") << " W " << c.world
+                                            << " slots " << c.slots << " reset " << c.reset);
+            const SimResult r = Sim(c).run();
+            EXPECT_EQ(r.golden, VerifyGolden::Captured);
+            EXPECT_EQ(r.total.dMismatches + r.total.recvMismatches, 0u);
+            EXPECT_TRUE(r.cpuOk);
+            EXPECT_TRUE(r.restored);
+            EXPECT_EQ(r.launches, c.launchesPerIteration * c.iterations);
+            // V3: every launch but the solution's first is checked on every rank.
+            EXPECT_EQ(r.total.checked, c.world * (r.launches - 1));
+        }
+}
+
+TEST(ViewTransport, VerifySimDetectsEveryTransportFault)
+{
+    std::map<std::string, uint64_t> runs;
+    for(bool gemmA2A : {false, true})
+        for(auto const& c : simConfigs(gemmA2A))
+            for(Fault f : {Fault::Missing,
+                           Fault::WrongSource,
+                           Fault::Early,
+                           Fault::EarlyRecv,
+                           Fault::Late,
+                           Fault::NextProducer,
+                           Fault::Stale1,
+                           Fault::Stale2,
+                           Fault::NextSlot,
+                           Fault::PrevSlot,
+                           Fault::Slot0,
+                           Fault::WrongSlotDest,
+                           Fault::GemmSkipsD,
+                           Fault::GemmWrongSlot})
+                for(uint32_t e = 1; e < c.launchesPerIteration * c.iterations; e++)
+                {
+                    const SimResult r = Sim(c, f, e).run();
+                    if(!r.applied)
+                        continue;
+                    const std::string key
+                        = std::string(gemmA2A ? "GemmA2A " : "A2AGemm ") + faultName(f);
+                    runs[key]++;
+                    SCOPED_TRACE(testing::Message()
+                                 << key << " W " << c.world << " slots " << c.slots << " reset "
+                                 << c.reset << " launch " << e);
+                    EXPECT_TRUE(r.differs);
+                    EXPECT_GT(r.total.dMismatches + r.total.recvMismatches, 0u);
+                    EXPECT_EQ(r.total.firstBad, e);
+                    EXPECT_EQ(r.badLaunches, 1u);
+                    EXPECT_EQ(r.golden, VerifyGolden::Captured);
+                    EXPECT_TRUE(r.restored);
+                }
+    uint64_t total = 0;
+    for(auto const& [key, n] : runs)
+    {
+        RecordProperty(key, (int)n);
+        total += n;
+    }
+    EXPECT_GT(total, 2000u);
+    for(char const* key : {"A2AGemm prev-slot",
+                           "A2AGemm slot-0",
+                           "A2AGemm next-slot",
+                           "A2AGemm stale-1",
+                           "GemmA2A stale-2",
+                           "GemmA2A prev-slot",
+                           "GemmA2A slot-0",
+                           "A2AGemm gemm-skips-d",
+                           "A2AGemm gemm-wrong-slot",
+                           "GemmA2A gemm-skips-d",
+                           "GemmA2A gemm-wrong-slot"})
+        EXPECT_GT(runs[key], 0u) << key;
+}
+
+TEST(ViewTransport, VerifySimSourcePinnedToSlot0IsSeenInOneRunIteration)
+{
+    for(bool gemmA2A : {false, true})
+        for(uint32_t w : {2u, 4u})
+            for(uint32_t slots : {2u, 5u, 13u, 22u})
+            {
+                SCOPED_TRACE(testing::Message() << (gemmA2A ? "GemmA2A" : "A2AGemm") << " W " << w
+                                                << " slots " << slots);
+                const SimConfig c{w, slots, 23, 1, 22, false, gemmA2A};
+                const SimResult r    = Sim(c, Fault::PinnedSlot0, 1).run();
+                uint64_t        off0 = 0;
+                for(uint32_t e = 1; e < 23; e++)
+                    off0 += e % slots != 0;
+                EXPECT_EQ(r.golden, VerifyGolden::Captured);
+                EXPECT_EQ(r.total.firstBad, 1u);
+                EXPECT_EQ(r.badLaunches, off0);
+                EXPECT_EQ(r.faulted, off0);
+            }
+}
+
+TEST(ViewTransport, VerifySimDebugFaultsSkipLaunch0AndHitEveryLaterLaunch)
+{
+    for(bool gemmA2A : {false, true})
+        for(auto const& c : simConfigs(gemmA2A))
+        {
+            SCOPED_TRACE(testing::Message() << (gemmA2A ? "GemmA2A" : "A2AGemm") << " W " << c.world
+                                            << " slots " << c.slots);
+            const SimResult r = Sim(c, Fault::DebugDrop).run();
+            EXPECT_EQ(r.golden, VerifyGolden::Captured);
+            EXPECT_EQ(r.total.firstBad, 1u);
+            EXPECT_EQ(r.badLaunches, r.launches - 1);
+            EXPECT_EQ(r.total.checked, c.world * (r.launches - 1));
+        }
+}
+
+TEST(ViewTransport, VerifySimFaultAtLaunch0DisablesTheGolden)
+{
+    for(bool gemmA2A : {false, true})
+        for(auto const& c : simConfigs(gemmA2A))
+        {
+            const SimResult r = Sim(c, Fault::Missing, 0).run();
+            EXPECT_EQ(r.golden, VerifyGolden::Disabled);
+            EXPECT_FALSE(r.cpuOk);
+            EXPECT_EQ(r.total.checked, 0u);
+            EXPECT_EQ(r.total.dMismatches + r.total.recvMismatches, 0u);
+        }
+}
+
+TEST(ViewTransport, VerifySimNextProblemStartsFromPristineInputs)
+{
+    for(bool gemmA2A : {false, true})
+        for(auto [slots, launches, iterations] : {std::tuple{3u, 4u, 1u},
+                                                  std::tuple{21u, 22u, 1u},
+                                                  std::tuple{1u, 23u, 1u},
+                                                  std::tuple{3u, 5u, 2u}})
+        {
+            SCOPED_TRACE(testing::Message() << (gemmA2A ? "GemmA2A" : "A2AGemm") << " slots "
+                                            << slots << " launches " << launches);
+            Sim sim({3, slots, launches, iterations, launches, false, gemmA2A});
+            for(int problem = 0; problem < 3; problem++)
+            {
+                const SimResult r = sim.run();
+                EXPECT_EQ(r.golden, VerifyGolden::Captured) << problem;
+                EXPECT_TRUE(r.cpuOk) << problem;
+                EXPECT_TRUE(r.restored) << problem;
+                EXPECT_EQ(r.total.dMismatches + r.total.recvMismatches, 0u) << problem;
+                sim.nextProblem();
+            }
+        }
 }

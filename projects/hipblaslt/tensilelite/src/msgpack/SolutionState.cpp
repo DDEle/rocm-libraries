@@ -1703,6 +1703,7 @@ namespace TensileLite
             s.workspaceSizePerElemC    = d.integer("_WorkspaceSizePerElemC");
             s.workspaceSizePerElemBias = d.integer("_WorkspaceSizePerElemBias");
             s.a2aSubRounds             = int(d.integer("A2ASubRounds", 1));
+            s.a2aPeerGroups            = int(d.integer("A2APeerGroups", 0));
             s.fusedA2ATransport        = fusedA2ATransport(d);
             s.activationFused          = d.truthy("ActivationFused");
             s.workGroupMappingXCC      = int(d.integer("WorkGroupMappingXCC"));

@@ -144,6 +144,7 @@ namespace
 
         auto const& size = solution.sizeMapping;
         add("sizeMapping.a2aSubRounds", jsonNumber(size.a2aSubRounds));
+        add("sizeMapping.a2aPeerGroups", jsonNumber(size.a2aPeerGroups));
         add("sizeMapping.waveNum", jsonNumber(size.waveNum));
         add("sizeMapping.WavefrontSize", jsonNumber(size.WavefrontSize));
         add("sizeMapping.workGroup", jsonDim(size.workGroupSize, 3));

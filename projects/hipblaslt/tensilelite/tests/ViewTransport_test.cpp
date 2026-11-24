@@ -213,13 +213,15 @@ namespace
                           uint32_t features,
                           uint32_t numCu,
                           uint32_t subRounds,
-                          uint32_t coalesce)
+                          uint32_t coalesce,
+                          uint32_t peerGroups = 0)
     {
         ViewArmArgs a{};
         a.mode           = VIEW_MODE_A2A_GEMM;
         a.world          = world;
         a.numQueues      = world - 1;
         a.subRounds      = subRounds;
+        a.peerGroups     = peerGroups;
         a.tokenBlocks    = blocks;
         a.featureTiles   = features;
         a.numCu          = numCu;
@@ -366,20 +368,111 @@ TEST(ViewTransport, A2AGemmFoldsTrailingEmptyRoundsIntoTheLastAtomic)
     expectAtomic(r, 2 * VIEW_COPY_DWORDS + VIEW_ATOMIC_DWORDS, kFlag, 7 * 2 - 1);
 }
 
-// W=8, B=16, F=16, S=1, coalesce >= Qb: groups {0,1,2} .. {12,13,14} {15} {} (GK=Qb=3). Queue q
-// serves groups q, q-1, .., 0, 6, .., q+1 with one ATOMIC each; the empty group's Qb rides on the
-// ATOMIC before it, on queue 6 on the first one.
+// W=8, B=16, F=16, S=1, coalesce >= Qb: 6 groups {0,1,2} .. {9,10,11} {12,13} {14,15} (GK=Qb=3).
+// Queue q serves groups q, q-1, .., 0, 6, .., q+1 with one ATOMIC each; group 6 is empty, and its
+// Qb rides on the ATOMIC before it, on queue 6 on the first one.
 TEST(ViewTransport, A2AGemmServesContiguousGroupsInInKernelOrder)
 {
     ViewArmArgs const a = chainArgs(8, 16, 16, 256, 1, kAll);
     EXPECT_EQ(chainText(a, 0),
-              "C0 C1 C2 A+6 C15 A+3 C12 C13 C14 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3 C3 C4 C5 A+3");
+              "C0 C1 C2 A+6 C14 C15 A+3 C12 C13 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3 C3 C4 C5 A+3");
     EXPECT_EQ(chainText(a, 1),
-              "C3 C4 C5 A+3 C0 C1 C2 A+6 C15 A+3 C12 C13 C14 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3");
+              "C3 C4 C5 A+3 C0 C1 C2 A+6 C14 C15 A+3 C12 C13 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3");
     EXPECT_EQ(chainText(a, 5),
-              "C15 A+3 C12 C13 C14 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3 C3 C4 C5 A+3 C0 C1 C2 A+6");
+              "C14 C15 A+3 C12 C13 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3 C3 C4 C5 A+3 C0 C1 C2 A+6");
     EXPECT_EQ(chainText(a, 6),
-              "C15 A+6 C12 C13 C14 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3 C3 C4 C5 A+3 C0 C1 C2 A+3");
+              "C14 C15 A+6 C12 C13 A+3 C9 C10 C11 A+3 C6 C7 C8 A+3 C3 C4 C5 A+3 C0 C1 C2 A+3");
+}
+
+// W=4, B=7, F=1, numCu=7, A2APeerGroups 0: groups {0,1,2} {3,4} {5,6}, the larger first; each
+// short group's ATOMIC brings the flag to the end of its Qb = 3 span.
+TEST(ViewTransport, A2AGemmBalancesGroupSizesLargerFirst)
+{
+    ViewArmArgs const a = chainArgs(4, 7, 1, 7, 1, kAll);
+    EXPECT_EQ(viewA2AGemmRoundUnits(a), 3u);
+    EXPECT_EQ(chainText(a, 0), "C0 C1 C2 A+3 C5 C6 A+3 C3 C4 A+3");
+    EXPECT_EQ(chainText(a, 1), "C3 C4 A+3 C0 C1 C2 A+3 C5 C6 A+3");
+    EXPECT_EQ(chainText(a, 2), "C5 C6 A+3 C3 C4 A+3 C0 C1 C2 A+3");
+    EXPECT_EQ(chainText(chainArgs(4, 7, 1, 7, 1, 1), 1), "C3 A+1 C4 A+2 C0 A+1 C1 A+1 C2 A+1 C5 A+1 C6 A+2");
+}
+
+// W=4, B=8, F=64, S=4, A2APeerGroups 1: one group per batch, Qb = nbMax = 4.
+// Queues 1 and 2 are idle in rounds 0..q-1 of batch 0; those rounds ride on their first ATOMIC.
+TEST(ViewTransport, A2AGemmOnePeerGroupLeavesQueuesIdle)
+{
+    ViewArmArgs const a = chainArgs(4, 8, 64, 256, 4, kAll, 1);
+    EXPECT_EQ(viewA2AGemmRoundUnits(a), 16u);
+    EXPECT_EQ(viewA2AGemmChainUnits(a), 96u);
+    const std::string sub0 = "C0.0 C1.0 C2.0 C3.0 A+";
+    const std::string rest0
+        = " C0.1 C1.1 C2.1 C3.1 A+4 C0.2 C1.2 C2.2 C3.2 A+4 C0.3 C1.3 C2.3 C3.3 A+36 "
+          "C4.0 C5.0 C6.0 C7.0 A+4 C4.1 C5.1 C6.1 C7.1 A+4 C4.2 C5.2 C6.2 C7.2 A+4 C4.3 C5.3 C6.3 C7.3 A+";
+    EXPECT_EQ(chainText(a, 0), sub0 + "4" + rest0 + "36");
+    EXPECT_EQ(chainText(a, 1), sub0 + "20" + rest0 + "20");
+    EXPECT_EQ(chainText(a, 2), sub0 + "36" + rest0 + "4");
+}
+
+// W=8, B=16, F=32, S=1, A2APeerGroups 2: two groups of 4 per batch, Qb = 4.
+TEST(ViewTransport, A2AGemmTwoPeerGroups)
+{
+    ViewArmArgs const a = chainArgs(8, 16, 32, 256, 1, kAll, 2);
+    EXPECT_EQ(viewA2AGemmRoundUnits(a), 4u);
+    EXPECT_EQ(chainText(a, 0), "C0 C1 C2 C3 A+24 C4 C5 C6 C7 A+4 C8 C9 C10 C11 A+24 C12 C13 C14 C15 A+4");
+    EXPECT_EQ(chainText(a, 1), "C4 C5 C6 C7 A+4 C0 C1 C2 C3 A+24 C12 C13 C14 C15 A+4 C8 C9 C10 C11 A+24");
+    EXPECT_EQ(chainText(a, 3), "C4 C5 C6 C7 A+12 C0 C1 C2 C3 A+24 C12 C13 C14 C15 A+4 C8 C9 C10 C11 A+16");
+    EXPECT_EQ(chainText(a, 6), "C4 C5 C6 C7 A+24 C0 C1 C2 C3 A+24 C12 C13 C14 C15 A+4 C8 C9 C10 C11 A+4");
+}
+
+// W=8, B=16, F=32, S=2, A2APeerGroups 3: groups {0,1,2} {3,4,5} {6,7} per
+// batch, Qb = 3, 84 per flag. Queues 2..6 all start with group 2; queue q >= 3 is idle in rounds
+// 0..q-3 of batch 0 and in rounds q+1..6 of the last batch.
+TEST(ViewTransport, A2AGemmThreePeerGroupsStartQueuesOnTheLastGroup)
+{
+    ViewArmArgs const a = chainArgs(8, 16, 32, 256, 2, kAll, 3);
+    EXPECT_EQ(viewA2AGemmRoundUnits(a), 6u);
+    EXPECT_EQ(viewA2AGemmChainUnits(a), 84u);
+    EXPECT_EQ(chainText(a, 0),
+              "C0.0 C1.0 C2.0 A+3 C0.1 C1.1 C2.1 A+27 C6.0 C7.0 A+3 C6.1 C7.1 A+3 C3.0 C4.0 C5.0 A+3 "
+              "C3.1 C4.1 C5.1 A+3 C8.0 C9.0 C10.0 A+3 C8.1 C9.1 C10.1 A+27 C14.0 C15.0 A+3 "
+              "C14.1 C15.1 A+3 C11.0 C12.0 C13.0 A+3 C11.1 C12.1 C13.1 A+3");
+    const std::string mid = " C6.1 C7.1 A+3 C3.0 C4.0 C5.0 A+3 C3.1 C4.1 C5.1 A+3 C0.0 C1.0 C2.0 A+3 "
+                            "C0.1 C1.1 C2.1 A+27 C14.0 C15.0 A+3 C14.1 C15.1 A+3 C11.0 C12.0 C13.0 A+3 "
+                            "C11.1 C12.1 C13.1 A+3 C8.0 C9.0 C10.0 A+3 C8.1 C9.1 C10.1 A+";
+    EXPECT_EQ(chainText(a, 2), "C6.0 C7.0 A+3" + mid + "27");
+    EXPECT_EQ(chainText(a, 3), "C6.0 C7.0 A+9" + mid + "21");
+    EXPECT_EQ(chainText(a, 6), "C6.0 C7.0 A+27" + mid + "3");
+}
+
+// W=8, B=8, F=32, A2APeerGroups 7: 7 groups {0,1} {2} .. {7}, Qb = 2, no idle queue.
+TEST(ViewTransport, A2AGemmSevenPeerGroupsSplitEveryQueue)
+{
+    ViewArmArgs const a = chainArgs(8, 8, 32, 256, 1, kAll, 7);
+    EXPECT_EQ(viewA2AGemmRoundUnits(a), 2u);
+    EXPECT_EQ(chainText(a, 0), "C0 C1 A+2 C7 A+2 C6 A+2 C5 A+2 C4 A+2 C3 A+2 C2 A+2");
+    EXPECT_EQ(chainText(a, 1), "C2 A+2 C0 C1 A+2 C7 A+2 C6 A+2 C5 A+2 C4 A+2 C3 A+2");
+    EXPECT_EQ(chainText(a, 6), "C7 A+2 C6 A+2 C5 A+2 C4 A+2 C3 A+2 C2 A+2 C0 C1 A+2");
+}
+
+// viewA2AGemmShape: k = 0 keeps ceil(n / G) blocks per group; k >= 1 caps the group count.
+TEST(ViewTransport, A2AGemmShapeFollowsA2APeerGroups)
+{
+    struct Case
+    {
+        uint32_t world, peerGroups, n, ng, gk;
+    };
+    const std::vector<Case> cases = {{8, 0, 16, 6, 3},  {8, 7, 16, 7, 3},  {8, 3, 8, 3, 3},
+                                     {8, 1, 8, 1, 8},   {8, 2, 3, 2, 2},   {8, 4, 2, 2, 1},
+                                     {4, 0, 7, 3, 3},   {4, 7, 7, 3, 3},   {8, 0, 1, 1, 1},
+                                     {8, 3, 1, 1, 1},   {2, 0, 5, 1, 5},   {2, 3, 5, 1, 5},
+                                     {8, 0, 0, 0, 0},   {8, 3, 0, 0, 0}};
+    for(auto const& c : cases)
+    {
+        SCOPED_TRACE(testing::Message() << "W=" << c.world << " k=" << c.peerGroups << " n=" << c.n);
+        uint32_t ng = 99, gk = 99;
+        viewA2AGemmShape(chainArgs(c.world, 1, 1, 1, 1, 1, c.peerGroups), c.n, ng, gk);
+        EXPECT_EQ(ng, c.ng);
+        EXPECT_EQ(gk, c.gk);
+    }
 }
 
 // W=4, B=4, S=2: groups {0, 1} {2, 3} {} (Qb=2), each sent once per sub-round, sub-round outer.
@@ -467,14 +560,17 @@ TEST(ViewTransport, A2AGemmEmptyFeaturesBuildsNothing)
     }
 }
 
-// Walks every queue's chain for many (W, B, S, coalesce, F, numCu) and follows each work-group's
-// segment switches as the kernel does: F' = min(F, numCu), batch iB = b * F' / numCu, groups of
-// GK = ceil(n / G) blocks of the batch, Gb = (b - bLo) / GK, pos = (b - bLo) % GK; queue
-// i = A2AShardIdx - 1 starting at Gb, ordinal K starting at S * iB * G * Qb + pos and stepping
-// by Qb at every switch. Against InKernel's a2aEnqueue order (per non-empty group, per h, the
-// group's COPYs, then one ATOMIC) no unit is released after more COPYs of its queue; with
-// coalesce >= Qb each one after as many. Each unit is released within coalesce - 1 COPYs after
-// its own, and each queue issues ceil(|group| / coalesce) ATOMICs per non-empty (group, h).
+// Walks every queue's chain for many (W, B, S, coalesce, F, numCu, A2APeerGroups k) and follows
+// each work-group's segment switches as the kernel does: F' = min(F, numCu), batch
+// iB = b * F' / numCu, the batch's n blocks laid out as NG groups, the first n + NG - NG * GK of
+// GK blocks and the rest of GK - 1 (k = 0: GK = ceil(n / G), NG = ceil(n / GK); else
+// NG = min(G, n, k), GK = ceil(n / NG)), Gb the group of b, pos = b - its first block, Qb the GK
+// of nbMax blocks; queue i = A2AShardIdx - 1 starting at Gb, ordinal K starting at
+// S * iB * G * Qb + pos and stepping by Qb at every switch. Against InKernel's a2aEnqueue order
+// (groups min(i, NG-1), .., 0, NG-1, .., min(i, NG-1)+1; per group, per h, the group's COPYs,
+// then one ATOMIC) no unit is released after more COPYs of its queue; with coalesce >= Qb each
+// one after as many. Each unit is released within coalesce - 1 COPYs after its own, and each
+// queue issues ceil(|group| / coalesce) ATOMICs per (group, h).
 TEST(ViewTransport, A2AGemmChainReleasesEveryUnitAfterItsCopy)
 {
     // (F, numCu): numCu / F of 1, 2, 3 and 8 blocks, not dividing, numCu = 256 and numCu < F.
@@ -501,12 +597,13 @@ TEST(ViewTransport, A2AGemmChainReleasesEveryUnitAfterItsCopy)
             fn.push_back({8, 8 * (blocks + 5)});
             for(uint32_t subRounds : {1u, 2u, 4u})
                 for(uint32_t coalesce : {1u, 3u, 4u, kAll})
+                    for(uint32_t peerGroups : {0u, 1u, 2u, 3u, 4u, 7u})
                     for(auto [features, numCu] : fn)
                     {
                         SCOPED_TRACE(testing::Message()
                                      << "W=" << world << " B=" << blocks << " S=" << subRounds
-                                     << " c=" << coalesce << " F=" << features
-                                     << " numCu=" << numCu);
+                                     << " c=" << coalesce << " k=" << peerGroups
+                                     << " F=" << features << " numCu=" << numCu);
                         const uint32_t g  = world - 1;
                         const uint32_t fp = std::min(features, numCu);
                         // InKernel's batches, a2aBatchSpan on F.
@@ -523,10 +620,33 @@ TEST(ViewTransport, A2AGemmChainReleasesEveryUnitAfterItsCopy)
                                 spans.push_back({lo, hi});
                             nbMax = std::max(nbMax, hi - lo);
                         }
-                        const uint32_t qb    = (nbMax + g - 1) / g;
+                        // InKernel's groups of a batch of n blocks: (first offset, size) each.
+                        auto groupsOf = [&](int64_t n) {
+                            int64_t ng = 0, gk = 0;
+                            if(peerGroups == 0)
+                            {
+                                gk = (n + g - 1) / g;
+                                ng = (n + gk - 1) / gk;
+                            }
+                            else
+                            {
+                                ng = std::min<int64_t>({(int64_t)g, n, (int64_t)peerGroups});
+                                gk = (n + ng - 1) / ng;
+                            }
+                            std::vector<std::pair<int64_t, int64_t>> out;
+                            for(int64_t x = 0, at = 0; x < ng; x++)
+                            {
+                                const int64_t size = x < ng - (ng * gk - n) ? gk : gk - 1;
+                                out.push_back({at, size});
+                                at += size;
+                            }
+                            return out;
+                        };
+                        const uint32_t qb
+                            = nbMax == 0 ? 0 : (uint32_t)groupsOf(nbMax).front().second;
                         const uint32_t total = spans.size() * g * qb * subRounds;
-                        ViewArmArgs    a
-                            = chainArgs(world, blocks, features, numCu, subRounds, coalesce);
+                        ViewArmArgs    a     = chainArgs(
+                            world, blocks, features, numCu, subRounds, coalesce, peerGroups);
                         ASSERT_EQ(viewA2AGemmBatches(a), spans.size());
                         ASSERT_EQ(viewA2AGemmBatchBlocksMax(a), nbMax);
                         for(uint32_t iB = 0; iB < spans.size(); iB++)
@@ -613,27 +733,23 @@ TEST(ViewTransport, A2AGemmChainReleasesEveryUnitAfterItsCopy)
                             uint32_t copies = 0;
                             for(auto [lo, hi] : spans)
                             {
-                                const int64_t n  = hi - lo;
-                                const int64_t gk = (n + g - 1) / g;
-                                int64_t       left = n, row = lo + i * gk;
-                                while(left > 0)
+                                const auto    groups = groupsOf(hi - lo);
+                                const int64_t ng     = groups.size();
+                                const int64_t first  = std::min<int64_t>(i, ng - 1);
+                                for(int64_t x = 0; x < ng; x++)
                                 {
-                                    if(row < lo + n)
+                                    auto const [off, nBlk] = groups[(first - x + ng) % ng];
+                                    ASSERT_GT(nBlk, 0);
+                                    ASSERT_LE(nBlk, (int64_t)qb);
+                                    const int64_t row = lo + off;
+                                    for(uint32_t h = 0; h < subRounds; h++)
                                     {
-                                        const int64_t nBlk = std::min<int64_t>(lo + n - row, gk);
-                                        for(uint32_t h = 0; h < subRounds; h++)
-                                        {
-                                            copies += nBlk;
-                                            for(int64_t b = row; b < row + nBlk; b++)
-                                                inkRelease[i][b * subRounds + h] = copies;
-                                            inkAtomics[i]++;
-                                            coalescedAtomics[i] += (nBlk + coalesce - 1) / coalesce;
-                                        }
-                                        left -= nBlk;
+                                        copies += nBlk;
+                                        for(int64_t b = row; b < row + nBlk; b++)
+                                            inkRelease[i][b * subRounds + h] = copies;
+                                        inkAtomics[i]++;
+                                        coalescedAtomics[i] += (nBlk + coalesce - 1) / coalesce;
                                     }
-                                    row -= gk;
-                                    if(row < lo)
-                                        row += g * gk;
                                 }
                             }
                         }
@@ -645,9 +761,12 @@ TEST(ViewTransport, A2AGemmChainReleasesEveryUnitAfterItsCopy)
                             ASSERT_LT(iB, spans.size());
                             const uint32_t bLo = spans[iB].first;
                             ASSERT_TRUE(bLo <= b && b < spans[iB].second);
-                            const uint32_t gk    = (spans[iB].second - bLo + g - 1) / g;
-                            const uint32_t gb    = (b - bLo) / gk;
-                            const uint32_t pos   = (b - bLo) % gk;
+                            const auto groups = groupsOf(spans[iB].second - bLo);
+                            uint32_t   gb     = 0;
+                            while(gb + 1 < groups.size() && groups[gb + 1].first <= b - bLo)
+                                gb++;
+                            const uint32_t pos   = b - bLo - groups[gb].first;
+                            ASSERT_LT(pos, groups[gb].second);
                             uint32_t       shard = gb + 1;
                             uint32_t       k     = subRounds * iB * g * qb + pos;
                             for(uint32_t j = 0; j < g; j++)
@@ -1205,6 +1324,13 @@ namespace
             cases.push_back(chainArgs(4, 5, 3, 8, 2, c));
             cases.push_back(chainArgs(3, 7, 1, 64, 1, c));
             cases.push_back(chainArgs(8, 16, 16, 256, 4, c));
+            for(uint32_t k : {1u, 2u, 3u, 7u})
+            {
+                cases.push_back(chainArgs(8, 16, 16, 256, 4, c, k));
+                cases.push_back(chainArgs(8, 8, 32, 256, 1, c, k));
+                cases.push_back(chainArgs(4, 7, 1, 7, 1, c, k));
+                cases.push_back(chainArgs(5, 11, 3, 8, 2, c, k));
+            }
         }
         return cases;
     }
@@ -1239,7 +1365,8 @@ TEST(ViewTransport, DropCopyOmitsOnlyQueue0sFirstCopy)
     for(auto a : faultCases())
     {
         SCOPED_TRACE(testing::Message() << "mode " << a.mode << " W " << a.world << " B "
-                                        << a.tokenBlocks << " coalesce " << a.coalesce);
+                                        << a.tokenBlocks << " coalesce " << a.coalesce
+                                        << " peerGroups " << a.peerGroups);
         const uint32_t                     queues = a.mode == VIEW_MODE_A2A_GEMM ? a.numQueues : 2;
         std::vector<std::vector<uint32_t>> plain;
         for(uint32_t k = 0; k < queues; k++)
@@ -1265,7 +1392,8 @@ TEST(ViewTransport, EarlyReleaseMovesQueue0sFirstCopyBeforeTheLastAtomic)
     for(auto a : faultCases())
     {
         SCOPED_TRACE(testing::Message() << "mode " << a.mode << " W " << a.world << " B "
-                                        << a.tokenBlocks << " coalesce " << a.coalesce);
+                                        << a.tokenBlocks << " coalesce " << a.coalesce
+                                        << " peerGroups " << a.peerGroups);
         const uint32_t                     queues = a.mode == VIEW_MODE_A2A_GEMM ? a.numQueues : 2;
         std::vector<std::vector<uint32_t>> plain;
         for(uint32_t k = 0; k < queues; k++)
@@ -1388,7 +1516,9 @@ TEST(ViewTransport, FaultFreeBuilderIgnoresTheCopyFaultBits)
 {
     for(auto a : faultCases())
     {
-        SCOPED_TRACE(testing::Message() << "mode " << a.mode << " W " << a.world);
+        SCOPED_TRACE(testing::Message() << "mode " << a.mode << " W " << a.world << " B "
+                                        << a.tokenBlocks << " coalesce " << a.coalesce
+                                        << " peerGroups " << a.peerGroups);
         const auto plain = buildWhole(a, 0, 3);
         a.debug          = VIEW_DEBUG_COPY_FAULTS;
         ViewRingWriter count{nullptr, 1ull << 40, 0};

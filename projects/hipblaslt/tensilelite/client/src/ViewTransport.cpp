@@ -294,6 +294,7 @@ namespace TensileLite
                 a.mode                   = VIEW_MODE_A2A_GEMM;
                 a.numQueues              = a.world - 1;
                 a.subRounds              = (uint32_t)subRounds;
+                a.peerGroups             = (uint32_t)solution.sizeMapping.a2aPeerGroups;
                 a.srcPitch               = (uint32_t)(rowBytes / 16);
                 a.dstPitch               = a.srcPitch;
                 a.slice                  = a.srcPitch * a.mt1;

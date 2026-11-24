@@ -1,5 +1,6 @@
 solutionName=""
 kernelName=""
+sizeMapping.a2aPeerGroups=0
 sizeMapping.a2aSubRounds=1
 sizeMapping.activationFused=true
 sizeMapping.adaptiveGemm=0

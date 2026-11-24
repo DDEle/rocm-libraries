@@ -171,6 +171,15 @@ gfx950-plain-a2a-gemm-bounds:
     CustomKernelSizePredicate:
     - {tag: SizeEqual, index: 0, value: 64}
 
+# A2AGemm with A2APeerGroups and FusedA2ATransport off their defaults.
+gfx950-plain-a2a-gemm-view:
+  base: gfx950-plain
+  set:
+    ProblemType.FusedA2A: A2AGemm
+    A2ASubRounds: 2
+    A2APeerGroups: 3
+    FusedA2ATransport: View
+
 # ReuseAcrossPersistent and the occupancy probe set.
 gfx1250-streamk-cluster-rap-probe:
   base: gfx1250-streamk-cluster

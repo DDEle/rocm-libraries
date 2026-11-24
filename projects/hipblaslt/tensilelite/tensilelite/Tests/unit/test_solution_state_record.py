@@ -383,6 +383,8 @@ def test_fixtures_cover_the_predicate_families():
         "TDMInst",
         "Multicast",
         "a2aSubRounds",
+        "a2aPeerGroups",
+        "fusedA2ATransport",
     ):
         assert len({mapping[key] for mapping in mappings}) > 1, f"sizeMapping {key} never varies"
     assert some(lambda s: problem(s).get("FusedA2A") == "GemmA2A"), "no GemmA2A"

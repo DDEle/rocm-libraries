@@ -930,7 +930,8 @@ FUSED_A2A_TRANSPORT_IDS = {
 }
 
 class SizeMapping:
-    StateKeys = ['a2aSubRounds',
+    StateKeys = ['a2aPeerGroups',
+                 'a2aSubRounds',
                  'activationFused',
                  'adaptiveGemm',
                  'adaptiveGemmGSUA',
@@ -1048,7 +1049,8 @@ class SizeMapping:
         dtlA = bool(d['DirectToLdsA'])
         dtlB = bool(d['DirectToLdsB'])
 
-        return cls(a2aSubRounds             = d.get('A2ASubRounds', 1),
+        return cls(a2aPeerGroups            = d.get('A2APeerGroups', 0),
+                   a2aSubRounds             = d.get('A2ASubRounds', 1),
                    activationFused          = d['ActivationFused'],
                    adaptiveGemm             = int(d.get('AdaptiveGemm', 0)),
                    adaptiveGemmGSUA         = d['AdaptiveGemmGSUA'] if 'AdaptiveGemmGSUA' in d else 0,

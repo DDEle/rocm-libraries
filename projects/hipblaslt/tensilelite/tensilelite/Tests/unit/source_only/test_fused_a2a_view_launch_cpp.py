@@ -108,3 +108,15 @@ def test_arm_kernel_books_halted_and_skipped_queues():
         "viewBookSkipped(a,q,addOnDevice)",
         "viewArmQueue(a,q,epoch)",
     )
+
+
+def test_a2a_gemm_arm_reads_sub_rounds_and_peer_groups_from_the_size_mapping():
+    make = _squash(_block(_read("src/ViewTransport.cpp"), "ViewArmArgs makeViewArmArgs("))
+    a2aGemm = _block(make, "if(gemm.fusedA2A()==FusedA2A::A2AGemm)")
+    _in_order(
+        a2aGemm,
+        "constuint64_tsubRounds=solution.sizeMapping.a2aSubRounds;",
+        "a.subRounds=(uint32_t)subRounds;",
+        "a.peerGroups=(uint32_t)solution.sizeMapping.a2aPeerGroups;",
+    )
+    assert make.count("a.peerGroups=") == 1

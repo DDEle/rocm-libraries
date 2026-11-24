@@ -329,6 +329,16 @@ def test_a2a_peer_groups_rejected_without_a2a_gemm(_gp_gfx942, request, assemble
     assert "A2APeerGroups > 0 requires FusedA2A=A2AGemm" in out
 
 
+@pytest.mark.parametrize("peerGroups", [0, 3])
+def test_a2a_peer_groups_in_size_mapping(_gp_gfx942, request, assembler, capsys, peerGroups):
+    from tensilelite.Common.Utilities import state as serialize
+    from tensilelite.Contractions import SizeMapping
+
+    sol, out = _derive_a2a_gemm(request, assembler, capsys, A2APeerGroups=peerGroups)
+    assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
+    assert serialize(SizeMapping.FromOriginalState(sol._state))["a2aPeerGroups"] == peerGroups
+
+
 # ---------------------------------------------------------------------------
 # FusedA2ATransport.
 # ---------------------------------------------------------------------------

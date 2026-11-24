@@ -9537,14 +9537,18 @@ class KernelWriterAssembly(KernelWriter):
     """With A2AViewStep = FusedNumCu on entry, G = gSgpr peer queues, B = NumWorkGroups1 token
     blocks, F = NumWorkGroups0 feature tiles, b = WorkGroup1 and F' = min(F, numCu):
     b is in batch iB = b * F' / numCu, blocks [bLo, bHi) with bLo = ceil(iB * numCu / F') and
-    bHi = min(ceil((iB+1) * numCu / F'), B), split into groups of GK = ceil((bHi - bLo) / G);
-    Gb = (b - bLo) / GK, pos = (b - bLo) % GK, Qb = ceil(min(ceil(numCu / F'), B) / G).
+    bHi = min(ceil((iB+1) * numCu / F'), B), n = bHi - bLo, split as a2aBatchSpan does into NG
+    groups of GK or GK - 1 blocks, the larger first: with A2APeerGroups 0, GK = ceil(n / G) and
+    NG = ceil(n / GK); otherwise NG = min(G, n, A2APeerGroups) and GK = ceil(n / NG).
+    Gb is the group of b, gLo its first block, pos = b - gLo, and Qb = GK(nbMax) with
+    nbMax = min(ceil(numCu / F'), B).
     A2AShardIdx := Gb, A2AViewK := S * iB * G * Qb + pos, the ordinal of this work-group's
-    first unit on its first queue, and A2AViewStep := Qb. tmpSgpr and A2AShardCounter are
-    scratch."""
+    first unit on its first queue, and A2AViewStep := Qb. tmpSgpr, gSgpr and A2AShardCounter
+    are scratch."""
     module    = Module("a2aViewOrdinals")
-    subRounds = kernel["A2ASubRounds"]
-    ww        = kernel["WavefrontSize"]
+    subRounds  = kernel["A2ASubRounds"]
+    peerGroups = kernel["A2APeerGroups"]
+    ww         = kernel["WavefrontSize"]
     def div(q, d, dv, comment):
       module.add(scalarUInt24DivideAndRemainder(qReg=q, dReg=d, divReg=dv, rReg=-1,
           tmpVgprRes=vgprRes, wavewidth=ww, doRemainder=False, comment=comment))
@@ -9578,27 +9582,67 @@ class KernelWriterAssembly(KernelWriter):
     div("A2AViewStep", "A2AViewStep", tmpSgpr, "ceil(numCu / F')")
     module.add(SMinU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr("NumWorkGroups1"),
                        comment="nbMax = min(ceil(numCu / F'), B)"))
-    module.add(SAddU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr(gSgpr),
-                       comment="nbMax + G"))
-    module.add(SSubU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=1,
-                       comment="nbMax + G - 1"))
-    div("A2AViewStep", "A2AViewStep", gSgpr, "Qb = ceil(nbMax / G)")
+    if peerGroups == 0:
+      module.add(SAddU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr(gSgpr),
+                         comment="nbMax + G"))
+      module.add(SSubU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=1,
+                         comment="nbMax + G - 1"))
+      div("A2AViewStep", "A2AViewStep", gSgpr, "Qb = ceil(nbMax / G)")
+    elif peerGroups > 1:
+      module.add(SMinU32(dst=sgpr(tmpSgpr), src0=sgpr(gSgpr), src1=sgpr("A2AViewStep"),
+                         comment="min(G, nbMax)"))
+      module.add(SMinU32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr), src1=peerGroups,
+                         comment="min(G, nbMax, A2APeerGroups)"))
+      module.add(SAddU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=sgpr(tmpSgpr),
+                         comment="nbMax + NG(nbMax)"))
+      module.add(SSubU32(dst=sgpr("A2AViewStep"), src0=sgpr("A2AViewStep"), src1=1,
+                         comment="nbMax + NG(nbMax) - 1"))
+      div("A2AViewStep", "A2AViewStep", tmpSgpr, "Qb = ceil(nbMax / NG(nbMax))")
     module.add(SSubU32(dst=sgpr(tmpSgpr), src0=sgpr("WorkGroup1"), src1=sgpr("A2AShardCounter"),
                        comment="b - bLo"))
-    module.add(SAddU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardIdx"), src1=sgpr(gSgpr),
-                       comment="n + G"))
-    module.add(SSubU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardCounter"), src1=1,
-                       comment="n + G - 1"))
-    div("A2AShardCounter", "A2AShardCounter", gSgpr, "GK = ceil(n / G)")
-    # Two SALU between the GK v_readfirstlane and the next VALU read of A2AShardCounter.
-    module.add(SMulI32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr(gSgpr), comment="iB * G"))
-    module.add(SMulI32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr("A2AViewStep"),
-                       comment="iB * G * Qb"))
-    div("A2AShardIdx", tmpSgpr, "A2AShardCounter", "Gb = (b - bLo) / GK")
-    module.add(SMulI32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardIdx"), src1=sgpr("A2AShardCounter"),
-                       comment="Gb * GK"))
-    module.add(SSubU32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr), src1=sgpr("A2AShardCounter"),
-                       comment="pos = b - bLo - Gb * GK"))
+    def scaleK():
+      module.add(SMulI32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr(gSgpr), comment="iB * G"))
+      module.add(SMulI32(dst=sgpr("A2AViewK"), src0=sgpr("A2AViewK"), src1=sgpr("A2AViewStep"),
+                         comment="iB * G * Qb"))
+    if peerGroups == 1:
+      scaleK()
+      module.add(SMovB32(dst=sgpr("A2AShardIdx"), src=0, comment="Gb = 0, pos = b - bLo"))
+    else:
+      if peerGroups == 0:
+        ng, gk = gSgpr, "A2AShardCounter"
+        module.add(SAddU32(dst=sgpr(gk), src0=sgpr("A2AShardIdx"), src1=sgpr(gSgpr), comment="n + G"))
+        module.add(SSubU32(dst=sgpr(gk), src0=sgpr(gk), src1=1, comment="n + G - 1"))
+        div(gk, gk, gSgpr, "GK = ceil(n / G)")
+        # Four SALU between the GK v_readfirstlane and the NG divide.
+        scaleK()
+        module.add(SAddU32(dst=sgpr(ng), src0=sgpr("A2AShardIdx"), src1=sgpr(gk), comment="n + GK"))
+        module.add(SSubU32(dst=sgpr(ng), src0=sgpr(ng), src1=1, comment="n + GK - 1"))
+        div(ng, ng, gk, "NG = ceil(n / GK)")
+      else:
+        ng, gk = "A2AShardCounter", gSgpr
+        module.add(SMinU32(dst=sgpr(ng), src0=sgpr(gSgpr), src1=sgpr("A2AShardIdx"), comment="min(G, n)"))
+        module.add(SMinU32(dst=sgpr(ng), src0=sgpr(ng), src1=peerGroups,
+                           comment="NG = min(G, n, A2APeerGroups)"))
+        scaleK()
+        module.add(SAddU32(dst=sgpr(gk), src0=sgpr("A2AShardIdx"), src1=sgpr(ng), comment="n + NG"))
+        module.add(SSubU32(dst=sgpr(gk), src0=sgpr(gk), src1=1, comment="n + NG - 1"))
+        div(gk, gk, ng, "GK = ceil(n / NG)")
+      module.add(SAddU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=sgpr(ng), comment="n + NG"))
+      module.add(SMulI32(dst=sgpr(ng), src0=sgpr(ng), src1=sgpr(gk), comment="NG * GK"))
+      module.add(SSubU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=sgpr(ng),
+                         comment="a = n + NG - NG * GK: the groups of GK blocks"))
+      module.add(SMulI32(dst=sgpr(ng), src0=sgpr("A2AShardIdx"), src1=sgpr(gk), comment="a * GK"))
+      module.add(SCmpGeU32(src0=sgpr(tmpSgpr), src1=sgpr(ng),
+                           comment="b - bLo >= a * GK: in a group of GK - 1"))
+      module.add(SCSelectB32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=0,
+                             comment="base = a or 0"))
+      module.add(SSubBU32(dst=sgpr(gk), src0=sgpr(gk), src1=0, comment="d = GK or GK - 1"))
+      module.add(SSubU32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr), src1=sgpr("A2AShardIdx"),
+                         comment="b - bLo - base"))
+      div("A2AShardIdx", tmpSgpr, gk, "Gb = (b - bLo - base) / d")
+      module.add(SMulI32(dst=sgpr(gk), src0=sgpr("A2AShardIdx"), src1=sgpr(gk), comment="Gb * d"))
+      module.add(SSubU32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr), src1=sgpr(gk),
+                         comment="pos = b - bLo - base - Gb * d"))
     if subRounds > 1:
       module.add(SLShiftLeftB32(dst=sgpr("A2AViewK"), shiftHex=log2(subRounds), src=sgpr("A2AViewK"),
                                 comment="S * iB * G * Qb"))

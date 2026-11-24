@@ -3,20 +3,24 @@
 """gfx950 A2A+GEMM (FusedA2A: A2AGemm) codegen characterization under FusedA2ATransport=View.
 
 Emits the a2a_gemm_loop.yaml solutions with FusedA2ATransport=View added to every
-fork and checks that each kernel assembles, carries _FAATV_ in its name, stays within
-the gfx950 SGPR budget, emits no SDMA packet, ring, election, tally or done-block code,
-that the setup loads FusedNumCu and sets A2AShardIdx = Gb + 1, A2AViewK = S * iB * G * Qb + pos
-and A2AViewStep = Qb, G = max(W-1, 1), B = NumWorkGroups1, F = NumWorkGroups0, b = WorkGroup1,
-F' = min(F, FusedNumCu), iB = b * F' / FusedNumCu, bLo = ceil(iB * FusedNumCu / F'),
-n = min(ceil((iB+1) * FusedNumCu / F'), B) - bLo, GK = ceil(n / G), Gb = (b - bLo) / GK,
-pos = (b - bLo) % GK, Qb = ceil(min(ceil(FusedNumCu / F'), B) / G), and that every segment switch
-polls flag[A2AShardIdx - 1] with sc0 sc1, compares it unsigned against A2AViewK + 1 with no scalar
+fork, and A2APeerGroups 3 added where the yaml forks A2APeerGroups, and checks that each kernel
+assembles, carries _FAATV_ in its name, stays within the gfx950 SGPR budget, emits no SDMA packet,
+ring, election, tally or done-block code, that the setup loads FusedNumCu and sets
+A2AShardIdx = Gb + 1, A2AViewK = S * iB * G * Qb + pos and A2AViewStep = Qb, G = max(W-1, 1),
+B = NumWorkGroups1, F = NumWorkGroups0, b = WorkGroup1, F' = min(F, FusedNumCu),
+iB = b * F' / FusedNumCu, bLo = ceil(iB * FusedNumCu / F'),
+n = min(ceil((iB+1) * FusedNumCu / F'), B) - bLo, the batch's NG groups of GK or GK - 1 blocks
+as a2aBatchSpan places them (A2APeerGroups k = 0: GK = ceil(n / G), NG = ceil(n / GK); k >= 1:
+NG = min(G, n, k), GK = ceil(n / NG)), Gb the group of b, pos = b - its first block,
+Qb = GK(min(ceil(FusedNumCu / F'), B)), and that every segment switch polls
+flag[A2AShardIdx - 1] with sc0 sc1, compares it unsigned against A2AViewK + 1 with no scalar
 load of the view block and no subtraction in between, and then advances A2AViewK by A2AViewStep,
-outside the main loop body. No SGPR a v_readfirstlane or v_readlane writes is read by a VALU within
-2 wait states (4 as a v_readlane/v_writelane operand), or by a VMEM within 5.
+outside the main loop body. The kernels pass config_harness.assert_no_sgpr_hazards, and the
+A2ASubRounds 1 setups, run with test_a2a_gemm_loop_char's interpreter, give those values.
 """
 
 import functools
+import itertools
 import math
 import os
 import re
@@ -24,7 +28,8 @@ import re
 import pytest
 import yaml
 
-from config_harness import assert_assembles, emit_kernels_from_config
+from config_harness import assert_assembles, assert_no_sgpr_hazards, emit_kernels_from_config
+from test_a2a_gemm_loop_char import _group_of, _group_sizes, _insts, _run
 from tensilelite.Components.Signature import fusedA2AKernArgLayout
 
 pytestmark = pytest.mark.unit
@@ -43,7 +48,7 @@ _CONFIG = os.path.normpath(
 )
 _NAME = re.compile(r"\.amdhsa_kernel (\S+)")
 _NEXT_FREE_SGPR = re.compile(r"^\s*\.amdhsa_next_free_sgpr (\d+)\b", re.M)
-_GROUPS = [0, 1, 2, 3, 4, 5, 6]
+_GROUPS = [0, 1, 2, 3, 4, 5, 6, 7]
 _LIMIT = 24
 
 _FORBIDDEN = (
@@ -61,77 +66,15 @@ _SERIAL_LANE0 = re.compile(
     r"|global_load_dword v\[vgprSerial\], v\[vgprSerial\], s\[sgprFusedCounterPtr:sgprFusedCounterPtr\+1\] sc0 sc1 )")
 
 
-_SET = re.compile(r"^\.set (\w+), (\d+)\s*$")
-_LABEL = re.compile(r"^[\w.]+:\s*$")
-_INST = re.compile(r"^([a-z][a-z0-9_]*)\b(.*)$")
-_VMEM = ("buffer_", "global_", "flat_", "scratch_")
-
-
-def _operands(rest):
-    return [o.strip().split()[0] for o in rest.split("//")[0].split(",") if o.strip()]
-
-
-def _sgprs(operand, sets):
-    """SGPR numbers of an `sN` or `s[expr]` / `s[expr:expr]` operand, expr a sum of integers and
-    .set names; empty for anything else."""
-    m = re.fullmatch(r"s(\d+)", operand)
-    if m:
-        return {int(m.group(1))}
-    m = re.fullmatch(r"s\[([^\]]+)\]", operand)
-    if not m:
-        return set()
-    ends = []
-    for part in m.group(1).split(":"):
-        total = 0
-        for term in part.split("+"):
-            term = term.strip()
-            if not term.isdigit() and term not in sets:
-                return set()
-            total += int(term) if term.isdigit() else sets[term]
-        ends.append(total)
-    return set(range(ends[0], ends[-1] + 1))
-
-
-def _sgpr_hazards(src):
-    """(line, writer, line, reader, wait states) for each read of an SGPR written by a
-    v_readfirstlane or v_readlane with fewer wait states than required; labels end the window."""
-    sets, insts = {}, []
-    for lineno, line in enumerate(src.splitlines(), 1):
-        line = line.strip()
-        m = _SET.match(line)
-        if m:
-            sets[m.group(1)] = int(m.group(2))
-        elif _LABEL.match(line):
-            insts.append(None)
-        elif m := _INST.match(line):
-            ops = _operands(m.group(2))
-            insts.append((lineno, m.group(1), [_sgprs(o, sets) for o in ops], ops, line))
-    hits = []
-    for n, inst in enumerate(insts):
-        if inst is None or inst[1] not in ("v_readfirstlane_b32", "v_readlane_b32") or not inst[2][0]:
-            continue
-        waits = 0
-        for e in insts[n + 1:]:
-            if e is None or waits >= 5:
-                break
-            lineno, mn, regs, ops, line = e
-            if mn.startswith(_VMEM):
-                read, need = set().union(*regs), 5
-            else:
-                read = set().union(*regs[1:])
-                need = 4 if mn in ("v_readlane_b32", "v_writelane_b32") else 2 if mn.startswith("v_") else 0
-            if read & inst[2][0] and waits < need:
-                hits.append((inst[0], inst[4], lineno, line, waits))
-            waits += int(ops[0], 0) + 1 if mn == "s_nop" else 1
-    return hits
-
-
 @pytest.fixture(scope="module")
 def view_config(tmp_path_factory):
     with open(_CONFIG) as fh:
         config = yaml.safe_load(fh)
     for problem in config["BenchmarkProblems"]:
         for group in problem[1:]:
+            for fork in group["ForkParameters"]:
+                if "A2APeerGroups" in fork:
+                    fork["A2APeerGroups"] = sorted(set(fork["A2APeerGroups"]) | {3})
             group["ForkParameters"].append({"FusedA2ATransport": ["View"]})
     path = tmp_path_factory.mktemp("a2a_gemm_view") / "a2a_gemm_view.yaml"
     with open(path, "w") as fh:
@@ -146,6 +89,11 @@ def _emit(config, group):
 
 def _param(name, key):
     return int(re.search(rf"_{key}(\d+)_", name).group(1))
+
+
+def _peer_groups(name):
+    found = re.search(r"_AAPG(\d+)_", name)
+    return int(found.group(1)) if found else 0
 
 
 def _switches(src):
@@ -167,9 +115,10 @@ def _divide(dividend, divisor, quotient, remainder=None):
             + tail)
 
 
-def _check_setup(base, src, subRounds):
-    """F', iB, bLo, n, nbMax, Qb, GK, Gb and pos from FusedNumCu, NumWorkGroups0/1 and WorkGroup1,
-    then A2AViewK = S * iB * G * Qb + pos, A2AViewStep = Qb and A2AShardIdx = Gb + 1."""
+def _check_setup(base, src, subRounds, peerGroups):
+    """F', iB, bLo, n, nbMax, Qb, the batch's groups, Gb and pos from FusedNumCu, NumWorkGroups0/1
+    and WorkGroup1, then A2AViewK = S * iB * G * Qb + pos, A2AViewStep = Qb and A2AShardIdx = Gb + 1,
+    one sequence per A2APeerGroups class 0, 1 and >= 2."""
     layout = fusedA2AKernArgLayout()
     loads = dict(re.findall(r"^s_load_dword s\[sgpr(A2AFeatIdx|A2AViewStep)\], "
                             r"s\[sgprKernArgAddress:sgprKernArgAddress\+1\], (0x[0-9a-f]+)$", src, re.M))
@@ -180,6 +129,52 @@ def _check_setup(base, src, subRounds):
     I, C = r"s\[sgprA2AShardIdx\]", r"s\[sgprA2AShardCounter\]"
     g, t = r"(?P=g)", r"(?P=t)"
     scale = rf"^s_lshl_b32 {K}, {K}, {int(math.log2(subRounds))} +//.*\n" if subRounds > 1 else ""
+    scaleK = rf"^s_mul_i32 {K}, {K}, {g} +//.*\n^s_mul_i32 {K}, {K}, {N} +//.*\n"
+    off = rf"^s_sub_u32 {t}, s\[sgprWorkGroup1\], {C} +//.*\n"
+
+    def place(ng, gk):
+        """a, base, d, Gb and pos from n in I, NG and GK, off in t."""
+        return (rf"^s_add_u32 {I}, {I}, {ng} +//.*\n"
+                rf"^s_mul_i32 {ng}, {ng}, {gk} +//.*\n"
+                rf"^s_sub_u32 {I}, {I}, {ng} +//.*\n"
+                rf"^s_mul_i32 {ng}, {I}, {gk} +//.*\n"
+                rf"^s_cmp_ge_u32 {t}, {ng} +//.*\n"
+                rf"^s_cselect_b32 {I}, {I}, 0 +//.*\n"
+                rf"^s_subb_u32 {gk}, {gk}, 0 +//.*\n"
+                rf"^s_sub_u32 {t}, {t}, {I} +//.*\n"
+                + _divide(t, gk, I)
+                + rf"^s_mul_i32 {gk}, {I}, {gk} +//.*\n"
+                rf"^s_sub_u32 {t}, {t}, {gk} +//.*\n")
+
+    if peerGroups == 0:
+        group = (rf"^s_add_u32 {N}, {N}, {g} +//.*\n"
+                 rf"^s_sub_u32 {N}, {N}, 1 +//.*\n"
+                 + _divide(N, g, N)
+                 + off
+                 + rf"^s_add_u32 {C}, {I}, {g} +//.*\n"
+                 rf"^s_sub_u32 {C}, {C}, 1 +//.*\n"
+                 + _divide(C, g, C)
+                 + scaleK
+                 + rf"^s_add_u32 {g}, {I}, {C} +//.*\n"
+                 rf"^s_sub_u32 {g}, {g}, 1 +//.*\n"
+                 + _divide(g, C, g)
+                 + place(g, C))
+    elif peerGroups == 1:
+        group = off + scaleK + rf"^s_mov_b32 {I}, 0 +//.*\n"
+    else:
+        group = (rf"^s_min_u32 {t}, {g}, {N} +//.*\n"
+                 rf"^s_min_u32 {t}, {t}, {peerGroups} +//.*\n"
+                 rf"^s_add_u32 {N}, {N}, {t} +//.*\n"
+                 rf"^s_sub_u32 {N}, {N}, 1 +//.*\n"
+                 + _divide(N, t, N)
+                 + off
+                 + rf"^s_min_u32 {C}, {g}, {I} +//.*\n"
+                 rf"^s_min_u32 {C}, {C}, {peerGroups} +//.*\n"
+                 + scaleK
+                 + rf"^s_add_u32 {g}, {I}, {C} +//.*\n"
+                 rf"^s_sub_u32 {g}, {g}, 1 +//.*\n"
+                 + _divide(g, C, g)
+                 + place(C, g))
     setup = re.findall(
         r"^s_sub_u32 (?P<g>s\d+), s\[sgprA2AW\], 1 +// W - 1\n"
         rf"^s_max_u32 {g}, {g}, 1 +// peer queue count, at least 1\n"
@@ -201,25 +196,14 @@ def _check_setup(base, src, subRounds):
         rf"^s_sub_u32 {N}, {N}, 1 +//.*\n"
         + _divide(N, t, N)
         + rf"^s_min_u32 {N}, {N}, s\[sgprNumWorkGroups1\] +//.*\n"
-        rf"^s_add_u32 {N}, {N}, {g} +//.*\n"
-        rf"^s_sub_u32 {N}, {N}, 1 +//.*\n"
-        + _divide(N, g, N)
-        + rf"^s_sub_u32 {t}, s\[sgprWorkGroup1\], {C} +//.*\n"
-        rf"^s_add_u32 {C}, {I}, {g} +//.*\n"
-        rf"^s_sub_u32 {C}, {C}, 1 +//.*\n"
-        + _divide(C, g, C)
-        + rf"^s_mul_i32 {K}, {K}, {g} +//.*\n"
-        rf"^s_mul_i32 {K}, {K}, {N} +//.*\n"
-        + _divide(t, C, I)
-        + rf"^s_mul_i32 {C}, {I}, {C} +//.*\n"
-        rf"^s_sub_u32 {t}, {t}, {C} +//.*\n"
+        + group
         + scale
         + rf"^s_add_u32 {K}, {K}, {t} +//.*\n"
         rf"^s_add_u32 {I}, {I}, 1 +// first gathered segment = Gb \+ 1$",
         src, re.M)
     assert len(setup) == 1, \
         f"Kernel {base!r}: setup does not compute A2AShardIdx = Gb + 1, A2AViewK = S * iB * G * Qb + pos " \
-        "and A2AViewStep = Qb on InKernel's batches"
+        f"and A2AViewStep = Qb on InKernel's batches and A2APeerGroups {peerGroups} groups"
 
 
 def _check_switch(base, switch, subRounds):
@@ -283,11 +267,11 @@ def test_a2a_gemm_view_gfx950(view_config, group):
         assert re.search(r"^\.set sgprA2AViewK, \d+$", src, re.M) and \
             re.search(r"^\.set sgprA2AViewStep, \d+$", src, re.M), f"Kernel {base!r}: A2AViewK/A2AViewStep not defined"
 
-        hazards = _sgpr_hazards(src)
-        assert not hazards, f"Kernel {base!r}: SGPR read before its VALU write is visible: {hazards}"
+        assert_no_sgpr_hazards(src, base)
 
         subRounds = _param(name, "AASR")
-        _check_setup(base, src, subRounds)
+        peerGroups = _peer_groups(name)
+        _check_setup(base, src, subRounds, peerGroups)
         pgr = _param(name, "PGR")
         subtile = _param(name, "USI")
         eps = 0 if subtile else _param(name, "EPS")
@@ -314,11 +298,57 @@ def test_a2a_gemm_view_gfx950(view_config, group):
 
 
 def test_a2a_gemm_view_gfx950_coverage(view_config):
-    """The groups above cover MT256 subtile and non-subtile, each with A2ASubRounds 1, 2 and 4."""
-    seen = set()
+    """The groups above cover MT256 subtile and non-subtile, each with A2ASubRounds 1, 2 and 4,
+    and A2APeerGroups 1, 2, 3 and 7 with A2ASubRounds 1 and 2."""
+    seen, peerGroups = set(), set()
     for group in _GROUPS:
         for _base, src, _err in _emit(view_config, group):
             name = _NAME.search(src).group(1)
             seen.add((re.search(r"_MT(\d+)x", name).group(1), _param(name, "USI"), _param(name, "AASR")))
+            peerGroups.add((_peer_groups(name), _param(name, "AASR")))
     want = {(mt, usi, s) for mt in ("256",) for usi in (0, 1) for s in (1, 2, 4)}
     assert want <= seen, f"missing {sorted(want - seen)}"
+    want = {(k, s) for k in (1, 2, 3, 7) for s in (1, 2)}
+    assert want <= peerGroups, f"missing {sorted(want - peerGroups)}"
+
+
+@functools.cache
+def _setup_kernels(config):
+    """(A2APeerGroups, basename, source) of the A2ASubRounds 1 View kernels of the last two groups."""
+    kernels = []
+    for group in _GROUPS[-2:]:
+        for base, src, _err in _emit(config, group):
+            name = _NAME.search(src).group(1)
+            if _param(name, "AASR") == 1:
+                kernels.append((_peer_groups(name), base, src))
+    kernels.sort(key=lambda kernel: kernel[0])
+    assert sorted({k for k, _b, _s in kernels}) == [0, 1, 2, 3, 7], [b for _k, b, _s in kernels]
+    return kernels
+
+
+def test_a2a_gemm_view_gfx950_setup_values(view_config):
+    """Runs each setup for W 2..8 and every work-group of a range of (numCu, F, B)."""
+    shapes = list(itertools.product((32, 256), range(2, 9), (2, 11, 12, 32, 44, 64), (2, 7, 8, 16, 44)))
+    shapes += [(n, W, 1, 2 * n + max(n // 3, 1)) for W in range(2, 9) for n in range(1, 25)]
+    for peerGroups, base, src in _setup_kernels(view_config):
+        [m] = re.finditer(r"^s_sub_u32 (s\d+), s\[sgprA2AW\], 1 +// W - 1\n"
+                          r"^s_max_u32 \1, \1, 1 +// peer queue count, at least 1\n"
+                          r".*?// first gathered segment = Gb \+ 1 *$", src, re.M | re.S)
+        insts = _insts(m.group(0))
+        for numCu, W, F, T in shapes:
+            G = max(W - 1, 1)
+            Fp = min(F, numCu)
+            Qb = _group_sizes(min(-(-numCu // Fp), T), W, peerGroups)[0]
+            for b in range(T):
+                regs = _run(insts, {"s[sgprA2AW]": W, "s[sgprA2AViewStep]": numCu,
+                                    "s[sgprWorkGroup1]": b, "s[sgprNumWorkGroups0]": F,
+                                    "s[sgprNumWorkGroups1]": T})
+                iB = b * Fp // numCu
+                bLo = -(-iB * numCu // Fp)
+                bHi = min(-(-(iB + 1) * numCu // Fp), T)
+                sizes = _group_sizes(bHi - bLo, W, peerGroups)
+                assert max(sizes) <= Qb
+                g, gLo = _group_of(b - bLo, sizes)
+                got = [regs[f"s[sgpr{r}]"] for r in ("A2AShardIdx", "A2AViewK", "A2AViewStep")]
+                assert got == [g + 1, iB * G * Qb + b - bLo - gLo, Qb], \
+                    f"Kernel {base!r}: numCu={numCu} W={W} F={F} B={T} b={b} -> {got}"

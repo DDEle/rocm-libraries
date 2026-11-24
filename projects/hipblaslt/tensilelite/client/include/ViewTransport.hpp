@@ -105,6 +105,7 @@ namespace TensileLite
             uint32_t      world; // W
             uint32_t      numQueues; // W-1 (A2AGemm) or W (GemmA2A)
             uint32_t      subRounds; // S; 1 for GemmA2A
+            uint32_t      peerGroups; // A2AGemm: the kernel's A2APeerGroups
             uint32_t      tokenBlocks; // B (A2AGemm) or T = NumWorkGroups1 (GemmA2A)
             uint32_t      featureTiles; // A2AGemm: F = NumWorkGroups0
             uint32_t      numCu; // A2AGemm: the kernel's FusedNumCu
@@ -309,13 +310,33 @@ namespace TensileLite
             return (a.tokenBlocks - 1) * viewA2AGemmFeatures(a) / a.numCu + 1;
         }
 
-        // A2AGemm: Qb * S, Qb = ceil(nbMax / G), G = numQueues; 0 when G = 0. The ordinal span of
-        // one (batch, round) pair.
+        // A2AGemm: the ng groups of a batch of n blocks and the size gk of the larger ones, as
+        // InKernel's a2aBatchSpan with G = numQueues: peerGroups 0: gk = ceil(n / G),
+        // ng = ceil(n / gk); else ng = min(G, n, peerGroups), gk = ceil(n / ng). 0, 0 when n = 0.
+        __host__ __device__ inline void
+            viewA2AGemmShape(ViewArmArgs const& a, uint32_t n, uint32_t& ng, uint32_t& gk)
+        {
+            ng = gk = 0;
+            if(n == 0 || a.numQueues == 0)
+                return;
+            if(a.peerGroups == 0)
+            {
+                gk = (n + a.numQueues - 1) / a.numQueues;
+                ng = (n + gk - 1) / gk;
+                return;
+            }
+            ng = a.numQueues < n ? a.numQueues : n;
+            ng = a.peerGroups < ng ? a.peerGroups : ng;
+            gk = (n + ng - 1) / ng;
+        }
+
+        // A2AGemm: Qb * S, Qb = gk of a batch of nbMax blocks (viewA2AGemmShape), the largest
+        // group of any batch. The ordinal span of one (batch, round) pair.
         __host__ __device__ inline uint32_t viewA2AGemmRoundUnits(ViewArmArgs const& a)
         {
-            if(a.numQueues == 0)
-                return 0;
-            return (viewA2AGemmBatchBlocksMax(a) + a.numQueues - 1) / a.numQueues * a.subRounds;
+            uint32_t ng = 0, gk = 0;
+            viewA2AGemmShape(a, viewA2AGemmBatchBlocksMax(a), ng, gk);
+            return gk * a.subRounds;
         }
 
         // A2AGemm: NB * G * Qb * S, what one launch adds to each flag[i].
@@ -325,18 +346,25 @@ namespace TensileLite
         }
 
         // A2AGemm: [lo, hi), the token blocks queue q serves in pair t = iB * G + j: group
-        // (q - j) mod G of batch iB, whose blocks split into G groups of ceil(n / G). Returns
-        // whether the group is non-empty.
+        // grp = (q - j) mod G of batch iB, whose n blocks split into ng groups, the first
+        // n + ng - ng * gk of gk blocks and the rest of gk - 1 (viewA2AGemmShape). Returns
+        // whether grp < ng.
         __host__ __device__ inline bool viewA2AGemmGroup(
             ViewArmArgs const& a, uint32_t q, uint32_t t, uint32_t& lo, uint32_t& hi)
         {
             const uint32_t g   = a.numQueues;
             const uint32_t bLo = viewA2AGemmBatchLo(a, t / g);
             const uint32_t bHi = viewA2AGemmBatchHi(a, t / g);
-            const uint32_t gk  = (bHi - bLo + g - 1) / g;
-            lo                 = bLo + (q + g - t % g) % g * gk;
-            hi                 = lo + gk < bHi ? lo + gk : bHi;
-            return lo < hi;
+            const uint32_t grp = (q + g - t % g) % g;
+            uint32_t       ng = 0, gk = 0;
+            viewA2AGemmShape(a, bHi - bLo, ng, gk);
+            lo = hi = bLo;
+            if(grp >= ng)
+                return false;
+            const uint32_t big = bHi - bLo + ng - ng * gk;
+            lo                 = bLo + grp * gk - (grp > big ? grp - big : 0);
+            hi                 = lo + (grp < big ? gk : gk - 1);
+            return true;
         }
 
         // Queue q's chain for the launch whose view-block epoch is `epoch`, without the

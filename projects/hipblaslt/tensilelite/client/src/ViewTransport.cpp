@@ -26,8 +26,6 @@ namespace TensileLite
 {
     namespace Client
     {
-        constexpr uint32_t kViewHeaderWords = FUSED_A2A_VIEW_SIG_OFFSET / sizeof(uint32_t);
-
         __device__ inline void viewStamp(uint64_t* slot)
         {
             __hip_atomic_store(
@@ -45,11 +43,12 @@ namespace TensileLite
             }
         };
 
-        // One thread per queue, then thread 0 advances the header. With a.stats: thread 0
-        // stamps VIEW_STATS_ARM_IN, and each queue's thread raises VIEW_STATS_ARM_OUT to the
-        // clock after its doorbell. Faults: as viewBuildUnits.
+        // One thread per queue (viewArmThread), then thread 0 advances the header, after
+        // setting VIEW_ERROR_ABORTED when bookOnly. With a.stats: thread 0 stamps
+        // VIEW_STATS_ARM_IN, and each queue's thread raises VIEW_STATS_ARM_OUT to the clock
+        // after its doorbell. Faults: as viewBuildUnits.
         template <uint32_t Faults>
-        __global__ void viewArmKernel(ViewArmArgs a)
+        __global__ void viewArmKernel(ViewArmArgs a, bool bookOnly)
         {
             const uint64_t  armIn = a.stats != nullptr ? (uint64_t)wall_clock64() : 0;
             uint32_t* const view  = a.view;
@@ -66,8 +65,8 @@ namespace TensileLite
             __syncthreads();
             if(q < a.numQueues)
             {
-                const uint32_t bits
-                    = viewArmOrBook<Faults>(a, q, epoch, halt, viewAdd32, viewStore32);
+                const uint32_t bits = viewArmThread<Faults>(
+                    a, q, epoch, halt, bookOnly, viewAdd32, viewStore32, viewRelease32);
                 if(bits != 0)
                     __hip_atomic_fetch_or(error, bits, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
                 if(a.stats != nullptr)
@@ -78,55 +77,56 @@ namespace TensileLite
             }
             __syncthreads();
             if(q == 0)
+            {
+                if(bookOnly)
+                    __hip_atomic_fetch_or(
+                        error, VIEW_ERROR_ABORTED, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
                 viewAdvance(a, epoch, view);
+            }
         }
 
-        // Single thread. Returns at once when the error word is set, unless `abort`. On
-        // timeout or `abort`: sets the error bit, releases sig[] with viewReleaseSig, then
-        // waits for the own queues to drain, setting VIEW_ERROR_STUCK if they do not.
+        // Single thread. Returns at once when the error word is set, unless `abort`; else
+        // spins, bounded, until viewWaitDone. A2AGemm: on timeout sets VIEW_ERROR_TIMEOUT, on
+        // `abort` VIEW_ERROR_ABORTED. GemmA2A: on timeout or `abort` sets the error bit, releases
+        // sig[] with viewReleaseSig and own entry[] with viewReleaseEntry, then waits for the
+        // own queues to drain, setting VIEW_ERROR_STUCK if they do not.
         // With a.stats and not `abort`: stamps VIEW_STATS_GEMM_END on entry and
         // VIEW_STATS_WAIT_OUT on exit, in the record of epoch - 1.
         __global__ void viewWaitKernel(ViewArmArgs a, bool abort)
         {
             if(threadIdx.x != 0)
                 return;
-            uint32_t* const view     = a.view;
-            uint32_t* const flag     = view + FUSED_A2A_VIEW_FLAG_OFFSET / sizeof(uint32_t);
-            uint32_t* const base     = view + FUSED_A2A_VIEW_BASE_OFFSET / sizeof(uint32_t);
-            uint32_t* const outbound = view + FUSED_A2A_VIEW_OUTBOUND_OFFSET / sizeof(uint32_t);
-            uint32_t* const error    = view + FUSED_A2A_VIEW_ERROR_OFFSET / sizeof(uint32_t);
+            uint32_t* const view  = a.view;
+            uint32_t* const error = view + FUSED_A2A_VIEW_ERROR_OFFSET / sizeof(uint32_t);
+            const uint32_t  epoch = viewLoad32(view + FUSED_A2A_VIEW_EPOCH_OFFSET / sizeof(uint32_t));
             ViewStampOnExit waitOut{nullptr};
             if(a.stats != nullptr && !abort)
             {
-                const uint32_t launch
-                    = viewLoad32(view + FUSED_A2A_VIEW_EPOCH_OFFSET / sizeof(uint32_t)) - 1u;
-                viewStamp(a.stats + viewStatsIndex(launch, VIEW_STATS_GEMM_END));
-                waitOut.slot = a.stats + viewStatsIndex(launch, VIEW_STATS_WAIT_OUT);
+                viewStamp(a.stats + viewStatsIndex(epoch - 1u, VIEW_STATS_GEMM_END));
+                waitOut.slot = a.stats + viewStatsIndex(epoch - 1u, VIEW_STATS_WAIT_OUT);
             }
-            const uint32_t outboundBase
-                = viewLoad32(view + FUSED_A2A_VIEW_OUTBOUND_BASE_OFFSET / sizeof(uint32_t));
             uint64_t start = (uint64_t)wall_clock64();
             if(!abort)
             {
                 if(viewLoad32(error) != 0)
                     return;
-                while(true)
+                while(!viewWaitDone(a, epoch))
                 {
-                    bool done = viewLoad32(outbound) - outboundBase >= a.world;
-                    for(uint32_t s = 0; done && s < a.world; s++)
-                        done = viewLoad32(flag + s) - viewLoad32(base + s) >= a.tokenBlocks;
-                    if(done)
-                        return;
                     if((uint64_t)wall_clock64() - start > a.waitTimeoutTicks)
                         break;
                     __builtin_amdgcn_s_sleep(1);
                 }
+                if(viewWaitDone(a, epoch))
+                    return;
             }
             __hip_atomic_fetch_or(error,
                                   abort ? VIEW_ERROR_ABORTED : VIEW_ERROR_TIMEOUT,
                                   __ATOMIC_RELAXED,
                                   __HIP_MEMORY_SCOPE_SYSTEM);
-            viewReleaseSig(a, viewLoad32(view + FUSED_A2A_VIEW_EPOCH_OFFSET / sizeof(uint32_t)));
+            if(a.mode != VIEW_MODE_GEMM_A2A)
+                return;
+            viewReleaseSig(a, epoch);
+            viewReleaseEntry(a, epoch, viewMax32);
             start = (uint64_t)wall_clock64();
             while(!viewQueuesDrained(a))
             {
@@ -138,16 +138,6 @@ namespace TensileLite
                 }
                 __builtin_amdgcn_s_sleep(1);
             }
-        }
-
-        // Single thread: stamps VIEW_STATS_GEMM_END and VIEW_STATS_WAIT_OUT of the record of
-        // epoch - 1.
-        __global__ void viewStampKernel(uint32_t* view, uint64_t* stats)
-        {
-            const uint32_t launch
-                = viewLoad32(view + FUSED_A2A_VIEW_EPOCH_OFFSET / sizeof(uint32_t)) - 1u;
-            viewStamp(stats + viewStatsIndex(launch, VIEW_STATS_GEMM_END));
-            viewStamp(stats + viewStatsIndex(launch, VIEW_STATS_WAIT_OUT));
         }
 
         __global__ void viewNoopKernel() {}
@@ -181,29 +171,15 @@ namespace TensileLite
                 HIP_CHECK_EXC(hipMemcpy(p, &value, sizeof(value), hipMemcpyHostToDevice));
             }
 
-            // Resets every flag and books every skipped queue before the first doorbell.
+            // viewArmHostQueues and viewAdvance on the header, after synchronizing `stream`.
             void viewArmHost(ViewArmArgs const& a, hipStream_t stream)
             {
                 HIP_CHECK_EXC(hipStreamSynchronize(stream));
                 uint32_t header[kViewHeaderWords];
                 HIP_CHECK_EXC(hipMemcpy(header, a.view, sizeof(header), hipMemcpyDeviceToHost));
-                const uint32_t epoch  = header[FUSED_A2A_VIEW_EPOCH_OFFSET / sizeof(uint32_t)];
-                uint32_t&      error  = header[FUSED_A2A_VIEW_ERROR_OFFSET / sizeof(uint32_t)];
-                const bool     halted = viewArmHalted(a, error);
-                bool           fits[FUSED_A2A_MAX_RANKS];
-                for(uint32_t q = 0; q < a.numQueues; q++)
-                {
-                    const uint32_t stuck = viewResetFlag(a, q, storeOnDevice);
-                    fits[q]              = !halted && stuck == 0 && viewQueueFits(a, q, epoch);
-                    if(fits[q])
-                        continue;
-                    if(!halted)
-                        error |= stuck != 0 ? stuck : VIEW_ERROR_RING_FULL;
-                    viewBookSkipped(a, q, addOnDevice);
-                }
-                for(uint32_t q = 0; q < a.numQueues; q++)
-                    if(fits[q])
-                        viewArmQueue(a, q, epoch);
+                const uint32_t epoch = header[FUSED_A2A_VIEW_EPOCH_OFFSET / sizeof(uint32_t)];
+                uint32_t&      error = header[FUSED_A2A_VIEW_ERROR_OFFSET / sizeof(uint32_t)];
+                error |= viewArmHostQueues(a, epoch, error, addOnDevice, storeOnDevice);
                 viewAdvance(a, epoch, header);
                 copyToDevice(a.view,
                              header,
@@ -225,9 +201,13 @@ namespace TensileLite
                                     size_t                                             launch,
                                     uint32_t                                           coalesce,
                                     Hardware const&                                    hardware,
-                                    int                                                debug)
+                                    int                                                debug,
+                                    uint32_t                                           delayRank,
+                                    uint32_t                                           delayCopies)
         {
 #ifndef TENSILELITE_ENABLE_SDMA
+            static_cast<void>(delayRank);
+            static_cast<void>(delayCopies);
             throw std::runtime_error("[fused-a2a] FusedA2ATransport=View needs a client built with "
                                      "TENSILELITE_ENABLE_SDMA.");
 #else
@@ -238,9 +218,16 @@ namespace TensileLite
             auto         inputsOf = [&](size_t j) -> ContractionInputs const& {
                 return dynamic_cast<ContractionInputs const&>(*devices[j]->inputArr[slot]);
             };
-            if(own.viewBlock == nullptr)
-                throw std::runtime_error("[fused-a2a] no view block on device "
-                                         + std::to_string(own.deviceId) + ".");
+            const size_t           tailOffset = fusedA2AViewTailOffset(problem, solution);
+            std::vector<uint32_t*> tails(world);
+            for(size_t j = 0; j < world; j++)
+            {
+                if(devices[j]->viewBlock == nullptr
+                   || devices[j]->viewBlockBytes < tailOffset + VIEW_TAIL_BYTES)
+                    throw std::runtime_error("[fused-a2a] no view block on device "
+                                             + std::to_string(devices[j]->deviceId) + ".");
+                tails[j] = viewTailOf(devices[j]->viewBlock, tailOffset);
+            }
 
             int wallClockKHz = 0;
             HIP_CHECK_EXC(hipDeviceGetAttribute(
@@ -254,6 +241,8 @@ namespace TensileLite
             a.tokenBlocks      = (a.nTokens + a.mt1 - 1) / a.mt1;
             a.coalesce         = coalesce;
             a.view             = static_cast<uint32_t*>(own.viewBlock);
+            a.delayRank        = delayRank;
+            a.delayCopies      = delayCopies;
             a.waitTimeoutTicks = (uint64_t)wallClockKHz * kViewWaitTimeoutMs;
             a.debug            = (uint32_t)debug;
             if((debug & VIEW_DEBUG_TIMELINE) != 0)
@@ -275,7 +264,10 @@ namespace TensileLite
                                      reinterpret_cast<uint64_t*>(r.Queue_DoorBell_aql),
                                      src,
                                      dst,
-                                     flag};
+                                     flag,
+                                     nullptr,
+                                     nullptr,
+                                     nullptr};
                   };
 
             if(gemm.fusedA2A() == FusedA2A::A2AGemm)
@@ -312,6 +304,20 @@ namespace TensileLite
                              viewAddress(inputsOf(rank).a2aBuf) + (i + 1) * segBytes,
                              flag + i);
                 }
+                if((debug & VIEW_DEBUG_DELAY_CHAIN) != 0 && delayRank >= world)
+                    throw std::runtime_error("[fused-a2a] --fused-a2a-view-delay-rank "
+                                             + std::to_string(delayRank) + " is not below "
+                                             + std::to_string(world) + ".");
+                if((debug & VIEW_DEBUG_DELAY_CHAIN) != 0 && rank == delayRank)
+                {
+                    if(own.viewDelayScratch == nullptr
+                       || 2 * a.srcBlockStride > VIEW_DELAY_SCRATCH_BYTES)
+                        throw std::runtime_error(
+                            "[fused-a2a] --fused-a2a-view-debug 128 needs a delay scratch of "
+                            + std::to_string(2 * a.srcBlockStride) + " bytes on device "
+                            + std::to_string(own.deviceId) + ".");
+                    a.delayScratch = viewAddress(own.viewDelayScratch);
+                }
             }
             else
             {
@@ -330,18 +336,14 @@ namespace TensileLite
                 a.subRoundStride      = 0;
                 a.tilesPerRank        = (uint32_t)(nShard / solution.sizeMapping.macroTile.x);
                 for(uint32_t p = 0; p < a.numQueues; p++)
-                {
-                    if(devices[p]->viewBlock == nullptr)
-                        throw std::runtime_error("[fused-a2a] no view block on device "
-                                                 + std::to_string(devices[p]->deviceId) + ".");
                     setQueue(p,
                              p,
                              viewAddress(inputsOf(rank).d) + p * nShard * bpe,
                              viewAddress(inputsOf(p).a2aBuf) + rank * a.nTokens * nShard * bpe,
                              static_cast<uint32_t*>(devices[p]->viewBlock)
                                  + FUSED_A2A_VIEW_FLAG_OFFSET / sizeof(uint32_t) + rank);
-                }
             }
+            viewWireTails(a, tails.data());
             return a;
 #endif
         }
@@ -352,40 +354,101 @@ namespace TensileLite
                 viewArmHost(args, stream);
             else
             {
+                static_cast<void>(hipGetLastError());
                 if((args.debug & VIEW_DEBUG_COPY_FAULTS) != 0)
                     hipLaunchKernelGGL(viewArmKernel<VIEW_DEBUG_COPY_FAULTS>,
                                        ::dim3(1),
                                        ::dim3(64),
                                        0,
                                        stream,
-                                       args);
+                                       args,
+                                       false);
                 else
-                    hipLaunchKernelGGL(viewArmKernel<0>, ::dim3(1), ::dim3(64), 0, stream, args);
+                    hipLaunchKernelGGL(
+                        viewArmKernel<0>, ::dim3(1), ::dim3(64), 0, stream, args, false);
                 HIP_CHECK_EXC(hipGetLastError());
             }
         }
 
         void viewWait(ViewArmArgs const& args, hipStream_t stream)
         {
-            if(args.mode != VIEW_MODE_GEMM_A2A)
-            {
-                if(args.stats == nullptr)
-                    return;
-                hipLaunchKernelGGL(
-                    viewStampKernel, ::dim3(1), ::dim3(1), 0, stream, args.view, args.stats);
-                HIP_CHECK_EXC(hipGetLastError());
+            if(args.mode != VIEW_MODE_GEMM_A2A && !viewExitWaits(args) && args.stats == nullptr)
                 return;
-            }
             hipLaunchKernelGGL(viewWaitKernel, ::dim3(1), ::dim3(64), 0, stream, args, false);
             HIP_CHECK_EXC(hipGetLastError());
         }
 
-        void viewAbort(ViewArmArgs const& args, hipStream_t stream) noexcept
+        void viewAbort(ViewArmArgs const& args, hipStream_t stream, bool armed) noexcept
         {
-            if(args.mode != VIEW_MODE_GEMM_A2A)
-                return;
-            hipLaunchKernelGGL(viewWaitKernel, ::dim3(1), ::dim3(64), 0, stream, args, true);
+            if(!armed)
+                hipLaunchKernelGGL(viewArmKernel<0>, ::dim3(1), ::dim3(64), 0, stream, args, true);
+            else
+                hipLaunchKernelGGL(viewWaitKernel, ::dim3(1), ::dim3(64), 0, stream, args, true);
             static_cast<void>(hipGetLastError());
+        }
+
+        namespace
+        {
+            auto viewNow()
+            {
+                return std::chrono::steady_clock::now();
+            }
+
+            void viewSleep()
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+
+        bool viewReleaseTailHost(DeviceContext& ctx, int path) noexcept
+        {
+            if(!ctx.viewQueuesArmed || ctx.viewBlock == nullptr)
+                return true;
+            uint32_t* const tail = reinterpret_cast<uint32_t*>(static_cast<char*>(ctx.viewBlock)
+                                                               + ctx.viewTailOffset);
+            if(path != VIEW_RELEASE_HOST_STORE
+               && (ctx.viewReleaseStream == nullptr || ctx.viewReleaseHost == nullptr
+                   || hipSetDevice(ctx.deviceId) != hipSuccess))
+                return false;
+            return viewReleaseTail(
+                tail,
+                path,
+                viewRelease32,
+                [&](uint32_t* to, size_t bytes) {
+                    return hipMemcpyAsync(to,
+                                          ctx.viewReleaseHost,
+                                          bytes,
+                                          hipMemcpyHostToDevice,
+                                          ctx.viewReleaseStream)
+                           == hipSuccess;
+                },
+                [&](uint32_t* to, size_t count, uint32_t value) {
+                    static_cast<void>(hipGetLastError());
+                    hipLaunchKernelGGL(viewFillKernel,
+                                       ::dim3(1),
+                                       ::dim3(64),
+                                       0,
+                                       ctx.viewReleaseStream,
+                                       to,
+                                       count,
+                                       value);
+                    return hipGetLastError() == hipSuccess;
+                });
+        }
+
+        hipError_t viewSyncBounded(DeviceContext& ctx) noexcept
+        {
+            return viewSyncWithin(
+                [&] {
+                    const hipError_t e = hipStreamQuery(ctx.stream);
+                    return e != hipSuccess || ctx.viewReleaseStream == nullptr
+                               ? e
+                               : hipStreamQuery(ctx.viewReleaseStream);
+                },
+                [] { return hipDeviceSynchronize(); },
+                viewNow,
+                viewSleep,
+                std::chrono::milliseconds(kViewSyncBoundMs));
         }
 
         bool viewDrainQueues(DeviceContext& ctx) noexcept
@@ -420,10 +483,15 @@ namespace TensileLite
                                                / sizeof(uint32_t),
                                            0xFFFFFFFFu);
                         HIP_CHECK_EXC(hipGetLastError());
-                        HIP_CHECK_EXC(hipStreamSynchronize(ctx.stream));
                     }
                     const auto deadline = std::chrono::steady_clock::now()
                                           + std::chrono::milliseconds(kViewWaitTimeoutMs);
+                    if(viewPollIdle([&] { return hipStreamQuery(ctx.stream); },
+                                    viewNow,
+                                    viewSleep,
+                                    deadline)
+                       != hipSuccess)
+                        return false;
                     while(!drained())
                     {
                         if(std::chrono::steady_clock::now() > deadline)
@@ -474,7 +542,8 @@ namespace TensileLite
 
             uint32_t             n = 0;
             Samples              arm, gemm, wait, total, firstStart, lastEnd;
-            std::vector<Samples> qDur(FUSED_A2A_MAX_RANKS), qEnd(FUSED_A2A_MAX_RANKS);
+            std::vector<Samples> qDur(FUSED_A2A_MAX_RANKS), qEnd(FUSED_A2A_MAX_RANKS),
+                qReady(FUSED_A2A_MAX_RANKS);
             std::vector<bool>    used(FUSED_A2A_MAX_RANKS, false);
             for(uint32_t r = 0; r < VIEW_STATS_RECORDS; r++)
             {
@@ -504,6 +573,9 @@ namespace TensileLite
                     }
                     if(start != 0 && end != 0)
                         qDur[q].push_back(us(end, start));
+                    const uint64_t ready = field(r, VIEW_STATS_TS_READY + q);
+                    if(start != 0 && ready != 0)
+                        qReady[q].push_back(us(ready, start));
                 }
                 if(!starts.empty())
                     firstStart.push_back(*std::min_element(starts.begin(), starts.end()));
@@ -515,7 +587,7 @@ namespace TensileLite
                    + " wait_us=" + median(wait) + " total_us=" + median(total)
                    + " xfer_first_start_us=" + median(firstStart)
                    + " xfer_last_end_us=" + median(lastEnd) + " q_dur_us=" + list(qDur, used)
-                   + " q_end_us=" + list(qEnd, used);
+                   + " q_end_us=" + list(qEnd, used) + " q_ready_us=" + list(qReady, used);
         }
     } // namespace Client
 } // namespace TensileLite

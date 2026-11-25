@@ -76,14 +76,15 @@ namespace TensileLite
 
             constexpr int kA2AGemmPoisonByte = 0xC7;
 
-            size_t viewBlockBytes(ContractionProblemGemm const& gemm,
-                                  ContractionSolution const&    solution)
-            {
-                const size_t mt1        = solution.sizeMapping.macroTile.y;
-                const size_t tokenTiles = (gemm.freeSizeB(0) + mt1 - 1) / mt1;
-                return fusedA2AViewBlockBytes(gemm.fusedA2A() == FusedA2A::GemmA2A ? tokenTiles
-                                                                                   : 0);
-            }
+        }
+
+        size_t fusedA2AViewTailOffset(ContractionProblem const&  problem,
+                                      ContractionSolution const& solution)
+        {
+            auto const&  gemm       = dynamic_cast<ContractionProblemGemm const&>(problem);
+            const size_t mt1        = solution.sizeMapping.macroTile.y;
+            const size_t tokenTiles = (gemm.freeSizeB(0) + mt1 - 1) / mt1;
+            return fusedA2AViewBlockBytes(gemm.fusedA2A() == FusedA2A::GemmA2A ? tokenTiles : 0);
         }
 
         bool fusedA2AViewTransport(ContractionSolution const& solution)
@@ -159,11 +160,17 @@ namespace TensileLite
         {
             if(commFlags != nullptr)
                 static_cast<void>(hipFree(commFlags));
-            // A view block that queues may still access is not freed.
-            if(viewBlock != nullptr && viewDrainQueues(*this))
-                static_cast<void>(hipFree(viewBlock));
-            if(viewStats != nullptr && viewDrainQueues(*this))
-                static_cast<void>(hipFree(viewStats));
+            // View buffers that queues or the release may still access are not freed.
+            if(viewDrainQueues(*this))
+            {
+                for(void* p : {viewBlock, viewStats, viewDelayScratch})
+                    if(p != nullptr)
+                        static_cast<void>(hipFree(p));
+                if(viewReleaseHost != nullptr)
+                    static_cast<void>(hipHostFree(viewReleaseHost));
+                if(viewReleaseStream != nullptr)
+                    static_cast<void>(hipStreamDestroy(viewReleaseStream));
+            }
             for(void* p : {verifyBlock, golden.a.p, golden.b.p, golden.d.p, golden.recv.p})
                 if(p != nullptr)
                     static_cast<void>(hipFree(p));
@@ -216,8 +223,9 @@ namespace TensileLite
                 = tensors[ContractionProblemGemm::TENSOR::A2A_BUF].totalAllocatedBytes();
             const size_t synchronizerBytes
                 = tensors[ContractionProblemGemm::TENSOR::Synchronizer].totalAllocatedBytes();
-            const size_t viewBytes
-                = fusedA2AViewTransport(solution) ? viewBlockBytes(*gemm, solution) : 0;
+            const size_t viewTail
+                = fusedA2AViewTransport(solution) ? fusedA2AViewTailOffset(problem, solution) : 0;
+            const size_t viewBytes = viewTail != 0 ? viewTail + VIEW_TAIL_BYTES : 0;
             for(auto const& ctx : devices)
                 if(!viewDrainQueues(*ctx))
                     throw std::runtime_error(
@@ -228,7 +236,16 @@ namespace TensileLite
                 HIP_CHECK_EXC(hipMemset(ctx.commFlags, 0, ctx.commFlagsBytes));
                 if(viewBytes != 0)
                 {
-                    ctx.viewQueuesArmed = true;
+                    if(ctx.viewReleaseStream == nullptr)
+                        HIP_CHECK_EXC(hipStreamCreateWithFlags(&ctx.viewReleaseStream,
+                                                               hipStreamNonBlocking));
+                    if(ctx.viewReleaseHost == nullptr)
+                    {
+                        HIP_CHECK_EXC(hipHostMalloc(&ctx.viewReleaseHost, VIEW_TAIL_RELEASE_BYTES));
+                        viewFillReleaseSource(ctx.viewReleaseHost);
+                    }
+                    if((viewDebug & VIEW_DEBUG_DELAY_CHAIN) != 0 && ctx.viewDelayScratch == nullptr)
+                        HIP_CHECK_EXC(hipMalloc(&ctx.viewDelayScratch, VIEW_DELAY_SCRATCH_BYTES));
                     if(ctx.viewBlockBytes < viewBytes)
                     {
                         if(ctx.viewBlock != nullptr)
@@ -240,6 +257,8 @@ namespace TensileLite
                         ctx.viewBlockBytes = viewBytes;
                     }
                     HIP_CHECK_EXC(hipMemset(ctx.viewBlock, 0, ctx.viewBlockBytes));
+                    ctx.viewQueuesArmed = true;
+                    ctx.viewTailOffset  = viewTail;
                     if((viewDebug & VIEW_DEBUG_TIMELINE) != 0)
                     {
                         if(ctx.viewStats == nullptr)
@@ -272,6 +291,9 @@ namespace TensileLite
                     verifyResetBlock(ctx.verifyBlock);
                 }
             });
+            if(viewBytes != 0)
+                forEachDevice(devices,
+                              [](DeviceContext&) { HIP_CHECK_EXC(hipDeviceSynchronize()); });
         }
 
         ProblemInputs const* rankInputs(ContractionInputs&                                 scratch,

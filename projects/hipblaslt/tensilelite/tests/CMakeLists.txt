@@ -74,6 +74,7 @@ target_sources(tensilelite-tests
         "${CMAKE_CURRENT_SOURCE_DIR}/TestData.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ThreadSafeValue_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/ViewTransport_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ViewTransportSim_test.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/HashmapEnumLookup_test.cpp"
 )
 

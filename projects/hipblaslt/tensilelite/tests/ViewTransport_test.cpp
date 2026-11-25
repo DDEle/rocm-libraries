@@ -1072,7 +1072,7 @@ TEST(ViewTransport, AdvanceMovesBaseToExpected)
     EXPECT_EQ(gemmHeader[FUSED_A2A_VIEW_EPOCH_OFFSET / 4], 3u);
 }
 
-TEST(ViewTransport, ArmHaltsOnlyGemmA2AAndBooksItsQueue)
+TEST(ViewTransport, ArmHaltsBothModesAndBooksTheQueue)
 {
     ViewArmArgs g = gemmA2AArgs();
     FakeQueue   gq(1024, 400);
@@ -1085,14 +1085,20 @@ TEST(ViewTransport, ArmHaltsOnlyGemmA2AAndBooksItsQueue)
     EXPECT_EQ(gq.ring, std::vector<uint32_t>(1024, 0xDEADBEEFu));
     EXPECT_EQ(gAdds, (Adds{{kFlag, 2}, {kView + FUSED_A2A_VIEW_OUTBOUND_OFFSET, 1}}));
 
-    ViewArmArgs a = a2aGemmArgs(1);
-    FakeQueue   aq(1024, 400);
-    aq.attach(a, 0);
-    Adds aAdds, aStores;
-    EXPECT_EQ(viewArmOrBook(a, 0, 0, VIEW_ERROR_TIMEOUT, recordTo(aAdds), recordTo(aStores)), 0u);
-    EXPECT_EQ(aq.wptr, 400 + 4 * (VIEW_COPY_DWORDS + VIEW_ATOMIC_DWORDS) * 4);
-    EXPECT_TRUE(aAdds.empty());
-    EXPECT_EQ(aStores, (Adds{{kFlag, 0u}}));
+    for(uint32_t error : {VIEW_ERROR_RING_FULL, VIEW_ERROR_TIMEOUT, VIEW_ERROR_ABORTED})
+    {
+        ViewArmArgs a = a2aGemmArgs(1);
+        FakeQueue   aq(1024, 400);
+        aq.attach(a, 0);
+        Adds aAdds, aStores;
+        EXPECT_EQ(viewArmOrBook(a, 0, 0, error, recordTo(aAdds), recordTo(aStores)), 0u);
+        EXPECT_EQ(aq.wptr, 400u);
+        EXPECT_EQ(aq.doorbell, 0u);
+        EXPECT_EQ(aAdds, (Adds{{kFlag, 4}}));
+        EXPECT_EQ(aStores, (Adds{{kFlag, 0u}}));
+    }
+    EXPECT_FALSE(viewArmHalted(0));
+    EXPECT_TRUE(viewArmHalted(VIEW_ERROR_STUCK));
 }
 
 TEST(ViewTransport, RingFullBooksTheSkippedQueue)
@@ -2913,4 +2919,839 @@ TEST(ViewTransport, VerifySimNextProblemStartsFromPristineInputs)
                 sim.nextProblem();
             }
         }
+}
+
+namespace
+{
+    constexpr uint64_t kTail    = 0x500000000ull;
+    constexpr uint64_t kScratch = 0x600000000ull;
+
+    // Rank x's view-block tail.
+    uint64_t tailAt(uint32_t x)
+    {
+        return kTail + x * 0x1000ull;
+    }
+
+    uint32_t peerOf(ViewArmArgs const& a, uint32_t q)
+    {
+        return a.mode == VIEW_MODE_A2A_GEMM ? (a.rank + 1 + q) % a.world : q;
+    }
+
+    // The readiness words of every queue, as makeViewArmArgs sets them.
+    ViewArmArgs withTail(ViewArmArgs a)
+    {
+        a.tail = fakePointer<uint32_t>(tailAt(a.rank));
+        for(uint32_t q = 0; q < a.numQueues; q++)
+        {
+            const uint32_t peer = peerOf(a, q);
+            if(peer == a.rank)
+                continue;
+            a.queues[q].ready
+                = fakePointer<uint32_t>(tailAt(a.rank) + VIEW_TAIL_ENTRY_OFFSET + 4 * peer);
+            a.queues[q].entryOut
+                = fakePointer<uint32_t>(tailAt(peer) + VIEW_TAIL_ENTRY_OFFSET + 4 * a.rank);
+            if(a.mode == VIEW_MODE_A2A_GEMM)
+                a.queues[q].pulled
+                    = fakePointer<uint32_t>(tailAt(peer) + VIEW_TAIL_PULLED_OFFSET + 4 * a.rank);
+        }
+        return a;
+    }
+
+    uint64_t packetAddress(Packet const& p)
+    {
+        return (uint64_t)p.words[2] << 32 | p.words[1];
+    }
+
+    std::vector<ViewArmArgs> readinessCases()
+    {
+        std::vector<ViewArmArgs> cases;
+        for(auto a : faultCases())
+            for(uint32_t r = 0; r < a.world; r++)
+            {
+                if(a.mode == VIEW_MODE_GEMM_A2A && r != a.rank)
+                    continue;
+                if(a.mode == VIEW_MODE_A2A_GEMM)
+                {
+                    a.rank = r;
+                    for(uint32_t q = 0; q < a.numQueues; q++)
+                        if(a.queues[q].flag == nullptr)
+                            a.queues[q] = a.queues[0];
+                }
+                cases.push_back(a);
+            }
+        for(uint32_t blocks : {0u, 1u})
+            for(uint32_t features : {0u, 1u})
+                cases.push_back(chainArgs(4, blocks, features, 8, 2, 1));
+        ViewArmArgs g  = dumpedGemmA2AArgs();
+        g.tokenBlocks  = 0;
+        cases.push_back(g);
+        return cases;
+    }
+}
+
+// R-bytes and the head/tail layout: a chain with a unit and a ready word starts with POLL(ready,
+// e + 1); an A2AGemm chain with a unit has one ATOMIC(pulled, 1), directly before its last ATOMIC,
+// which is a flag ATOMIC; without the two packets, and with NO_READY | NO_EXITWAIT, the chain is
+// the step-1 chain.
+TEST(ViewTransport, ReadinessHeadPollAndPulledAtomicPlacement)
+{
+    for(auto const& base : readinessCases())
+        for(uint32_t q = 0; q < base.numQueues; q++)
+            for(uint32_t epoch : {0u, 5u, 0x7FFFFFFEu})
+            {
+                SCOPED_TRACE(testing::Message()
+                             << "mode " << base.mode << " W " << base.world << " rank " << base.rank
+                             << " B " << base.tokenBlocks << " F " << base.featureTiles << " c "
+                             << base.coalesce << " k " << base.peerGroups << " q " << q
+                             << " epoch " << epoch);
+                ViewArmArgs const full  = withTail(base);
+                auto const        plain = buildWhole(base, q, epoch);
+                auto              p     = packets(buildWhole(full, q, epoch));
+                const bool        head  = viewChainHasUnit(base, q) && peerOf(base, q) != base.rank;
+                const bool        tail  = head && base.mode == VIEW_MODE_A2A_GEMM;
+                if(head)
+                {
+                    ASSERT_FALSE(p.empty());
+                    EXPECT_EQ(p[0].header, VIEW_POLL_HEADER);
+                    EXPECT_EQ(packetAddress(p[0]), viewAddress(full.queues[q].ready));
+                    EXPECT_EQ(p[0].words[3], epoch + 1u);
+                    p.erase(p.begin());
+                }
+                else if(!p.empty() && p[0].header == VIEW_POLL_HEADER)
+                    EXPECT_NE(packetAddress(p[0]), viewAddress(full.queues[q].ready));
+                size_t pulledAt = p.size(), pulledCount = 0;
+                for(size_t i = 0; i < p.size(); i++)
+                    if(p[i].header == VIEW_ATOMIC_HEADER && full.queues[q].pulled != nullptr
+                       && packetAddress(p[i]) == viewAddress(full.queues[q].pulled))
+                    {
+                        pulledAt = i;
+                        pulledCount++;
+                        EXPECT_EQ(p[i].words[3], 1u);
+                    }
+                EXPECT_EQ(pulledCount, tail ? 1u : 0u);
+                if(tail)
+                {
+                    ASSERT_EQ(pulledAt + 2, p.size());
+                    EXPECT_EQ(p.back().header, VIEW_ATOMIC_HEADER);
+                    EXPECT_EQ(packetAddress(p.back()), viewAddress(full.queues[q].flag));
+                    p.erase(p.begin() + pulledAt);
+                    uint64_t flagSum = 0;
+                    for(auto const& k : only(p, VIEW_ATOMIC_HEADER))
+                        flagSum += k.words[3];
+                    EXPECT_EQ(flagSum, viewA2AGemmChainUnits(base));
+                }
+                EXPECT_TRUE(p == packets(plain));
+
+                ViewArmArgs off = full;
+                off.debug |= VIEW_DEBUG_NO_READY | VIEW_DEBUG_NO_EXITWAIT;
+                EXPECT_EQ(buildWhole(off, q, epoch), plain);
+                ViewArmArgs noReady = full;
+                noReady.debug |= VIEW_DEBUG_NO_READY;
+                auto const nr = packets(buildWhole(noReady, q, epoch));
+                EXPECT_EQ(nr.size() + (head ? 1 : 0), packets(buildWhole(full, q, epoch)).size());
+                ViewArmArgs noExit = full;
+                noExit.debug |= VIEW_DEBUG_NO_EXITWAIT;
+                auto const ne = packets(buildWhole(noExit, q, epoch));
+                EXPECT_EQ(ne.size() + (tail ? 1 : 0), packets(buildWhole(full, q, epoch)).size());
+            }
+}
+
+// The step-1 hashes of DebugBitsZeroKeepTheBuilderBytes, with every readiness word set and
+// VIEW_DEBUG_NO_READY | VIEW_DEBUG_NO_EXITWAIT.
+TEST(ViewTransport, ReadinessOffKeepsTheStep1Bytes)
+{
+    ViewArmArgs a = withTail(dumpedA2AGemmArgs());
+    for(uint32_t q = 1; q < a.numQueues; q++)
+    {
+        a.queues[q].srcBase = a.queues[0].srcBase;
+        a.queues[q].dstBase = a.queues[0].dstBase;
+    }
+    ViewArmArgs g = withTail(dumpedGemmA2AArgs());
+    a.debug = g.debug = VIEW_DEBUG_NO_READY | VIEW_DEBUG_NO_EXITWAIT;
+    const std::vector<std::pair<std::vector<uint32_t>, std::pair<size_t, uint64_t>>> cases
+        = {{build(a, 0, 0), {210, 0xabac02f7ed9f5213ull}},
+           {build(a, 1, 7), {210, 0x9897dc5c36713cfbull}},
+           {build(g, 0, 5), {62, 0xb2abe52fd03dbb4full}},
+           {build(g, 1, 5), {62, 0x50ae60652e042a97ull}}};
+    for(auto const& [ring, want] : cases)
+    {
+        EXPECT_EQ(ring.size(), want.first);
+        EXPECT_EQ(fnv1a(ring), want.second);
+    }
+    a.debug = g.debug = 0;
+    EXPECT_NE(fnv1a(build(a, 0, 0)), 0xabac02f7ed9f5213ull);
+    EXPECT_NE(fnv1a(build(g, 1, 5)), 0x50ae60652e042a97ull);
+    EXPECT_EQ(fnv1a(build(g, 0, 5)), 0xb2abe52fd03dbb4full);
+}
+
+// VIEW_DEBUG_DELAY_CHAIN: queue 0 of delayRank gets delayCopies COPYs from delayScratch to
+// delayScratch + srcBlockStride right before its last COPY; nothing else changes.
+TEST(ViewTransport, DelayChainInsertsCopiesBeforeQueue0sLastCopy)
+{
+    for(auto base : readinessCases())
+    {
+        if(base.mode != VIEW_MODE_A2A_GEMM)
+            continue;
+        for(int debug : {0, VIEW_DEBUG_NO_READY, VIEW_DEBUG_NO_EXITWAIT})
+            for(uint32_t delayRank : {0u, 1u})
+                for(uint32_t q = 0; q < base.numQueues; q++)
+                {
+                    SCOPED_TRACE(testing::Message()
+                                 << "W " << base.world << " rank " << base.rank << " B "
+                                 << base.tokenBlocks << " c " << base.coalesce << " k "
+                                 << base.peerGroups << " q " << q << " delayRank " << delayRank
+                                 << " debug " << debug);
+                    ViewArmArgs a = withTail(base);
+                    a.debug       = debug;
+                    auto const on = buildWhole(a, q, 3);
+                    a.debug |= VIEW_DEBUG_DELAY_CHAIN;
+                    a.delayRank   = delayRank;
+                    a.delayCopies = 3;
+                    EXPECT_EQ(buildWhole(a, q, 3), on);
+                    a.delayScratch = kScratch;
+                    auto       p     = packets(buildWhole(a, q, 3));
+                    const bool delay = q == 0 && a.rank == delayRank && viewChainHasUnit(a, q);
+                    size_t     first = p.size(), count = 0;
+                    for(size_t i = 0; i < p.size(); i++)
+                        if(p[i].header == VIEW_COPY_HEADER && packetAddress(p[i]) == kScratch)
+                        {
+                            EXPECT_EQ((uint64_t)p[i].words[7] << 32 | p[i].words[6],
+                                      kScratch + a.srcBlockStride);
+                            first = std::min(first, i);
+                            count++;
+                        }
+                    EXPECT_EQ(count, delay ? 3u : 0u);
+                    if(delay)
+                    {
+                        size_t lastCopy = 0;
+                        for(size_t i = 0; i < p.size(); i++)
+                            if(p[i].header == VIEW_COPY_HEADER)
+                                lastCopy = i;
+                        EXPECT_EQ(first + 3, lastCopy);
+                        p.erase(p.begin() + first, p.begin() + first + 3);
+                    }
+                    EXPECT_TRUE(p == packets(on));
+                }
+    }
+}
+
+// Booking adds the chain's pulled word once (not under NO_EXITWAIT); an armed chain without a
+// unit books it too; the arm thread publishes first, also when it books.
+TEST(ViewTransport, ReadinessBookingAndPublish)
+{
+    using Event = std::tuple<char, uint64_t, uint32_t>;
+    for(bool gemmA2A : {false, true})
+        for(int debug : {0, VIEW_DEBUG_NO_READY, VIEW_DEBUG_NO_EXITWAIT})
+            for(uint32_t error : {0u, VIEW_ERROR_TIMEOUT})
+                for(bool bookOnly : {false, true})
+                {
+                    SCOPED_TRACE(testing::Message() << "gemmA2A " << gemmA2A << " debug " << debug
+                                                    << " error " << error << " bookOnly "
+                                                    << bookOnly);
+                    ViewArmArgs a = withTail(gemmA2A ? gemmA2AArgs() : a2aGemmArgs(1));
+                    const uint32_t q = gemmA2A ? 1 : 0;
+                    a.debug          = debug;
+                    FakeQueue fq(1024, 400);
+                    fq.attach(a, q);
+                    std::vector<Event> ev;
+                    auto add = [&](uint32_t* p, uint32_t v) { ev.push_back({'a', viewAddress(p), v}); };
+                    auto store
+                        = [&](uint32_t* p, uint32_t v) { ev.push_back({'s', viewAddress(p), v}); };
+                    auto rel
+                        = [&](uint32_t* p, uint32_t v) { ev.push_back({'r', viewAddress(p), v}); };
+                    const uint32_t bits = viewArmThread(a, q, 6, error, bookOnly, add, store, rel);
+                    EXPECT_EQ(bits, 0u);
+                    const bool books   = error != 0 || bookOnly;
+                    const bool publish = (debug & VIEW_DEBUG_NO_READY) == 0;
+                    const bool pulled  = !gemmA2A && (debug & VIEW_DEBUG_NO_EXITWAIT) == 0;
+                    std::vector<Event> want;
+                    if(publish)
+                        want.push_back({'r', viewAddress(a.queues[q].entryOut), 7u});
+                    if(!gemmA2A)
+                        want.push_back({'s', kFlag, 0u});
+                    if(books)
+                    {
+                        if(gemmA2A)
+                        {
+                            want.push_back({'a', kFlag, 2u});
+                            want.push_back({'a', kView + FUSED_A2A_VIEW_OUTBOUND_OFFSET, 1u});
+                        }
+                        else
+                        {
+                            want.push_back({'a', kFlag, viewA2AGemmChainUnits(a)});
+                            if(pulled)
+                                want.push_back({'a', viewAddress(a.queues[q].pulled), 1u});
+                        }
+                    }
+                    EXPECT_EQ(ev, want);
+                    EXPECT_EQ(fq.wptr != 400, !books);
+                }
+
+    // An empty A2AGemm chain is armed with nothing in it and books pulled once.
+    for(uint32_t features : {0u, 1u})
+    {
+        ViewArmArgs a = withTail(chainArgs(3, features == 0 ? 4 : 0, features, 8, 1, 1));
+        a.rank        = 1;
+        a             = withTail(a);
+        FakeQueue fq(1024, 400);
+        fq.attach(a, 1);
+        Adds adds, stores;
+        EXPECT_EQ(viewArmOrBook(a, 1, 0, 0, recordTo(adds), recordTo(stores)), 0u);
+        EXPECT_EQ(fq.wptr, 400u);
+        EXPECT_EQ(adds, (Adds{{viewAddress(a.queues[1].pulled), 1u}}));
+        a.debug = VIEW_DEBUG_NO_EXITWAIT;
+        adds.clear();
+        EXPECT_EQ(viewArmOrBook(a, 1, 0, 0, recordTo(adds), recordTo(stores)), 0u);
+        EXPECT_TRUE(adds.empty());
+    }
+}
+
+// pulled[r] - epoch as int32: the exit wait across the u32 wrap.
+TEST(ViewTransport, ExitDoneComparesWrapSafe)
+{
+    uint32_t    tail[VIEW_TAIL_BYTES / 4] = {};
+    ViewArmArgs a                         = chainArgs(4, 4, 1, 8, 1, 1);
+    a.rank                                = 1;
+    a.tail                                = tail;
+    uint32_t* const pulled                = tail + VIEW_TAIL_PULLED_OFFSET / 4;
+    for(uint32_t epoch : {1u, 5u, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu, 0u})
+    {
+        SCOPED_TRACE(testing::Message() << "epoch " << epoch);
+        for(uint32_t r = 0; r < 4; r++)
+            pulled[r] = epoch;
+        pulled[1] = epoch - 100;
+        EXPECT_TRUE(viewExitDone(a, epoch));
+        for(uint32_t r : {0u, 2u, 3u})
+        {
+            for(uint32_t lag : {1u, 0x7FFFFFFFu, 0x80000000u})
+            {
+                pulled[r] = epoch - lag;
+                EXPECT_FALSE(viewExitDone(a, epoch)) << "r " << r << " lag " << lag;
+            }
+            pulled[r] = epoch + 0x7FFFFFFFu;
+            EXPECT_TRUE(viewExitDone(a, epoch));
+            pulled[r] = epoch;
+        }
+        pulled[2] = epoch - 1;
+        a.debug   = VIEW_DEBUG_NO_EXITWAIT;
+        EXPECT_TRUE(viewExitDone(a, epoch));
+        EXPECT_FALSE(viewExitWaits(a));
+        a.debug = 0;
+        EXPECT_FALSE(viewExitDone(a, epoch));
+        EXPECT_TRUE(viewExitWaits(a));
+        pulled[2] = epoch;
+    }
+    ViewArmArgs one = chainArgs(2, 4, 1, 8, 1, 1);
+    one.world       = 1;
+    EXPECT_FALSE(viewExitWaits(one));
+    EXPECT_FALSE(viewExitWaits(gemmA2AArgs()));
+    // VIEW_TAIL_RELEASED >= every u32 head POLL reference.
+    for(uint32_t ref : {1u, 0x80000000u, 0xFFFFFFFFu})
+        EXPECT_GE(VIEW_TAIL_RELEASED, ref);
+}
+
+// NO_READY keeps the exit wait and the pulled word; only NO_EXITWAIT drops them.
+TEST(ViewTransport, NoReadyKeepsTheExitWait)
+{
+    uint32_t    tail[VIEW_TAIL_BYTES / 4] = {};
+    ViewArmArgs a                         = chainArgs(4, 4, 1, 8, 1, 1);
+    a.rank                                = 1;
+    a.tail                                = tail;
+    a.queues[0].pulled                    = tail + VIEW_TAIL_PULLED_OFFSET / 4;
+    tail[VIEW_TAIL_PULLED_OFFSET / 4]     = 2;
+    for(int debug : {0, VIEW_DEBUG_NO_READY, VIEW_DEBUG_NO_EXITWAIT,
+                     VIEW_DEBUG_NO_READY | VIEW_DEBUG_NO_EXITWAIT})
+    {
+        a.debug          = (uint32_t)debug;
+        const bool waits = (debug & VIEW_DEBUG_NO_EXITWAIT) == 0;
+        EXPECT_EQ(viewExitWaits(a), waits) << debug;
+        EXPECT_EQ(viewExitDone(a, 3), !waits) << debug;
+        EXPECT_EQ(viewPulled(a, 0), waits ? a.queues[0].pulled : nullptr) << debug;
+    }
+}
+
+namespace
+{
+    struct ReleaseCalls
+    {
+        size_t copyBytes = 0, fillCount = 0;
+        uint32_t fillValue = 0;
+    };
+
+    // viewReleaseTail of `tail` by `path` with host fakes of the three paths.
+    bool releaseTail(uint32_t* tail, int path, ReleaseCalls& calls, bool ok = true)
+    {
+        std::vector<uint32_t> source(VIEW_TAIL_RELEASE_WORDS + 2, 0u);
+        viewFillReleaseSource(source.data());
+        EXPECT_EQ(source[VIEW_TAIL_RELEASE_WORDS], 0u);
+        return viewReleaseTail(
+            tail,
+            path,
+            [](uint32_t* p, uint32_t v) { *p = v; },
+            [&](uint32_t* to, size_t bytes) {
+                calls.copyBytes = bytes;
+                std::memcpy(to, source.data(), bytes);
+                return ok;
+            },
+            [&](uint32_t* to, size_t count, uint32_t value) {
+                calls.fillCount = count;
+                calls.fillValue = value;
+                for(size_t i = 0; i < count; i++)
+                    to[i] = value;
+                return ok;
+            });
+    }
+}
+
+// Every release path stores VIEW_TAIL_RELEASED into entry[] and the released word and leaves
+// pulled[] alone; the released word ends every exit wait, also after later pulled ATOMICs, and
+// entry[] satisfies every head POLL.
+TEST(ViewTransport, HostReleaseEndsTheExitWaitAndKeepsPulled)
+{
+    static_assert(VIEW_TAIL_RELEASED_OFFSET / 4 < VIEW_TAIL_RELEASE_WORDS);
+    static_assert(VIEW_TAIL_PULLED_OFFSET >= VIEW_TAIL_RELEASE_BYTES);
+    for(int path : {VIEW_RELEASE_HOST_STORE, VIEW_RELEASE_MEMCPY, VIEW_RELEASE_KERNEL})
+        for(uint32_t world : {2u, 4u, 8u})
+            for(uint32_t epoch : {1u, 6u, 1000u, 0x7FFFFFFFu})
+            {
+                SCOPED_TRACE(testing::Message()
+                             << "path " << path << " W " << world << " epoch " << epoch);
+                uint32_t    tail[VIEW_TAIL_BYTES / 4] = {};
+                ViewArmArgs a                         = chainArgs(world, 4, 1, 8, 1, 1);
+                a.rank                                = world - 1;
+                a.tail                                = tail;
+                uint32_t* const entry                 = tail + VIEW_TAIL_ENTRY_OFFSET / 4;
+                uint32_t* const pulled                = tail + VIEW_TAIL_PULLED_OFFSET / 4;
+                for(uint32_t r = 0; r < world; r++)
+                {
+                    entry[r]  = epoch - 1;
+                    pulled[r] = epoch - 1;
+                }
+                ASSERT_FALSE(viewExitDone(a, epoch));
+                std::vector<uint32_t> before(tail, tail + VIEW_TAIL_BYTES / 4);
+                ReleaseCalls          calls;
+                ASSERT_TRUE(releaseTail(tail, path, calls));
+                for(uint32_t i = 0; i < VIEW_TAIL_BYTES / 4; i++)
+                    EXPECT_EQ(tail[i], i < VIEW_TAIL_RELEASE_WORDS ? VIEW_TAIL_RELEASED : before[i])
+                        << "word " << i;
+                if(path == VIEW_RELEASE_MEMCPY)
+                    EXPECT_EQ(calls.copyBytes, (size_t)VIEW_TAIL_RELEASE_BYTES);
+                if(path == VIEW_RELEASE_KERNEL)
+                {
+                    EXPECT_EQ(calls.fillCount, (size_t)VIEW_TAIL_RELEASE_WORDS);
+                    EXPECT_EQ(calls.fillValue, VIEW_TAIL_RELEASED);
+                }
+                EXPECT_TRUE(viewExitDone(a, epoch));
+                for(uint32_t late = 0; late < 3; late++)
+                {
+                    for(uint32_t r = 0; r < world; r++)
+                        pulled[r] += 1;
+                    EXPECT_TRUE(viewExitDone(a, epoch + late));
+                }
+                for(uint32_t r = 0; r < world; r++)
+                    EXPECT_GE(entry[r], epoch + 1);
+            }
+    uint32_t     tail[VIEW_TAIL_BYTES / 4] = {};
+    ReleaseCalls calls;
+    EXPECT_FALSE(releaseTail(tail, VIEW_RELEASE_MEMCPY, calls, false));
+    EXPECT_FALSE(releaseTail(tail, VIEW_RELEASE_KERNEL, calls, false));
+}
+
+namespace
+{
+    struct FakeStream
+    {
+        uint64_t   now = 0, queries = 0, syncs = 0, idleAt = ~0ull;
+        hipError_t busyError = hipErrorNotReady, syncResult = hipSuccess;
+
+        hipError_t query()
+        {
+            queries++;
+            if(queries > 1000)
+                return hipErrorUnknown;
+            return queries >= idleAt ? hipSuccess : busyError;
+        }
+    };
+}
+
+// viewPollIdle returns hipErrorNotReady once the clock passes the deadline, the first result
+// other than hipErrorNotReady otherwise; viewSyncWithin synchronizes only an idle stream.
+TEST(ViewTransport, BoundedSyncStopsAtTheDeadline)
+{
+    static_assert(kViewSyncBoundMs > 2 * kViewWaitTimeoutMs);
+    auto poll = [](FakeStream& f, uint64_t deadline) {
+        return viewPollIdle([&] { return f.query(); },
+                            [&] { return f.now; },
+                            [&] { f.now++; },
+                            deadline);
+    };
+    FakeStream busy;
+    EXPECT_EQ(poll(busy, 10), hipErrorNotReady);
+    EXPECT_EQ(busy.queries, 12u);
+    FakeStream idle;
+    idle.idleAt = 3;
+    EXPECT_EQ(poll(idle, 10), hipSuccess);
+    EXPECT_EQ(idle.queries, 3u);
+    FakeStream faulted;
+    faulted.busyError = hipErrorIllegalAddress;
+    EXPECT_EQ(poll(faulted, 10), hipErrorIllegalAddress);
+    EXPECT_EQ(faulted.queries, 1u);
+
+    auto sync = [](FakeStream& f, uint64_t bound) {
+        return viewSyncWithin([&] { return f.query(); },
+                              [&] {
+                                  f.syncs++;
+                                  return f.syncResult;
+                              },
+                              [&] { return f.now; },
+                              [&] { f.now++; },
+                              bound);
+    };
+    FakeStream stuck;
+    stuck.now = 100;
+    EXPECT_EQ(sync(stuck, 10), hipErrorNotReady);
+    EXPECT_EQ(stuck.queries, 12u);
+    EXPECT_EQ(stuck.syncs, 0u);
+    FakeStream done;
+    done.idleAt     = 2;
+    done.syncResult = hipErrorLaunchFailure;
+    EXPECT_EQ(sync(done, 10), hipErrorLaunchFailure);
+    EXPECT_EQ(done.syncs, 1u);
+    FakeStream lost;
+    lost.busyError = hipErrorIllegalAddress;
+    EXPECT_EQ(sync(lost, 10), hipErrorIllegalAddress);
+    EXPECT_EQ(lost.syncs, 0u);
+}
+
+TEST(ViewTransport, ReleaseEntryRaisesOnlyThePeersEntries)
+{
+    uint32_t    tail[VIEW_TAIL_BYTES / 4] = {};
+    ViewArmArgs g                         = gemmA2AArgs();
+    g.world = g.numQueues = 4;
+    g.rank                = 2;
+    g.tail                = tail;
+    uint32_t* const entry = tail + VIEW_TAIL_ENTRY_OFFSET / 4;
+    entry[0]              = 3;
+    entry[1]              = 9;
+    entry[2]              = 1;
+    entry[3]              = 0;
+    viewReleaseEntry(g, 5, viewMax32);
+    EXPECT_EQ(std::vector<uint32_t>(entry, entry + 4), (std::vector<uint32_t>{5, 9, 1, 5}));
+    EXPECT_EQ(std::vector<uint32_t>(tail + 4, tail + VIEW_TAIL_BYTES / 4),
+              std::vector<uint32_t>(VIEW_TAIL_BYTES / 4 - 4, 0u));
+}
+
+TEST(ViewTransport, TailCountsMatchEveryPeer)
+{
+    uint32_t tail[VIEW_TAIL_BYTES / 4] = {};
+    for(uint32_t x = 0; x < 4; x++)
+        tail[VIEW_TAIL_ENTRY_OFFSET / 4 + x] = tail[VIEW_TAIL_PULLED_OFFSET / 4 + x] = 7;
+    tail[VIEW_TAIL_ENTRY_OFFSET / 4 + 1] = tail[VIEW_TAIL_PULLED_OFFSET / 4 + 1] = 0;
+    for(uint32_t mode : {VIEW_MODE_A2A_GEMM, VIEW_MODE_GEMM_A2A})
+    {
+        EXPECT_TRUE(viewTailCountsMatch(mode, 1, 4, 7, tail, true, true));
+        EXPECT_FALSE(viewTailCountsMatch(mode, 0, 4, 7, tail, true, true));
+        EXPECT_FALSE(viewTailCountsMatch(mode, 1, 4, 8, tail, true, false));
+    }
+    tail[VIEW_TAIL_PULLED_OFFSET / 4 + 3] = 6;
+    EXPECT_FALSE(viewTailCountsMatch(VIEW_MODE_A2A_GEMM, 1, 4, 7, tail, true, true));
+    EXPECT_TRUE(viewTailCountsMatch(VIEW_MODE_A2A_GEMM, 1, 4, 7, tail, true, false));
+    EXPECT_TRUE(viewTailCountsMatch(VIEW_MODE_GEMM_A2A, 1, 4, 7, tail, true, true));
+    tail[VIEW_TAIL_ENTRY_OFFSET / 4 + 2] = 6;
+    EXPECT_TRUE(viewTailCountsMatch(VIEW_MODE_GEMM_A2A, 1, 4, 7, tail, false, true));
+    EXPECT_FALSE(viewTailCountsMatch(VIEW_MODE_GEMM_A2A, 1, 4, 7, tail, true, false));
+}
+
+TEST(ViewTransport, ThrowAtParsesSiteDeviceAndLaunch)
+{
+    EXPECT_FALSE(viewParseThrowAt("").set);
+    const char* names[] = {"start", "arm", "launch", "wait", "stop", "check"};
+    for(int i = 0; i < 6; i++)
+    {
+        const ViewThrowAt t = viewParseThrowAt(std::string(names[i]) + ":3:12");
+        EXPECT_TRUE(t.set);
+        EXPECT_EQ((int)t.site, i);
+        EXPECT_EQ(t.device, 3u);
+        EXPECT_EQ(t.launch, 12u);
+    }
+    for(auto bad : {"arm", "arm:1", "arm:1:", "x:1:2", "arm:-1:2", "arm:1:2x", ":1:2"})
+        EXPECT_THROW(viewParseThrowAt(bad), std::invalid_argument) << bad;
+}
+
+// Every rank arms every launch with the same readiness bits; launch 0 of verify keeps them.
+TEST(ViewTransport, ReadinessBitsAndTimelineFields)
+{
+    constexpr int readiness
+        = VIEW_DEBUG_NO_READY | VIEW_DEBUG_NO_EXITWAIT | VIEW_DEBUG_DELAY_CHAIN;
+    static_assert((VERIFY_LAUNCH0_CLEARED_DEBUG & readiness) == 0);
+    static_assert((readiness & 31) == 0 && VIEW_DEBUG_ALL == (31 | readiness));
+    EXPECT_EQ(verifyViewDebug(readiness, 0), (uint32_t)readiness);
+    static_assert(VIEW_STATS_TS_READY >= VIEW_STATS_TS_END + 2 * (FUSED_A2A_MAX_RANKS - 1) + 1);
+    static_assert(VIEW_STATS_TS_READY + FUSED_A2A_MAX_RANKS == VIEW_STATS_FIELDS);
+
+    ViewArmArgs g = withTail(dumpedGemmA2AArgs());
+    g.stats       = fakePointer<uint64_t>(0x700000000ull);
+    auto const r  = buildWhole(g, 1, 2);
+    ASSERT_GE(r.size(), 2 * VIEW_TIMESTAMP_DWORDS + VIEW_POLL_DWORDS);
+    EXPECT_EQ(r[0], VIEW_TIMESTAMP_HEADER);
+    EXPECT_EQ(r[VIEW_TIMESTAMP_DWORDS], VIEW_POLL_HEADER);
+    const size_t ts = VIEW_TIMESTAMP_DWORDS + VIEW_POLL_DWORDS;
+    EXPECT_EQ(r[ts], VIEW_TIMESTAMP_HEADER);
+    EXPECT_EQ((uint64_t)r[ts + 2] << 32 | r[ts + 1],
+              viewAddress(g.stats + viewStatsIndex(2, VIEW_STATS_TS_READY + 1)));
+}
+
+// The first match throws and clears the setting; a mismatch in any field does not. Replays
+// launchAll's calls: 6 solutions alternating InKernel (no calls) and View, 4 launches each (comm
+// yaml) or 23 (verify yaml), devices 0-3, every site; a throw ends its solution.
+TEST(ViewTransport, ThrowAtFiresOnceAtTheFirstMatch)
+{
+    for(uint64_t perSolution : {4u, 23u})
+        for(uint64_t at : {0u, 3u, 5u})
+        {
+            SCOPED_TRACE(testing::Message() << "launches " << perSolution << " at " << at);
+            ViewThrowAt           t = viewParseThrowAt("check:1:" + std::to_string(at));
+            std::vector<uint32_t> threw, ran;
+            for(uint32_t solution = 1; solution < 6; solution += 2)
+            {
+                bool thrown = false;
+                for(uint64_t launch = 0; launch < perSolution && !thrown; launch++)
+                    for(uint32_t d = 0; d < 4 && !thrown; d++)
+                        for(int site = 0; site < 6 && !thrown; site++)
+                            thrown = viewThrowNow(t, (ViewThrowSite)site, d, launch);
+                (thrown ? threw : ran).push_back(solution);
+            }
+            if(at < perSolution)
+            {
+                EXPECT_EQ(threw, (std::vector<uint32_t>{1}));
+                EXPECT_EQ(ran, (std::vector<uint32_t>{3, 5}));
+            }
+            else
+                EXPECT_TRUE(threw.empty());
+            EXPECT_EQ(t.set, at >= perSolution);
+        }
+    ViewThrowAt t = viewParseThrowAt("wait:2:7");
+    EXPECT_FALSE(viewThrowNow(t, ViewThrowSite::Stop, 2, 7));
+    EXPECT_FALSE(viewThrowNow(t, ViewThrowSite::Wait, 1, 7));
+    EXPECT_FALSE(viewThrowNow(t, ViewThrowSite::Wait, 2, 6));
+    EXPECT_TRUE(t.set);
+    EXPECT_TRUE(viewThrowNow(t, ViewThrowSite::Wait, 2, 7));
+    EXPECT_FALSE(viewThrowNow(t, ViewThrowSite::Wait, 2, 7));
+    ViewThrowAt none;
+    EXPECT_FALSE(viewThrowNow(none, ViewThrowSite::Start, 0, 0));
+}
+
+namespace
+{
+    using ArmEvent = std::tuple<char, uint64_t, uint32_t>;
+
+    // One FakeQueue per queue of a, each with room for its chain at `epoch`.
+    std::vector<std::unique_ptr<FakeQueue>> attachEvery(ViewArmArgs& a, uint32_t epoch)
+    {
+        std::vector<std::unique_ptr<FakeQueue>> out;
+        for(uint32_t q = 0; q < a.numQueues; q++)
+        {
+            ViewRingWriter count{nullptr, 1ull << 40, 0};
+            viewBuildChain(a, q, epoch, count);
+            size_t dwords = 16;
+            while(dwords <= count.pos)
+                dwords *= 2;
+            out.push_back(std::make_unique<FakeQueue>(dwords, 400));
+            out.back()->attach(a, q);
+        }
+        return out;
+    }
+}
+
+// viewArmHostQueues makes the writes and adds of viewArmThread over every queue, with the same
+// error bits and rings; it publishes every entry before any other write and rings no doorbell
+// before its last write. Cases: readinessCases x debug {0, 32, 64} x error {0, TIMEOUT} x queue 0
+// {fits, ring full, stuck}.
+TEST(ViewTransport, HostArmBooksAsTheDeviceArm)
+{
+    const uint32_t epoch    = 6;
+    uint64_t       unitFree = 0, pulledAtomics = 0;
+    for(auto const& base : readinessCases())
+        for(int debug : {0, VIEW_DEBUG_NO_READY, VIEW_DEBUG_NO_EXITWAIT})
+            for(uint32_t error : {0u, VIEW_ERROR_TIMEOUT})
+                for(int variant = 0; variant < 3; variant++)
+                {
+                    SCOPED_TRACE(testing::Message()
+                                 << "mode " << base.mode << " W " << base.world << " rank "
+                                 << base.rank << " B " << base.tokenBlocks << " F "
+                                 << base.featureTiles << " debug " << debug << " error " << error
+                                 << " variant " << variant);
+                    ViewArmArgs host = withTail(base), dev = withTail(base);
+                    host.debug = dev.debug = debug;
+                    auto hostQs            = attachEvery(host, epoch);
+                    auto devQs             = attachEvery(dev, epoch);
+                    if(variant == 1)
+                        host.queues[0].ringBytes = dev.queues[0].ringBytes = 4;
+                    if(variant == 2)
+                        hostQs[0]->rptr = devQs[0]->rptr = 300;
+
+                    std::vector<ArmEvent> hostEv, devEv;
+                    auto                  rung = [&] {
+                        for(auto const& f : hostQs)
+                            if(f->doorbell != 0)
+                                return true;
+                        return false;
+                    };
+                    auto hostAdd = [&](uint32_t* p, uint32_t v) {
+                        EXPECT_FALSE(rung());
+                        hostEv.push_back({'a', viewAddress(p), v});
+                    };
+                    auto hostStore = [&](uint32_t* p, uint32_t v) {
+                        EXPECT_FALSE(rung());
+                        hostEv.push_back({'w', viewAddress(p), v});
+                    };
+                    const uint32_t hostBits
+                        = viewArmHostQueues(host, epoch, error, hostAdd, hostStore);
+
+                    auto devAdd = [&](uint32_t* p, uint32_t v) {
+                        devEv.push_back({'a', viewAddress(p), v});
+                    };
+                    auto devWrite = [&](uint32_t* p, uint32_t v) {
+                        devEv.push_back({'w', viewAddress(p), v});
+                    };
+                    uint32_t devBits = 0;
+                    for(uint32_t q = 0; q < dev.numQueues; q++)
+                        devBits |= viewArmThread(
+                            dev, q, epoch, error, false, devAdd, devWrite, devWrite);
+
+                    EXPECT_EQ(hostBits, devBits);
+                    std::set<uint64_t> entries;
+                    for(uint32_t q = 0; q < host.numQueues; q++)
+                    {
+                        if(host.queues[q].entryOut != nullptr
+                           && (debug & VIEW_DEBUG_NO_READY) == 0)
+                            entries.insert(viewAddress(host.queues[q].entryOut));
+                        EXPECT_EQ(hostQs[q]->wptr, devQs[q]->wptr) << "q " << q;
+                        EXPECT_EQ(hostQs[q]->doorbell, devQs[q]->doorbell) << "q " << q;
+                        EXPECT_TRUE(hostQs[q]->ring == devQs[q]->ring) << "q " << q;
+                        if(error == 0 && variant == 0 && viewPulled(host, q) != nullptr)
+                            (viewChainHasUnit(host, q) ? pulledAtomics : unitFree)++;
+                    }
+                    for(size_t i = 0; i < hostEv.size(); i++)
+                    {
+                        const bool publish = std::get<0>(hostEv[i]) == 'w'
+                                             && entries.count(std::get<1>(hostEv[i])) != 0;
+                        EXPECT_EQ(publish, i < entries.size()) << "event " << i;
+                    }
+                    std::sort(hostEv.begin(), hostEv.end());
+                    std::sort(devEv.begin(), devEv.end());
+                    EXPECT_EQ(hostEv, devEv);
+                }
+    EXPECT_GT(unitFree, 0u);
+    EXPECT_GT(pulledAtomics, 0u);
+
+    // A2AGemm W3 rank 1, debug 0: without units every queue books pulled at the arm; with units
+    // none does.
+    for(uint32_t blocks : {0u, 2u})
+    {
+        ViewArmArgs a = chainArgs(3, blocks, 1, 8, 1, 1);
+        a.rank        = 1;
+        a             = withTail(a);
+        auto qs       = attachEvery(a, 0);
+        Adds adds, stores;
+        EXPECT_EQ(viewArmHostQueues(a, 0, 0, recordTo(adds), recordTo(stores)), 0u);
+        Adds want;
+        if(blocks == 0)
+            want = {{viewAddress(a.queues[0].pulled), 1u}, {viewAddress(a.queues[1].pulled), 1u}};
+        EXPECT_EQ(adds, want) << "blocks " << blocks;
+        EXPECT_EQ(stores,
+                  (Adds{{viewAddress(a.queues[0].entryOut), 1u},
+                        {viewAddress(a.queues[1].entryOut), 1u},
+                        {kFlag, 0u},
+                        {kFlag + 4, 0u}}));
+        EXPECT_NE(qs[0]->doorbell, 0u);
+        EXPECT_EQ(qs[0]->wptr != 400, blocks != 0);
+    }
+}
+
+// viewWireTails sets the words withTail sets, at W 2, 3 and 8, both modes, every rank;
+// viewTailOf adds the tail offset.
+TEST(ViewTransport, WireTailsPointEveryQueueAtTheTails)
+{
+    EXPECT_EQ(viewAddress(viewTailOf(fakePointer<void>(kTail), 0x60)), kTail + 0x60);
+    for(uint32_t w : {2u, 3u, 8u})
+        for(bool gemmA2A : {false, true})
+            for(uint32_t r = 0; r < w; r++)
+            {
+                SCOPED_TRACE(testing::Message()
+                             << "W " << w << " GemmA2A " << gemmA2A << " rank " << r);
+                ViewArmArgs a = gemmA2A ? gemmA2AArgs() : chainArgs(w, 2, 1, 8, 1, 1);
+                a.world       = w;
+                a.numQueues   = gemmA2A ? w : w - 1;
+                a.rank        = r;
+                uint32_t* tails[FUSED_A2A_MAX_RANKS];
+                for(uint32_t x = 0; x < w; x++)
+                    tails[x] = fakePointer<uint32_t>(tailAt(x));
+                ViewArmArgs wired = a;
+                viewWireTails(wired, tails);
+                ViewArmArgs const want = withTail(a);
+                EXPECT_EQ(wired.tail, want.tail);
+                for(uint32_t q = 0; q < a.numQueues; q++)
+                {
+                    EXPECT_EQ(wired.queues[q].ready, want.queues[q].ready) << "q " << q;
+                    EXPECT_EQ(wired.queues[q].entryOut, want.queues[q].entryOut) << "q " << q;
+                    EXPECT_EQ(wired.queues[q].pulled, want.queues[q].pulled) << "q " << q;
+                }
+            }
+    ViewArmArgs a = chainArgs(3, 2, 1, 8, 1, 1);
+    a.rank        = 1;
+    uint32_t* tails[3];
+    for(uint32_t x = 0; x < 3; x++)
+        tails[x] = fakePointer<uint32_t>(tailAt(x));
+    viewWireTails(a, tails);
+    EXPECT_EQ(viewAddress(a.tail), tailAt(1));
+    EXPECT_EQ(viewAddress(a.queues[0].ready), tailAt(1) + VIEW_TAIL_ENTRY_OFFSET + 8);
+    EXPECT_EQ(viewAddress(a.queues[0].entryOut), tailAt(2) + VIEW_TAIL_ENTRY_OFFSET + 4);
+    EXPECT_EQ(viewAddress(a.queues[0].pulled), tailAt(2) + VIEW_TAIL_PULLED_OFFSET + 4);
+    EXPECT_EQ(viewAddress(a.queues[1].pulled), tailAt(0) + VIEW_TAIL_PULLED_OFFSET + 4);
+}
+
+// viewTailChecks: entry unless NO_READY, pulled unless NO_EXITWAIT. viewCheckTails compares each
+// rank with its own header epoch, reports the failing ranks, and checks nothing when an error
+// word is set.
+TEST(ViewTransport, ValidatorChecksEveryRankAgainstItsOwnEpoch)
+{
+    for(uint32_t debug = 0; debug <= VIEW_DEBUG_ALL; debug++)
+    {
+        const ViewTailChecks c = viewTailChecks(debug);
+        EXPECT_EQ(c.entry, (debug & VIEW_DEBUG_NO_READY) == 0) << debug;
+        EXPECT_EQ(c.pulled, (debug & VIEW_DEBUG_NO_EXITWAIT) == 0) << debug;
+    }
+    constexpr uint32_t W = 4, T = VIEW_TAIL_BYTES / 4;
+    constexpr uint32_t E = VIEW_TAIL_ENTRY_OFFSET / 4, P = VIEW_TAIL_PULLED_OFFSET / 4;
+    using Bad            = std::vector<uint32_t>;
+    for(uint32_t mode : {VIEW_MODE_A2A_GEMM, VIEW_MODE_GEMM_A2A})
+    {
+        SCOPED_TRACE(testing::Message() << "mode " << mode);
+        const bool            a2aGemm = mode == VIEW_MODE_A2A_GEMM;
+        std::vector<uint32_t> headers(W * kViewHeaderWords, 0), tails(W * T, 0);
+        for(uint32_t d = 0; d < W; d++)
+        {
+            headers[d * kViewHeaderWords + FUSED_A2A_VIEW_EPOCH_OFFSET / 4] = 10 + 3 * d;
+            for(uint32_t x = 0; x < W; x++)
+                tails[d * T + E + x] = tails[d * T + P + x] = x == d ? 0 : 10 + 3 * d;
+        }
+        auto run = [&](ViewTailChecks c, bool checked) {
+            Bad bad;
+            EXPECT_EQ(viewCheckTails(mode, W, headers.data(), tails.data(), c, bad), checked);
+            return bad;
+        };
+        EXPECT_EQ(run({true, true}, true), Bad{});
+        tails[2 * T + E + 0]--;
+        EXPECT_EQ(run({true, true}, true), Bad{2});
+        EXPECT_EQ(run({false, true}, true), Bad{});
+        tails[2 * T + E + 0]++;
+        tails[3 * T + P + 1]++;
+        EXPECT_EQ(run({true, true}, true), a2aGemm ? Bad{3} : Bad{});
+        EXPECT_EQ(run({true, false}, true), Bad{});
+        tails[0 * T + E + 1]--;
+        EXPECT_EQ(run({true, true}, true), a2aGemm ? (Bad{0, 3}) : (Bad{0}));
+        headers[1 * kViewHeaderWords + FUSED_A2A_VIEW_ERROR_OFFSET / 4] = VIEW_ERROR_TIMEOUT;
+        EXPECT_EQ(run({true, true}, false), Bad{});
+    }
 }

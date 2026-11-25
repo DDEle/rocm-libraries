@@ -313,7 +313,11 @@ namespace TensileLite
                 ("fused-a2a-drain-send",     po::value<int>()->default_value(1), "Runtime drainSend flag passed to the fused kernel (1=on): the kernel exits only once this card's engines have finished reading D[0:AM), so D can be reused on stream order alone. Independent of --fused-a2a-drain-recv.")
                 ("fused-a2a-view-arm",       po::value<int>()->default_value(VIEW_ARM_DEVICE), "Fused A2A, FusedA2ATransport=View solutions: who writes the SDMA chains before each launch. 0: a kernel on the device's stream; 1: the host thread, after synchronizing that stream.")
                 ("fused-a2a-view-coalesce",  po::value<int>()->default_value(1), "Fused A2A, A2AGemm FusedA2ATransport=View solutions: COPY units per arrival ATOMIC on each queue; the last ATOMIC carries the remainder.")
-                ("fused-a2a-view-debug",     po::value<int>()->default_value(0), "Fused A2A debug bitmask. 1: View solutions record a per-launch timeline (arm kernel, GEMM end, wait kernel, and a TIMESTAMP at the start and end of each queue's chain) and print VIEWSTAT lines per solution; 2: GemmA2A View chains are built without their POLLs (data is wrong); 4: InKernel solutions launch an empty kernel right before and right after the fused GEMM; 8: View queue 0 omits its first COPY; 16: View queue 0's first COPY moves to just before its chain's last ATOMIC.")
+                ("fused-a2a-view-debug",     po::value<int>()->default_value(0), "Fused A2A debug bitmask. 1: View solutions record a per-launch timeline (arm kernel, GEMM end, wait kernel, and a TIMESTAMP at the start and end of each queue's chain) and print VIEWSTAT lines per solution; 2: GemmA2A View chains are built without their POLLs (data is wrong); 4: InKernel solutions launch an empty kernel right before and right after the fused GEMM; 8: View queue 0 omits its first COPY; 16: View queue 0's first COPY moves to just before its chain's last ATOMIC; 32: View chains start without their readiness POLL and arms publish no entry; 64: A2AGemm View chains add no pulled count and no exit wait follows the GEMM; 128: A2AGemm View queue 0 of --fused-a2a-view-delay-rank copies --fused-a2a-view-delay-copies extra units before its last COPY.")
+                ("fused-a2a-view-delay-rank",   po::value<int>()->default_value(1), "Fused A2A, --fused-a2a-view-debug 128: the rank whose queue 0 is delayed.")
+                ("fused-a2a-view-delay-copies", po::value<int>()->default_value(32), "Fused A2A, --fused-a2a-view-debug 128: the extra COPYs.")
+                ("fused-a2a-view-release",      po::value<int>()->default_value(VIEW_RELEASE_MEMCPY), "Fused A2A, FusedA2ATransport=View: how a failed solution releases every view-block readiness word before its bounded device synchronization. 1: CPU stores through the view block pointer; 2: hipMemcpyAsync on a non-blocking stream; 3: a fill kernel on that stream.")
+                ("fused-a2a-view-throw-at",     po::value<std::string>()->default_value(""), "Fused A2A, FusedA2ATransport=View debug: <site>:<device>:<launch> throws at that site of the per-device launch body, at the first match only; site is start, arm, launch, wait, stop or check, device an index into the active devices, launch the solution's launch count.")
                 ("fused-a2a-verify",         po::value<int>()->default_value(VERIFY_OFF), "Fused A2A: 0 off; 1 before every launch e a producer rewrites the inputs from copies taken before the problem's first launch, each element negated by bit (its shard coordinate mod 32) of e * 0x9E3779B1, and poisons D and the a2aBuf peer segments (A2AGemm: A and B along K, so D equals the launch-0 D bitwise; GemmA2A: A along M, all of a2aBuf); after the launch a kernel compares D (GemmA2A: and the received a2aBuf) with the launch-0 result under the same pattern. Launch 0 has no pattern. 2 as 1, and from launch 1 on rank (e mod W) spins --fused-a2a-verify-skew-us before its producer.")
                 ("fused-a2a-verify-barrier", po::value<int>()->default_value(1), "Fused A2A, --fused-a2a-verify: 1 synchronizes every device's stream before and after the producers of each launch; 0 does not.")
                 ("fused-a2a-verify-skew-us", po::value<int>()->default_value(1000), "Fused A2A, --fused-a2a-verify 2: the spin, in microseconds.")
@@ -878,8 +882,28 @@ namespace TensileLite
                     "[fused-a2a] --fused-a2a-view-coalesce must be at least 1.");
             const int viewDebug = args["fused-a2a-view-debug"].as<int>();
             if(viewDebug < 0 || viewDebug > VIEW_DEBUG_ALL)
+                throw std::runtime_error(concatenate("[fused-a2a] --fused-a2a-view-debug must be in [0, ",
+                                                     VIEW_DEBUG_ALL,
+                                                     "]; got ",
+                                                     viewDebug,
+                                                     "."));
+            for(auto name : {"fused-a2a-view-delay-rank", "fused-a2a-view-delay-copies"})
+                if(args[name].as<int>() < 0)
+                    throw std::runtime_error(
+                        concatenate("[fused-a2a] --", name, " must not be negative."));
+            const int release = args["fused-a2a-view-release"].as<int>();
+            if(release < VIEW_RELEASE_HOST_STORE || release > VIEW_RELEASE_KERNEL)
                 throw std::runtime_error(concatenate(
-                    "[fused-a2a] --fused-a2a-view-debug must be in [0, 31]; got ", viewDebug, "."));
+                    "[fused-a2a] --fused-a2a-view-release must be 1, 2 or 3; got ", release, "."));
+            try
+            {
+                static_cast<void>(
+                    viewParseThrowAt(args["fused-a2a-view-throw-at"].as<std::string>()));
+            }
+            catch(std::invalid_argument const& e)
+            {
+                throw std::runtime_error(concatenate("[fused-a2a] ", e.what()));
+            }
             if(args["use-user-args"].as<bool>())
                 throw std::runtime_error("[fused-a2a] --use-user-args is not supported.");
             if(!args["library-update-file"].as<std::string>().empty())
@@ -1043,6 +1067,12 @@ int main(int argc, const char* argv[])
     const int      viewArmMode  = args["fused-a2a-view-arm"].as<int>();
     const uint32_t viewCoalesce = (uint32_t)args["fused-a2a-view-coalesce"].as<int>();
     const int      viewDebug    = args["fused-a2a-view-debug"].as<int>();
+    const uint32_t viewDelayRank   = (uint32_t)args["fused-a2a-view-delay-rank"].as<int>();
+    const uint32_t viewDelayCopies = (uint32_t)args["fused-a2a-view-delay-copies"].as<int>();
+    const int      viewRelease     = args["fused-a2a-view-release"].as<int>();
+    ViewThrowAt viewThrowAt
+        = fusedA2A ? viewParseThrowAt(args["fused-a2a-view-throw-at"].as<std::string>())
+                   : ViewThrowAt{};
     VerifyOptions  verifyOptions;
     verifyOptions.mode      = args["fused-a2a-verify"].as<int>();
     verifyOptions.barrier   = args["fused-a2a-verify-barrier"].as<int>() != 0;
@@ -1725,11 +1755,15 @@ int main(int argc, const char* argv[])
                         listeners.preSolution(solution.get());
                     }
                     bool deviceLost = false;
+                    // A stream still busy after the bounded sync or the drain.
+                    bool deviceBusy      = false;
                     bool runThisSolution = false;
                     VerifyLayout verifyLayoutOf;
                     VerifyState  verifyState;
                     // Set by the first producer; the inputs are restored after the solution.
                     bool verifyProduced = false;
+                    // launchAll calls of a View solution, across its run iterations.
+                    uint64_t viewLaunches = 0;
                     {
                         ScopedTimer timer("run_current_solution_check");
                         runThisSolution = solutionIterator->runCurrentSolution() && runKernels;
@@ -1810,7 +1844,9 @@ int main(int argc, const char* argv[])
                                                                                  k,
                                                                                  viewCoalesce,
                                                                                  *hardware,
-                                                                                 viewDebug);
+                                                                                 viewDebug,
+                                                                                 viewDelayRank,
+                                                                                 viewDelayCopies);
                                             kernels[k][d]
                                                 = useUserArgs
                                                       ? solution->solveTensileGPU(deviceProblem,
@@ -1875,6 +1911,28 @@ int main(int argc, const char* argv[])
                                                        size_t              invocation) {
                                     const size_t launchSlot = launchIdx++ % kernels.size();
                                     auto const&  launch     = kernels[launchSlot];
+                                    const uint64_t viewLaunch = viewLaunches;
+                                    if(viewTransport)
+                                    {
+                                        const uint64_t limit
+                                            = viewLaunchLimit(viewArgs[launchSlot][0]);
+                                        if(viewLaunch >= limit)
+                                            throw std::runtime_error(concatenate(
+                                                "[fused-a2a] a View solution's launches stop at ",
+                                                limit,
+                                                "."));
+                                        viewLaunches++;
+                                    }
+                                    auto throwAt = [&](ViewThrowSite site, size_t d) {
+                                        if(viewThrowNow(viewThrowAt, site, (uint32_t)d, viewLaunch))
+                                            throw std::runtime_error(
+                                                concatenate("[fused-a2a] --fused-a2a-view-throw-at ",
+                                                            (int)site,
+                                                            ":",
+                                                            d,
+                                                            ":",
+                                                            viewLaunch));
+                                    };
                                     const size_t dataSlot
                                         = verify ? launchSlot % device0->inputArr.size() : 0;
                                     uint32_t verifyLaunch = 0;
@@ -1906,70 +1964,93 @@ int main(int argc, const char* argv[])
                                         if(barrier)
                                             syncAll(active);
                                     }
+                                    auto viewArgsOf = [&](size_t d) {
+                                        ViewArmArgs view = viewArgs[launchSlot][d];
+                                        if(verify)
+                                            view.debug = verifyViewDebug(view.debug, verifyLaunch);
+                                        return view;
+                                    };
                                     for(size_t d = 0; d < active.size(); d++)
                                     {
-                                        auto&        ctx = *active[d];
-                                        ScopedDevice device(ctx.deviceId);
+                                        auto&       ctx = *active[d];
+                                        ViewArmArgs view{};
+                                        bool        armed = false;
                                         if(viewTransport)
+                                            view = viewArgsOf(d);
+                                        try
                                         {
-                                            // The events bracket the arm, the GEMM and the
-                                            // wait.
-                                            ViewArmArgs view = viewArgs[launchSlot][d];
-                                            if(verify)
-                                                view.debug
-                                                    = verifyViewDebug(view.debug, verifyLaunch);
-                                            if(startEvents)
-                                                HIP_CHECK_EXC(hipEventRecord(
-                                                    startEvents->card(d)[invocation].front(),
-                                                    ctx.stream));
-                                            try
+                                            ScopedDevice device(ctx.deviceId);
+                                            if(viewTransport)
                                             {
+                                                // The events bracket the arm, the GEMM and the
+                                                // wait.
+                                                throwAt(ViewThrowSite::Start, d);
+                                                if(startEvents)
+                                                    HIP_CHECK_EXC(hipEventRecord(
+                                                        startEvents->card(d)[invocation].front(),
+                                                        ctx.stream));
+                                                throwAt(ViewThrowSite::Arm, d);
                                                 viewArm(view, ctx.stream, viewArmMode);
+                                                armed = true;
+                                                throwAt(ViewThrowSite::Launch, d);
                                                 HIP_CHECK_EXC(ctx.adapter->launchKernels(
                                                     launch[d], ctx.stream, nullptr, nullptr));
+                                                throwAt(ViewThrowSite::Wait, d);
+                                                viewWait(view, ctx.stream);
+                                                throwAt(ViewThrowSite::Stop, d);
+                                                if(stopEvents)
+                                                    HIP_CHECK_EXC(hipEventRecord(
+                                                        stopEvents->card(d)[invocation].back(),
+                                                        ctx.stream));
+                                                throwAt(ViewThrowSite::Check, d);
                                             }
-                                            catch(...)
+                                            else if(inKernelNoops)
                                             {
-                                                viewAbort(view, ctx.stream);
-                                                throw;
+                                                // The events bracket both empty kernels and the
+                                                // GEMM.
+                                                if(startEvents)
+                                                    HIP_CHECK_EXC(hipEventRecord(
+                                                        startEvents->card(d)[invocation].front(),
+                                                        ctx.stream));
+                                                viewNoop(ctx.stream);
+                                                HIP_CHECK_EXC(ctx.adapter->launchKernels(
+                                                    launch[d], ctx.stream, nullptr, nullptr));
+                                                viewNoop(ctx.stream);
+                                                if(stopEvents)
+                                                    HIP_CHECK_EXC(hipEventRecord(
+                                                        stopEvents->card(d)[invocation].back(),
+                                                        ctx.stream));
                                             }
-                                            viewWait(view, ctx.stream);
-                                            if(stopEvents)
-                                                HIP_CHECK_EXC(hipEventRecord(
-                                                    stopEvents->card(d)[invocation].back(),
-                                                    ctx.stream));
+                                            else if(startEvents)
+                                                HIP_CHECK_EXC(ctx.adapter->launchKernels(
+                                                    launch[d],
+                                                    ctx.stream,
+                                                    startEvents->card(d)[invocation],
+                                                    stopEvents->card(d)[invocation]));
+                                            else
+                                                HIP_CHECK_EXC(ctx.adapter->launchKernels(
+                                                    launch[d], ctx.stream, nullptr, nullptr));
+                                            if(verify && verifyState.checks())
+                                                verifyCheck(
+                                                    ctx, verifyLayoutOf, dataSlot, verifyLaunch);
+                                            if(!joinSplit)
+                                                publish(d);
                                         }
-                                        else if(inKernelNoops)
+                                        catch(...)
                                         {
-                                            // The events bracket both empty kernels and the
-                                            // GEMM.
-                                            if(startEvents)
-                                                HIP_CHECK_EXC(hipEventRecord(
-                                                    startEvents->card(d)[invocation].front(),
-                                                    ctx.stream));
-                                            viewNoop(ctx.stream);
-                                            HIP_CHECK_EXC(ctx.adapter->launchKernels(
-                                                launch[d], ctx.stream, nullptr, nullptr));
-                                            viewNoop(ctx.stream);
-                                            if(stopEvents)
-                                                HIP_CHECK_EXC(hipEventRecord(
-                                                    stopEvents->card(d)[invocation].back(),
-                                                    ctx.stream));
+                                            if(viewTransport)
+                                            {
+                                                static_cast<void>(hipSetDevice(ctx.deviceId));
+                                                viewAbort(view, ctx.stream, armed);
+                                                for(size_t e = d + 1; e < active.size(); e++)
+                                                {
+                                                    static_cast<void>(
+                                                        hipSetDevice(active[e]->deviceId));
+                                                    viewAbort(viewArgsOf(e), active[e]->stream, false);
+                                                }
+                                            }
+                                            throw;
                                         }
-                                        else if(startEvents)
-                                            HIP_CHECK_EXC(ctx.adapter->launchKernels(
-                                                launch[d],
-                                                ctx.stream,
-                                                startEvents->card(d)[invocation],
-                                                stopEvents->card(d)[invocation]));
-                                        else
-                                            HIP_CHECK_EXC(ctx.adapter->launchKernels(
-                                                launch[d], ctx.stream, nullptr, nullptr));
-                                        if(verify && verifyState.checks())
-                                            verifyCheck(
-                                                ctx, verifyLayoutOf, dataSlot, verifyLaunch);
-                                        if(!joinSplit)
-                                            publish(d);
                                     }
                                     // Join the devices: the next launch starts on every device
                                     // only when this one has finished on all of them, as
@@ -2179,15 +2260,23 @@ int main(int argc, const char* argv[])
                             reporters->report(ResultKey::Validation, "INVALID");
                             reporters->log(LogLevel::Error,
                                            concatenate("Exception occurred: ", err.what(), "\n"));
+                            for(auto const& ctx : devices)
+                                if(!viewReleaseTailHost(*ctx, viewRelease))
+                                    reporters->log(LogLevel::Error,
+                                                   concatenate("View readiness words of device ",
+                                                               ctx->deviceId,
+                                                               " not released.\n"));
                             // A sticky error (e.g. a kernel memory fault) leaves the device unusable.
                             for(auto const& ctx : devices)
                             {
                                 hipError_t syncErr = hipSetDevice(ctx->deviceId);
                                 if(syncErr == hipSuccess)
-                                    syncErr = hipDeviceSynchronize();
+                                    syncErr = ctx->viewQueuesArmed ? viewSyncBounded(*ctx)
+                                                                   : hipDeviceSynchronize();
                                 if(syncErr != hipSuccess)
                                 {
                                     deviceLost = true;
+                                    deviceBusy = deviceBusy || syncErr == hipErrorNotReady;
                                     reporters->log(LogLevel::Error,
                                                    concatenate("Device unusable (",
                                                                hipGetErrorName(syncErr),
@@ -2200,6 +2289,7 @@ int main(int argc, const char* argv[])
                             if(!viewDrainQueues(*ctx))
                             {
                                 deviceLost = true;
+                                deviceBusy = true;
                                 reporters->log(
                                     LogLevel::Error,
                                     concatenate("SDMA queues of device ",
@@ -2227,6 +2317,16 @@ int main(int argc, const char* argv[])
                             }
                         }
                         static_cast<void>(hipSetDevice(device0->deviceId));
+                    }
+
+                    // Skips every destructor, DeviceContext::release included.
+                    if(deviceBusy)
+                    {
+                        flushTimingBuffer();
+                        std::cout.flush();
+                        std::cerr.flush();
+                        std::clog.flush();
+                        std::_Exit(std::clamp(listeners.error(), 1, 255));
                     }
 
                     {

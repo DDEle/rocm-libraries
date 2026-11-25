@@ -214,6 +214,10 @@ namespace TensileLite
             /// With --fused-a2a-verify: synchronizes every device's stream, then reads and
             /// resets each check block; marks the solution failed on a mismatch.
             void checkVerify(char const* stage);
+            // View solution without an error word set: syncs every device and fails the
+            // solution unless every view-block tail holds the header epoch in entry[] (without
+            // VIEW_DEBUG_NO_READY) and, A2AGemm, in pulled[] (without VIEW_DEBUG_NO_EXITWAIT).
+            void checkViewTails(char const* stage);
 
             /// Checks the iteration's inputs after launches, marking the solution
             /// failed and rethrowing if the check throws. A launch with no captured
@@ -251,6 +255,14 @@ namespace TensileLite
             // The solution in hand is FusedA2ATransport=View: postSolution reads every
             // device's view-block error word, whether or not the check is enabled.
             bool m_viewTransport = false;
+            // View solution: its fusedA2AViewTailOffset and VIEW_MODE_*.
+            size_t   m_viewTailOffset = 0;
+            uint32_t m_viewMode       = 0;
+            // Per View solution: checkViewTails calls, checks that read every tail, and
+            // mismatched ranks; postSolution prints them as VIEW_TAILS.
+            uint32_t m_viewTailIterations = 0;
+            uint32_t m_viewTailChecked    = 0;
+            uint32_t m_viewTailMismatches = 0;
             // --fused-a2a-view-debug; with VIEW_DEBUG_TIMELINE postSolution prints the
             // VIEWSTAT lines of a View solution.
             int         m_viewDebug = 0;

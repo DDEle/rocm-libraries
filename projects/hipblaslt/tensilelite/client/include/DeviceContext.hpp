@@ -77,6 +77,14 @@ namespace TensileLite
             void* viewStats = nullptr;
             // Set by resetCommBuffers for a View solution, cleared by viewDrainQueues.
             bool viewQueuesArmed = false;
+            // Byte offset of the view-block tail (fusedA2AViewTailOffset).
+            size_t viewTailOffset = 0;
+            // VIEW_DEBUG_DELAY_CHAIN: VIEW_DELAY_SCRATCH_BYTES.
+            void* viewDelayScratch = nullptr;
+            // viewReleaseTailHost: a hipStreamNonBlocking stream and a pinned
+            // viewFillReleaseSource buffer.
+            hipStream_t viewReleaseStream = nullptr;
+            void*       viewReleaseHost   = nullptr;
             // --fused-a2a-verify, sized by resetCommBuffers: the check block (VERIFY_BLOCK_BYTES,
             // fine-grained) and the goldens.
             void*               verifyBlock = nullptr;
@@ -109,9 +117,10 @@ namespace TensileLite
                                    size_t                     world);
 
         // First runs viewDrainQueues on every device and throws if one fails. Also sizes and
-        // zeroes every device's view block for a FusedA2ATransport=View solution, and with
-        // VIEW_DEBUG_TIMELINE in viewDebug its viewStats ring. With a verify layout, grows the
-        // goldens to it and resets the check block.
+        // zeroes every device's view block (with its tail) for a FusedA2ATransport=View
+        // solution, with VIEW_DEBUG_TIMELINE in viewDebug its viewStats ring and with
+        // VIEW_DEBUG_DELAY_CHAIN its viewDelayScratch, then synchronizes every device. With a
+        // verify layout, grows the goldens to it and resets the check block.
         void resetCommBuffers(ContractionProblem const&                          problem,
                               ContractionSolution const&                         solution,
                               std::vector<std::shared_ptr<DeviceContext>> const& devices,
@@ -119,6 +128,11 @@ namespace TensileLite
                               VerifyLayout const*                                verify = nullptr);
 
         bool fusedA2AViewTransport(ContractionSolution const& solution);
+
+        // Byte offset of the view-block tail of a View solution: fusedA2AViewBlockBytes(T),
+        // T the token tiles for GemmA2A and 0 for A2AGemm.
+        size_t fusedA2AViewTailOffset(ContractionProblem const&  problem,
+                                      ContractionSolution const& solution);
 
         // Copies devices[rank]'s inputs into scratch and adds the peers of the launch's slot
         // and channel. viewTransport: counter_ptr is devices[rank]'s view block instead of the

@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -63,7 +64,44 @@ namespace TensileLite
         // Queue 0's first COPY moves to just before the chain's last ATOMIC.
         constexpr int VIEW_DEBUG_EARLY_RELEASE = 16;
         constexpr int VIEW_DEBUG_COPY_FAULTS   = VIEW_DEBUG_DROP_COPY | VIEW_DEBUG_EARLY_RELEASE;
-        constexpr int VIEW_DEBUG_ALL           = 31;
+        // No head POLL and no entry publish.
+        constexpr int VIEW_DEBUG_NO_READY = 32;
+        // A2AGemm: no pulled ATOMIC, no pulled booking and no exit wait.
+        constexpr int VIEW_DEBUG_NO_EXITWAIT = 64;
+        // A2AGemm: queue 0 of delayRank copies delayCopies units within delayScratch right
+        // before its last COPY.
+        constexpr int VIEW_DEBUG_DELAY_CHAIN = 128;
+        constexpr int VIEW_DEBUG_ALL         = 255;
+
+        // Client-only tail of a view block, at viewTailOffset bytes: u32 entry[W] at
+        // VIEW_TAIL_ENTRY_OFFSET, u32 released at VIEW_TAIL_RELEASED_OFFSET, u32 pulled[W] at
+        // VIEW_TAIL_PULLED_OFFSET. entry[x] is rank x's arm count; released is non-zero after the
+        // host release; pulled[r] counts rank r's A2AGemm chains for the block's owner that passed
+        // their last COPY, plus their bookings.
+        constexpr uint32_t VIEW_TAIL_ENTRY_OFFSET    = 0;
+        constexpr uint32_t VIEW_TAIL_RELEASED_OFFSET = 32;
+        constexpr uint32_t VIEW_TAIL_PULLED_OFFSET   = 64;
+        constexpr uint32_t VIEW_TAIL_BYTES           = 128;
+        // The host release stores VIEW_TAIL_RELEASED into the tail's first VIEW_TAIL_RELEASE_BYTES.
+        constexpr uint32_t VIEW_TAIL_RELEASE_BYTES = VIEW_TAIL_PULLED_OFFSET;
+        constexpr uint32_t VIEW_TAIL_RELEASE_WORDS = VIEW_TAIL_RELEASE_BYTES / 4;
+        static_assert(VIEW_TAIL_ENTRY_OFFSET + 4 * FUSED_A2A_MAX_RANKS <= VIEW_TAIL_RELEASED_OFFSET);
+        static_assert(VIEW_TAIL_RELEASED_OFFSET + 4 <= VIEW_TAIL_RELEASE_BYTES);
+        static_assert(VIEW_TAIL_PULLED_OFFSET + 4 * FUSED_A2A_MAX_RANKS <= VIEW_TAIL_BYTES);
+        constexpr uint32_t VIEW_TAIL_RELEASED = 0xFFFFFFFFu;
+        // A solution's launch count stays below it (viewLaunchLimit).
+        constexpr uint64_t VIEW_EPOCH_LIMIT = 1ull << 31;
+
+        // --fused-a2a-view-release values: how the error path writes VIEW_TAIL_RELEASED.
+        // CPU stores through the view block pointer.
+        constexpr int VIEW_RELEASE_HOST_STORE = 1;
+        // hipMemcpyAsync from pinned memory on a non-blocking stream.
+        constexpr int VIEW_RELEASE_MEMCPY = 2;
+        // A fill kernel on that stream.
+        constexpr int VIEW_RELEASE_KERNEL = 3;
+
+        // VIEW_DEBUG_DELAY_CHAIN scratch per device, bytes.
+        constexpr size_t VIEW_DELAY_SCRATCH_BYTES = 16ull << 20;
 
         // VIEW_DEBUG_TIMELINE ring: record (epoch % VIEW_STATS_RECORDS) of VIEW_STATS_FIELDS
         // u64 slots, one slot per VIEW_STATS_SLOT_U64 u64s (32 B). Fields are wall-clock ticks.
@@ -73,15 +111,18 @@ namespace TensileLite
         constexpr uint32_t VIEW_STATS_ARM_OUT  = 1;
         constexpr uint32_t VIEW_STATS_GEMM_END = 2;
         constexpr uint32_t VIEW_STATS_WAIT_OUT = 3;
-        // Queue q: VIEW_STATS_TS_START + 2q and VIEW_STATS_TS_END + 2q.
+        // Queue q: VIEW_STATS_TS_START + 2q, VIEW_STATS_TS_END + 2q and VIEW_STATS_TS_READY + q.
         constexpr uint32_t VIEW_STATS_TS_START = 4;
         constexpr uint32_t VIEW_STATS_TS_END   = 5;
-        constexpr uint32_t VIEW_STATS_FIELDS   = 4 + 2 * FUSED_A2A_MAX_RANKS;
+        constexpr uint32_t VIEW_STATS_TS_READY = 4 + 2 * FUSED_A2A_MAX_RANKS;
+        constexpr uint32_t VIEW_STATS_FIELDS   = 4 + 3 * FUSED_A2A_MAX_RANKS;
         constexpr size_t   VIEW_STATS_BYTES
             = (size_t)VIEW_STATS_RECORDS * VIEW_STATS_FIELDS * VIEW_STATS_SLOT_U64 * sizeof(uint64_t);
         constexpr uint32_t VIEW_STATS_TICKS_PER_US = 100;
 
         constexpr uint64_t kViewWaitTimeoutMs = 5000;
+        // viewSyncBounded.
+        constexpr uint64_t kViewSyncBoundMs = 2 * kViewWaitTimeoutMs + 1000;
 
         struct ViewQueueArgs
         {
@@ -94,6 +135,9 @@ namespace TensileLite
             uint64_t  dstBase; // byte address of unit (b=0, h=0)'s COPY destination
             uint32_t*
                 flag; // u32 the unit ATOMICs add to: own flag[i] (A2AGemm), peer p's flag[rank] (GemmA2A)
+            uint32_t* ready; // own entry[peer], the head POLL's word; nullptr: no head
+            uint32_t* entryOut; // peer's entry[rank]; nullptr: no publish
+            uint32_t* pulled; // A2AGemm: source's pulled[rank]; nullptr: no pulled ATOMIC
         };
 
         // One device's arm for one launch. A2AGemm queue i serves source (rank+1+i) mod W;
@@ -124,6 +168,10 @@ namespace TensileLite
             uint64_t      waitTimeoutTicks; // wait kernel bound, wall-clock ticks
             uint32_t      debug; // --fused-a2a-view-debug
             uint64_t*     stats; // VIEW_DEBUG_TIMELINE ring, else nullptr
+            uint32_t*     tail; // this device's view-block tail
+            uint32_t      delayRank; // VIEW_DEBUG_DELAY_CHAIN
+            uint32_t      delayCopies; // VIEW_DEBUG_DELAY_CHAIN
+            uint64_t      delayScratch; // byte address of 2 * srcBlockStride bytes, or 0
             ViewQueueArgs queues[FUSED_A2A_MAX_RANKS];
         };
 
@@ -167,6 +215,29 @@ namespace TensileLite
             __hip_atomic_fetch_add(p, v, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
             __atomic_fetch_add(p, v, __ATOMIC_SEQ_CST);
+#endif
+        }
+
+        __host__ __device__ inline void viewMax32(uint32_t* p, uint32_t v)
+        {
+#if defined(__HIP_DEVICE_COMPILE__)
+            __hip_atomic_fetch_max(p, v, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
+#else
+            uint32_t old = __atomic_load_n(p, __ATOMIC_SEQ_CST);
+            while(old < v && !__atomic_compare_exchange_n(
+                      p, &old, v, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+                ;
+#endif
+        }
+
+        // Ordered after every earlier store of the calling thread.
+        __host__ __device__ inline void viewRelease32(uint32_t* p, uint32_t v)
+        {
+#if defined(__HIP_DEVICE_COMPILE__)
+            __hip_atomic_store(p, v, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
+#else
+            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+            *reinterpret_cast<volatile uint32_t*>(p) = v;
 #endif
         }
 
@@ -367,6 +438,61 @@ namespace TensileLite
             return true;
         }
 
+        // Whether queue q's chain has a COPY of a unit.
+        __host__ __device__ inline bool viewChainHasUnit(ViewArmArgs const& a, uint32_t q)
+        {
+            if(a.mode != VIEW_MODE_A2A_GEMM)
+                return a.tokenBlocks != 0;
+            const uint32_t pairs = viewA2AGemmBatches(a) * a.numQueues;
+            uint32_t       lo = 0, hi = 0;
+            for(uint32_t t = 0; t < pairs; t++)
+                if(viewA2AGemmGroup(a, q, t, lo, hi))
+                    return true;
+            return false;
+        }
+
+        // The word queue q's head POLL waits on; nullptr under VIEW_DEBUG_NO_READY.
+        __host__ __device__ inline uint32_t* viewReady(ViewArmArgs const& a, uint32_t q)
+        {
+            return (a.debug & VIEW_DEBUG_NO_READY) != 0 ? nullptr : a.queues[q].ready;
+        }
+
+        // The word queue q's pulled ATOMIC or booking adds 1 to; nullptr for GemmA2A and under
+        // VIEW_DEBUG_NO_EXITWAIT.
+        __host__ __device__ inline uint32_t* viewPulled(ViewArmArgs const& a, uint32_t q)
+        {
+            return a.mode != VIEW_MODE_A2A_GEMM || (a.debug & VIEW_DEBUG_NO_EXITWAIT) != 0
+                       ? nullptr
+                       : a.queues[q].pulled;
+        }
+
+        // The tail of a view block whose tail starts `tailOffset` bytes into it.
+        __host__ __device__ inline uint32_t* viewTailOf(void* viewBlock, size_t tailOffset)
+        {
+            return reinterpret_cast<uint32_t*>(static_cast<char*>(viewBlock) + tailOffset);
+        }
+
+        // tails[x] is rank x's tail. Sets a.tail to tails[a.rank] and, for every queue q whose
+        // peer p (A2AGemm (rank + 1 + q) mod world, GemmA2A q) is not a.rank: ready to
+        // entry[p] of tails[rank], entryOut to entry[rank] of tails[p] and, A2AGemm, pulled to
+        // pulled[rank] of tails[p].
+        __host__ inline void viewWireTails(ViewArmArgs& a, uint32_t* const* tails)
+        {
+            a.tail = tails[a.rank];
+            for(uint32_t q = 0; q < a.numQueues; q++)
+            {
+                const uint32_t p
+                    = a.mode == VIEW_MODE_A2A_GEMM ? (a.rank + 1 + q) % a.world : q;
+                if(p == a.rank)
+                    continue;
+                a.queues[q].ready    = tails[a.rank] + VIEW_TAIL_ENTRY_OFFSET / sizeof(uint32_t) + p;
+                a.queues[q].entryOut = tails[p] + VIEW_TAIL_ENTRY_OFFSET / sizeof(uint32_t) + a.rank;
+                if(a.mode == VIEW_MODE_A2A_GEMM)
+                    a.queues[q].pulled
+                        = tails[p] + VIEW_TAIL_PULLED_OFFSET / sizeof(uint32_t) + a.rank;
+            }
+        }
+
         // Queue q's chain for the launch whose view-block epoch is `epoch`, without the
         // VIEW_DEBUG_TIMELINE TIMESTAMPs.
         // A2AGemm: for pair t = 0..NB*G-1 with a non-empty group [lo, hi) (viewA2AGemmGroup), for
@@ -374,14 +500,20 @@ namespace TensileLite
         // `coalesce` units and one after its last unit, which brings the flag to Qb * (S*t + h + 1),
         // or for h = S-1 to Qb * S * t', t' the next non-empty pair (NB * G * Qb * S when none).
         // The first ATOMIC also carries the Qb * S of every pair before the first non-empty one.
+        // viewPulled's ATOMIC(+1) directly precedes the last ATOMIC; under VIEW_DEBUG_DELAY_CHAIN
+        // queue 0 of a.delayRank puts a.delayCopies COPYs from delayScratch to delayScratch +
+        // srcBlockStride, with the last unit's geometry, before the last unit's COPY.
         // GemmA2A: no POLL under VIEW_DEBUG_NO_POLL.
         // The bits of VIEW_DEBUG_COPY_FAULTS in both a.debug and Faults change queue 0's first COPY.
         template <uint32_t Faults = VIEW_DEBUG_COPY_FAULTS>
         __host__ __device__ inline void
             viewBuildUnits(ViewArmArgs const& a, uint32_t q, uint32_t epoch, ViewRingWriter& w)
         {
-            ViewQueueArgs const& qa    = a.queues[q];
-            const uint64_t       flag  = viewAddress(qa.flag);
+            ViewQueueArgs const& qa     = a.queues[q];
+            const uint64_t       flag   = viewAddress(qa.flag);
+            uint32_t* const      pulled = viewPulled(a, q);
+            const bool delay = (a.debug & VIEW_DEBUG_DELAY_CHAIN) != 0 && q == 0
+                               && a.rank == a.delayRank && a.delayScratch != 0;
             const uint32_t       fault = q == 0 ? a.debug & Faults & VIEW_DEBUG_COPY_FAULTS : 0u;
             bool                 first = true, held = false;
             uint64_t             heldSrc = 0, heldDst = 0;
@@ -430,14 +562,29 @@ namespace TensileLite
                         uint32_t pending = 0;
                         for(uint32_t b = lo; b < hi; b++)
                         {
+                            const bool last
+                                = b + 1 == hi && h + 1 == a.subRounds && next == pairs;
+                            for(uint32_t k = 0; delay && last && k < a.delayCopies; k++)
+                                viewPutCopy(w,
+                                            a.delayScratch,
+                                            a.delayScratch + a.srcBlockStride,
+                                            a.srcPitch,
+                                            a.dstPitch,
+                                            a.slice,
+                                            a.rectX,
+                                            viewRectY(a, b));
                             copy(qa.srcBase + b * a.srcBlockStride + h * a.subRoundStride,
                                  qa.dstBase + b * a.dstBlockStride + h * a.subRoundStride,
                                  viewRectY(a, b));
                             ++pending;
                             if(b + 1 == hi)
                             {
-                                if(h + 1 == a.subRounds && next == pairs)
+                                if(last)
+                                {
                                     putHeld();
+                                    if(pulled != nullptr)
+                                        viewPutAtomic(w, viewAddress(pulled), 1u);
+                                }
                                 viewPutAtomic(w, flag, target - added);
                                 added = target;
                                 lead  = 0;
@@ -475,6 +622,8 @@ namespace TensileLite
         }
 
         // viewBuildUnits<Faults> between a leading and a trailing TIMESTAMP when a.stats is set.
+        // A chain with a unit and a viewReady word first POLLs that word for >= epoch + 1,
+        // followed by a VIEW_STATS_TS_READY TIMESTAMP when a.stats is set.
         template <uint32_t Faults = VIEW_DEBUG_COPY_FAULTS>
         __host__ __device__ inline void
             viewBuildChain(ViewArmArgs const& a, uint32_t q, uint32_t epoch, ViewRingWriter& w)
@@ -482,6 +631,14 @@ namespace TensileLite
             if(a.stats != nullptr)
                 viewPutTimestamp(
                     w, viewAddress(a.stats + viewStatsIndex(epoch, VIEW_STATS_TS_START + 2 * q)));
+            uint32_t* const ready = viewReady(a, q);
+            if(ready != nullptr && viewChainHasUnit(a, q))
+            {
+                viewPutPoll(w, viewAddress(ready), epoch + 1u);
+                if(a.stats != nullptr)
+                    viewPutTimestamp(
+                        w, viewAddress(a.stats + viewStatsIndex(epoch, VIEW_STATS_TS_READY + q)));
+            }
             viewBuildUnits<Faults>(a, q, epoch, w);
             // Follows the last ATOMIC of an A2AGemm chain; it touches no counter.
             if(a.stats != nullptr)
@@ -519,10 +676,10 @@ namespace TensileLite
             return true;
         }
 
-        // GemmA2A arms no queue once the view block's error word is non-zero.
-        __host__ __device__ inline bool viewArmHalted(ViewArmArgs const& a, uint32_t error)
+        // No queue is armed once the view block's error word is non-zero.
+        __host__ __device__ inline bool viewArmHalted(uint32_t error)
         {
-            return a.mode == VIEW_MODE_GEMM_A2A && error != 0;
+            return error != 0;
         }
 
         __host__ __device__ inline bool viewQueueDrained(ViewArmArgs const& a, uint32_t q)
@@ -544,21 +701,35 @@ namespace TensileLite
         }
 
         // Adds what queue q's chain would have added, through add(u32*, addend): A2AGemm own
-        // flag[q] += NB*G*Qb*S; GemmA2A peer flag[rank] += T and own outbound += 1.
+        // flag[q] += NB*G*Qb*S and viewPulled += 1; GemmA2A peer flag[rank] += T and own
+        // outbound += 1.
         template <typename Add>
         __host__ __device__ inline void viewBookSkipped(ViewArmArgs const& a, uint32_t q, Add&& add)
         {
             if(a.mode == VIEW_MODE_A2A_GEMM)
             {
                 add(a.queues[q].flag, viewA2AGemmChainUnits(a));
+                if(uint32_t* const pulled = viewPulled(a, q))
+                    add(pulled, 1u);
                 return;
             }
             add(a.queues[q].flag, a.tokenBlocks);
             add(a.view + FUSED_A2A_VIEW_OUTBOUND_OFFSET / sizeof(uint32_t), 1u);
         }
 
+        // Armed queue q: adds 1 to viewPulled through add(u32*, addend) when its chain has no
+        // unit.
+        template <typename Add>
+        __host__ __device__ inline void viewBookUnitFree(ViewArmArgs const& a, uint32_t q, Add&& add)
+        {
+            uint32_t* const pulled = viewPulled(a, q);
+            if(pulled != nullptr && !viewChainHasUnit(a, q))
+                add(pulled, 1u);
+        }
+
         // viewResetFlag, then arms queue q, or books it through viewBookSkipped when the arm
-        // is halted, the queue is stuck or the chain does not fit. Returns the error bits to set.
+        // is halted, the queue is stuck or the chain does not fit. An armed queue gets
+        // viewBookUnitFree. Returns the error bits to set.
         template <uint32_t Faults = VIEW_DEBUG_COPY_FAULTS, typename Add, typename Store>
         __host__ __device__ inline uint32_t viewArmOrBook(ViewArmArgs const& a,
                                                           uint32_t           q,
@@ -567,12 +738,268 @@ namespace TensileLite
                                                           Add&&              add,
                                                           Store&&            store)
         {
-            const bool     halted = viewArmHalted(a, error);
+            const bool     halted = viewArmHalted(error);
             const uint32_t stuck  = viewResetFlag(a, q, store);
             if(!halted && stuck == 0 && viewArmQueue<Faults>(a, q, epoch))
+            {
+                viewBookUnitFree(a, q, add);
                 return 0u;
+            }
             viewBookSkipped(a, q, add);
             return halted || stuck != 0 ? stuck : VIEW_ERROR_RING_FULL;
+        }
+
+        // Stores epoch + 1 into queue q's entryOut through release(u32*, value), unless
+        // VIEW_DEBUG_NO_READY.
+        template <typename Release>
+        __host__ __device__ inline void
+            viewPublishEntry(ViewArmArgs const& a, uint32_t q, uint32_t epoch, Release&& release)
+        {
+            if((a.debug & VIEW_DEBUG_NO_READY) == 0 && a.queues[q].entryOut != nullptr)
+                release(a.queues[q].entryOut, epoch + 1u);
+        }
+
+        // Queue q's part of the arm kernel for the launch at `epoch`, with `error` read before
+        // it: viewPublishEntry, then viewArmOrBook; bookOnly books as a halted arm does.
+        template <uint32_t Faults = VIEW_DEBUG_COPY_FAULTS,
+                  typename Add,
+                  typename Store,
+                  typename Release>
+        __host__ __device__ inline uint32_t viewArmThread(ViewArmArgs const& a,
+                                                          uint32_t           q,
+                                                          uint32_t           epoch,
+                                                          uint32_t           error,
+                                                          bool               bookOnly,
+                                                          Add&&              add,
+                                                          Store&&            store,
+                                                          Release&&          release)
+        {
+            viewPublishEntry(a, q, epoch, release);
+            return viewArmOrBook<Faults>(
+                a, q, epoch, bookOnly ? error | VIEW_ERROR_ABORTED : error, add, store);
+        }
+
+        // The host arm's queues for the launch at `epoch`, with `error` read before it:
+        // viewPublishEntry of every queue through store; then per queue viewResetFlag and
+        // viewBookUnitFree when it fits, else viewBookSkipped; then viewArmQueue of every
+        // queue that fits. Returns the error bits to set.
+        template <uint32_t Faults = VIEW_DEBUG_COPY_FAULTS, typename Add, typename Store>
+        __host__ inline uint32_t viewArmHostQueues(
+            ViewArmArgs const& a, uint32_t epoch, uint32_t error, Add&& add, Store&& store)
+        {
+            const bool halted = viewArmHalted(error);
+            bool       fits[FUSED_A2A_MAX_RANKS];
+            uint32_t   bits = 0;
+            for(uint32_t q = 0; q < a.numQueues; q++)
+                viewPublishEntry(a, q, epoch, store);
+            for(uint32_t q = 0; q < a.numQueues; q++)
+            {
+                const uint32_t stuck = viewResetFlag(a, q, store);
+                fits[q] = !halted && stuck == 0 && viewQueueFits<Faults>(a, q, epoch);
+                if(fits[q])
+                {
+                    viewBookUnitFree(a, q, add);
+                    continue;
+                }
+                bits |= halted || stuck != 0 ? stuck : VIEW_ERROR_RING_FULL;
+                viewBookSkipped(a, q, add);
+            }
+            for(uint32_t q = 0; q < a.numQueues; q++)
+                if(fits[q])
+                    viewArmQueue<Faults>(a, q, epoch);
+            return bits;
+        }
+
+        // A solution's launch count stays below it: VIEW_EPOCH_LIMIT, and for GemmA2A
+        // 0xFFFFFFFF / tilesPerRank.
+        __host__ __device__ inline uint64_t viewLaunchLimit(ViewArmArgs const& a)
+        {
+            if(a.mode != VIEW_MODE_GEMM_A2A || a.tilesPerRank == 0)
+                return VIEW_EPOCH_LIMIT;
+            const uint64_t sig = 0xFFFFFFFFull / a.tilesPerRank;
+            return sig < VIEW_EPOCH_LIMIT ? sig : VIEW_EPOCH_LIMIT;
+        }
+
+        // Whether the launch's A2AGemm exit wait runs.
+        __host__ __device__ inline bool viewExitWaits(ViewArmArgs const& a)
+        {
+            return a.mode == VIEW_MODE_A2A_GEMM && (a.debug & VIEW_DEBUG_NO_EXITWAIT) == 0
+                   && a.world > 1;
+        }
+
+        // A2AGemm with viewExitWaits, header epoch `epoch`: whether the tail's released word
+        // is non-zero or (int32)(pulled[r] - epoch) >= 0 for every r != rank. Otherwise true.
+        __host__ __device__ inline bool viewExitDone(ViewArmArgs const& a, uint32_t epoch)
+        {
+            if(!viewExitWaits(a) || viewLoad32(a.tail + VIEW_TAIL_RELEASED_OFFSET / 4) != 0)
+                return true;
+            uint32_t* const pulled = a.tail + VIEW_TAIL_PULLED_OFFSET / sizeof(uint32_t);
+            for(uint32_t r = 0; r < a.world; r++)
+                if(r != a.rank && (int32_t)(viewLoad32(pulled + r) - epoch) < 0)
+                    return false;
+            return true;
+        }
+
+        // GemmA2A: whether every own chain and every peer's chain into this rank finished the
+        // launch whose base and outboundBase the header holds.
+        __host__ __device__ inline bool viewGemmA2ADone(ViewArmArgs const& a)
+        {
+            uint32_t* const view = a.view;
+            uint32_t* const flag = view + FUSED_A2A_VIEW_FLAG_OFFSET / sizeof(uint32_t);
+            uint32_t* const base = view + FUSED_A2A_VIEW_BASE_OFFSET / sizeof(uint32_t);
+            bool            done
+                = viewLoad32(view + FUSED_A2A_VIEW_OUTBOUND_OFFSET / sizeof(uint32_t))
+                      - viewLoad32(view + FUSED_A2A_VIEW_OUTBOUND_BASE_OFFSET / sizeof(uint32_t))
+                  >= a.world;
+            for(uint32_t s = 0; done && s < a.world; s++)
+                done = viewLoad32(flag + s) - viewLoad32(base + s) >= a.tokenBlocks;
+            return done;
+        }
+
+        // The wait kernel's exit condition at header epoch `epoch`.
+        __host__ __device__ inline bool viewWaitDone(ViewArmArgs const& a, uint32_t epoch)
+        {
+            return a.mode == VIEW_MODE_GEMM_A2A ? viewGemmA2ADone(a) : viewExitDone(a, epoch);
+        }
+
+        // Raises own entry[x], x != rank, to `epoch` through max(u32*, value).
+        template <typename Max>
+        __host__ __device__ inline void
+            viewReleaseEntry(ViewArmArgs const& a, uint32_t epoch, Max&& max)
+        {
+            for(uint32_t x = 0; x < a.world; x++)
+                if(x != a.rank)
+                    max(a.tail + VIEW_TAIL_ENTRY_OFFSET / sizeof(uint32_t) + x, epoch);
+        }
+
+        // Whether a view-block tail of rank `rank` at header epoch `epoch` holds entry[x] ==
+        // epoch for every x != rank (checkEntry) and, A2AGemm, pulled[r] == epoch for every
+        // r != rank (checkPulled).
+        inline bool viewTailCountsMatch(uint32_t        mode,
+                                        uint32_t        rank,
+                                        uint32_t        world,
+                                        uint32_t        epoch,
+                                        uint32_t const* tail,
+                                        bool            checkEntry,
+                                        bool            checkPulled)
+        {
+            for(uint32_t x = 0; x < world; x++)
+            {
+                if(x == rank)
+                    continue;
+                if(checkEntry && tail[VIEW_TAIL_ENTRY_OFFSET / sizeof(uint32_t) + x] != epoch)
+                    return false;
+                if(checkPulled && mode == VIEW_MODE_A2A_GEMM
+                   && tail[VIEW_TAIL_PULLED_OFFSET / sizeof(uint32_t) + x] != epoch)
+                    return false;
+            }
+            return true;
+        }
+
+        // The words of the view block a header copy holds.
+        constexpr uint32_t kViewHeaderWords = FUSED_A2A_VIEW_SIG_OFFSET / sizeof(uint32_t);
+
+        // The tail words the validator compares with the header epoch.
+        struct ViewTailChecks
+        {
+            bool entry  = false;
+            bool pulled = false;
+        };
+
+        // entry unless VIEW_DEBUG_NO_READY, pulled unless VIEW_DEBUG_NO_EXITWAIT.
+        inline ViewTailChecks viewTailChecks(uint32_t debug)
+        {
+            return {(debug & VIEW_DEBUG_NO_READY) == 0, (debug & VIEW_DEBUG_NO_EXITWAIT) == 0};
+        }
+
+        // The validator's readiness check of `world` ranks: rank d's header copy at
+        // headers + d * kViewHeaderWords, its tail at tails + d * VIEW_TAIL_BYTES / 4. Returns
+        // false, checking nothing, when an error word is non-zero; otherwise appends to `bad`
+        // every rank that fails viewTailCountsMatch at its header epoch, and returns true.
+        inline bool viewCheckTails(uint32_t               mode,
+                                   uint32_t               world,
+                                   uint32_t const*        headers,
+                                   uint32_t const*        tails,
+                                   ViewTailChecks         checks,
+                                   std::vector<uint32_t>& bad)
+        {
+            for(uint32_t d = 0; d < world; d++)
+                if(headers[d * kViewHeaderWords + FUSED_A2A_VIEW_ERROR_OFFSET / sizeof(uint32_t)]
+                   != 0)
+                    return false;
+            for(uint32_t d = 0; d < world; d++)
+                if(!viewTailCountsMatch(
+                       mode,
+                       d,
+                       world,
+                       headers[d * kViewHeaderWords + FUSED_A2A_VIEW_EPOCH_OFFSET / sizeof(uint32_t)],
+                       tails + d * (VIEW_TAIL_BYTES / sizeof(uint32_t)),
+                       checks.entry,
+                       checks.pulled))
+                    bad.push_back(d);
+            return true;
+        }
+
+        // --fused-a2a-view-throw-at sites, in launchAll's order.
+        enum class ViewThrowSite
+        {
+            Start,
+            Arm,
+            Launch,
+            Wait,
+            Stop,
+            Check
+        };
+
+        struct ViewThrowAt
+        {
+            bool          set    = false;
+            ViewThrowSite site   = ViewThrowSite::Start;
+            uint32_t      device = 0;
+            uint64_t      launch = 0;
+        };
+
+        // "<site>:<device>:<launch>", site one of start, arm, launch, wait, stop, check; empty
+        // gives set = false. Throws std::invalid_argument on anything else.
+        inline ViewThrowAt viewParseThrowAt(std::string const& text)
+        {
+            ViewThrowAt t;
+            if(text.empty())
+                return t;
+            static const char* const names[]
+                = {"start", "arm", "launch", "wait", "stop", "check"};
+            const size_t c1 = text.find(':');
+            const size_t c2 = c1 == std::string::npos ? c1 : text.find(':', c1 + 1);
+            auto number     = [&](std::string const& s) {
+                if(s.empty() || s.find_first_not_of("0123456789") != std::string::npos)
+                    throw std::invalid_argument("--fused-a2a-view-throw-at: bad number '" + s
+                                                + "' in '" + text + "'");
+                return std::stoull(s);
+            };
+            if(c2 == std::string::npos)
+                throw std::invalid_argument(
+                    "--fused-a2a-view-throw-at must be <site>:<device>:<launch>; got '" + text
+                    + "'");
+            const std::string site = text.substr(0, c1);
+            for(int i = 0; i < 6; i++)
+                if(site == names[i])
+                {
+                    t.set    = true;
+                    t.site   = (ViewThrowSite)i;
+                    t.device = (uint32_t)number(text.substr(c1 + 1, c2 - c1 - 1));
+                    t.launch = number(text.substr(c2 + 1));
+                    return t;
+                }
+            throw std::invalid_argument("--fused-a2a-view-throw-at: unknown site '" + site + "'");
+        }
+
+        // Whether t is set and matches (site, device, launch); a match clears t.set.
+        inline bool viewThrowNow(ViewThrowAt& t, ViewThrowSite site, uint32_t device, uint64_t launch)
+        {
+            if(!t.set || t.site != site || t.device != device || t.launch != launch)
+                return false;
+            t.set = false;
+            return true;
         }
 
         // Stores epoch * tilesPerRank into sig[0, W*T) of a GemmA2A view block whose header
@@ -641,6 +1068,58 @@ namespace TensileLite
             return true;
         }
 
+        // The host release of a view-block tail by `path`: VIEW_RELEASE_HOST_STORE stores
+        // VIEW_TAIL_RELEASED into each of the first VIEW_TAIL_RELEASE_WORDS words through
+        // store(u32*, value); VIEW_RELEASE_MEMCPY returns copy(tail, VIEW_TAIL_RELEASE_BYTES) of
+        // a viewFillReleaseSource buffer; otherwise returns fill(tail, VIEW_TAIL_RELEASE_WORDS,
+        // VIEW_TAIL_RELEASED).
+        template <typename Store, typename Copy, typename Fill>
+        inline bool
+            viewReleaseTail(uint32_t* tail, int path, Store&& store, Copy&& copy, Fill&& fill)
+        {
+            if(path == VIEW_RELEASE_HOST_STORE)
+            {
+                for(uint32_t i = 0; i < VIEW_TAIL_RELEASE_WORDS; i++)
+                    store(tail + i, VIEW_TAIL_RELEASED);
+                return true;
+            }
+            if(path == VIEW_RELEASE_MEMCPY)
+                return copy(tail, (size_t)VIEW_TAIL_RELEASE_BYTES);
+            return fill(tail, (size_t)VIEW_TAIL_RELEASE_WORDS, VIEW_TAIL_RELEASED);
+        }
+
+        // VIEW_TAIL_RELEASE_WORDS words of VIEW_TAIL_RELEASED at `source`.
+        inline void viewFillReleaseSource(void* source)
+        {
+            for(uint32_t i = 0; i < VIEW_TAIL_RELEASE_WORDS; i++)
+                static_cast<uint32_t*>(source)[i] = VIEW_TAIL_RELEASED;
+        }
+
+        // Calls query() until it returns other than hipErrorNotReady and returns that, with
+        // sleep() between calls; hipErrorNotReady once now() is past `deadline`.
+        template <typename Query, typename Now, typename Sleep, typename TimePoint>
+        inline hipError_t viewPollIdle(Query&& query, Now&& now, Sleep&& sleep, TimePoint deadline)
+        {
+            while(true)
+            {
+                const hipError_t e = query();
+                if(e != hipErrorNotReady)
+                    return e;
+                if(now() > deadline)
+                    return hipErrorNotReady;
+                sleep();
+            }
+        }
+
+        // viewPollIdle until now() + bound, then sync() when it returned hipSuccess.
+        template <typename Query, typename Sync, typename Now, typename Sleep, typename Duration>
+        inline hipError_t
+            viewSyncWithin(Query&& query, Sync&& sync, Now&& now, Sleep&& sleep, Duration bound)
+        {
+            const hipError_t e = viewPollIdle(query, now, sleep, now() + bound);
+            return e != hipSuccess ? e : sync();
+        }
+
         // Fills the arm of devices[rank] for launch `launch` (its rotating slot), with
         // today's in-kernel COPY geometry: a2aEnqueue (A2AGemm) and
         // _fusedA2AComputeCopyFields (GemmA2A).
@@ -651,23 +1130,34 @@ namespace TensileLite
                                     size_t                                             launch,
                                     uint32_t                                           coalesce,
                                     Hardware const&                                    hardware,
-                                    int                                                debug = 0);
+                                    int                                                debug       = 0,
+                                    uint32_t                                           delayRank   = 1,
+                                    uint32_t                                           delayCopies = 32);
 
         // On `stream` of the current device. arm is VIEW_ARM_DEVICE or VIEW_ARM_HOST; the host
         // arm synchronizes `stream` first.
         void viewArm(ViewArmArgs const& args, hipStream_t stream, int arm);
 
-        // GemmA2A: the wait kernel. A2AGemm: with args.stats, a kernel that stamps the
-        // launch's VIEW_STATS_GEMM_END and VIEW_STATS_WAIT_OUT; otherwise a no-op.
+        // The wait kernel: GemmA2A, or A2AGemm with viewExitWaits or args.stats. With
+        // args.stats it stamps the launch's VIEW_STATS_GEMM_END and VIEW_STATS_WAIT_OUT.
         void viewWait(ViewArmArgs const& args, hipStream_t stream);
 
-        // For a launch whose GEMM was not enqueued after viewArm: on `stream`, sets
-        // VIEW_ERROR_ABORTED, releases sig[] with viewReleaseSig and waits, bounded, for the
-        // own queues to drain. GemmA2A only; errors are ignored.
-        void viewAbort(ViewArmArgs const& args, hipStream_t stream) noexcept;
+        // For a launch on `stream` whose per-device body threw. armed: sets VIEW_ERROR_ABORTED;
+        // GemmA2A also releases sig[] with viewReleaseSig and own entry[] with viewReleaseEntry
+        // and waits, bounded, for the own queues to drain. Not armed: the arm kernel in
+        // book-only mode (viewArmThread). Errors are ignored.
+        void viewAbort(ViewArmArgs const& args, hipStream_t stream, bool armed) noexcept;
 
-        // When ctx.viewQueuesArmed: raises every sig[] word of ctx's view block to 0xFFFFFFFF
-        // if a queue is not drained, then waits up to kViewWaitTimeoutMs for every
+        // When ctx.viewQueuesArmed: viewReleaseTail of ctx's view-block tail by `path`
+        // (VIEW_RELEASE_*), not ordered behind ctx.stream. Returns false on any error.
+        bool viewReleaseTailHost(DeviceContext& ctx, int path) noexcept;
+
+        // Waits up to kViewSyncBoundMs for ctx.stream and ctx.viewReleaseStream to finish, then
+        // synchronizes the device. hipErrorNotReady when either is still busy.
+        hipError_t viewSyncBounded(DeviceContext& ctx) noexcept;
+
+        // When ctx.viewQueuesArmed: raises every word of ctx's view block from sig[] on to
+        // 0xFFFFFFFF if a queue is not drained, then waits up to kViewWaitTimeoutMs for every
         // ctx.sdmaQueues entry to have *rptr == *wptr and clears ctx.viewQueuesArmed. Returns
         // false when a queue is still not drained or on any error.
         bool viewDrainQueues(DeviceContext& ctx) noexcept;

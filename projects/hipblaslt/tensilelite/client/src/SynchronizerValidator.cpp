@@ -74,7 +74,14 @@ namespace TensileLite
             m_failedInSolution = false;
             m_verifyTotal      = VerifyCounts{};
             m_verifyIterations = 0;
+            m_viewTailIterations = m_viewTailChecked = m_viewTailMismatches = 0;
             m_viewTransport    = solution != nullptr && fusedA2AViewTransport(*solution);
+            m_viewTailOffset   = m_viewTransport && m_problem != nullptr
+                                     ? fusedA2AViewTailOffset(*m_problem, *solution)
+                                     : 0;
+            m_viewMode = m_viewTransport && solution->problemType.fusedA2A == FusedA2A::GemmA2A
+                             ? VIEW_MODE_GEMM_A2A
+                             : VIEW_MODE_A2A_GEMM;
             m_solutionName     = solution != nullptr ? solution->name() : std::string();
             // Covers the possible uses of the pointer: Flags in singleCallArgs
             // for StreamK, the dstD/Synchronizer block for MBSK, AmaxSync for
@@ -150,6 +157,11 @@ namespace TensileLite
                           << " recv_mismatches=" << m_verifyTotal.recvMismatches
                           << " first_bad_launch=" << (int64_t)(int32_t)m_verifyTotal.firstBad
                           << " name=" << m_solutionName << std::endl;
+            if(m_viewTransport)
+                std::cout << "VIEW_TAILS iterations=" << m_viewTailIterations
+                          << " checked=" << m_viewTailChecked
+                          << " mismatched=" << m_viewTailMismatches << " name=" << m_solutionName
+                          << std::endl;
             // The fused-A2A flag blocks are not tied to a launch: checked here regardless.
             guarded([&] {
                 for(auto const& device : *m_devices)
@@ -228,7 +240,64 @@ namespace TensileLite
         void SynchronizerValidator::checkRunIteration()
         {
             checkVerify("run iteration");
+            checkViewTails("run iteration");
             checkLaunches("run iteration", runIterationTimers);
+        }
+
+        void SynchronizerValidator::checkViewTails(char const* stage)
+        {
+            if(!m_viewTransport)
+                return;
+            m_viewTailIterations++;
+            const ViewTailChecks checks = viewTailChecks((uint32_t)m_viewDebug);
+            if(m_devices == nullptr || m_viewTailOffset == 0 || (!checks.entry && !checks.pulled))
+                return;
+            syncAll(*m_devices);
+            const size_t          world = m_devices->size();
+            std::vector<uint32_t> headers, tails;
+            for(auto const& device : *m_devices)
+            {
+                if(device->viewBlock == nullptr)
+                    return;
+                auto const* header = reinterpret_cast<uint32_t const*>(readBuffer(
+                    device->deviceId, device->viewBlock, kViewHeaderWords * sizeof(uint32_t)));
+                headers.insert(headers.end(), header, header + kViewHeaderWords);
+                auto const* tail = reinterpret_cast<uint32_t const*>(
+                    readBuffer(device->deviceId,
+                               viewTailOf(device->viewBlock, m_viewTailOffset),
+                               VIEW_TAIL_BYTES));
+                tails.insert(tails.end(), tail, tail + VIEW_TAIL_BYTES / sizeof(uint32_t));
+            }
+            std::vector<uint32_t> bad;
+            if(!viewCheckTails(
+                   m_viewMode, (uint32_t)world, headers.data(), tails.data(), checks, bad))
+                return;
+            m_viewTailChecked++;
+            m_viewTailMismatches += (uint32_t)bad.size();
+            for(uint32_t d : bad)
+            {
+                uint32_t const* tail = tails.data() + d * (VIEW_TAIL_BYTES / sizeof(uint32_t));
+                std::string     text;
+                for(uint32_t i = 0; i < 2 * world; i++)
+                    text += (i == 0 ? "" : i == world ? " | " : ",")
+                            + std::to_string(
+                                tail[(i < world ? VIEW_TAIL_ENTRY_OFFSET : VIEW_TAIL_PULLED_OFFSET)
+                                         / sizeof(uint32_t)
+                                     + i % world]);
+                m_reporter->log(
+                    LogLevel::Error,
+                    concatenate("fused-A2A view readiness counters (",
+                                stage,
+                                ", device ",
+                                (*m_devices)[d]->deviceId,
+                                ", epoch ",
+                                headers[d * kViewHeaderWords
+                                        + FUSED_A2A_VIEW_EPOCH_OFFSET / sizeof(uint32_t)],
+                                "): entry | pulled ",
+                                text,
+                                "\n"));
+                m_failedInSolution = true;
+            }
         }
 
         void SynchronizerValidator::checkVerify(char const* stage)

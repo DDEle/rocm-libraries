@@ -57,6 +57,7 @@ from ..Components.DecouplePGR import pgrLevelsForTensors, ldsBlocksForPgrLevel, 
                                        pgrAutoPairRequested, \
                                        resolvePrefetchGlobalReadSpecialValues
 from ..Components.TDMFuse import TDM_FUSE_GROUPING, TDM_SCALE_TENSORS, tdmBothTensors, \
+                                       tdmSeparateABDescriptors, tdmWaveSeparated, \
                                        tdmGroupingName, tdmKDimTrackable, tdmLiveScales, \
                                        tdmPairOnEveryWave, \
                                        tdmPapRejectReason, tdmWavePartition, tdmWaveSeparated
@@ -2789,6 +2790,10 @@ class Solution(collections.abc.Mapping):
           reject(state, printRejectionReason,
                  "UseSubtileImpl with FusedA2A=A2AGemm is not implemented on gfx1250")
           return
+        if state["HalfPLR"] or state["TDMSplit"]:
+          reject(state, printRejectionReason,
+                 "HalfPLR and TDMSplit with FusedA2A=A2AGemm are not implemented on gfx1250")
+          return
       if not state["ProblemType"]["DataTypeB"].isBFloat16():
         reject(state, printRejectionReason, "FusedA2A=A2AGemm requires a bf16 B")
         return
@@ -4748,6 +4753,14 @@ class Solution(collections.abc.Mapping):
             reject(state, printRejectionReason,
                    "TDMIterateMode %s requires TLU%s to be False" % (tc, tc))
             return
+
+        if state["ProblemType"]["FusedA2A"] == "A2AGemm" and \
+           (not tdmWaveSeparated(state) or tdmSeparateABDescriptors(state)
+            or state.get("_TDMIterateModeA", False) or state.get("_TDMIterateModeB", False)):
+          reject(state, printRejectionReason,
+                 "FusedA2A=A2AGemm with TDM loads requires A and B on one wave-separated "
+                 "descriptor set without iterate mode")
+          return
 
         # Stage 2: for non-iterate tensors, halve auto-derived VW until LBSPP
         # fits the pad_interval 1024 B limit.

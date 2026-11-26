@@ -14,6 +14,8 @@
 
 #include <hip/hip_runtime.h>
 
+#include "FusedA2ATopology.hpp"
+
 #include "hsa/hsa.h"
 #include "hsa/hsa_ext_amd.h"
 #include "hsakmt/hsakmt.h"
@@ -124,10 +126,8 @@ namespace TensileLite
                     {
                         char busId[64] = {};
                         CHK_HIP(hipDeviceGetPCIBusId(busId, sizeof(busId), d));
-                        unsigned pciDomain = 0, pciBus = 0, pciDevice = 0, pciFunction = 0;
-                        if(std::sscanf(
-                               busId, "%x:%x:%x.%x", &pciDomain, &pciBus, &pciDevice, &pciFunction)
-                           != 4)
+                        PciBusId pci;
+                        if(!parsePciBusId(busId, pci))
                             throw std::runtime_error("ensureHsaKfd: cannot parse PCI bus id '"
                                                      + std::string(busId) + "' of HIP device "
                                                      + std::to_string(d));
@@ -141,8 +141,8 @@ namespace TensileLite
                             CHK_HSA(hsa_agent_get_info(
                                 agent, (hsa_agent_info_t)HSA_AMD_AGENT_INFO_DOMAIN, &domain));
                             // BDFID packs bus into [15:8], device into [7:3], function into [2:0].
-                            if(domain == pciDomain
-                               && bdfid == ((pciBus << 8) | (pciDevice << 3) | pciFunction))
+                            if(domain == pci.domain
+                               && bdfid == ((pci.bus << 8) | (pci.device << 3) | pci.function))
                             {
                                 match = &agent;
                                 break;
@@ -239,15 +239,7 @@ namespace TensileLite
         {
             if(mask & ~1u)
                 mask &= ~1u;
-            if(mask == 0)
-                return 0;
-            size_t engines = 0;
-            for(uint32_t b = 0; b < 32; ++b)
-                engines += (mask >> b) & 1u;
-            k %= engines;
-            for(uint32_t b = 0;; ++b)
-                if((mask & (1u << b)) && k-- == 0)
-                    return b;
+            return sdmaMaskEngine(mask, k);
         }
 
         // Engine of the `remote`-th remote peer queue of a node with target `gfx`, given

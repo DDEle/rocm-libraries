@@ -148,6 +148,29 @@ def test_a2a_gemm_gfx1250_flags_are_system_scope(results):
             assert not wrong, f"Kernel {base!r}: {what!r} without SCOPE_SYS: {wrong[:2]}"
 
 
+def test_a2a_gemm_gfx1250_packet_stores_alone_under_narrow_exec(results):
+    """In the enqueue's copy loop, each narrowed EXEC span holds only the ring stores and
+    ends in the full-mask reset, so the backend scheduler keeps it whole."""
+    for base, src, _err in results:
+        insts = _instructions(src)
+        begin = next(i for i, ln in enumerate(insts) if "blocks placed this pass" in ln)
+        end = next(i for i in range(begin, len(insts)) if "pending += signal bytes" in insts[i])
+        loop, spans, cur = insts[begin:end], [], None
+        for ln in loop:
+            if re.match(r"s_\w+ exec_lo", ln):
+                assert ln.startswith("s_mov_b32 exec_lo"), f"Kernel {base!r}: {ln}"
+                if ln.startswith("s_mov_b32 exec_lo, -1"):
+                    spans.append(cur)
+                    cur = None
+                else:
+                    cur = []
+            elif cur is not None and not ln.startswith(_SCHEDULER_FILL):
+                cur.append(ln)
+        assert len(spans) == 2 and cur is None, f"Kernel {base!r}: {len(spans)} store spans"
+        bad = [ln for sp in spans for ln in sp if not ln.startswith("global_store_")]
+        assert not bad, f"Kernel {base!r}: non-store work under a narrow EXEC: {bad[:3]}"
+
+
 def test_a2a_gemm_gfx1250_atomics_on_one_lane(results):
     for base, src, _err in results:
         insts = _instructions(src)

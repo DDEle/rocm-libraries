@@ -80,3 +80,15 @@ TEST(FusedA2AKernArg, ScalarsFollowCounterInLayoutOrder)
         EXPECT_TRUE(it == KernelArguments::const_iterator(args, name)) << name;
     }
 }
+
+TEST(FusedA2AKernArg, DrainCarriesDirectMaskAndCount)
+{
+    EXPECT_EQ(fusedA2ADrain(0, 8), FUSED_A2A_DRAIN_RECV | FUSED_A2A_DRAIN_SEND);
+    EXPECT_EQ(fusedA2ADrain(0, 8), 0x3u);
+    EXPECT_EQ(fusedA2ADrain(0x30, 8), 0x23003u);
+    EXPECT_EQ(fusedA2ADrain(0x3, 2), 0x20303u);
+    EXPECT_EQ(fusedA2ADrain(0x1, 1), 0x10103u);
+    EXPECT_EQ(fusedA2ADrain(0xc, 2), 0x3u);
+    EXPECT_EQ(fusedA2ADrain(0xff, 8), 0x8ff03u);
+    EXPECT_EQ(fusedA2ADrain(0xc0, 7), 0x14003u);
+}

@@ -92,6 +92,11 @@ FUSED_A2A_A2AGEMM_FLAG_OFFSET = FUSED_A2A_CURSOR_BYTES
 FUSED_A2A_A2AGEMM_DONE_OFFSET = 0
 FUSED_A2A_DRAIN_RECV = 1
 FUSED_A2A_DRAIN_SEND = 2
+# FusedDrain[15:8]: direct-peer mask (bit j = rank j); FusedDrain[23:16]: its popcount.
+FUSED_A2A_DIRECT_MASK_SHIFT = 8
+FUSED_A2A_DIRECT_COUNT_SHIFT = 16
+assert FUSED_A2A_DIRECT_MASK_SHIFT + FUSED_A2A_MAX_RANKS <= FUSED_A2A_DIRECT_COUNT_SHIFT \
+    and FUSED_A2A_DIRECT_COUNT_SHIFT + FUSED_A2A_MAX_RANKS <= 32, "FusedDrain direct-peer fields overlap"
 
 # (argName, byteSize) in addArg() order. Both the offset map and the segment
 # size derive from this one list, so an arg added to the segment cannot reach

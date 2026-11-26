@@ -10567,7 +10567,8 @@ class KernelWriterAssembly(KernelWriter):
     under UseSubtileImpl) back when stepBack, and LoopCounterL gains its iterations.
     The flag polled is flag[gLo][A2AShardIdx - 1], gLo being the first block of b's
     group and the last one placed.
-    Lane 0 of Serial carries the poll and is restored; no other VGPR is touched.
+    Without scalar atomics the poll is an s_load at system scope; otherwise lane 0 of Serial
+    carries it and is restored, and no other VGPR is touched.
     """
     module    = Module("a2aSwitchSegment")
     layout    = fusedA2AKernArgLayout()
@@ -10596,16 +10597,24 @@ class KernelWriterAssembly(KernelWriter):
         module.add(SAddU32(dst=sgpr(slot), src0=sgpr(slot), src1=sgpr(h), comment="+ sub-round"))
       module.add(SLShiftLeftB32(dst=sgpr(slot), shiftHex=2, src=sgpr(slot),
                                 comment="flag slot byte offset"))
+      smemPoll = not self.states.asmCaps["HasSAtomic"]
       def pollFlag():
         poll = Module("a2aPollFlag")
+        if smemPoll:
+          poll.add(SLoadB32(dst=sgpr(flag), base=sgpr("FusedCounterPtr", 2), soffset=sgpr(slot),
+                            smem=SMEMModifiers(scope=CacheScope.SCOPE_SYS,
+                                               offset=FUSED_A2A_A2AGEMM_FLAG_OFFSET),
+                            comment="poll flag[b][i] at system scope"))
+          return poll
         poll.add(VMovB32(dst=vgpr("Serial"), src=sgpr(slot), comment="poll offset"))
         poll.add(GlobalLoadB32(dst=vgpr("Serial"), vaddr=vgpr("Serial"),
             saddr=sgpr("FusedCounterPtr", 2),
             modifier=self.a2aSysModifier(FUSED_A2A_A2AGEMM_FLAG_OFFSET, False),
             comment="poll flag[b][i] at system scope"))
         return poll
-      module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=1, comment="lane 0 polls"))
-      module.add(VReadfirstlaneB32(dst=sgpr(serial), src=vgpr("Serial"), comment="save Serial lane 0"))
+      if not smemPoll:
+        module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=1, comment="lane 0 polls"))
+        module.add(VReadfirstlaneB32(dst=sgpr(serial), src=vgpr("Serial"), comment="save Serial lane 0"))
       module.add(pollFlag())
       module.add(self.argLoader.loadKernArg(rank, "KernArgAddress",
                                             sgprOffset=hex(base + layout["FusedMyRank"]), dword=1))
@@ -10666,7 +10675,8 @@ class KernelWriterAssembly(KernelWriter):
                          comment="wrap the feature shard at W"))
       if tdm:
         module.add(self.a2aTdmSegment(kernel, tPA, tPB, "A2AFeatIdx", "A2AShardIdx",
-                                      fromBase=True, stepBack=stepBack, serialSgpr=serial))
+                                      fromBase=True, stepBack=stepBack,
+                                      serialSgpr=None if smemPoll else serial))
       elif subRounds > 1:
         module.add(SLShiftLeftB32(dst=sgpr(rank), shiftHex=log2(subRounds),
                                   src=sgpr("A2AFeatIdx"), comment="feature shard * S"))
@@ -10692,20 +10702,29 @@ class KernelWriterAssembly(KernelWriter):
       module.add(SSubU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AShardCounter"), src1=1,
                          comment="segments left"))
 
-      module.add(SWaitCnt(vlcnt=0, comment="wait the flag poll"))
-      module.add(VReadfirstlaneB32(dst=sgpr(flag), src=vgpr("Serial"), comment="flag"))
+      module.add(self.a2aWaitFlagPoll(smemPoll, flag))
       module.add(SCmpGeU32(src0=sgpr(flag), src1=1, comment="segment landed?"))
       module.add(SCBranchSCC1(labelName=readyLabel.getLabelName(), comment="yes"))
       module.add(pollLabel)
       module.add(SSleep(simm16=1, comment="back off between polls"))
       module.add(pollFlag())
-      module.add(SWaitCnt(vlcnt=0, comment="wait the flag poll"))
-      module.add(VReadfirstlaneB32(dst=sgpr(flag), src=vgpr("Serial"), comment="flag"))
+      module.add(self.a2aWaitFlagPoll(smemPoll, flag))
       module.add(SCmpLtU32(src0=sgpr(flag), src1=1, comment="flag < 1?"))
       module.add(SCBranchSCC1(labelName=pollLabel.getLabelName(), comment="segment short -> poll again"))
       module.add(readyLabel)
-      module.add(VMovB32(dst=vgpr("Serial"), src=sgpr(serial), comment="restore Serial lane 0"))
-      module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+      if not smemPoll:
+        module.add(VMovB32(dst=vgpr("Serial"), src=sgpr(serial), comment="restore Serial lane 0"))
+        module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+    return module
+
+  def a2aWaitFlagPoll(self, smemPoll, flagSgpr):
+    """Wait for the flag poll and leave the flag in flagSgpr."""
+    module = Module("a2aWaitFlagPoll")
+    if smemPoll:
+      module.add(SWaitCnt(kmcnt=0, comment="wait the flag poll"))
+      return module
+    module.add(SWaitCnt(vlcnt=0, comment="wait the flag poll"))
+    module.add(VReadfirstlaneB32(dst=sgpr(flagSgpr), src=vgpr("Serial"), comment="flag"))
     return module
 
   def a2aSegmentSrd(self, kernel, tP, shifts, stepBack):

@@ -42,9 +42,9 @@ _GFX12_PACKET_CONSTANTS = ("0x1e30000a", "0xc0c0000")
 # Placed by the backend after scheduling, LDS waits included.
 _SCHEDULER_FILL = ("s_wait_alu", "s_set_vgpr_msb", "s_nop", "s_wait_dscnt")
 
-# The segment switch: from the flag-slot arithmetic to the EXEC restore that closes it.
+# The segment switch: from the flag-slot arithmetic to the branch back into its poll.
 _SWITCH_START = "flag slot = flag row + segment"
-_SWITCH_END = "restore EXEC = full"
+_SWITCH_END = "segment short -> poll again"
 # Barriers of the A2AGemm protocol, matched on their comments.
 _A2A_BARRIERS = ("ticket published", "ticket read", "every wave passed its last flag wait")
 

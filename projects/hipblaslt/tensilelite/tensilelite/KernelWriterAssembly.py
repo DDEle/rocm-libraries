@@ -9510,6 +9510,85 @@ class KernelWriterAssembly(KernelWriter):
     emit(module)
     module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=-1, comment="restore EXEC = full"))
 
+  def a2aTdmDesc(self, kernel):
+    """The descriptor set A and B share, one tensor per wave."""
+    assert self.isTdmWaveSeparated(kernel) and not kernel["TDMSplit"] \
+        and self.tdmDescriptorSetOwner(kernel, "A") == self.tdmDescriptorSetOwner(kernel, "B") \
+        and not kernel.get("_TDMIterateModeA", False) and not kernel.get("_TDMIterateModeB", False), \
+        "A2AGemm with TDM loads needs A and B on one wave-separated descriptor set"
+    return "tdm%sGroup0" % self.tdmDescriptorSetOwner(kernel, "A")
+
+  def a2aTdmCarriesB(self, kernel, module, serialSgpr=None):
+    """SCC = this wave carries B, from WaveIdx or from serialSgpr = Serial of lane 0."""
+    oddB = tdmWavePartition(kernel, "B")[1][0] % 2 == 1
+    if serialSgpr is None:
+      self._emitTdmWaveParitySCCAuto(module, kernel, comment="wave parity", tmpTag="a2aTdmParity")
+    else:
+      module.add(SBitcmp1B32(src0=sgpr(serialSgpr), src1=log2(kernel["WavefrontSize"]),
+                             comment="wave parity"))
+    return oddB
+
+  def a2aShardOffset(self, kernel, module, tP, idxName, alongK, s):
+    """sgpr(s + 2, 2) = `idxName` shards' worth of bytes of tP; s..s+3 scratch, s even."""
+    tc = tP["tensorChar"]
+    if alongK:
+      unrollStride = self.strideRef(tc, kernel["ProblemType"]["IndexUnroll"])
+      if self.isConstUnitStride(unrollStride):
+        module.add(SMovB32(dst=sgpr(s), src=sgpr("A2AKLocal"),
+                           comment="elements per %s shard" % tc))
+        factor = sgpr(idxName)
+      else:
+        module.add(SMulI32(dst=sgpr(s), src0=sgpr("A2AKLocal"), src1=sgpr(idxName),
+                           comment="shard index * k_local"))
+        factor = unrollStride
+    else:
+      module.add(SMulI32(dst=sgpr(s), src0=sgpr(idxName),
+                         src1=self.strideRef(tc, tP["tileIdx"]),
+                         comment="shard index * %s row stride" % tc))
+      factor = self.sizeRef(tP["tileIdx"])
+    module.addModuleAsFlatItems(self.s_mul_u64_u32(sgpr(s + 2), sgpr(s + 3), sgpr(s),
+                                                   factor,
+                                                   comment="shard offset in elements"))
+    module.add(scalarMultiply64Bpe(s + 2, s + 2, float(tP["bpeGR"]), s,
+                                   comment="shard offset"))
+
+  def a2aTdmSegment(self, kernel, tPA, tPB, idxA, idxB, fromBase, stepBack, serialSgpr=None):
+    """Point this wave's descriptor at shard idxA of A along K, or at segment idxB of B:
+    from A2ATileBase<tc> when fromBase, else from where it points now; one tdmABIncs
+    back when stepBack."""
+    module = Module("a2aTdmSegment")
+    desc   = self.a2aTdmDesc(kernel)
+    with self.allocTmpSgpr(8, alignment=2, tag="a2aTdmSegment") as tmpSgprInfo:
+      sA = tmpSgprInfo.idx
+      sB = tmpSgprInfo.idx + 4
+      self.a2aShardOffset(kernel, module, tPA, idxA, True, sA)
+      self.a2aShardOffset(kernel, module, tPB, idxB, False, sB)
+      oddB = self.a2aTdmCarriesB(kernel, module, serialSgpr)
+      offB, offA = (sB + 2, sA + 2) if oddB else (sA + 2, sB + 2)
+      for i in range(2):
+        module.add(SCSelectB32(dst=sgpr(sA + 2 + i), src0=sgpr(offB + i), src1=sgpr(offA + i),
+                               comment="this wave's shard offset"))
+      if fromBase:
+        (hiB, hiA) = ("A2ATileBaseB", "A2ATileBaseA") if oddB else ("A2ATileBaseA", "A2ATileBaseB")
+        for i in range(2):
+          module.add(SCSelectB32(dst=sgpr(sB + i), src0=sgpr("%s+%u" % (hiB, i)),
+                                 src1=sgpr("%s+%u" % (hiA, i)), comment="this wave's tile base"))
+      else:
+        module.add(SMovB32(dst=sgpr(sB), src=sgpr("%s+2" % desc), comment="descriptor address lo"))
+        module.add(SAndB32(dst=sgpr(sB + 1), src0=sgpr("%s+3" % desc), src1=hex(0x1ffffff),
+                           comment="descriptor address hi"))
+      module.add(SAddU32(dst=sgpr("%s+2" % desc), src0=sgpr(sB), src1=sgpr(sA + 2),
+                         comment="TDM addr = base + shard offset (lo)"))
+      module.add(SAddCU32(dst=sgpr("%s+3" % desc), src0=sgpr(sB + 1), src1=sgpr(sA + 3),
+                          comment="TDM addr = base + shard offset (hi)"))
+      if stepBack:
+        module.add(SSubU32(dst=sgpr("%s+2" % desc), src0=sgpr("%s+2" % desc), src1=sgpr("tdmABIncs"),
+                           comment="one tdmABIncs back"))
+        module.add(SSubBU32(dst=sgpr("%s+3" % desc), src0=sgpr("%s+3" % desc), src1=0))
+      module.add(SOrB32(dst=sgpr("%s+3" % desc), src0=sgpr("%s+3" % desc), src1=hex(2 << 30),
+                        comment="set type field to 2(image)"))
+    return module
+
   def a2aSetupSegments(self, kernel, tPA, tPB):
     module = Module("a2aSetupSegments")
     if kernel["ProblemType"]["FusedA2A"] != "A2AGemm":
@@ -9541,18 +9620,35 @@ class KernelWriterAssembly(KernelWriter):
     # holds B's tile offset until the gathered buffer is known.
     module.add(RegSet("s", "sgprA2ATileBaseA", self.sgprs["AddressA"]))
     module.add(RegSet("s", "sgprA2ATileBaseB", self.sgprs["AddressB"]))
-    module.add(SSubU32(dst=sgpr("A2ATileBaseA+0"), src0=sgpr("SrdB+0"), src1=sgpr("AddressB+0"),
-                       comment="B tile offset"))
-    module.add(SSubBU32(dst=sgpr("A2ATileBaseA+1"), src0=sgpr("SrdB+1"), src1=sgpr("AddressB+1")))
+    tdm = kernel["enableTDMA"] and kernel["enableTDMB"]
+    if tdm:
+      desc = self.a2aTdmDesc(kernel)
+      module.add(SAndB32(dst=sgpr("A2ATileBaseA+1"), src0=sgpr("%s+3" % desc), src1=hex(0x1ffffff),
+                         comment="descriptor address hi"))
+      module.add(SSubU32(dst=sgpr("A2ATileBaseA+0"), src0=sgpr("%s+2" % desc), src1=sgpr("AddressB+0"),
+                         comment="B tile offset on the waves carrying B"))
+      module.add(SSubBU32(dst=sgpr("A2ATileBaseA+1"), src0=sgpr("A2ATileBaseA+1"),
+                          src1=sgpr("AddressB+1")))
+    else:
+      module.add(SSubU32(dst=sgpr("A2ATileBaseA+0"), src0=sgpr("SrdB+0"), src1=sgpr("AddressB+0"),
+                         comment="B tile offset"))
+      module.add(SSubBU32(dst=sgpr("A2ATileBaseA+1"), src0=sgpr("SrdB+1"), src1=sgpr("AddressB+1")))
     module.add(self.a2aRebaseAddressB(kernel, tPB))
     module.add(self.a2aBatchSpan(kernel, tPB))
     module.add(SAddU32(dst=sgpr("A2ATileBaseB+0"), src0=sgpr("AddressB+0"), src1=sgpr("A2ATileBaseA+0"),
                        comment="gathered B tile base"))
     module.add(SAddCU32(dst=sgpr("A2ATileBaseB+1"), src0=sgpr("AddressB+1"), src1=sgpr("A2ATileBaseA+1")))
-    module.add(SMovB32(dst=sgpr("A2ATileBaseA+0"), src=sgpr("SrdA+0"), comment="A tile base"))
-    module.add(SMovB32(dst=sgpr("A2ATileBaseA+1"), src=sgpr("SrdA+1")))
-    module.add(self.a2aShiftSrd(kernel, tPA, "A2AFeatIdx"))
-    module.add(self.a2aShiftSrd(kernel, tPB, "A2AFeatIdx"))
+    if tdm:
+      module.add(SMovB32(dst=sgpr("A2ATileBaseA+0"), src=sgpr("%s+2" % desc),
+                         comment="A tile base on the waves carrying A"))
+      module.add(SAndB32(dst=sgpr("A2ATileBaseA+1"), src0=sgpr("%s+3" % desc), src1=hex(0x1ffffff)))
+      module.add(self.a2aTdmSegment(kernel, tPA, tPB, "A2AFeatIdx", "A2AFeatIdx",
+                                    fromBase=False, stepBack=False))
+    else:
+      module.add(SMovB32(dst=sgpr("A2ATileBaseA+0"), src=sgpr("SrdA+0"), comment="A tile base"))
+      module.add(SMovB32(dst=sgpr("A2ATileBaseA+1"), src=sgpr("SrdA+1")))
+      module.add(self.a2aShiftSrd(kernel, tPA, "A2AFeatIdx"))
+      module.add(self.a2aShiftSrd(kernel, tPB, "A2AFeatIdx"))
     subRounds = kernel["A2ASubRounds"]
     if subRounds > 1:
       module.add(SSubU32(dst=sgpr("A2AShardCounter"), src0=sgpr("A2AW"), src1=1,
@@ -10514,7 +10610,8 @@ class KernelWriterAssembly(KernelWriter):
       module.add(self.argLoader.loadKernArg(rank, "KernArgAddress",
                                             sgprOffset=hex(base + layout["FusedMyRank"]), dword=1))
 
-      if not kernel["UseSubtileImpl"]:
+      tdm = kernel["enableTDMA"] and kernel["enableTDMB"]
+      if not kernel["UseSubtileImpl"] and not tdm:
         module.addComment0("iterations of the segment being left")
         module.add(scalarStaticDivideAndRemainder(qReg=iters, rReg=-1, dReg="A2AKLocal", divisor=depthU,
                                                   tmpSgprRes=ContinuousRegister(prod, 2), doRemainder=False))
@@ -10552,7 +10649,8 @@ class KernelWriterAssembly(KernelWriter):
 
       # B is indexed by the gathered segment, A by the feature shard.
       shiftsB = [("A2AShardIdx", None)] + ([(h, True)] if subRounds > 1 else [])
-      module.add(self.a2aSegmentSrd(kernel, tPB, shiftsB, stepBack))
+      if not tdm:
+        module.add(self.a2aSegmentSrd(kernel, tPB, shiftsB, stepBack))
       module.addComment0("iterations of the next segment")
       module.add(scalarStaticDivideAndRemainder(qReg=iters, rReg=-1, dReg="A2AKLocal", divisor=depthU,
                                                 tmpSgprRes=ContinuousRegister(prod, 2), doRemainder=False))
@@ -10566,7 +10664,10 @@ class KernelWriterAssembly(KernelWriter):
                          comment="feature shard - W, underflowing while below W"))
       module.add(SMinU32(dst=sgpr("A2AFeatIdx"), src0=sgpr("A2AFeatIdx"), src1=sgpr(rank),
                          comment="wrap the feature shard at W"))
-      if subRounds > 1:
+      if tdm:
+        module.add(self.a2aTdmSegment(kernel, tPA, tPB, "A2AFeatIdx", "A2AShardIdx",
+                                      fromBase=True, stepBack=stepBack, serialSgpr=serial))
+      elif subRounds > 1:
         module.add(SLShiftLeftB32(dst=sgpr(rank), shiftHex=log2(subRounds),
                                   src=sgpr("A2AFeatIdx"), comment="feature shard * S"))
         module.add(SAddU32(dst=sgpr(rank), src0=sgpr(rank), src1=sgpr(h),
@@ -10688,26 +10789,7 @@ class KernelWriterAssembly(KernelWriter):
     with self.allocTmpSgpr(4, alignment=2, tag="a2aShardOffset") as tmpSgprInfo:
       s = tmpSgprInfo.idx
       # alongK steps k_local along K; otherwise one shard is a whole [nToken, k_local] segment.
-      if alongK:
-        unrollStride = self.strideRef(tc, kernel["ProblemType"]["IndexUnroll"])
-        if self.isConstUnitStride(unrollStride):
-          module.add(SMovB32(dst=sgpr(s), src=sgpr("A2AKLocal"),
-                             comment="elements per %s shard" % tc))
-          factor = sgpr(idxName)
-        else:
-          module.add(SMulI32(dst=sgpr(s), src0=sgpr("A2AKLocal"), src1=sgpr(idxName),
-                             comment="shard index * k_local"))
-          factor = unrollStride
-      else:
-        module.add(SMulI32(dst=sgpr(s), src0=sgpr(idxName),
-                           src1=self.strideRef(tc, tP["tileIdx"]),
-                           comment="shard index * %s row stride" % tc))
-        factor = self.sizeRef(tP["tileIdx"])
-      module.addModuleAsFlatItems(self.s_mul_u64_u32(sgpr(s + 2), sgpr(s + 3), sgpr(s),
-                                                     factor,
-                                                     comment="shard offset in elements"))
-      module.add(scalarMultiply64Bpe(s + 2, s + 2, float(tP["bpeGR"]), s,
-                                     comment="shard offset"))
+      self.a2aShardOffset(kernel, module, tP, idxName, alongK, s)
       module.add(SAddU32(dst=sgpr("Srd%s+0" % tc), src0=sgpr("Srd%s+0" % tc),
                          src1=sgpr(s + 2), comment="Srd%s base += shard offset" % tc))
       module.add(SAddCU32(dst=sgpr("Srd%s+1" % tc), src0=sgpr("Srd%s+1" % tc),

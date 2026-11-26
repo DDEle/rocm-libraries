@@ -230,6 +230,8 @@ def test_a2a_gemm_gfx1250_is_accepted(_gp_gfx942, gfx1250_iim, assembler, capsys
     ({"A2ASubRounds": 2}, "A2ASubRounds > 1 is not implemented on gfx1250"),
     ({"TDMInst": 0}, "FusedA2A=A2AGemm on gfx1250 requires TDMInst"),
     ({"UseSubtileImpl": True}, "UseSubtileImpl with FusedA2A=A2AGemm is not implemented on gfx1250"),
+    ({"HalfPLR": 1}, "HalfPLR and TDMSplit with FusedA2A=A2AGemm are not implemented on gfx1250"),
+    ({"TDMSplit": True}, "HalfPLR and TDMSplit with FusedA2A=A2AGemm are not implemented on gfx1250"),
 ])
 def test_a2a_gemm_gfx1250_rejects(_gp_gfx942, gfx1250_iim, assembler, capsys, overrides, msg):
     sol, out = _derive(gfx1250_iim, assembler, capsys, mode="A2AGemm",

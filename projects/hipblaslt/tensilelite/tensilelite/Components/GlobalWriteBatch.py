@@ -30,8 +30,9 @@ from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, \
   BufferAtomicCmpswapB64, BufferStoreB16, BufferStoreB32, BufferStoreB64, BufferStoreB128, \
   DSBPermuteB32, FlatAtomicCmpswapB32, \
   SAddCU32, SAddU32, SAddU64, SAndB32, \
-  SAndB64, SAtomicDec, SAtomicInc, SBarrier, SBfmB32, SBfmB64, SBranch, SCBranchExecNZ, SCBranchExecZ, \
-  SCBranchSCC0, SCBranchSCC1, SCBranchVCCNZ, SCmpGtU32, SCmpKGtU32, SCSelectB32, SCmpEQI32, SCmpEQU32, SCmpGtI32, SCmpLeI32, SCmpLeU32, SMinU32, SEndpgm, \
+  SAndB64, SAtomicDec, SAtomicInc, SBarrier, SBfeU32, SBfmB32, SBfmB64, SBitcmp1B32, SBranch, \
+  SCBranchExecNZ, SCBranchExecZ, \
+  SCBranchSCC0, SCBranchSCC1, SCBranchVCCNZ, SCmpGtU32, SCmpLgU32, SCmpKGtU32, SCSelectB32, SCmpEQI32, SCmpEQU32, SCmpGtI32, SCmpLeI32, SCmpLeU32, SMinU32, SEndpgm, \
   SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SLShiftRightB64, SMovB32, SMovB64, SMulHIU32, SMulI32, \
   SNop, SOrB32, SOrB64, SOrSaveExecB32, SOrSaveExecB64, SSleep, SSubI32, SSubU32, \
   SSwapPCB64, SWaitCnt, SWaitAlu, VAShiftRightI32, VAddCCOU32, VAddCOU32, VAddF32, VAddF64, \
@@ -39,7 +40,7 @@ from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, \
   VCmpNeU32, VCmpNeU64, VCndMaskB32, VCvtBF8toF32, VCvtF16toF32, VCvtF32toF16, VCvtF32toI32, \
   VCvtFP8toF32, VCvtI32toF32, VCvtPkBF8toF32, VCvtPkF32toBF16, VCvtPkF32toFP16, VCvtPkFP8toF32, \
   VFmaF32, VFmaF64, VFmaPKF32, VFmaMixF32, VAndB32, VLShiftLeftB32, VPermlane16SwapB32, VPermlane32SwapB32, \
-  VLShiftRightB32, VMacF32, VMadMixF32, VMaxF32, VMovB32, VMovB64, VMulF32, VMulF64, \
+  VLShiftRightB32, VMacF32, VSubU32, VMadMixF32, VMaxF32, VMovB32, VMovB64, VMulF32, VMulF64, \
   VMulLOU32, VMulPKF16, VMulPKF32, VPackF16toB32, VReadfirstlaneB32, VRndneF32, VCvtBF16toFP32
 from rocisa.functions import scalarUInt32DivideAndRemainder, vectorStaticMultiply
 
@@ -105,25 +106,37 @@ def _scmpGtU32(writer, src, imm, comment=""):
         writer.sgprPool.checkIn(tmpSgpr)
         return module
 
-def emitFusedA2AGate(module, kw, localLabelName, amTilesSgpr=None):
+def emitFusedA2AGate(module, kw, localLabelName, amTilesSgpr=None, drainPair=None):
   """Emit the runtime FusedA2A=GemmA2A PUSH/local dispatch gate into `module`:
   branch to localLabelName when WorkGroup0 >= AM_tiles (local WG), else fall
   through (PUSH WG). AM_tiles = FusedAM >> log2(MT0).
 
   Pass amTilesSgpr to keep AM_tiles live for the caller (the handshake's DRAIN
-  guard reuses it); otherwise a scratch SGPR is taken and released here."""
+  guard reuses it); otherwise a scratch SGPR is taken and released here.
+  drainPair (2-aligned pair): one s_load_b64 fills it with FusedDrain, FusedAM;
+  AM_tiles then overwrites drainPair+1."""
   from .Signature import fusedA2AKernArgLayout
   layout    = fusedA2AKernArgLayout()
   fusedBase = kw.states.fusedA2AKernArgBase
   mt0       = kw.states.kernel["MacroTile0"]
   log2mt0   = int(log2(mt0))
-  ownScratch = amTilesSgpr is None
-  tmpS = kw.sgprPool.checkOut(1, tag="fusedA2A_dispatchGate", preventOverflow=False) \
-         if ownScratch else amTilesSgpr
+  assert amTilesSgpr is None or drainPair is None
+  ownScratch = amTilesSgpr is None and drainPair is None
+  if drainPair is not None:
+    tmpS = drainPair + 1
+  else:
+    tmpS = kw.sgprPool.checkOut(1, tag="fusedA2A_dispatchGate", preventOverflow=False) \
+           if ownScratch else amTilesSgpr
   module.addComment0("fused-A2A dispatch: runtime gate WorkGroup0 < (FusedAM/MT0) ? PUSH : local")
-  module.add(kw.argLoader.loadKernArg(tmpS, "KernArgAddress",
-    sgprOffset=hex(fusedBase + layout["FusedAM"]), dword=1))
-  module.add(SWaitCnt(kmcnt=0, comment="wait FusedAM"))
+  if drainPair is not None:
+    assert layout["FusedAM"] == layout["FusedDrain"] + 4
+    module.add(kw.argLoader.loadKernArg(drainPair, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedDrain"]), dword=2))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedDrain, FusedAM"))
+  else:
+    module.add(kw.argLoader.loadKernArg(tmpS, "KernArgAddress",
+      sgprOffset=hex(fusedBase + layout["FusedAM"]), dword=1))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedAM"))
   module.add(SLShiftRightB32(dst=sgpr(tmpS), shiftHex=log2mt0, src=sgpr(tmpS),
                              comment=f"AM_tiles = FusedAM >> log2(MT0={mt0})"))
   module.add(SCmpLeU32(src0=sgpr(tmpS), src1=sgpr("WorkGroup0"),
@@ -132,6 +145,88 @@ def emitFusedA2AGate(module, kw, localLabelName, amTilesSgpr=None):
                           comment="WorkGroup0 >= AM_tiles -> local store"))
   if ownScratch:
     kw.sgprPool.checkIn(tmpS)
+
+class FusedA2ADirect:
+  """Registers and per-replay state of the gfx1250 GemmA2A direct stores (one PUSH replay)."""
+  def __init__(self, kw):
+    self.srdRecv = kw.sgprPool.checkOutAligned(4, 4, tag="fusedA2A_dwSrdRecv", preventOverflow=False)
+    self.dwStep = kw.sgprPool.checkOut(1, tag="fusedA2A_dwStep", preventOverflow=False)
+    self.dwLane = kw.vgprPool.checkOut(1, tag="fusedA2A_dwLane")
+    self.labelBase = kw.labels.getNameInc("fusedA2A_dw")
+    self.coldBlocks = []
+    self.rowSum = 0
+    self.live = True
+
+  def checkIn(self, kw):
+    if self.live:
+      kw.sgprPool.checkIn(self.srdRecv)
+      kw.sgprPool.checkIn(self.dwStep)
+      kw.vgprPool.checkIn(self.dwLane)
+      self.live = False
+
+def emitFusedA2ADirectPrologue(module, kw, drainPair, regs):
+  """PUSH-entry prologue of the direct stores. drainPair holds FusedDrain (emitFusedA2AGate).
+  DwStep = 0 unless dst_rank is a direct peer; then DwStep = n_shard*bpe, SrdRecv = the rows
+  [w1*MT1, min(N, (w1+1)*MT1)) of slab src=my_rank in peer_bufPtr[dst_rank], and
+  DwLane = ((coord1 - w1*MT1 - dst_rank)*n_shard + coord0)*bpe."""
+  from .Signature import FUSED_A2A_DIRECT_MASK_SHIFT, FUSED_A2A_MAX_RANKS, fusedA2AKernArgLayout
+  from .SdmaRingEmitter import OFF_bufPtr, PEER_GROUP_BYTES
+  layout    = fusedA2AKernArgLayout()
+  fusedBase = kw.states.fusedA2AKernArgBase
+  mt1       = kw.states.kernel["MacroTile1"]
+  log2bpe   = int(log2(kw.states.bpeCexternal))
+  assert (kw.states.kernel["MacroTile0"] << log2bpe) % 128 == 0
+  srd, step, lane = regs.srdRecv, regs.dwStep, regs.dwLane
+  endLabel = Label(regs.labelBase + "_pro_end", "fused-A2A: end of the direct-store prologue")
+  dstRank = kw.sgprPool.checkOut(1, tag="fusedA2A_dwDstRank", preventOverflow=False)
+  tmp = kw.sgprPool.checkOut(4, tag="fusedA2A_dwTmp", preventOverflow=False)
+  maskBits = ((1 << FUSED_A2A_MAX_RANKS) - 1) << FUSED_A2A_DIRECT_MASK_SHIFT
+  module.addComment1("fused-A2A direct stores: DwStep != 0 iff dst_rank is a direct peer")
+  module.add(SMovB32(dst=sgpr(step), src=0, comment="DwStep = 0"))
+  module.add(SAndB32(dst=sgpr(tmp), src0=sgpr(drainPair), src1=hex(maskBits),
+                     comment="direct-peer mask (SCC = mask != 0)"))
+  module.add(SCBranchSCC0(labelName=endLabel.getLabelName(), comment="no direct peer"))
+  emitFusedA2ADstRankScan(module, kw, dstRank, "FusedNShard", tmp + 2)
+  module.add(SAddU32(dst=sgpr(tmp), src0=sgpr(dstRank), src1=FUSED_A2A_DIRECT_MASK_SHIFT,
+                     comment="mask bit of dst_rank"))
+  module.add(SBitcmp1B32(src0=sgpr(drainPair), src1=sgpr(tmp), comment="dst_rank direct?"))
+  module.add(SCBranchSCC0(labelName=endLabel.getLabelName(), comment="dst_rank is not a direct peer"))
+  module.add(SMulI32(dst=sgpr(tmp), src0=sgpr(dstRank), src1=PEER_GROUP_BYTES,
+                     comment="dst_rank * %d (peer group stride)" % PEER_GROUP_BYTES))
+  module.add(SLoadB64(dst=sgpr(srd, 2), base=sgpr("KernArgAddress", 2), soffset=sgpr(tmp),
+                      smem=SMEMModifiers(offset=fusedBase + layout["peer_0_flagPtr"] + OFF_bufPtr),
+                      comment="peer_bufPtr[dst_rank]"))
+  module.add(kw.argLoader.loadKernArg(tmp + 1, "KernArgAddress",
+    sgprOffset=hex(fusedBase + layout["FusedMyRank"]), dword=1))
+  module.add(SLShiftLeftB32(dst=sgpr(tmp + 2), src=sgpr("WorkGroup1"), shiftHex=int(log2(mt1)),
+                            comment=f"w1*MT1({mt1})"))
+  module.add(SSubU32(dst=sgpr(tmp + 3), src0=sgpr("SizesFree+1"), src1=sgpr(tmp + 2), comment="N - w1*MT1"))
+  module.add(SMinU32(dst=sgpr(tmp + 3), src0=sgpr(tmp + 3), src1=mt1, comment="rows of this tile"))
+  module.add(SLShiftLeftB32(dst=sgpr(step), src=sgpr("FusedNShard"), shiftHex=log2bpe,
+                            comment="DwStep = n_shard * bpe"))
+  module.add(SLShiftRightB32(dst=sgpr(srd + 2), src=sgpr("FusedNShard"), shiftHex=7 - log2bpe,
+                             comment="DwStep >> 7"))
+  module.add(SMulI32(dst=sgpr(srd + 2), src0=sgpr(srd + 2), src1=sgpr(tmp + 3),
+                     comment="num_records >> 7 = rows * DwStep >> 7"))
+  module.add(SMovB32(dst=sgpr(srd + 3), src="Srd127_96", comment="Set bits 127_96 in SRD"))
+  module.add(SAddU32(dst=sgpr(tmp + 3), src0=sgpr(tmp + 2), src1=sgpr(dstRank), comment="w1*MT1 + dst_rank"))
+  module.add(VSubU32(dst=vgpr(lane), src0=vgpr(kw.vgprs.coord1), src1=sgpr(tmp + 3),
+                     comment="coord1 - w1*MT1 - dst_rank"))
+  module.add(VMulLOU32(dst=vgpr(lane), src0=vgpr(lane), src1=sgpr("FusedNShard"), comment="* n_shard"))
+  module.add(VAddU32(dst=vgpr(lane), src0=vgpr(lane), src1=vgpr(kw.vgprs.coord0), comment="+ coord0"))
+  module.add(VLShiftLeftB32(dst=vgpr(lane), shiftHex=log2bpe, src=vgpr(lane), comment="DwLane (bytes)"))
+  module.add(SWaitCnt(kmcnt=0, comment="wait peer_bufPtr, FusedMyRank"))
+  module.add(SMulI32(dst=sgpr(tmp + 1), src0=sgpr(tmp + 1), src1=sgpr("SizesFree+1"), comment="my_rank * N"))
+  module.add(SAddU32(dst=sgpr(tmp + 1), src0=sgpr(tmp + 1), src1=sgpr(tmp + 2), comment="+ w1*MT1"))
+  module.add(SMulHIU32(dst=sgpr(tmp + 3), src0=sgpr(tmp + 1), src1=sgpr(step), comment="* DwStep (hi)"))
+  module.add(SMulI32(dst=sgpr(tmp + 1), src0=sgpr(tmp + 1), src1=sgpr(step), comment="* DwStep (lo)"))
+  module.add(SAddU32(dst=sgpr(srd), src0=sgpr(srd), src1=sgpr(tmp + 1), comment="SrdRecv base lo"))
+  module.add(SAddCU32(dst=sgpr(srd + 1), src0=sgpr(srd + 1), src1=sgpr(tmp + 3), comment="SrdRecv base hi"))
+  module.add(SAndB32(dst=sgpr(srd + 1), src0=sgpr(srd + 1), src1=hex(0x1ffffff),
+                     comment="base[56:32], num_records[6:0] = 0"))
+  module.add(endLabel)
+  kw.sgprPool.checkIn(tmp)
+  kw.sgprPool.checkIn(dstRank)
 
 def emitFusedA2ANShardLatch(module, kw, sgprName):
   """Latch AM/W into a persistent SGPR in the PROLOGUE.
@@ -160,6 +255,22 @@ def emitFusedA2ANShardLatch(module, kw, sgprName):
   kw.vgprPool.checkIn(tmpVgpr)
   kw.sgprPool.checkIn(wSgpr)
   kw.sgprPool.checkIn(amSgpr)
+
+def emitFusedA2ADstRankScan(module, kw, dstRankSgpr, nShardSgpr, tmpSgpr):
+  """dst_rank = the highest j < FUSED_A2A_MAX_RANKS with j*n_shard <= WorkGroup0*MT0.
+  tmpSgpr: 2 scratch SGPRs."""
+  from .Signature import FUSED_A2A_MAX_RANKS
+  mt0 = kw.states.kernel["MacroTile0"]
+  module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr), src=sgpr("WorkGroup0"), shiftHex=int(log2(mt0)),
+                            comment=f"n_col_base_wg = WorkGroup0 * MT0({mt0})"))
+  module.add(SMovB32(dst=sgpr(dstRankSgpr), src=0, comment="dst_rank = 0 (default)"))
+  for j in range(1, FUSED_A2A_MAX_RANKS):
+    module.add(SMulI32(dst=sgpr(tmpSgpr + 1), src0=sgpr(nShardSgpr), src1=j,
+                       comment=f"cand shard_lo = {j} * n_shard"))
+    module.add(SCmpLeU32(src0=sgpr(tmpSgpr + 1), src1=sgpr(tmpSgpr),
+                         comment=f"shard_lo <= n_col_base_wg? (WG at or above rank {j})"))
+    module.add(SCSelectB32(dst=sgpr(dstRankSgpr), src0=j, src1=sgpr(dstRankSgpr),
+                           comment=f"dst_rank = {j} if so, else keep the current winner"))
 
 def fusedA2ATilesPerBand(kernel):
   """Token-tiles per SDMA packet: ClusterDim[1] when it is a power of two, else 1."""
@@ -247,6 +358,7 @@ class GlobalWriteBatchWriter:
     self.packdata     = packdata
     self.parentWriter = parentWriter
     self.storesIssued = 0
+    self._fusedA2ADirectRecs = []
     self.factorDim = factorDim
     self.amdClangVersion = amdClangVersion
 
@@ -603,14 +715,21 @@ class GlobalWriteBatchWriter:
     isLastBatch = (self.batchIdx == self.numBatches - 1)
     needsCrossWaveBarrier = needsBiasSavDrain and \
       (isMultiDU or isLastBatch or not isMxf4SubtilePath(self.kernel))
+    storesBefore = self.storesIssued
     if not isMultiDU:
       self._emitAdd(module)
+    direct = self.parentWriter.states.fusedA2ADirect
+    if direct is not None:
+      assert not isMultiDU and not needsCrossWaveBarrier
+      self._emitFusedA2ADirectBlock(module, direct, self.storesIssued - storesBefore)
     if needsCrossWaveBarrier:
       module.add(SWaitCnt(dscnt=0, comment="drain bias/SAV LDS reads"))
       module.add(SBarrier(comment="sync waves before subtile paired stores"))
     if isMultiDU:
       self._emitAdd(module)
     self._epilog(module)
+    if direct is not None and isLastBatch:
+      direct.checkIn(self.parentWriter)
     if needsBiasSavDrain and not needsCrossWaveBarrier:
       assert not any(type(i).__name__.startswith(("DSStore", "DsStore"))
                      for i in module.flatitems()), \
@@ -2751,6 +2870,13 @@ class GlobalWriteBatchWriter:
                                                    overrideAfterPrimerRows=_emitOverrideRows, comment="store D",
                                                    forceSlc=fusedA2APushPass)
           storeCodeModule.add(tmpStoreCode)
+          direct = self.parentWriter.states.fusedA2ADirect
+          if direct is not None:
+            assert addrCalc.coordOffset1 == direct.rowSum + addrCalc.rowInc
+            assert not self.ss.optSingleColVgpr or \
+              addrCalc.globalOffset == addrCalc.coordOffset0 * self.parentWriter.states.bpeCexternal
+            direct.rowSum = addrCalc.coordOffset1
+            self._fusedA2ADirectRecs.append((addrCalc, sumIdx, elementIdx))
           if useAlign8:
             storeCodeModule.add(self.getEdgeMovInstType()(EXEC(), -1, "restore exec"))
           if skipLabel is not None:
@@ -2963,18 +3089,7 @@ class GlobalWriteBatchWriter:
       nShardSgpr:   persistent SGPR holding n_shard (element units).
       tmpSgpr:      2 scratch SGPRs; tmpSgpr+0 = n_col_base_wg, tmpSgpr+1 = candidate.
     """
-    from .Signature import FUSED_A2A_MAX_RANKS
-    mt0 = self.kernel["MacroTile0"]
-    module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr), src=sgpr("WorkGroup0"), shiftHex=int(log2(mt0)),
-                              comment=f"n_col_base_wg = WorkGroup0 * MT0({mt0})"))
-    module.add(SMovB32(dst=sgpr(dstRankSgpr), src=0, comment="dst_rank = 0 (default)"))
-    for j in range(1, FUSED_A2A_MAX_RANKS):
-      module.add(SMulI32(dst=sgpr(tmpSgpr + 1), src0=sgpr(nShardSgpr), src1=j,
-                         comment=f"cand shard_lo = {j} * n_shard"))
-      module.add(SCmpLeU32(src0=sgpr(tmpSgpr + 1), src1=sgpr(tmpSgpr),
-                           comment=f"shard_lo <= n_col_base_wg? (WG at or above rank {j})"))
-      module.add(SCSelectB32(dst=sgpr(dstRankSgpr), src0=j, src1=sgpr(dstRankSgpr),
-                             comment=f"dst_rank = {j} if so, else keep the current winner"))
+    emitFusedA2ADstRankScan(module, self.parentWriter, dstRankSgpr, nShardSgpr, tmpSgpr)
     self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, dstRankSgpr, "FusedPeerGroupPtr")
 
   def _fusedA2ALoadFlagBaseByRank(self, module, flagBaseSgpr, rankSgpr, groupOffSgpr):
@@ -3114,7 +3229,8 @@ class GlobalWriteBatchWriter:
     module.add(SLShiftRightB32(dst=sgpr(outDstSliceS), src=sgpr(outDstSliceS), shiftHex=pkShift,
                                comment="slice, src AND dst (bf16 elems -> packet elems)"))
 
-  def _fusedA2AComputeFlagAddr(self, module, flagBaseS, myRankS, outAddrS, tmpS):
+  def _fusedA2AComputeFlagAddr(self, module, flagBaseS, myRankS, outAddrS, tmpS,
+                               atomic="the ATOMIC is an ADD_RTN_32"):
     """Compute the ATOMIC target peer_flagPtr[p] + myRank*4 into outAddrS (2
     SGPRs), a 64-bit add.  flagBaseS is peer_flagPtr[p]; tmpS is one scratch SGPR.
 
@@ -3122,7 +3238,7 @@ class GlobalWriteBatchWriter:
     matching the "== 1" drain predicate.
     """
     module.add(SLShiftLeftB32(dst=sgpr(tmpS), src=sgpr(myRankS), shiftHex=2,
-                              comment="myRank * 4 (u32 flag-slot byte offset: the ATOMIC is an ADD_RTN_32)"))
+                              comment="myRank * 4 (u32 flag-slot byte offset: %s)" % atomic))
     module.add(SAddU32(dst=sgpr(outAddrS + 0), src0=sgpr(flagBaseS + 0), src1=sgpr(tmpS),
                        comment="flag addr lo = peer_flagPtr[p] + myRank*4"))
     module.add(SAddCU32(dst=sgpr(outAddrS + 1), src0=sgpr(flagBaseS + 1), src1=0,
@@ -3275,7 +3391,7 @@ class GlobalWriteBatchWriter:
       peer_flagPtr[dst_rank][my_rank]               += 1   (dst_rank's DRAIN_RECV)
       peer_flagPtr[my_rank] + FUSED_A2A_OUTBOUND_OFFSET += 1   (this card's DRAIN_SEND)
     Once every queue has carried them, each flag slot reads 1 and the outbound
-    counter reads W.
+    counter reads W (on gfx1250, W - FusedDrain[23:16]).
 
     MUST be emitted after the last _emitFusedA2ASdmaIssue submit on this queue.
 
@@ -3396,9 +3512,10 @@ class GlobalWriteBatchWriter:
       module.add(VMovB32(dst=vgpr(vPkt + dw + 1), src=sgpr(baseS + 1),
                          comment="SUBWIN DW%d: %s hi" % (dw + 1, what)))
 
-  def _emitFusedA2ACounterInc(self, module, dstSgpr, baseSgpr, offset, what, comment):
+  def _emitFusedA2ACounterInc(self, module, dstSgpr, baseSgpr, offset, what, comment,
+                              scope=CacheScope.SCOPE_DEV):
     """dstSgpr = atomic_inc(*(baseSgpr + offset)) with dstSgpr's value as the wrap
-    limit, returning the pre-op value."""
+    limit, returning the pre-op value. scope applies to the VMEM form only."""
     kw = self.parentWriter
     if kw.states.asmCaps["HasSAtomic"]:
       module.add(SAtomicInc(dst=sgpr(dstSgpr), base=sgpr(baseSgpr, 2), soffset=hex(offset),
@@ -3412,7 +3529,7 @@ class GlobalWriteBatchWriter:
     module.add(VMovB32(dst=vgpr(vData), src=sgpr(dstSgpr), comment="wrap limit"))
     module.add(GlobalAtomicIncU32Saddr(dst=vgpr(vRet), vaddr=vgpr(vOff), data=vgpr(vData),
                                        saddr=sgpr(baseSgpr, 2),
-                                       modifier=GLOBALModifiers(offset=offset, scope=CacheScope.SCOPE_DEV),
+                                       modifier=GLOBALModifiers(offset=offset, scope=scope),
                                        comment=comment))
     module.add(SWaitCnt(vlcnt=0, comment="fused-A2A: wait %s atomic return" % what))
     module.add(VReadfirstlaneB32(dst=sgpr(dstSgpr), src=vgpr(vRet), comment="pre-op"))
@@ -3443,6 +3560,57 @@ class GlobalWriteBatchWriter:
     module.add(self.getEdgeMovInstType()(EXEC(), 1,
                "fused-A2A: isolate lane 0 so the atomic fires once per WG"))
 
+  def _emitFusedA2ADirectBlock(self, module, direct, numStores):
+    """Inline tail of a direct-store batch (s_cmp_lg DwStep, 0; s_cbranch_scc1 to the cold block;
+    return label) and its cold block, appended to direct.coldBlocks: the batch's D stores in D order
+    into SrdRecv at DwLane + c1*DwStep, offset c0*bpe, ending with s_branch to the return label."""
+    kw = self.parentWriter
+    recs = self._fusedA2ADirectRecs
+    assert recs and len(recs) == numStores, \
+      "%d D stores recorded for the direct stores, %d issued" % (len(recs), numStores)
+    blkLabel = Label("%s_blk_%d" % (direct.labelBase, self.batchIdx), "fused-A2A: direct stores of batch %d" % self.batchIdx)
+    retLabel = Label("%s_ret_%d" % (direct.labelBase, self.batchIdx), "")
+    module.add(SCmpLgU32(src0=sgpr(direct.dwStep), src1=0, comment="direct peer?"))
+    module.add(SCBranchSCC1(labelName=blkLabel.getLabelName(), comment="direct stores"))
+    module.add(retLabel)
+
+    numRowVgprs = min(4, kw.vgprPool.available())
+    assert numRowVgprs >= 2
+    rowVgprs = [kw.vgprPool.checkOut(1, tag="fusedA2A_dwRow") for _ in range(numRowVgprs)]
+    rowSgprs = kw.sgprPool.checkOut(2, tag="fusedA2A_dwRow", preventOverflow=False)
+    bpe = kw.states.bpeCexternal
+    setups, addrs = [], []
+    prevC1, numRows = None, 0
+    for addrCalc, _sumIdx, _elementIdx in recs:
+      c1 = addrCalc.coordOffset1
+      setup = None
+      if c1 != prevC1 and c1 == 0:
+        addr = direct.dwLane
+      elif c1 != prevC1:
+        addr, rowS = rowVgprs[numRows % numRowVgprs], rowSgprs + numRows % 2
+        setup = Module("fusedA2A_dwRow")
+        setup.add(SMulI32(dst=sgpr(rowS), src0=sgpr(direct.dwStep), src1=c1, comment="c1 * DwStep"))
+        setup.add(VAddU32(dst=vgpr(addr), src0=sgpr(rowS), src1=vgpr(direct.dwLane), comment="DwLane + c1 * DwStep"))
+        numRows += 1
+      prevC1 = c1
+      setups.append(setup)
+      addrs.append(addr)
+
+    cold = Module("fusedA2A_dwCold")
+    cold.add(blkLabel)
+    if setups[0] is not None:
+      cold.add(setups[0])
+    for k, (addrCalc, sumIdx, elementIdx) in enumerate(recs):
+      if k + 1 < len(recs) and setups[k + 1] is not None:
+        cold.add(setups[k + 1])
+      cold.add(kw.addStore(self.kernel, self.ss, 'D', addrCalc, sumIdx, self.tmpS01, self.edge, elementIdx,
+                           self.batchIdx, comment="store recv", recv=(addrs[k], addrCalc.coordOffset0 * bpe)))
+    cold.add(SBranch(labelName=retLabel.getLabelName(), comment="back to batch %d" % self.batchIdx))
+    for v in rowVgprs:
+      kw.vgprPool.checkIn(v)
+    kw.sgprPool.checkIn(rowSgprs)
+    direct.coldBlocks.append(cold)
+
   def _emitFusedA2AHandshake(self, module: Module):
     """Emit the once-per-WG cross-card handshake for PUSH work-groups: wait for
     this WG's stores, elect one lane, bump the per-(dst_rank, token-tile) counter,
@@ -3466,8 +3634,9 @@ class GlobalWriteBatchWriter:
     #     render transparently. ---
     from .Signature import (FUSED_A2A_COUNTER1_OFFSET, FUSED_A2A_COUNTER2_OFFSET,
                             FUSED_A2A_COUNTER3_OFFSET, FUSED_A2A_CURSOR_BYTES,
+                            FUSED_A2A_DIRECT_COUNT_SHIFT, FUSED_A2A_DIRECT_MASK_SHIFT,
                             FUSED_A2A_DRAIN_RECV,
-                            FUSED_A2A_DRAIN_SEND, FUSED_A2A_OUTBOUND_OFFSET,
+                            FUSED_A2A_DRAIN_SEND, FUSED_A2A_MAX_RANKS, FUSED_A2A_OUTBOUND_OFFSET,
                             fusedA2AKernArgLayout)
     from .SdmaRingEmitter import SdmaRingEmitter
     layout = fusedA2AKernArgLayout()
@@ -3505,7 +3674,18 @@ class GlobalWriteBatchWriter:
     counterPtrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsCounterPtr", preventOverflow=False)
     argModule.add(kw.argLoader.loadKernArg(counterPtrSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["counter_ptr"]), dword=2))
-    argModule.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/counter_ptr"))
+    gfx1250 = kw.states.version[:2] == (12, 5)
+    if gfx1250:
+      directMaskSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_hsDirectMask", preventOverflow=False)
+      argModule.add(kw.argLoader.loadKernArg(directMaskSgpr, "KernArgAddress",
+        sgprOffset=hex(fusedBase + layout["FusedDrain"]), dword=1))
+    argModule.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/counter_ptr" + ("/FusedDrain" if gfx1250 else "")))
+    if gfx1250:
+      argModule.add(SBfeU32(dst=sgpr(directMaskSgpr), src0=sgpr(directMaskSgpr),
+                            src1=(FUSED_A2A_MAX_RANKS << 16) | FUSED_A2A_DIRECT_MASK_SHIFT,
+                            comment="direct-peer mask = FusedDrain[%d:%d]"
+                                    % (FUSED_A2A_DIRECT_MASK_SHIFT + FUSED_A2A_MAX_RANKS - 1,
+                                       FUSED_A2A_DIRECT_MASK_SHIFT)))
     # Election target: the feature-tiles of ONE token-tile row in one rank's shard,
     # since the counter is per (dst_rank, token-tile) pair.  Held as tilesPerRank-1,
     # the S_ATOMIC_INC wrap limit.
@@ -3599,8 +3779,17 @@ class GlobalWriteBatchWriter:
                             comment="not the last WG -> skip the SDMA submit"))
 
     # (5) elected last WG for (dst_rank, j): hand the band to the SDMA engine.
+    if gfx1250:
+      directNoCopyLabel = Label(kw.labels.getNameInc("fusedA2A_direct_nocopy"),
+                                "fused-A2A: direct peer -> no SDMA COPY")
+      module.add(SBitcmp1B32(src0=sgpr(directMaskSgpr), src1=sgpr(dstRankSgpr),
+                             comment="dst_rank a direct peer?"))
+      module.add(SCBranchSCC1(labelName=directNoCopyLabel.getLabelName(),
+                              comment="direct peer -> skip the SDMA submit"))
     self._emitFusedA2ASdmaIssue(module, dstRankSgpr, myRankSgpr, nShardSgpr,
                                 flagBaseSgpr, tmpSgpr2, bandSgpr, mt1 * ck)
+    if gfx1250:
+      module.add(directNoCopyLabel)
     if ck > 1:
       kw.sgprPool.checkIn(bandSgpr)
 
@@ -3635,8 +3824,28 @@ class GlobalWriteBatchWriter:
                             comment="not the last submitter for dst_rank -> skip the "
                                     "queue-tail ATOMICs"))
 
+    if gfx1250:
+      directFlagLabel = Label(kw.labels.getNameInc("fusedA2A_direct_flag"),
+                              "fused-A2A: direct peer -> raise its flag slot from the CU")
+      module.add(SBitcmp1B32(src0=sgpr(directMaskSgpr), src1=sgpr(dstRankSgpr),
+                             comment="dst_rank a direct peer?"))
+      module.add(SCBranchSCC1(labelName=directFlagLabel.getLabelName(),
+                              comment="direct peer -> no queue-tail ATOMICs"))
     self._emitFusedA2AQueueTailAtomics(module, dstRankSgpr, myRankSgpr,
                                        flagBaseSgpr, tmpSgpr2)
+    if gfx1250:
+      module.add(SBranch(labelName=skipReleaseLabel.getLabelName(),
+                         comment="queue-tail ATOMICs submitted"))
+      module.add(directFlagLabel)
+      flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_hsDirectFlagAddr", preventOverflow=False)
+      self._fusedA2AComputeFlagAddr(module, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr2,
+                                    atomic="a global_atomic_inc_u32")
+      module.add(SMovB32(dst=sgpr(tmpSgpr2), src=-1, comment="wrap limit 0xFFFFFFFF: plain +1"))
+      self._emitFusedA2ACounterInc(module, tmpSgpr2, flagAddrSgpr, 0, "direct flag",
+                                   "peer_flagPtr[dst_rank][my_rank] += 1",
+                                   scope=CacheScope.SCOPE_SYS)
+      kw.sgprPool.checkIn(flagAddrSgpr)
+      kw.sgprPool.checkIn(directMaskSgpr)
 
     module.add(skipReleaseLabel)
     # The PUSH path has already done its wave-0 election, so it jumps OVER the local
@@ -3695,9 +3904,12 @@ class GlobalWriteBatchWriter:
     # to slot j, behind all of its COPYs, so "all of source j's data has landed"
     # is flag[j] == 1.
     #
-    # The p == my_rank packet also routes through SDMA (loopback queue, local recv
-    # slot), so this card's own flag slot has a real producer and polling it is
-    # neither a deadlock nor a special case.
+    # On gfx1250 a direct source (FusedDrain[15:8]) submits nothing to its queue and
+    # adds that 1 with a CU atomic instead.
+    #
+    # The p == my_rank slot is raised the same way (loopback queue, or the CU atomic
+    # when direct), so this card's own flag slot has a real producer and polling it
+    # is neither a deadlock nor a special case.
     #
     # Gated at RUNTIME by the FusedDrain kernarg (a compile-time gate would fork the
     # fused kernel into drain-on/off variants).
@@ -3710,7 +3922,8 @@ class GlobalWriteBatchWriter:
     drainPollLabel = Label(kw.labels.getNameInc("fusedA2A_drain_poll"),
                            "fused-A2A: DRAIN poll all W self flags until each == 1")
     sendPollLabel  = Label(kw.labels.getNameInc("fusedA2A_drain_sendpoll"),
-                           "fused-A2A: drainSend poll the outbound counter until == W")
+                           "fused-A2A: drainSend poll the outbound counter until == "
+                           + ("W - direct-peer count" if gfx1250 else "W"))
 
     # runtime gate: FusedDrain == 0 -> skip the whole barrier.
     drainSgpr = kw.sgprPool.checkOut(1, tag="fusedA2A_drainFlag", preventOverflow=False)
@@ -3782,7 +3995,6 @@ class GlobalWriteBatchWriter:
     pollOff = VLShiftLeftB32(dst=vgpr(vPollOff), shiftHex=2, src=vgpr("Serial"),
                              comment="lane j -> self flag slot byte offset j*4")
     # gfx1250: inside the loop, whose block starts at the W-lane EXEC.
-    gfx1250 = kw.states.version[:2] == (12, 5)
     if not gfx1250:
       module.add(pollOff)
     # spin: system-scope load (sc0 sc1) bypasses this card's stale L2 to read the HBM
@@ -3820,6 +4032,16 @@ class GlobalWriteBatchWriter:
     module.add(SCBranchSCC1(labelName=skipSendLabel.getLabelName(),
                             comment="DRAIN_SEND clear -> skip the outbound poll"))
 
+    sendTargetSgpr = c3WSgpr
+    if gfx1250:
+      sendTargetSgpr = drainBitSgpr
+      module.add(SBfeU32(dst=sgpr(sendTargetSgpr), src0=sgpr(drainSgpr),
+                         src1=(FUSED_A2A_MAX_RANKS << 16) | FUSED_A2A_DIRECT_COUNT_SHIFT,
+                         comment="direct-peer count = FusedDrain[%d:%d]"
+                                 % (FUSED_A2A_DIRECT_COUNT_SHIFT + FUSED_A2A_MAX_RANKS - 1,
+                                    FUSED_A2A_DIRECT_COUNT_SHIFT)))
+      module.add(SSubU32(dst=sgpr(sendTargetSgpr), src0=sgpr(c3WSgpr), src1=sgpr(sendTargetSgpr),
+                         comment="outbound target = W - direct-peer count"))
     module.add(VMovB32(dst=vgpr(vPollOff), src=0, comment="voffset = 0 (single counter)"))
     module.add(sendPollLabel)
     module.add(GlobalLoadB32(
@@ -3827,8 +4049,9 @@ class GlobalWriteBatchWriter:
       modifier=self._fusedA2ASysModifier(FUSED_A2A_OUTBOUND_OFFSET, isStore=False),
       comment="poll the outbound counter (system scope, sc0 sc1)"))
     module.add(SWaitCnt(vlcnt=0, comment="fused-A2A: wait outbound poll load"))
-    module.add(VCmpNeU32(VCC(), vgpr(vPollVal), sgpr(c3WSgpr),
-                         comment="outbound != W? (a queue is still reading D)"))
+    module.add(VCmpNeU32(VCC(), vgpr(vPollVal), sgpr(sendTargetSgpr),
+                         comment="outbound != %s? (a queue is still reading D)"
+                                 % ("target" if gfx1250 else "W")))
     module.add(SCBranchVCCNZ(labelName=sendPollLabel.getLabelName(),
                              comment="some queue incomplete -> spin (poll again)"))
 

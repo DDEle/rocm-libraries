@@ -2609,6 +2609,8 @@ namespace TensileLite
         {
             if(problemType.fusedA2A == FusedA2A::A2AGemm)
                 checkA2AGemmBufAligned(inputs.fusedA2APeers, inputs.fusedA2AMyRank);
+            if(problemType.fusedA2A == FusedA2A::GemmA2A)
+                checkGemmA2AGsu(gsu);
             AMDGPU const* pAMDGPU = dynamic_cast<AMDGPU const*>(&hardware);
             appendFusedSegment(rv.args,
                                inputs.fusedA2APeers,
@@ -3597,6 +3599,8 @@ namespace TensileLite
                 {
                     if(problemType.fusedA2A == FusedA2A::A2AGemm)
                         checkA2AGemmBufAligned(inputs.fusedA2APeers, inputs.fusedA2AMyRank);
+                    if(problemType.fusedA2A == FusedA2A::GemmA2A)
+                        checkGemmA2AGsu(gsu);
                     AMDGPU const* pAMDGPU = dynamic_cast<AMDGPU const*>(&hardware);
                     appendFusedSegment(
                         rv.args,

@@ -49,6 +49,23 @@ namespace TensileLite
         = fusedA2AAlignLine(FUSED_A2A_OUTBOUND_OFFSET + sizeof(uint32_t));
     constexpr uint32_t FUSED_A2A_DRAIN_RECV = 1u;
     constexpr uint32_t FUSED_A2A_DRAIN_SEND = 2u;
+    // FusedDrain[15:8]: direct-peer mask (bit j = rank j); FusedDrain[23:16]: its popcount.
+    constexpr uint32_t FUSED_A2A_DIRECT_MASK_SHIFT  = 8;
+    constexpr uint32_t FUSED_A2A_DIRECT_COUNT_SHIFT = 16;
+    static_assert(FUSED_A2A_DIRECT_MASK_SHIFT + FUSED_A2A_MAX_RANKS <= FUSED_A2A_DIRECT_COUNT_SHIFT
+                      && FUSED_A2A_DIRECT_COUNT_SHIFT + FUSED_A2A_MAX_RANKS <= 32,
+                  "FusedDrain direct-peer fields overlap");
+
+    // FusedDrain with both drains on and the ranks of directMask below `world` direct.
+    constexpr uint32_t fusedA2ADrain(uint32_t directMask, size_t world)
+    {
+        const uint32_t mask  = directMask & (uint32_t)((1ull << world) - 1);
+        uint32_t       count = 0;
+        for(uint32_t m = mask; m != 0; m &= m - 1)
+            ++count;
+        return FUSED_A2A_DRAIN_RECV | FUSED_A2A_DRAIN_SEND | mask << FUSED_A2A_DIRECT_MASK_SHIFT
+               | count << FUSED_A2A_DIRECT_COUNT_SHIFT;
+    }
 
     // One group per peer: flag base, buffer base, then the queue pointers.
     // Order is the contract with SdmaRingEmitter.py FUSED_A2A_PEER_FIELDS.
@@ -146,5 +163,12 @@ namespace TensileLite
         if(myRank < peers.size()
            && reinterpret_cast<uintptr_t>(peers[myRank][FUSED_A2A_SLOT_BUF_PTR]) % 128 != 0)
             throw std::runtime_error("[fused-a2a] A2AGemm requires a 128-byte aligned a2aBuf.");
+    }
+
+    inline void checkGemmA2AGsu(uint32_t gsu)
+    {
+        if(gsu != 1)
+            throw std::runtime_error("[fused-a2a] GemmA2A requires GSU 1; got " + std::to_string(gsu)
+                                     + ".");
     }
 } // namespace TensileLite

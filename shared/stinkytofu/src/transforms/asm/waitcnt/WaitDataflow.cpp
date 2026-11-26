@@ -285,10 +285,13 @@ WaitDataflow::WaitDataflow(Function& func, const DominanceInfo& /*domInfo*/,
     std::function<void(BasicBlock*)> dfs = [&](BasicBlock* bb) {
         if (!visited.insert(bb).second) return;
         std::vector<BasicBlock*> succs = bb->getSuccessors();
+        auto it = layoutIdx.find(bb);
         std::stable_partition(succs.begin(), succs.end(), [&](const BasicBlock* s) {
-            return layoutIdx.at(s) == layoutIdx.at(bb) + 1;
+            auto si = layoutIdx.find(s);
+            return it != layoutIdx.end() && si != layoutIdx.end() && si->second == it->second + 1;
         });
-        for (BasicBlock* s : succs) dfs(s);
+        for (BasicBlock* s : succs)
+            if (s != nullptr) dfs(s);
         sweepOrder.push_back(bb);
     };
     if (!rpo.empty()) dfs(rpo.front());

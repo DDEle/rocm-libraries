@@ -582,13 +582,14 @@ class SdmaRingEmitter:
         module.add(padLoop)
         module.add(VCmpGtU32(dst=VCC(), src0=sgpr(offsetS), src1=vgpr(laneOffV),
                              comment="lane's dword inside the padding?"))
-        module.add(SMovB64(dst=EXEC(), src=VCC(), comment="padding lanes"))
+        execMov = SMovB32 if waveSize == 32 else SMovB64
+        module.add(execMov(dst=EXEC(), src=VCC(), comment="padding lanes"))
         self.emitLaneRingAddrV(module, w, addrV, queueBufV, pendingWptrS, laneOffV)
         module.add(GlobalStoreB32(vaddr=vgpr(addrV, 2), src=vgpr(zeroV),
                                   saddr=vgpr("off", 1, False, False, True),
-                                  modifier=GLOBALModifiers(glc=True, slc=True, isStore=True),
+                                  modifier=self._ringStoreModifier(),
                                   comment="ring[wrap] = 0 padding NOP"))
-        module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+        module.add(execMov(dst=EXEC(), src=-1, comment="restore EXEC = full"))
         module.add(SMinU32(dst=sgpr(stepS), src0=sgpr(offsetS), src1=waveSize * 4,
                            comment="padded bytes this pass"))
         module.add(SAddU32(dst=sgpr(pendingWptrS + 0), src0=sgpr(pendingWptrS + 0), src1=sgpr(stepS),

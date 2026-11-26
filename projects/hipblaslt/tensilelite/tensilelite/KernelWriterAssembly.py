@@ -71,7 +71,8 @@ from .ir import BranchInstruction, BufferLoadB128, BufferLoadB32, \
   VPermB32, VPrngB32, VReadfirstlaneB32, VReadlaneB32, VWritelaneB32, VSubF32, VSubI32, VSubU32, VXorB32, GlobalLoadTR8B64, GlobalLoadTR16B128, \
   GlobalLoadB32, GlobalLoadB64, GlobalLoadB96, GlobalLoadB128, GlobalLoadD16B16, GlobalLoadD16HIB16, \
   GlobalLoadD16U8, GlobalLoadD16HIU8, \
-  GlobalStoreB8, GlobalStoreB16, GlobalStoreB32, GlobalStoreB64, GlobalStoreB128, GlobalStoreD16HIB16
+  GlobalStoreB8, GlobalStoreB16, GlobalStoreB32, GlobalStoreB64, GlobalStoreB128, GlobalStoreD16HIB16, \
+  GlobalAtomicIncU32Saddr
 
 from .Component import Component, TensorDataMover, GL2Prefetch
 from .Components.TensorDataMover import TensorDataMoverLoad
@@ -9464,6 +9465,52 @@ class KernelWriterAssembly(KernelWriter):
   ##############################################################################
   # A2A-GEMM segments
   ##############################################################################
+  def a2aExecMov(self, kernel):
+    return SMovB32 if kernel["WavefrontSize"] == 32 else SMovB64
+
+  def a2aSysModifier(self, offset, isStore):
+    """Modifiers of the flag and done[] polls and stores."""
+    if not self.states.asmCaps["HasSAtomic"]:
+      return GLOBALModifiers(offset=offset, scope=CacheScope.SCOPE_SYS)
+    if isStore:
+      return GLOBALModifiers(offset=offset, glc=True, slc=True, isStore=True)
+    return GLOBALModifiers(offset=offset, glc=True, slc=True, scope=CacheScope.SCOPE_NONE, isStore=False)
+
+  def a2aCounterInc(self, kernel, module, dstSgpr, ptrSgpr, offSgpr, offset, comment, waitComment):
+    """dstSgpr = atomic_inc(*(ptrSgpr + offSgpr + offset)) wrapping at dstSgpr's value, returning
+    the pre-op. offSgpr is an SGPR index or None. Needs lane 0 active; restores EXEC to full."""
+    if self.states.asmCaps["HasSAtomic"]:
+      soffset = sgpr(offSgpr) if offSgpr is not None else hex(offset)
+      module.add(SAtomicInc(dst=sgpr(dstSgpr), base=sgpr(ptrSgpr, 2), soffset=soffset,
+                            smem=SMEMModifiers(glc=True), comment=comment))
+      module.add(SWaitCnt(kmcnt=0, comment=waitComment))
+      return
+    vOff  = self.vgprPool.checkOut(1, tag="a2aCounterInc_offset")
+    vData = self.vgprPool.checkOut(1, tag="a2aCounterInc_data")
+    module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=1, comment="lane 0"))
+    module.add(VMovB32(dst=vgpr(vOff), src=sgpr(offSgpr) if offSgpr is not None else 0,
+                       comment="counter offset"))
+    module.add(VMovB32(dst=vgpr(vData), src=sgpr(dstSgpr), comment="wrap limit"))
+    module.add(GlobalAtomicIncU32Saddr(dst=vgpr(vData), vaddr=vgpr(vOff), data=vgpr(vData),
+                                       saddr=sgpr(ptrSgpr, 2),
+                                       modifier=GLOBALModifiers(offset=0 if offSgpr is not None else offset,
+                                                                scope=CacheScope.SCOPE_DEV),
+                                       comment=comment))
+    module.add(SWaitCnt(vlcnt=0, comment=waitComment))
+    module.add(VReadfirstlaneB32(dst=sgpr(dstSgpr), src=vgpr(vData), comment="pre-op"))
+    module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+    self.vgprPool.checkIn(vData)
+    self.vgprPool.checkIn(vOff)
+
+  def a2aOneLane(self, kernel, module, emit):
+    """emit(module), on lane 0 alone where the ring is written through VMEM."""
+    if self.states.asmCaps["HasSAtomic"]:
+      emit(module)
+      return
+    module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=1, comment="lane 0 drives the ring"))
+    emit(module)
+    module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+
   def a2aSetupSegments(self, kernel, tPA, tPB):
     module = Module("a2aSetupSegments")
     if kernel["ProblemType"]["FusedA2A"] != "A2AGemm":
@@ -9764,11 +9811,9 @@ class KernelWriterAssembly(KernelWriter):
                        comment="DATA = count - 1"))
     module.add(SCmpLgU32(src0=sgpr(wave), src1=0, comment="wave index != 0?"))
     module.add(SCBranchSCC1(labelName=drawnLbl.getLabelName(), comment="wave 0 draws"))
-    module.add(SAtomicInc(dst=sgpr(data), base=sgpr(ptr, 2),
-                          soffset=hex(FUSED_A2A_A2AGEMM_FLAG_OFFSET),
-                          smem=SMEMModifiers(glc=True),
-                          comment="ticket = atomic_inc(counter[iB]), wrap at DATA, return pre-op"))
-    module.add(SWaitCnt(kmcnt=0, comment="wait the election atomic return (SMEM -> lgkmcnt)"))
+    self.a2aCounterInc(kernel, module, data, ptr, None, FUSED_A2A_A2AGEMM_FLAG_OFFSET,
+                       "ticket = atomic_inc(counter[iB]), wrap at DATA, return pre-op",
+                       "wait the election atomic return (SMEM -> lgkmcnt)")
     self.sgprPool.checkIn(ptr)
 
     vAddr = self.vgprPool.checkOut(1, tag="a2aElect_ldsAddr")
@@ -9877,11 +9922,14 @@ class KernelWriterAssembly(KernelWriter):
     module    = Module("a2aEnqueue")
     layout    = fusedA2AKernArgLayout()
     fusedBase = self.states.fusedA2AKernArgBase
-    ring      = SdmaRingEmitter(groupImm=fusedBase + layout["peer_0_flagPtr"])
-    pkt       = SdmaPacketEmitter()
+    ww        = kernel["WavefrontSize"]
+    gfx1250   = not self.states.asmCaps["HasSAtomic"]
+    ring      = SdmaRingEmitter(groupImm=fusedBase + layout["peer_0_flagPtr"], gfx1250=gfx1250)
+    pkt       = SdmaPacketEmitter(gfx1250=gfx1250)
+    execMov   = self.a2aExecMov(kernel)
+    execTop   = EXEC() if ww == 32 else EXECHI()
     mt        = kernel["MacroTile1"]
     subRounds = kernel["A2ASubRounds"]
-    ww        = kernel["WavefrontSize"]
     bpe       = int(tPB["bpeGR"])
     ldb       = self.strideRef("B", tPB["tileIdx"])
     nToken    = self.sizeRef(tPB["tileIdx"])
@@ -9965,7 +10013,8 @@ class KernelWriterAssembly(KernelWriter):
       module.add(VMovB32(dst=vgpr(vGK), src=sgpr(gk), comment="GK -> packet state"))
       module.add(VWritelaneB32(dst=vgpr(vGK), src0=sgpr(size), src1=1, comment="NG -> lane 1"))
     self.vgprPool.checkIn(tmpVgpr)
-    ring.emitSeedCursorsAndCache(module, self, peerGrp, "FusedCounterPtr", curOff, cached)
+    self.a2aOneLane(kernel, module, lambda m: ring.emitSeedCursorsAndCache(
+        m, self, peerGrp, "FusedCounterPtr", curOff, cached))
     module.add(SMulI32(dst=sgpr(size), src0=sgpr(size), src1=ATOMIC_PACKET_DWORDS * 4,
                        comment="one ATOMIC per group"))
     module.add(SMulI32(dst=sgpr(pad), src0=sgpr("A2ABlockCount"), src1=COPY_PACKET_DWORDS * 4,
@@ -9975,8 +10024,8 @@ class KernelWriterAssembly(KernelWriter):
     if subRounds > 1:
       module.add(SLShiftLeftB32(dst=sgpr(size), shiftHex=log2(subRounds), src=sgpr(size),
                                 comment="one pass per sub-round"))
-    ring.emitReserveQueueSpace(module, self, peerGrp, "FusedCounterPtr", curOff,
-                               cached, sgpr(size), cur, pad)
+    self.a2aOneLane(kernel, module, lambda m: ring.emitReserveQueueSpace(
+        m, self, peerGrp, "FusedCounterPtr", curOff, cached, sgpr(size), cur, pad))
     pending = self.sgprPool.checkOutAligned(2, 2, tag="a2aEnq_pending", preventOverflow=False)
     module.add(SMovB64(dst=sgpr(pending, 2), src=sgpr(cur, 2), comment="pending = reserved base"))
 
@@ -10051,12 +10100,13 @@ class KernelWriterAssembly(KernelWriter):
     else:
       module.add(VMovB32(dst=vgpr(vRectX), src=vgpr(vTmp), comment="rect_x = pitch"))
     self.vgprPool.checkIn(vTmp)
-    module.add(SMovB32(dst=EXECLO(), src=0, comment="the signal lane"))
-    module.add(SMovB32(dst=EXECHI(), src=hex(1 << 31), comment="the signal lane"))
+    if ww == 64:
+      module.add(SMovB32(dst=EXECLO(), src=0, comment="the signal lane"))
+    module.add(SMovB32(dst=execTop, src=hex(1 << 31), comment="the signal lane"))
     module.add(VMovB32(dst=vgpr(vLaneStep), src=hex(1 << 30),
                        comment="the signal lane holds no block"))
     pkt.emitBuildAtomicPacketUniformV(module, vPkt)
-    module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+    module.add(execMov(dst=EXEC(), src=-1, comment="restore EXEC = full"))
 
     ring.emitPadV(module, self, vQBuf, pending, pad, vLane, vPkt + 8, ww)
     self.sgprPool.checkIn(pad)
@@ -10146,7 +10196,7 @@ class KernelWriterAssembly(KernelWriter):
                          comment="the lane's block"))
       module.add(VCmpLeI32(dst=VCC(), src0=sgpr(row), src1=vgpr(vRow),
                            comment="inside the group?"))
-      module.add(SMovB64(dst=EXEC(), src=VCC(), comment="lanes holding a block"))
+      module.add(execMov(dst=EXEC(), src=VCC(), comment="lanes holding a block"))
       module.add(VMulU32U24(dst=vgpr(vTok), src0=mt, src1=vgpr(vRow),
                             comment="token row = b * MT_token"))
       module.add(VMulLOU32(dst=vgpr(vOff), src0=vgpr(vTok), src1=ldb, comment="token row * ldb lo"))
@@ -10182,15 +10232,15 @@ class KernelWriterAssembly(KernelWriter):
         module.add(SCmpEQU32(src0=sgpr(nLeft), src1=0, comment="the group's last pass?"))
         module.add(SCSelectB32(dst=sgpr(sig), src0=hex(1 << 31), src1=0,
                                comment="the signal lane, on the last pass"))
-        module.add(SOrB32(dst=EXECHI(), src0=EXECHI(), src1=sgpr(sig), comment="+ the signal lane"))
+        module.add(SOrB32(dst=execTop, src0=execTop, src1=sgpr(sig), comment="+ the signal lane"))
         ring.emitLaneRingAddrV(module, self, vAddr, vQBuf, pending, vLaneOff)
         ring.emitStorePacketV(module, vAddr, vPkt, ATOMIC_PACKET_DWORDS)
-        module.add(SAndN2B32(dst=EXECHI(), src0=EXECHI(), src1=sgpr(sig),
+        module.add(SAndN2B32(dst=execTop, src0=execTop, src1=sgpr(sig),
                              comment="- the signal lane"))
         ring.emitStorePacketV(module, vAddr, vPkt, COPY_PACKET_DWORDS,
                               firstDword=ATOMIC_PACKET_DWORDS)
         module.add(SNop(waitState=1, comment="write-data hazard"))
-        module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+        module.add(execMov(dst=EXEC(), src=-1, comment="restore EXEC = full"))
         module.add(SAddU32(dst=sgpr(pending), src0=sgpr(pending), src1=sgpr(t),
                            comment="pending += COPY bytes"))
         module.add(SAddCU32(dst=sgpr(pending + 1), src0=sgpr(pending + 1), src1=0,
@@ -10209,14 +10259,15 @@ class KernelWriterAssembly(KernelWriter):
         module.add(SCmpEQU32(src0=sgpr(pLeft), src1=sgpr("A2ABlockCount"),
                              comment="first group of this queue?"))
         module.add(SCBranchSCC0(labelName=earlySkip.getLabelName(), comment="doorbell already rung"))
-        module.add(SWaitCnt(vlcnt=0, comment="the group's packets are in the ring"))
+        module.add(SWaitCnt(vscnt=0, comment="the group's packets are in the ring") if gfx1250 else
+                   SWaitCnt(vlcnt=0, comment="the group's packets are in the ring"))
         scratch = self.sgprPool.checkOutAligned(6, 4, tag="a2aEnq_earlyScratch", preventOverflow=False)
         eOff    = self.sgprPool.checkOut(1, tag="a2aEnq_earlyCursorOff", preventOverflow=False)
         module.add(SLShiftLeftB32(dst=sgpr(eOff), shiftHex=int(log2(CURSOR_PAIR_BYTES)),
                                   src=sgpr(srank),
                                   comment="cursor pair offset = s * %u" % CURSOR_PAIR_BYTES))
-        ring.emitEarlyDoorbell(module, self, peerGrp, "FusedCounterPtr", eOff, cur, pending,
-                               scratchS=scratch)
+        self.a2aOneLane(kernel, module, lambda m: ring.emitEarlyDoorbell(
+            m, self, peerGrp, "FusedCounterPtr", eOff, cur, pending, scratchS=scratch))
         self.sgprPool.checkIn(eOff)
         self.sgprPool.checkIn(scratch)
         module.add(earlySkip)
@@ -10226,13 +10277,14 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SCmpLgU32(src0=sgpr(pLeft), src1=0, comment="more blocks on this queue?"))
     module.add(SCBranchSCC1(labelName=gLoop.getLabelName(), comment="next group"))
 
-    module.add(SWaitCnt(vlcnt=0, comment="every packet is in the ring"))
+    module.add(SWaitCnt(vscnt=0, comment="every packet is in the ring") if gfx1250 else
+               SWaitCnt(vlcnt=0, comment="every packet is in the ring"))
     curOff = self.sgprPool.checkOut(1, tag="a2aEnq_cursorOff2", preventOverflow=False)
     module.add(SLShiftLeftB32(dst=sgpr(curOff), shiftHex=int(log2(CURSOR_PAIR_BYTES)),
                               src=sgpr(srank),
                               comment="cursor pair offset = s * %u" % CURSOR_PAIR_BYTES))
-    ring.emitSubmitPacket(module, self, peerGrp, "FusedCounterPtr", curOff, cur, pending,
-                          turnAtOrPast=True)
+    self.a2aOneLane(kernel, module, lambda m: ring.emitSubmitPacket(
+        m, self, peerGrp, "FusedCounterPtr", curOff, cur, pending, turnAtOrPast=True))
     self.sgprPool.checkIn(curOff)
 
     for reg in (nLeft, rowC, gk, nBlk, row, pending, cur, pLeft, peerGrp, srank):
@@ -10296,10 +10348,9 @@ class KernelWriterAssembly(KernelWriter):
                          comment="+ FLAG_OFFSET"))
       module.add(SSubU32(dst=sgpr(old), src0=sgpr(wrapSrc), src1=1,
                          comment="DATA = %s - 1" % wrapSrc))
-      module.add(SAtomicInc(dst=sgpr(old), base=sgpr(ptr, 2), soffset=sgpr(tmp),
-                            smem=SMEMModifiers(glc=True),
-                            comment="old = atomic_inc(%s tally), wrap at DATA, return pre-op" % what))
-      module.add(SWaitCnt(kmcnt=0, comment="wait the %s tally return" % what))
+      self.a2aCounterInc(kernel, module, old, ptr, tmp, 0,
+                         "old = atomic_inc(%s tally), wrap at DATA, return pre-op" % what,
+                         "wait the %s tally return" % what)
       module.add(SSubU32(dst=sgpr(tmp), src0=sgpr(wrapSrc), src1=1, comment="%s - 1" % wrapSrc))
       module.add(SCmpLgU32(src0=sgpr(old), src1=sgpr(tmp), comment="not the last of the %s?" % what))
       module.add(SCBranchSCC1(labelName=endLbl.getLabelName(), comment="done"))
@@ -10313,19 +10364,19 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SMovB32(dst=sgpr(old), src=0, comment="bytes cleared"))
     module.add(clrLbl)
     module.add(VCmpGtU32(dst=VCC(), src0=sgpr(flagBytes), src1=vgpr(vOff), comment="inside the flags?"))
-    module.add(SMovB64(dst=EXEC(), src=VCC(), comment="lanes inside the flags"))
+    module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=VCC(), comment="lanes inside the flags"))
     module.add(GlobalStoreB32(vaddr=vgpr(vOff), src=vgpr(vData), saddr=sgpr("FusedCounterPtr", 2),
-                              modifier=GLOBALModifiers(offset=FUSED_A2A_A2AGEMM_FLAG_OFFSET, glc=True,
-                                                       slc=True, isStore=True),
+                              modifier=self.a2aSysModifier(FUSED_A2A_A2AGEMM_FLAG_OFFSET, True),
                               comment="flag = 0 (system scope)"))
-    module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+    module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=-1, comment="restore EXEC = full"))
     module.add(VAddU32(dst=vgpr(vOff), src0=ww * 4, src1=vgpr(vOff), comment="next stride"))
     module.add(SAddU32(dst=sgpr(old), src0=sgpr(old), src1=ww * 4, comment="bytes cleared"))
     module.add(SCmpLtU32(src0=sgpr(old), src1=sgpr(flagBytes), comment="any left?"))
     module.add(SCBranchSCC1(labelName=clrLbl.getLabelName(), comment="clear the next stride"))
     self.sgprPool.checkIn(old)
     self.sgprPool.checkIn(flagBytes)
-    SdmaRingEmitter().emitClearCursors(module, self, "FusedCounterPtr", FUSED_A2A_CURSOR_BYTES)
+    SdmaRingEmitter(gfx1250=not self.states.asmCaps["HasSAtomic"]).emitClearCursors(
+        module, self, "FusedCounterPtr", FUSED_A2A_CURSOR_BYTES)
 
     module.add(self.argLoader.loadKernArg(tmp, "KernArgAddress",
                                           sgprOffset=hex(base + layout["FusedDrain"]), dword=1))
@@ -10343,7 +10394,7 @@ class KernelWriterAssembly(KernelWriter):
     # A2ADrainFlagPtr aliases FusedCounterPtr from here on.
     module.add(RegSet("s", "sgprA2ADrainFlagPtr", self.sgprs["FusedCounterPtr"]))
     loadFlagPtr(sgpr("A2ADrainFlagPtr", 2), "A2ADrainMyRank", "my peer group offset", "my")
-    module.add(SMovB64(dst=EXEC(), src=1, comment="lane 0"))
+    module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=1, comment="lane 0"))
     module.add(VMovB32(dst=vgpr(vData), src=1))
     module.add(SLShiftLeftB32(dst=sgpr(tmp), shiftHex=2, src=sgpr("A2ADrainMyRank"), comment="myRank * 4"))
     module.add(VMovB32(dst=vgpr(vOff), src=sgpr(tmp), comment="done[myRank] offset"))
@@ -10353,14 +10404,13 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SCBranchSCC1(labelName=nextLbl.getLabelName(), comment="skip self"))
     loadFlagPtr(sgpr(ptr, 2), "A2AShardIdx", "peer group offset", "peer s")
     module.add(GlobalStoreB32(vaddr=vgpr(vOff), src=vgpr(vData), saddr=sgpr(ptr, 2),
-                              modifier=GLOBALModifiers(offset=FUSED_A2A_A2AGEMM_DONE_OFFSET, glc=True,
-                                                       slc=True, isStore=True),
+                              modifier=self.a2aSysModifier(FUSED_A2A_A2AGEMM_DONE_OFFSET, True),
                               comment="peer s done[myRank] = 1 (system scope)"))
     module.add(nextLbl)
     module.add(SAddU32(dst=sgpr("A2AShardIdx"), src0=sgpr("A2AShardIdx"), src1=1, comment="s + 1"))
     module.add(SCmpLtU32(src0=sgpr("A2AShardIdx"), src1=sgpr("A2AW"), comment="s < W?"))
     module.add(SCBranchSCC1(labelName=pubLbl.getLabelName(), comment="next peer"))
-    module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+    module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=-1, comment="restore EXEC = full"))
     module.add(SMovB32(dst=sgpr("A2ADrainArmed"), src=1, comment="arm the drain-send wait"))
     self.vgprPool.checkIn(vData)
     self.vgprPool.checkIn(vOff)
@@ -10383,29 +10433,32 @@ class KernelWriterAssembly(KernelWriter):
     with self.allocTmpSgpr(3, alignment=2, tag="a2aDrainSendWait_mask") as tmpSgprInfo:
       mask = tmpSgprInfo.idx
       bit  = tmpSgprInfo.idx + 2
-      module.add(SBfmB64(dst=sgpr(mask, 2), src0=sgpr("A2AW"), src1=0,
-                         comment="(1 << W) - 1, one lane per peer"))
+      if kernel["WavefrontSize"] == 32:
+        module.add(SBfmB32(dst=sgpr(mask), src0=sgpr("A2AW"), src1=0,
+                           comment="(1 << W) - 1, one lane per peer"))
+      else:
+        module.add(SBfmB64(dst=sgpr(mask, 2), src0=sgpr("A2AW"), src1=0,
+                           comment="(1 << W) - 1, one lane per peer"))
       module.add(SLShiftLeftB32(dst=sgpr(bit), src=1, shiftHex=sgpr("A2ADrainMyRank"),
                                 comment="1 << myRank"))
       module.add(SAndN2B32(dst=sgpr(mask), src0=sgpr(mask), src1=sgpr(bit),
                            comment="drop my own lane"))
-      module.add(SMovB64(dst=EXEC(), src=sgpr(mask, 2), comment="lane s polls done[s]"))
+      module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=sgpr(mask, self.states.laneSGPRCount),
+                                         comment="lane s polls done[s]"))
     module.add(VLShiftLeftB32(dst=vgpr(vOff), shiftHex=2, src=vgpr("Serial"),
                               comment="done[s] offset"))
     module.add(spinLbl)
     module.add(GlobalLoadB32(dst=vgpr(vVal), vaddr=vgpr(vOff), saddr=sgpr("A2ADrainFlagPtr", 2),
-                             modifier=GLOBALModifiers(offset=FUSED_A2A_A2AGEMM_DONE_OFFSET, glc=True,
-                                                      slc=True, isStore=False),
+                             modifier=self.a2aSysModifier(FUSED_A2A_A2AGEMM_DONE_OFFSET, False),
                              comment="poll done[s] at system scope"))
     module.add(SWaitCnt(vlcnt=0, comment="wait the done poll"))
     module.add(VCmpEQU32(dst=VCC(), src0=0, src1=vgpr(vVal), comment="any done[s] == 0?"))
     module.add(SCBranchVCCNZ(labelName=spinLbl.getLabelName(), comment="a peer is still reading"))
     module.add(VMovB32(dst=vgpr(vVal), src=0))
     module.add(GlobalStoreB32(vaddr=vgpr(vOff), src=vgpr(vVal), saddr=sgpr("A2ADrainFlagPtr", 2),
-                              modifier=GLOBALModifiers(offset=FUSED_A2A_A2AGEMM_DONE_OFFSET, glc=True,
-                                                       slc=True, isStore=True),
+                              modifier=self.a2aSysModifier(FUSED_A2A_A2AGEMM_DONE_OFFSET, True),
                               comment="done[s] = 0 (system scope)"))
-    module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+    module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=-1, comment="restore EXEC = full"))
     self.vgprPool.checkIn(vVal)
     self.vgprPool.checkIn(vOff)
     module.add(endLbl)
@@ -10453,11 +10506,10 @@ class KernelWriterAssembly(KernelWriter):
         poll.add(VMovB32(dst=vgpr("Serial"), src=sgpr(slot), comment="poll offset"))
         poll.add(GlobalLoadB32(dst=vgpr("Serial"), vaddr=vgpr("Serial"),
             saddr=sgpr("FusedCounterPtr", 2),
-            modifier=GLOBALModifiers(offset=FUSED_A2A_A2AGEMM_FLAG_OFFSET, glc=True, slc=True,
-                                     scope=CacheScope.SCOPE_NONE, isStore=False),
+            modifier=self.a2aSysModifier(FUSED_A2A_A2AGEMM_FLAG_OFFSET, False),
             comment="poll flag[b][i] at system scope"))
         return poll
-      module.add(SMovB64(dst=EXEC(), src=1, comment="lane 0 polls"))
+      module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=1, comment="lane 0 polls"))
       module.add(VReadfirstlaneB32(dst=sgpr(serial), src=vgpr("Serial"), comment="save Serial lane 0"))
       module.add(pollFlag())
       module.add(self.argLoader.loadKernArg(rank, "KernArgAddress",
@@ -10553,7 +10605,7 @@ class KernelWriterAssembly(KernelWriter):
       module.add(SCBranchSCC1(labelName=pollLabel.getLabelName(), comment="segment short -> poll again"))
       module.add(readyLabel)
       module.add(VMovB32(dst=vgpr("Serial"), src=sgpr(serial), comment="restore Serial lane 0"))
-      module.add(SMovB64(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+      module.add(self.a2aExecMov(kernel)(dst=EXEC(), src=-1, comment="restore EXEC = full"))
     return module
 
   def a2aSegmentSrd(self, kernel, tP, shifts, stepBack):

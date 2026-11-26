@@ -86,7 +86,7 @@ from .Components.Signature import FUSED_A2A_A2AGEMM_DONE_OFFSET, FUSED_A2A_A2AGE
     FUSED_A2A_CURSOR_BYTES, FUSED_A2A_DRAIN_SEND, FUSED_A2A_LINE_BYTES, FUSED_A2A_MAX_RANKS, \
     PEER_GROUP_BYTES, fusedA2AKernArgLayout
 from .Components.SdmaPacketEmitter import ATOMIC_PACKET_DWORDS, COPY_DW_DST, COPY_DW_SRC, \
-    COPY_PACKET_DWORDS, SdmaPacketEmitter
+    COPY_PACKET_DWORDS, SIGNAL_DW_ADDR, SdmaPacketEmitter
 from .Components.SdmaRingEmitter import CURSOR_PAIR_BYTES, OFF_bufPtr, OFF_flagPtr, OFF_queueBuf, \
     SdmaRingEmitter, peerLoad
 from .KernelWriterModules import *
@@ -10192,13 +10192,21 @@ class KernelWriterAssembly(KernelWriter):
     else:
       module.add(VMovB32(dst=vgpr(vRectX), src=vgpr(vTmp), comment="rect_x = pitch"))
     self.vgprPool.checkIn(vTmp)
-    if ww == 64:
-      module.add(SMovB32(dst=EXECLO(), src=0, comment="the signal lane"))
-    module.add(SMovB32(dst=execTop, src=hex(1 << 31), comment="the signal lane"))
-    module.add(VMovB32(dst=vgpr(vLaneStep), src=hex(1 << 30),
-                       comment="the signal lane holds no block"))
-    pkt.emitBuildAtomicPacketUniformV(module, vPkt)
-    module.add(execMov(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+    if gfx1250:
+      vSig = self.vgprPool.checkOutAligned(ATOMIC_PACKET_DWORDS, 4, tag="a2aEnq_signal")
+      with self.allocTmpSgpr(1, tag="a2aEnq_noBlock") as tmpSgprInfo:
+        module.add(SMovB32(dst=sgpr(tmpSgprInfo.idx), src=hex(1 << 30)))
+        module.add(VWritelaneB32(dst=vgpr(vLaneStep), src0=sgpr(tmpSgprInfo.idx), src1=ww - 1,
+                                 comment="the signal lane holds no block"))
+      pkt.emitBuildAtomicPacketUniformV(module, vSig)
+    else:
+      if ww == 64:
+        module.add(SMovB32(dst=EXECLO(), src=0, comment="the signal lane"))
+      module.add(SMovB32(dst=execTop, src=hex(1 << 31), comment="the signal lane"))
+      module.add(VMovB32(dst=vgpr(vLaneStep), src=hex(1 << 30),
+                         comment="the signal lane holds no block"))
+      pkt.emitBuildAtomicPacketUniformV(module, vPkt)
+      module.add(execMov(dst=EXEC(), src=-1, comment="restore EXEC = full"))
 
     ring.emitPadV(module, self, vQBuf, pending, pad, vLane, vPkt + 8, ww)
     self.sgprPool.checkIn(pad)
@@ -10209,6 +10217,7 @@ class KernelWriterAssembly(KernelWriter):
     gk    = self.sgprPool.checkOut(1, tag="a2aEnq_groupWidth", preventOverflow=False)
     rowC  = self.sgprPool.checkOut(1, tag="a2aEnq_passRow", preventOverflow=False)
     nLeft = self.sgprPool.checkOut(1, tag="a2aEnq_passLeft", preventOverflow=False)
+    blkMask = self.sgprPool.checkOut(1, tag="a2aEnq_blockLanes", preventOverflow=False) if gfx1250 else None
     vRow  = self.vgprPool.checkOut(1, tag="a2aEnq_row")
     vTok  = self.vgprPool.checkOut(1, tag="a2aEnq_tokenRow")
     vT    = self.vgprPool.checkOut(1, tag="a2aEnq_tmp")
@@ -10274,7 +10283,12 @@ class KernelWriterAssembly(KernelWriter):
                            comment="&flag[gLo][i] lo"))
         module.add(SAddCU32(dst=sgpr(fFlag + 1), src0=sgpr("FusedCounterPtr+1"), src1=0,
                             comment="&flag[gLo][i] hi (carry)"))
-        pkt.emitSignalAddressV(module, vPkt, fFlag, ww - 1)
+        if gfx1250:
+          module.add(VMovB32(dst=vgpr(vSig + SIGNAL_DW_ADDR), src=sgpr(fFlag), comment="signal DW1: addr lo"))
+          module.add(VMovB32(dst=vgpr(vSig + SIGNAL_DW_ADDR + 1), src=sgpr(fFlag + 1),
+                             comment="signal DW2: addr hi"))
+        else:
+          pkt.emitSignalAddressV(module, vPkt, fFlag, ww - 1)
 
       module.addComment1("A2A: the group's COPYs, one block per lane, then its ATOMIC")
       cLoop = Label(self.labels.getNameInc("a2a_copy_loop"), "up to one block per lane")
@@ -10286,9 +10300,13 @@ class KernelWriterAssembly(KernelWriter):
       module.add(cLoop)
       module.add(VSubU32(dst=vgpr(vRow), src0=sgpr(rowC), src1=vgpr(vLaneStep),
                          comment="the lane's block"))
-      module.add(VCmpLeI32(dst=VCC(), src0=sgpr(row), src1=vgpr(vRow),
-                           comment="inside the group?"))
-      module.add(execMov(dst=EXEC(), src=VCC(), comment="lanes holding a block"))
+      if gfx1250:
+        module.add(VCmpLeI32(dst=sgpr(blkMask), src0=sgpr(row), src1=vgpr(vRow),
+                             comment="lanes holding a block"))
+      else:
+        module.add(VCmpLeI32(dst=VCC(), src0=sgpr(row), src1=vgpr(vRow),
+                             comment="inside the group?"))
+        module.add(execMov(dst=EXEC(), src=VCC(), comment="lanes holding a block"))
       module.add(VMulU32U24(dst=vgpr(vTok), src0=mt, src1=vgpr(vRow),
                             comment="token row = b * MT_token"))
       module.add(VMulLOU32(dst=vgpr(vOff), src0=vgpr(vTok), src1=ldb, comment="token row * ldb lo"))
@@ -10324,15 +10342,24 @@ class KernelWriterAssembly(KernelWriter):
         module.add(SCmpEQU32(src0=sgpr(nLeft), src1=0, comment="the group's last pass?"))
         module.add(SCSelectB32(dst=sgpr(sig), src0=hex(1 << 31), src1=0,
                                comment="the signal lane, on the last pass"))
-        module.add(SOrB32(dst=execTop, src0=execTop, src1=sgpr(sig), comment="+ the signal lane"))
-        ring.emitLaneRingAddrV(module, self, vAddr, vQBuf, pending, vLaneOff)
-        ring.emitStorePacketV(module, vAddr, vPkt, ATOMIC_PACKET_DWORDS)
-        module.add(SAndN2B32(dst=execTop, src0=execTop, src1=sgpr(sig),
-                             comment="- the signal lane"))
-        ring.emitStorePacketV(module, vAddr, vPkt, COPY_PACKET_DWORDS,
-                              firstDword=ATOMIC_PACKET_DWORDS)
-        module.add(SNop(waitState=1, comment="write-data hazard"))
-        module.add(execMov(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+        if gfx1250:
+          ring.emitLaneRingAddrV(module, self, vAddr, vQBuf, pending, vLaneOff)
+          module.add(execMov(dst=EXEC(), src=sgpr(blkMask), comment="lanes holding a block"))
+          ring.emitStorePacketV(module, vAddr, vPkt, COPY_PACKET_DWORDS)
+          module.add(execMov(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+          module.add(execMov(dst=EXEC(), src=sgpr(sig), comment="the signal lane, on the last pass"))
+          ring.emitStorePacketV(module, vAddr, vSig, ATOMIC_PACKET_DWORDS)
+          module.add(execMov(dst=EXEC(), src=-1, comment="restore EXEC = full"))
+        else:
+          module.add(SOrB32(dst=execTop, src0=execTop, src1=sgpr(sig), comment="+ the signal lane"))
+          ring.emitLaneRingAddrV(module, self, vAddr, vQBuf, pending, vLaneOff)
+          ring.emitStorePacketV(module, vAddr, vPkt, ATOMIC_PACKET_DWORDS)
+          module.add(SAndN2B32(dst=execTop, src0=execTop, src1=sgpr(sig),
+                               comment="- the signal lane"))
+          ring.emitStorePacketV(module, vAddr, vPkt, COPY_PACKET_DWORDS,
+                                firstDword=ATOMIC_PACKET_DWORDS)
+          module.add(SNop(waitState=1, comment="write-data hazard"))
+          module.add(execMov(dst=EXEC(), src=-1, comment="restore EXEC = full"))
         module.add(SAddU32(dst=sgpr(pending), src0=sgpr(pending), src1=sgpr(t),
                            comment="pending += COPY bytes"))
         module.add(SAddCU32(dst=sgpr(pending + 1), src0=sgpr(pending + 1), src1=0,
@@ -10381,6 +10408,9 @@ class KernelWriterAssembly(KernelWriter):
 
     for reg in (nLeft, rowC, gk, nBlk, row, pending, cur, pLeft, peerGrp, srank):
       self.sgprPool.checkIn(reg)
+    if gfx1250:
+      self.sgprPool.checkIn(blkMask)
+      self.vgprPool.checkIn(vSig)
     if subRounds > 1:
       self.vgprPool.checkIn(vCol)
     for reg in (vAddr, vOff, vT, vTok, vRow, vPkt, vLaneOff, vRectX, vLaneStep, vLane,

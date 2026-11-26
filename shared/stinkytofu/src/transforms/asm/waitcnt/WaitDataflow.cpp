@@ -23,7 +23,9 @@
 #include "stinkytofu/transforms/asm/waitcnt/WaitDataflow.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <iostream>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "stinkytofu/core/BasicBlock.hpp"
@@ -274,9 +276,23 @@ bool DataflowState::operator==(const DataflowState& other) const {
 // WaitDataflow
 // ---------------------------------------------------------------------------
 
-WaitDataflow::WaitDataflow(Function& /*func*/, const DominanceInfo& /*domInfo*/,
+WaitDataflow::WaitDataflow(Function& func, const DominanceInfo& /*domInfo*/,
                            const std::vector<BasicBlock*>& rpo)
     : rpo(rpo) {
+    std::unordered_map<const BasicBlock*, size_t> layoutIdx;
+    for (BasicBlock& bb : func) layoutIdx.emplace(&bb, layoutIdx.size());
+    std::unordered_set<const BasicBlock*> visited;
+    std::function<void(BasicBlock*)> dfs = [&](BasicBlock* bb) {
+        if (!visited.insert(bb).second) return;
+        std::vector<BasicBlock*> succs = bb->getSuccessors();
+        std::stable_partition(succs.begin(), succs.end(), [&](const BasicBlock* s) {
+            return layoutIdx.at(s) == layoutIdx.at(bb) + 1;
+        });
+        for (BasicBlock* s : succs) dfs(s);
+        sweepOrder.push_back(bb);
+    };
+    if (!rpo.empty()) dfs(rpo.front());
+    std::reverse(sweepOrder.begin(), sweepOrder.end());
     const unsigned n = static_cast<unsigned>(rpo.size());
     // Wait-count immediates are capped to the hardware window
     // (kMaxInFlight - 1). Keep a floor above that window so loop-carried
@@ -1034,7 +1050,7 @@ bool WaitDataflow::solve() {
         // Cleared each sweep so that, at the fixed point, overflowSites holds
         // exactly the steady-state queue saturations.
         overflowSites.clear();
-        for (BasicBlock* bb : rpo) {
+        for (BasicBlock* bb : sweepOrder) {
             const bool keepLiveTensorState = hasUntaggedTensorAnchor(*bb);
             DataflowState entry = mergeFromPredecessors(*bb);
             if (!loopCarriedTokenDepsEnabled && iter > 0) {
@@ -1112,7 +1128,7 @@ void WaitDataflow::finalizePlan(WaitInsertionPlan& plan) const {
         bool changed = false;
         newAnchors.clear();
 
-        for (BasicBlock* bb : rpo) {
+        for (BasicBlock* bb : sweepOrder) {
             const bool keepLiveTensorState = hasUntaggedTensorAnchor(*bb);
             // Entry = merge of recomputed predecessor exits (back-edges
             // start at bottom and tighten over iterations), then apply the

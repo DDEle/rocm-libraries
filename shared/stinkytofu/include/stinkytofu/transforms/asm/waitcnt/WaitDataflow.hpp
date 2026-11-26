@@ -219,6 +219,9 @@ class WaitDataflow {
 
    private:
     const std::vector<BasicBlock*>& rpo;
+    /// Solver sweep order: reverse post-order of a DFS that visits the
+    /// fall-through successor first.
+    std::vector<BasicBlock*> sweepOrder;
     DataflowResult result;
 
     /// Per-counter RAW-wait constraint, indexed by CounterKind. Seeded with

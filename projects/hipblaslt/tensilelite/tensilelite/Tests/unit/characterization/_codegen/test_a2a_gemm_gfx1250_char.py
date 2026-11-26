@@ -39,8 +39,8 @@ _A2A_MARKERS = (
 # ATOMIC DW0 and COPY_LINEAR_SUBWIN DW12 with their scope fields at SCOPE_SYS.
 _GFX12_PACKET_CONSTANTS = ("0x1e30000a", "0xc0c0000")
 
-# Placed by the backend after scheduling, LDS waits included.
 _SCHEDULER_FILL = ("s_wait_alu", "s_set_vgpr_msb", "s_nop", "s_wait_dscnt")
+_EXACT_IN_LOOP = ("s_wait_tensorcnt", "s_wait_loadcnt", "s_wait_kmcnt", "s_barrier")
 
 # The segment switch: from the flag-slot arithmetic to the branch back into its poll.
 _SWITCH_START = "flag slot = flag row + segment"
@@ -76,12 +76,19 @@ def _last_exec_write(insts, i):
     return None
 
 
-def _loop_body(src):
+def _loop_lines(src):
     lines = src.splitlines()
     begin = next(i for i, ln in enumerate(lines) if ln.startswith("label_LoopBeginL:"))
     end = next(i for i, ln in enumerate(lines) if ln.startswith("label_LoopEndL:"))
-    return [ln.split()[0] for ln in _instructions("\n".join(lines[begin + 1:end]))
-            if not ln.startswith(_SCHEDULER_FILL)]
+    return _instructions("\n".join(lines[begin + 1:end]))
+
+
+def _loop_body(src):
+    return [ln.split()[0] for ln in _loop_lines(src) if not ln.startswith(_SCHEDULER_FILL)]
+
+
+def _loop_syncs(src):
+    return [ln.split("//")[0].strip() for ln in _loop_lines(src) if ln.startswith(_EXACT_IN_LOOP)]
 
 
 @pytest.fixture(scope="module")
@@ -204,6 +211,26 @@ def _name_tokens(src):
     return set(name.split("_")) - {"A2AGemm", "AASR1"}
 
 
+def test_a2a_gemm_gfx1250_switch_selects_like_the_loop_increment(results):
+    """The tile base a switch picks for a wave is of the tensor its loop increment is."""
+    for base, src, _err in results:
+        incs = [ln for ln in _instructions(src)
+                if re.match(r"s_cselect_b32 s\[sgprtdmABIncs\], s\[sgprGlobalReadIncs([AB])", ln)]
+        assert incs, f"Kernel {base!r}: no tdmABIncs select"
+        first = re.match(r"s_cselect_b32 s\[sgprtdmABIncs\], s\[sgprGlobalReadIncs([AB])", incs[0]).group(1)
+        for sw in _switches(src):
+            sel = [ln for ln in sw if ln.startswith("s_cselect_b32") and "tile base" in ln]
+            wrong = [ln for ln in sel if not re.search(r"s_cselect_b32 \S+, s\[sgprA2ATileBase%s" % first, ln)]
+            assert not wrong, f"Kernel {base!r}: tile-base select disagrees with tdmABIncs: {wrong}"
+
+
+def test_a2a_gemm_gfx1250_step_back_only_after_pgr2_loop_exit(results):
+    for base, src, _err in results:
+        pgr = int(re.search(r"_PGR(\d)_", re.search(r"^\.globl (\S+)", src, re.M).group(1)).group(1))
+        backs = sum("one tdmABIncs back" in ln for ln in _instructions(src))
+        assert backs == (1 if pgr >= 2 else 0), f"Kernel {base!r} (PGR{pgr}): {backs} step-backs"
+
+
 def test_a2a_gemm_gfx1250_loop_body_matches_plain_gemm(results, plain_results):
     """Same instructions in the main loop as the plain GEMM of the same forks, in any order."""
     plain = {frozenset(_name_tokens(psrc)): (pbase, psrc) for (pbase, psrc, _e) in plain_results}
@@ -212,6 +239,10 @@ def test_a2a_gemm_gfx1250_loop_body_matches_plain_gemm(results, plain_results):
         fused, ref = Counter(_loop_body(src)), Counter(_loop_body(psrc))
         assert fused == ref, (
             f"Kernel {base!r}: main loop differs from {pbase!r}: "
+            f"+{dict(fused - ref)} -{dict(ref - fused)}")
+        fused, ref = Counter(_loop_syncs(src)), Counter(_loop_syncs(psrc))
+        assert fused == ref, (
+            f"Kernel {base!r}: main-loop waits and barriers differ from {pbase!r}: "
             f"+{dict(fused - ref)} -{dict(ref - fused)}")
 
 

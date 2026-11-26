@@ -6,8 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <stdexcept>
-#include <string>
 #include <vector>
 
 namespace TensileLite
@@ -29,36 +27,13 @@ namespace TensileLite
                    == 4;
         }
 
-        enum class FusedA2ADirect
-        {
-            None,
-            Self,
-            Card
-        };
-
-        inline FusedA2ADirect parseFusedA2ADirect(std::string const& text)
-        {
-            if(text == "none")
-                return FusedA2ADirect::None;
-            if(text == "self")
-                return FusedA2ADirect::Self;
-            if(text == "card")
-                return FusedA2ADirect::Card;
-            throw std::runtime_error("--fused-a2a-direct must be none, self or card; got '" + text
-                                     + "'.");
-        }
-
-        // Bit j set iff peers[j] is direct for self: None, never; Self, the same PCI domain, bus,
-        // device and function; Card, the same PCI domain, bus and device.
-        inline uint32_t fusedA2ADirectMask(FusedA2ADirect               mode,
-                                           PciBusId const&              self,
-                                           std::vector<PciBusId> const& peers)
+        // Bit j set iff peers[j] is on self's card: the same PCI domain, bus and device.
+        inline uint32_t fusedA2ADirectMask(PciBusId const& self, std::vector<PciBusId> const& peers)
         {
             uint32_t mask = 0;
             for(size_t j = 0; j < peers.size(); j++)
-                if(mode != FusedA2ADirect::None && peers[j].domain == self.domain
-                   && peers[j].bus == self.bus && peers[j].device == self.device
-                   && (mode == FusedA2ADirect::Card || peers[j].function == self.function))
+                if(peers[j].domain == self.domain && peers[j].bus == self.bus
+                   && peers[j].device == self.device)
                     mask |= 1u << j;
             return mask;
         }

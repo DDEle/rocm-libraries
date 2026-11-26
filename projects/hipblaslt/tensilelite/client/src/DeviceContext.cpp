@@ -9,13 +9,11 @@
 #include <Tensile/Utils.hpp>
 
 #ifdef TENSILELITE_ENABLE_SDMA
+#include "FusedA2ATopology.hpp"
 #include "SdmaQueue.hpp"
 #endif
 
-#include <cstdlib>
-#include <iostream>
 #include <stdexcept>
-#include <string>
 
 namespace TensileLite
 {
@@ -78,7 +76,7 @@ namespace TensileLite
             constexpr int kA2AGemmPoisonByte = 0xC7;
 
 #ifdef TENSILELITE_ENABLE_SDMA
-            PciBusId pciBusIdOfDevice(int device, std::string* text = nullptr)
+            PciBusId pciBusIdOfDevice(int device)
             {
                 char busId[64] = {};
                 HIP_CHECK_EXC(hipDeviceGetPCIBusId(busId, sizeof(busId), device));
@@ -88,8 +86,6 @@ namespace TensileLite
                                                          busId,
                                                          "' of HIP device ",
                                                          device));
-                if(text != nullptr)
-                    *text = busId;
                 return id;
             }
 #endif
@@ -100,7 +96,7 @@ namespace TensileLite
                                      size_t                  commFlagsBytes,
                                      std::vector<int> const& sdmaPeers,
                                      int                     sdmaRotate,
-                                     FusedA2ADirect          fusedA2ADirect)
+                                     bool                    fusedA2ADirect)
             : deviceId(deviceId)
             , adapter(std::make_shared<hip::SolutionAdapter>())
             , commFlagsBytes(commFlagsBytes)
@@ -132,43 +128,25 @@ namespace TensileLite
                         if(pe != hipSuccess && pe != hipErrorPeerAccessAlreadyEnabled)
                             HIP_CHECK_EXC(pe);
                     }
-                    char const* traceEnv = std::getenv("TENSILELITE_SDMA_TRACE");
-                    const bool  trace    = traceEnv != nullptr && *traceEnv != '\0';
-                    if(fusedA2ADirect != FusedA2ADirect::None || trace)
+                    if(fusedA2ADirect)
                     {
-                        std::string    busId;
-                        const PciBusId self = pciBusIdOfDevice(deviceId, &busId);
-                        if(fusedA2ADirect != FusedA2ADirect::None)
-                        {
-                            std::vector<PciBusId> peerIds;
-                            for(int peer : sdmaPeers)
-                                peerIds.push_back(pciBusIdOfDevice(peer));
-                            directMask = fusedA2ADirectMask(fusedA2ADirect, self, peerIds);
-                        }
-                        if(trace)
-                            std::cout << "SENTINEL_FUSED_DIRECT dev=" << deviceId
-                                      << " bdf=" << busId << " mask=0x" << std::hex << directMask
-                                      << std::dec << std::endl;
+                        std::vector<PciBusId> peerIds;
+                        for(int peer : sdmaPeers)
+                            peerIds.push_back(pciBusIdOfDevice(peer));
+                        directMask = fusedA2ADirectMask(pciBusIdOfDevice(deviceId), peerIds);
                     }
 
                     const uint32_t node = sdmaNodeIdForDevice(deviceId);
                     const auto     plan = sdmaQueuePlan(sdmaPeers, deviceId, directMask);
                     sdmaQueues.resize(sdmaPeers.size());
-                    for(size_t order = 0; order < plan.size(); order++)
+                    for(SdmaQueuePlan const& q : plan)
                     {
-                        SdmaQueuePlan const& q        = plan[order];
-                        const uint32_t       peerNode = sdmaNodeIdForDevice(sdmaPeers[q.peer]);
-                        const uint32_t       engine
+                        const uint32_t peerNode = sdmaNodeIdForDevice(sdmaPeers[q.peer]);
+                        const uint32_t engine
                             = q.spread
                                   ? sdmaMaskEngine(sdmaRecommendedEngineMask(node, peerNode), q.k)
                                   : sdmaQueueEngine(node, peerNode, q.k, sdmaRotate);
                         sdmaQueues[q.peer] = std::make_shared<SdmaQueue>(node, engine);
-                        if(trace)
-                            std::cout << "SENTINEL_SDMA_QUEUE dev=" << deviceId
-                                      << " peer=" << q.peer << " order=" << order
-                                      << " engine=" << engine << " ring=0x" << std::hex
-                                      << reinterpret_cast<uintptr_t>(sdmaQueues[q.peer]->ringBase())
-                                      << std::dec << std::endl;
                     }
 #else
                     throw std::runtime_error(

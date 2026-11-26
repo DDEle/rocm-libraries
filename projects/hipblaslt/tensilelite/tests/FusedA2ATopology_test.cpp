@@ -50,27 +50,7 @@ TEST(FusedA2ATopology, ParsesPciBusId)
     EXPECT_FALSE(parsePciBusId("", bad));
 }
 
-TEST(FusedA2ATopology, ParsesDirectMode)
-{
-    EXPECT_EQ(parseFusedA2ADirect("none"), FusedA2ADirect::None);
-    EXPECT_EQ(parseFusedA2ADirect("self"), FusedA2ADirect::Self);
-    EXPECT_EQ(parseFusedA2ADirect("card"), FusedA2ADirect::Card);
-    for(char const* bad : {"true", "false", "", "Card"})
-    {
-        try
-        {
-            parseFusedA2ADirect(bad);
-            ADD_FAILURE() << "accepted '" << bad << "'";
-        }
-        catch(std::runtime_error const& e)
-        {
-            EXPECT_NE(std::string(e.what()).find("none, self or card"), std::string::npos)
-                << e.what();
-        }
-    }
-}
-
-TEST(FusedA2ATopology, DirectMaskOfEachMode)
+TEST(FusedA2ATopology, DirectMaskIsTheCard)
 {
     const std::vector<PciBusId> peers = {parse("0000:05:00.0"),
                                          parse("0000:05:00.1"),
@@ -80,9 +60,7 @@ TEST(FusedA2ATopology, DirectMaskOfEachMode)
     const uint32_t              card[5] = {0x3, 0x3, 0x4, 0x8, 0x10};
     for(size_t d = 0; d < peers.size(); d++)
     {
-        EXPECT_EQ(fusedA2ADirectMask(FusedA2ADirect::None, peers[d], peers), 0u) << d;
-        EXPECT_EQ(fusedA2ADirectMask(FusedA2ADirect::Self, peers[d], peers), 1u << d) << d;
-        EXPECT_EQ(fusedA2ADirectMask(FusedA2ADirect::Card, peers[d], peers), card[d]) << d;
+        EXPECT_EQ(fusedA2ADirectMask(peers[d], peers), card[d]) << d;
     }
 }
 
@@ -90,13 +68,7 @@ TEST(FusedA2ATopology, DirectMaskOfDpxPairs)
 {
     const auto peers = dpxCards(8);
     for(size_t d = 0; d < peers.size(); d++)
-    {
-        EXPECT_EQ(fusedA2ADirectMask(FusedA2ADirect::None, peers[d], peers), 0u) << d;
-        EXPECT_EQ(fusedA2ADirectMask(FusedA2ADirect::Self, peers[d], peers), 1u << d) << d;
-        EXPECT_EQ(fusedA2ADirectMask(FusedA2ADirect::Card, peers[d], peers),
-                  0x3u << (d & ~size_t(1)))
-            << d;
-    }
+        EXPECT_EQ(fusedA2ADirectMask(peers[d], peers), 0x3u << (d & ~size_t(1))) << d;
 }
 
 TEST(FusedA2ATopology, MaskEngineKeepsEngineZero)
@@ -127,35 +99,30 @@ TEST(FusedA2ATopology, PlanWithoutDirectIsRankOrder)
 TEST(FusedA2ATopology, PlanSkipsDirectPeers)
 {
     const auto peers = dpxCards(8);
-    for(FusedA2ADirect mode : {FusedA2ADirect::Self, FusedA2ADirect::Card})
-        for(int self = 0; self < 8; self++)
-        {
-            const uint32_t mask = fusedA2ADirectMask(mode, peers[self], peers);
-            const auto     plan = sdmaQueuePlan(iota(8), self, mask);
-            ASSERT_EQ(plan.size(), mode == FusedA2ADirect::Card ? 6u : 7u) << self;
+    for(int self = 0; self < 8; self++)
+    {
+        const uint32_t mask = fusedA2ADirectMask(peers[self], peers);
+        const auto     plan = sdmaQueuePlan(iota(8), self, mask);
+        ASSERT_EQ(plan.size(), 6u) << self;
 
-            std::set<uint32_t> engines;
-            size_t             i = 0;
-            for(size_t j = 0; j < 8; j++)
-                if(((mask >> j) & 1u) == 0)
-                {
-                    EXPECT_EQ(plan[i].peer, j) << self;
-                    EXPECT_TRUE(plan[i].spread);
-                    EXPECT_EQ(plan[i].k, i);
-                    engines.insert(sdmaMaskEngine(0x3f, plan[i].k));
-                    i++;
-                }
-            if(mode == FusedA2ADirect::Card)
-                EXPECT_EQ(engines.size(), 6u) << self;
-        }
+        std::set<uint32_t> engines;
+        size_t             i = 0;
+        for(size_t j = 0; j < 8; j++)
+            if(((mask >> j) & 1u) == 0)
+            {
+                EXPECT_EQ(plan[i].peer, j) << self;
+                EXPECT_TRUE(plan[i].spread);
+                EXPECT_EQ(plan[i].k, i);
+                engines.insert(sdmaMaskEngine(0x3f, plan[i].k));
+                i++;
+            }
+        EXPECT_EQ(engines.size(), 6u) << self;
+    }
 }
 
 TEST(FusedA2ATopology, PlanOfOneCardIsEmpty)
 {
     const auto peers = dpxCards(2);
     for(int self = 0; self < 2; self++)
-        EXPECT_TRUE(
-            sdmaQueuePlan(
-                iota(2), self, fusedA2ADirectMask(FusedA2ADirect::Card, peers[self], peers))
-                .empty());
+        EXPECT_TRUE(sdmaQueuePlan(iota(2), self, fusedA2ADirectMask(peers[self], peers)).empty());
 }

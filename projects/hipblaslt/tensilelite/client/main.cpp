@@ -318,7 +318,6 @@ namespace TensileLite
                 ("fused-a2a-drain-recv",     po::value<int>()->default_value(1), "Runtime drainRecv flag passed to the fused kernel (1=on): the kernel exits only once this card's recv buffer is complete.")
                 ("fused-a2a-drain-send",     po::value<int>()->default_value(1), "Runtime drainSend flag passed to the fused kernel (1=on): the kernel exits only once this card's engines have finished reading D[0:AM), so D can be reused on stream order alone. Independent of --fused-a2a-drain-recv.")
                 ("fused-a2a-sdma-rotate",    po::value<int>(), "Fused A2A, gfx942 and gfx950: move each remote peer SDMA queue this many steps along the even xGMI engines 2,4,...,14 from its KFD recommendation; nonzero requires 14 xGMI SDMA engines. Ignored on other architectures, which spread the remote peer queues over the recommended engines. The loopback queue uses engine 0. Defaults to -1.")
-                ("fused-a2a-direct",         po::value<std::string>(), "Fused A2A GemmA2A, gfx1250: the peers whose receive slots the kernel writes itself, with no SDMA queue opened to them. none: no peer. self: this rank only. card: every rank on this device's card (same PCI domain, bus and device), itself included. With self or card the queues to the other peers are spread over every engine of the link's recommended mask. Defaults to card with --fused-a2a=GemmA2A on gfx1250, else none.")
                 ("numa-bind",                po::value<int>(), "nonzero: the process allocates with MPOL_LOCAL (memory stays on the node it is first touched from, out of automatic NUMA balancing); 0: system default policy. Defaults to 1 with --fused-a2a, else 0.")
                 ("use-default-stream",       po::value<bool>()->default_value(false), "Use default Hip stream to run kernels.")
 
@@ -1037,11 +1036,6 @@ int main(int argc, const char* argv[])
         throw std::runtime_error("--world-filter applies only with --fused-a2a");
     if(!fusedA2A && args.count("fused-a2a-sdma-rotate"))
         throw std::runtime_error("--fused-a2a-sdma-rotate applies only with --fused-a2a");
-    FusedA2ADirect fusedA2ADirect = FusedA2ADirect::None;
-    if(args.count("fused-a2a-direct"))
-        fusedA2ADirect = parseFusedA2ADirect(args["fused-a2a-direct"].as<std::string>());
-    if(fusedA2ADirect != FusedA2ADirect::None && fusedMode != FusedA2A::GemmA2A)
-        throw std::runtime_error("--fused-a2a-direct applies only with --fused-a2a=GemmA2A");
 
     auto problems        = problemFactory.problems();
     int  firstProblemIdx = args["problem-start-idx"].as<int>();
@@ -1061,11 +1055,8 @@ int main(int argc, const char* argv[])
     {
         ScopedTimer timer("hip_initialization");
         hardware     = GetHardware(args);
-        const bool gfx1250 = hardware->archName().find("gfx1250") != std::string::npos;
-        if(fusedA2ADirect != FusedA2ADirect::None && !gfx1250)
-            throw std::runtime_error("--fused-a2a-direct applies only to gfx1250");
-        if(!args.count("fused-a2a-direct") && fusedMode == FusedA2A::GemmA2A && gfx1250)
-            fusedA2ADirect = FusedA2ADirect::Card;
+        const bool fusedA2ADirect = fusedMode == FusedA2A::GemmA2A
+                                    && hardware->archName().find("gfx1250") != std::string::npos;
         size_t world = 1;
         for(int i : problemIdxs)
             world = std::max<size_t>(world, problems[i]->world());

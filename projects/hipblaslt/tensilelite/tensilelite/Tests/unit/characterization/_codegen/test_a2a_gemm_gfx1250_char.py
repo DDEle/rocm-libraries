@@ -160,6 +160,23 @@ def test_a2a_gemm_gfx1250_keeps_its_barriers(results):
         assert not missing, f"Kernel {base!r}: barriers dropped: {missing}"
 
 
+def _after_loop_tensor_waits(src):
+    lines = src.splitlines()
+    begin = next(i for i, ln in enumerate(lines) if ln.startswith("label_LoopEndL:"))
+    end = next(i for i in range(begin, len(lines))
+               if lines[i].startswith("label_PrefetchGlobalLastIterEnd"))
+    return sum(ln.strip().startswith("s_wait_tensorcnt") for ln in lines[begin:end])
+
+
+def test_a2a_gemm_gfx1250_no_load_loop_drains_like_plain_gemm(results, plain_results):
+    plain = {frozenset(_name_tokens(psrc)): psrc for (_pbase, psrc, _e) in plain_results}
+    for base, src, _err in results:
+        want = _after_loop_tensor_waits(plain[frozenset(_name_tokens(src))])
+        got = _after_loop_tensor_waits(src)
+        assert got >= want, (
+            f"Kernel {base!r}: {got} tensor-count waits after the main loop, plain GEMM has {want}")
+
+
 def test_a2a_gemm_gfx1250_switch_has_no_tdm_drain(results):
     for base, src, _err in results:
         switches = _switches(src)

@@ -6,7 +6,9 @@ Runs the emitted store-pass gate and handshake of every work-group of every rank
 twice on the same memory, with the last work-group to tally on each rank a RECV or a PUSH unit, and
 checks the counter3 election, the DRAIN waits and that every flag, counter and cursor is back at
 zero for the next launch.  For FusedRSWait 1 and 2, also runs every work-group of every rank at once from the
-RECV wait, in several orders, and checks that each rank's DRAIN follows every work-group's wait.
+RECV wait, in several orders, and checks that each rank's DRAIN follows every work-group's wait.  Also runs
+launches back to back on two rotating slots and flag channels with the ranks running ahead of each other,
+and checks that no packet lands in a slot or channel whose rank has not ended the launch before.
 """
 
 import random
@@ -14,7 +16,8 @@ import random
 import pytest
 
 import fused_rs_launch as L
-from tensilelite.Components.Signature import FUSED_A2A_CURSOR_BYTES, FUSED_A2A_DRAIN_SEND
+from tensilelite.Components.Signature import (FUSED_A2A_CURSOR_BYTES, FUSED_A2A_DRAIN_SEND,
+                                              fusedA2AKernArgLayout)
 
 pytestmark = pytest.mark.unit
 
@@ -58,7 +61,7 @@ def test_fused_rs_gfx1250_handshake(cluster_dim, wait):
         for world_size in _WORLDS:
             for r_units, seg_bands in _GRIDS:
                 for last in ("recv", "push") if world_size > 1 else ("recv",):
-                    for drain in (3, 1, 0):
+                    for drain in (3, 2, 1, 0):
                         world = L.World(k, world_size, r_units, seg_bands, drain)
                         for n in range(2):
                             where = (f"Kernel {base!r} W={world_size} grid {(r_units, seg_bands)} last {last} "
@@ -101,3 +104,87 @@ def test_fused_rs_gfx1250_handshake_with_recv_wait(cluster_dim, wait):
                         drain = [i for i, kind, _wg in log if kind == "drain"]
                         assert len(drain) == 1 and all(i < drain[0] for i, kind, _wg in log if kind == "ready"), (
                             f"{where}: rank {r} DRAIN before a work-group left the RECV wait")
+
+
+def _target(world, addr):
+    """(rank, slot, flag slot?) of a receive-buffer, flag-slot or outbound-counter address."""
+    span = world.w * world.seg_n * world.m * 2
+    for b in range(world.w):
+        for slot in (0, 1):
+            if 0 <= addr - world.recv(b, slot) < span:
+                return b, slot, False
+            if 0 <= addr - world.flags(b, slot) < 4 * world.w:
+                return b, slot, True
+            if addr == world.outbound(b, slot):
+                return b, slot, False
+    raise AssertionError(f"packet target {addr:#x} is in no receive buffer or flag block")
+
+
+def _check_streams(where, world, launch, launches, slots=2):
+    w = world.w
+    pos = {(kind, r, n): i for i, (kind, r, n) in enumerate(launch.log) if kind in ("start", "end")}
+    assert len(pos) == 2 * w * launches, f"{where}: launches started / ended {sorted(pos)}"
+    for i, (kind, src, info) in enumerate(launch.log):
+        if kind not in ("copy", "atomic"):
+            continue
+        n, addr = info
+        b, slot, inbound = _target(world, addr)
+        if kind == "copy" or inbound:
+            assert i < pos[("end", b, n)], f"{where}: rank {src} launch {n} {kind} lands after rank {b} ended it"
+        if slots == 2:
+            assert slot == n % 2, f"{where}: rank {src} launch {n} {kind} into slot {slot}"
+        if n >= slots:
+            assert i > pos[("end", b, n - slots)], (
+                f"{where}: rank {src} launch {n} {kind} lands in rank {b}'s slot {slot} before rank {b} ended "
+                f"launch {n - slots}")
+    for r in range(w):
+        for slot in range(slots):
+            flags = [world.mem.get(world.flags(r, slot) + 4 * j, 0) for j in range(w)]
+            assert flags == [0] * w, f"{where}: rank {r} channel {slot} flags {flags}"
+            cursors = [world.mem.get(world.counters(r, slot) + a, 0) for a in range(0, FUSED_A2A_CURSOR_BYTES, 4)]
+            assert not any(cursors), f"{where}: rank {r} slot {slot} cursors {cursors}"
+            for addr in world.counter_addrs(r, slot)[1:]:
+                assert world.mem.get(addr, 0) == 0, f"{where}: rank {r} slot {slot} counter {addr:#x}"
+
+
+def _overlaps(launch, w, launches):
+    """True if some rank started launch n + 1 before another rank ended launch n."""
+    pos = {(kind, r, n): i for i, (kind, r, n) in enumerate(launch.log) if kind in ("start", "end")}
+    return any(pos[("start", a, n + 1)] < pos[("end", b, n)]
+               for n in range(launches - 1) for a in range(w) for b in range(w))
+
+
+@pytest.mark.parametrize("wait", [0, 1, 2])
+@pytest.mark.parametrize("cluster_dim", [None, (2, 2)])
+def test_fused_rs_gfx1250_back_to_back_launches(cluster_dim, wait):
+    launches = 4
+    for base, k in _kernels(cluster_dim, wait):
+        for world_size in _WORLDS[1:]:
+            for drain in (3, 0):
+                schedules = {"even": [1] * world_size, "rank 0 ahead": [1] + [5] * (world_size - 1),
+                             "last rank ahead": [5] * (world_size - 1) + [1]}
+                for name, periods in schedules.items():
+                    world = L.World(k, world_size, 2, 2, drain)
+                    where = f"Kernel {base!r} W={world_size} FusedDrain={drain} schedule {name}"
+                    launch = world.launch_streams(launches, periods)
+                    _check_streams(where, world, launch, launches)
+                    if name != "even":
+                        assert _overlaps(launch, world_size, launches), f"{where}: no rank ran ahead"
+
+
+def _alias_slot1_to_slot0(world):
+    layout = fusedA2AKernArgLayout()
+    for r in range(world.w):
+        ka = world.kernarg(r, 1) + world.k.fused_base
+        for j in range(world.w):
+            world.store64(ka + layout["peer_%d_flagPtr" % j], world.flags(j))
+            world.store64(ka + layout["peer_%d_bufPtr" % j], world.recv(j))
+
+
+@pytest.mark.parametrize("wait", [0, 1, 2])
+def test_fused_rs_gfx1250_back_to_back_launches_on_one_slot_fail(wait):
+    for base, k in _kernels(None, wait):
+        world = L.World(k, 2, 2, 2, 3)
+        _alias_slot1_to_slot0(world)
+        with pytest.raises(AssertionError, match=r"lands in rank \d+'s slot 0 before rank \d+ ended launch"):
+            _check_streams(f"Kernel {base!r}", world, world.launch_streams(4, [1, 5]), 4, slots=1)

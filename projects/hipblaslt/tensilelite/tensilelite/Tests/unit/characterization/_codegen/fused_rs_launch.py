@@ -12,6 +12,8 @@ test module.
 """
 
 import functools
+import os
+import pathlib
 import re
 import struct
 import tempfile
@@ -19,9 +21,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 import pytest
+import yaml
 
 from config_harness import emit_kernels_from_config
-from test_fused_rs_remap_gfx1250_char import _remap_body, _rs_config as rs_config, _run_remap
 from tensilelite.Components.SdmaPacketEmitter import (
     ATOMIC_PACKET_DWORDS, COPY_DW_DST, COPY_DW_RECT, COPY_DW_SRC, COPY_PACKET_DWORDS,
     SDMA_OP_ATOMIC, SDMA_OP_COPY_SUBWIN, SIGNAL_DW_ADDR)
@@ -31,6 +33,18 @@ from tensilelite.Components.Signature import (
     FUSED_A2A_OUTBOUND_OFFSET, fusedA2AKernArgLayout)
 
 ARCH = "gfx1250"
+_COMM = os.path.normpath(os.path.join(
+    os.path.dirname(__file__), os.pardir, os.pardir, os.pardir, "common", "comm", "gfx1250"))
+
+# Comments on the remap's own instructions.
+REMAP_COMMENTS = {
+    "FusedMyRank, FusedW", "counter_ptr", "wait FusedMyRank, FusedW and counter_ptr",
+    "R = N0 / Cs (dispatch units per band)", "bands = N1 / Ck", "cy", "cx", "u = cy*R ...",
+    "... + cx (cluster dispatch index)", "peer x", "peer y", "u = wg1*N0 ...", "... + wg0 (dispatch index)",
+    "FusedRSDst = dst if PUSH else -1", "WorkGroup0 = m * Cs + peer x", "WorkGroup1 = band * Ck + peer y",
+}
+TOTAL_WGS = "FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"
+RANK_W = "FusedMyRank, FusedW"
 
 GATE = "FusedRSDst < 0? (own segment)"
 HANDSHAKE_START = "fused-RS: full exec before wave-0 election"
@@ -49,11 +63,30 @@ M32 = 0xFFFFFFFF
 LANES = 32
 PACKET_BYTES = 16
 # (name, width) of the SGPRs the handshake reads on entry.
+REMAPPED = ("WorkGroup0", "WorkGroup1", "FusedRSDst", "FusedTokenTiles", "FusedNShard", "FusedTotalWGs",
+            "NumWorkGroups0", "NumWorkGroups1")
 HANDSHAKE_SGPRS = (("WorkGroup0", 1), ("WorkGroup1", 1), ("FusedRSDst", 1), ("FusedTokenTiles", 1),
                    ("FusedNShard", 1), ("FusedTotalWGs", 1), ("KernArgAddress", 2), ("FusedCounterPtr", 2),
                    ("AddressD", 2), ("SizesFree", 2), ("StrideD1J", 1), ("FusedPeerGroupPtr", 1))
 _SKIPPED = ("s_wait", "s_set_vgpr_msb", "s_nop", "s_sleep", "s_prefetch_inst", "s_barrier", "s_delay_alu")
 _SPIN_LIMIT = 10000
+
+
+def rs_config(tmp_path, cluster_dim, wait=0):
+    with open(os.path.join(_COMM, "fused_a2a_cluster.yaml" if cluster_dim else "fused_a2a.yaml")) as f:
+        config = yaml.safe_load(f)
+    problem_type, group = config["BenchmarkProblems"][0]
+    problem_type.update(FusedA2A="GemmRS", UseBeta=False)
+    forks = [p for p in group["ForkParameters"]
+             if not {"ClusterDim", "ClusterAIDMapping"} & set(p)] + [{"FusedRSWait": [wait]}]
+    if cluster_dim:
+        forks += [{"ClusterDim": [list(cluster_dim)]}, {"ClusterAIDMapping": [-1]}]
+    group["ForkParameters"] = forks
+    group["BenchmarkFinalParameters"] = [{"ProblemSizes": [
+        {"Exact": {"sizes": [4096, 2048, 1, 2048], "world": 2}}]}]
+    path = pathlib.Path(tmp_path) / "fused_rs.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return str(path)
 
 
 @functools.lru_cache(maxsize=None)
@@ -72,6 +105,14 @@ def f32_bits(x):
     return struct.unpack("<I", struct.pack("<f", x))[0]
 
 
+def f64(b):
+    return struct.unpack("<d", struct.pack("<Q", b))[0]
+
+
+def f64_bits(x):
+    return struct.unpack("<Q", struct.pack("<d", x))[0]
+
+
 def bf16(b):
     """Round-to-nearest-even of the FP32 bit pattern b to BF16 bits."""
     return (b + 0x7FFF + (b >> 16 & 1)) >> 16 & 0xFFFF
@@ -80,6 +121,14 @@ def bf16(b):
 def _split(line):
     code, _, comment = line.partition("//")
     return code.strip(), comment.strip()
+
+
+def remap_window(lines):
+    """(first, last) index into `lines`, (code, comment) pairs: the first remap instruction and the
+    FusedTotalWGs latch after it."""
+    idx = [i for i, (code, comment) in enumerate(lines) if code and comment in REMAP_COMMENTS | {TOTAL_WGS}]
+    assert idx, "no fused-RS remap in the kernel"
+    return idx[0], idx[-1]
 
 
 class Kernel:
@@ -108,7 +157,7 @@ class Kernel:
         # Store code trees: the line of each Summation_End label.
         self.trees = {c[:-1]: i for i, (c, _x) in enumerate(self.lines)
                       if re.fullmatch(r"label_Summation_End(_OptNLL|_\d+):", c)}
-        self.remap = _remap_body(src)
+        self.remap = remap_window(self.lines)
         layout = fusedA2AKernArgLayout()
         rank_w = next(code for code, c in self.lines if c == "FusedMyRank, FusedW")
         self.fused_base = int(rank_w.split(",")[-1], 0) - layout["FusedMyRank"]
@@ -194,6 +243,7 @@ _VALU_U32 = {
     "v_and_b32": lambda a, b: a & b,
     "v_add_lshl_u32": lambda a, b, c: (a + b) << (c & 31) & M32,
     "v_mul_lo_u32": lambda a, b: a * b & M32,
+    "v_sub_nc_u32": lambda a, b: a - b & M32,
 }
 _VALU_F32 = {
     "v_mul_f32": lambda a, b: f32_bits(f32(a) * f32(b)),
@@ -229,25 +279,29 @@ class World:
         self.seg_bands, self.seg_n = seg_bands, self.n // world
         self.mem = {}
         self.read = {}
+        self._wgs = {}
+        self._starts = defaultdict(list)
+        layout = fusedA2AKernArgLayout()
         for r in range(world):
-            ka = self.kernarg(r) + kernel.fused_base
-            layout = fusedA2AKernArgLayout()
-            for j in range(world):
-                for name, addr in (("flagPtr", self.flags(j)), ("bufPtr", self.recv(j)),
-                                   ("queueBuf", self.queue(r, j)), ("rptr", self.rptr(r, j)),
-                                   ("wptr", self.rptr(r, j) + 8), ("doorbell", self.rptr(r, j) + 16)):
-                    self.store64(ka + layout["peer_%d_%s" % (j, name)], addr)
-                self.read[(r, j)] = 0
-            self.store64(ka + layout["counter_ptr"], self.counters(r))
-            for name, value in (("FusedMyRank", r), ("FusedW", world), ("FusedDrain", drain),
-                                ("FusedAM", self.m), ("FusedNumCu", 256)):
-                self.mem[ka + layout[name]] = value
+            for slot in range(2):
+                ka = self.kernarg(r, slot) + kernel.fused_base
+                for j in range(world):
+                    for name, addr in (("flagPtr", self.flags(j, slot)), ("bufPtr", self.recv(j, slot)),
+                                       ("queueBuf", self.queue(r, j)), ("rptr", self.rptr(r, j)),
+                                       ("wptr", self.rptr(r, j) + 8), ("doorbell", self.rptr(r, j) + 16)):
+                        self.store64(ka + layout["peer_%d_%s" % (j, name)], addr)
+                    self.read[(r, j)] = 0
+                self.store64(ka + layout["counter_ptr"], self.counters(r, slot))
+                for name, value in (("FusedMyRank", r), ("FusedW", world), ("FusedDrain", drain),
+                                    ("FusedAM", self.m), ("FusedNumCu", 256)):
+                    self.mem[ka + layout[name]] = value
 
-    kernarg = staticmethod(lambda r: 0x10_0000_0000 + r * 0x1_0000_0000)
-    d = staticmethod(lambda r: 0x20_0000_0000 + r * 0x1_0000_0000)
-    recv = staticmethod(lambda r: 0x30_0000_0000 + r * 0x1_0000_0000)
-    flags = staticmethod(lambda r: 0x40_0000_0000 + r * 0x1_0000)
-    counters = staticmethod(lambda r: 0x50_0000_0000 + r * 0x10_0000)
+    # Rotating slot `s` (kernarg, D, receive buffer, counters) and flag channel `s`; launch n uses n % 2.
+    kernarg = staticmethod(lambda r, s=0: 0x10_0000_0000 + r * 0x1_0000_0000 + s * 0x1000_0000)
+    d = staticmethod(lambda r, s=0: 0x20_0000_0000 + r * 0x1_0000_0000 + s * 0x8000_0000)
+    recv = staticmethod(lambda r, s=0: 0x30_0000_0000 + r * 0x1_0000_0000 + s * 0x8000_0000)
+    flags = staticmethod(lambda r, s=0: 0x40_0000_0000 + r * 0x1_0000 + s * 0x1000)
+    counters = staticmethod(lambda r, s=0: 0x50_0000_0000 + r * 0x10_0000 + s * 0x8_0000)
     queue = staticmethod(lambda r, j: 0x60_0000_0000 + (r * 8 + j) * 0x100_0000)
     rptr = staticmethod(lambda r, j: 0x70_0000_0000 + (r * 8 + j) * 0x100)
 
@@ -278,29 +332,52 @@ class World:
                         rect_x=(dw[COPY_DW_RECT] & 0xFFFF) + 1, rect_y=(dw[COPY_DW_RECT] >> 16) + 1)
                     launch.copies.append((r, j, fields))
                     launch.queues[(r, j)].append(("COPY", fields))
+                    launch.log.append(("copy", r, (self._launch_of(r, j, done), fields["dst"])))
                     done += 4 * COPY_PACKET_DWORDS
                 elif op == SDMA_OP_ATOMIC:
                     addr = dw[SIGNAL_DW_ADDR] | dw[SIGNAL_DW_ADDR + 1] << 32
                     self.mem[addr] = (self.mem.get(addr, 0) + dw[3]) & M32
                     launch.queues[(r, j)].append(("ATOMIC", addr, dw[3]))
+                    launch.log.append(("atomic", r, (self._launch_of(r, j, done), addr)))
                     done += 4 * ATOMIC_PACKET_DWORDS
                 else:
                     pytest.fail(f"queue {(r, j)}: unknown SDMA packet {dw[0]:#x}")
             self.read[(r, j)] = done
             self.store64(self.rptr(r, j), done)
 
+    def _launch_of(self, r, j, pos):
+        """The launch of rank r that queued the packet at byte `pos` of its queue to j, under launch_streams."""
+        return max((n for start, n in self._starts[(r, j)] if start <= pos), default=None)
+
+    def remap(self, rank, wg0, wg1):
+        """{"s[sgpr<name>]": value} for every name in REMAPPED after the remap of work-group (wg0, wg1), run
+        on lane 0 only."""
+        k = self.k
+        s = {}
+        for name, value in (("NumWorkGroups0", self.n0), ("NumWorkGroups1", self.n1), ("WorkGroup0", wg0),
+                            ("WorkGroup1", wg1)):
+            s[k.sreg("sgpr" + name)] = value
+        ka = self.kernarg(rank)
+        s[k.sreg("sgprKernArgAddress")], s[k.sreg("sgprKernArgAddress") + 1] = ka & M32, ka >> 32
+        st = dict(s=s, v={}, scc=None, exec=M32, vcc=0, wave=0, pending=[], busy={}, lanes=1)
+        first, last = k.remap
+        for pc in range(first, last + 1):
+            assert self._step(None, rank, st, pc) == pc + 1, f"line {pc}: branch inside the remap"
+        return {"s[sgpr%s]" % name: s[k.sreg("sgpr" + name)] for name in REMAPPED}
+
     def work_groups(self, rank):
         """[(u, wg0, wg1, registers after the remap)] in dispatch order."""
-        k = self.k
-        out = []
-        for wg1 in range(self.n1):
-            for wg0 in range(self.n0):
-                reg, _ = _run_remap(k.remap, self.n0, self.n1, rank, self.w, wg0, wg1)
-                u = wg0 // k.cs + (self.n0 // k.cs) * (wg1 // k.ck)
-                out.append((u, wg0, wg1, reg))
-        return sorted(out, key=lambda t: t[:3])
+        if rank not in self._wgs:
+            k = self.k
+            out = []
+            for wg1 in range(self.n1):
+                for wg0 in range(self.n0):
+                    u = wg0 // k.cs + (self.n0 // k.cs) * (wg1 // k.ck)
+                    out.append((u, wg0, wg1, self.remap(rank, wg0, wg1)))
+            self._wgs[rank] = sorted(out, key=lambda t: t[:3])
+        return list(self._wgs[rank])
 
-    def run_wg(self, launch, rank, reg, gate, wait=None):
+    def run_wg(self, launch, rank, reg, gate, wait=None, slot=0):
         """Generator: wave 0 of one work-group from the gate to the end of its handshake; yields on
         every taken backward branch.  With `wait` (line of a RECV wait), from the start of its store code
         tree to the end of the wait, then from the gate."""
@@ -309,15 +386,15 @@ class World:
         for name in ("WorkGroup0", "WorkGroup1", "FusedRSDst", "FusedTokenTiles", "FusedNShard",
                      "FusedTotalWGs"):
             s[k.sreg("sgpr" + name)] = reg["s[sgpr%s]" % name]
-        for name, value in (("KernArgAddress", self.kernarg(rank)), ("FusedCounterPtr", self.counters(rank)),
-                            ("AddressD", self.d(rank))):
+        for name, value in (("KernArgAddress", self.kernarg(rank, slot)),
+                            ("FusedCounterPtr", self.counters(rank, slot)), ("AddressD", self.d(rank, slot))):
             s[k.sreg("sgpr" + name)], s[k.sreg("sgpr" + name) + 1] = value & M32, value >> 32
         s[k.sreg("sgprSizesFree+0")] = self.m
         s[k.sreg("sgprSizesFree+1")] = self.n
         s[k.sreg("sgprStrideD1J")] = self.m
         s[k.sreg("sgprFusedPeerGroupPtr")] = 0
         if wait is not None:
-            s.update(self._store_sgprs(rank, reg, 0, 1.0))
+            s.update(self._store_sgprs(rank, reg, 0, 1.0, slot))
         v = {k.sreg("vgprSerial"): list(range(LANES))}
         st = dict(s=s, v=v, scc=None, exec=M32, vcc=0, wave=0, pending=[], busy={})
 
@@ -347,7 +424,7 @@ class World:
                 launch.drains.append(rank)
                 launch.log.append(("drain", rank, None))
             if comment == FLAG_CLEAR:
-                launch.inbound[rank] = [self.mem.get(self.flags(rank) + 4 * j, 0) for j in range(self.w)]
+                launch.inbound[rank] = [self.mem.get(self.flags(rank, slot) + 4 * j, 0) for j in range(self.w)]
             nxt = self._step(launch, rank, st, pc)
             if comment == HANDSHAKE_END:
                 return
@@ -394,12 +471,18 @@ class World:
         def ws64(o, val):
             ws(o, val), ws(o, val >> 32, 1)
 
+        def rd64v(o, lane):
+            return rd(o, lane) | rd(o, lane, 1) << 32
+
+        def wv64(o, lane, val):
+            wv(o, lane, val), wv(o, lane, val >> 32, 1)
+
         def wv(o, lane, val, i=0):
             assert o[1] + i != k.sreg("vgprSerial"), f"line {pc} writes Serial"
             assert loading or not busy.get(o[1] + i), f"line {pc} {k.lines[pc][0]!r} overwrites pending v{o[1] + i}"
             v.setdefault(o[1] + i, [None] * LANES)[lane] = val & M32
 
-        lanes = [i for i in range(LANES) if st["exec"] >> i & 1]
+        lanes = [i for i in range(st.get("lanes", LANES)) if st["exec"] >> i & 1]
         label = lambda o: k.labels[o[1]]
         loading = op.startswith(("buffer_load", "global_load", "global_atomic"))
 
@@ -424,6 +507,10 @@ class World:
             st["scc"] = int(b > x)
         elif op == "s_mul_i32":
             ws(a[0], rd(a[1]) * rd(a[2]))
+        elif op == "s_max_u32":
+            x, y = rd(a[1]), rd(a[2])
+            ws(a[0], max(x, y))
+            st["scc"] = int(x > y)
         elif op == "s_mul_hi_u32":
             ws(a[0], rd(a[1]) * rd(a[2]) >> 32)
         elif op in ("s_lshl_b32", "s_lshr_b32", "s_and_b32", "s_andn2_b32", "s_or_b32"):
@@ -462,8 +549,21 @@ class World:
                 ws(a[0], self.mem.get(addr + 4 * i, 0), i)
         elif op == "v_readfirstlane_b32":
             ws(a[0], rd(a[1], lanes[0] if lanes else 0))
-        elif op == "v_cmp_ne_u32":
-            st["vcc"] = sum(1 << i for i in lanes if rd(a[1], i) != rd(a[2], i))
+        elif op in ("v_cmp_ne_u32", "v_cmp_ge_u32"):
+            cmp = (lambda x, y: x != y) if op == "v_cmp_ne_u32" else (lambda x, y: x >= y)
+            st["vcc"] = sum(1 << i for i in lanes if cmp(rd(a[1], i), rd(a[2], i)))
+        elif op == "v_cvt_f64_u32":
+            for i in lanes:
+                wv64(a[0], i, f64_bits(float(rd(a[1], i))))
+        elif op == "v_rcp_f64":
+            for i in lanes:
+                wv64(a[0], i, f64_bits(1.0 / f64(rd64v(a[1], i))))
+        elif op == "v_mul_f64":
+            for i in lanes:
+                wv64(a[0], i, f64_bits(f64(rd64v(a[1], i)) * f64(rd64v(a[2], i))))
+        elif op == "v_cvt_u32_f64":
+            for i in lanes:
+                wv(a[0], i, min(max(int(f64(rd64v(a[1], i))), 0), M32))
         elif op in _VALU_U32:
             for i in lanes:
                 wv(a[0], i, _VALU_U32[op](*(rd(o, i) for o in a[1:])))
@@ -570,17 +670,17 @@ class World:
                 else:
                     wv(a[0], i, tile.read32(addr), d)
 
-    def _store_sgprs(self, rank, reg, wave, alpha):
+    def _store_sgprs(self, rank, reg, wave, alpha, slot=0):
         """{SGPR: value} on entry to a store code tree."""
         k = self.k
         s = {}
         for name in ("WorkGroup0", "WorkGroup1", "FusedRSDst", "FusedTokenTiles", "FusedNShard",
                      "FusedTotalWGs", "NumWorkGroups0", "NumWorkGroups1"):
             s[k.sreg("sgpr" + name)] = reg["s[sgpr%s]" % name]
-        srd = self.d(rank) + reg["s[sgprWorkGroup1]"] * k.mt1 * self.m * 2
+        srd = self.d(rank, slot) + reg["s[sgprWorkGroup1]"] * k.mt1 * self.m * 2
         oob = int(k.sets["BufferOOB"], 0)
-        for name, value in (("KernArgAddress", self.kernarg(rank)), ("FusedCounterPtr", self.counters(rank)),
-                            ("AddressD", self.d(rank)),
+        for name, value in (("KernArgAddress", self.kernarg(rank, slot)),
+                            ("FusedCounterPtr", self.counters(rank, slot)), ("AddressD", self.d(rank, slot)),
                             ("SrdD", srd & M32 | ((srd >> 32 & 0x1FFFFFF) | (oob & 127) << 25) << 32),
                             ("SrdD+2", oob >> 7 | int(k.sets["Srd127_96"], 0) << 32)):
             s[k.sreg("sgpr" + name)], s[k.sreg("sgpr" + name) + 1] = value & M32, value >> 32
@@ -662,6 +762,46 @@ class World:
         self.pump(launch)
         return launch
 
+    def launch_streams(self, launches, periods, gate=None):
+        """`launches` launches in a row on every rank, launch n on slot and channel n % 2.  A rank starts
+        launch n + 1 when its launch n has ended; within a launch every work-group is live at once (from
+        the RECV wait of the store tree of `gate`, if the kernel has one).  Rank r takes a scheduling turn
+        every periods[r] rounds.  launch.log gets ("start" | "end", rank, n) as well."""
+        k = self.k
+        gate = k.gates[0] if gate is None else gate
+        waits = [i for i in k.waits if i < gate]
+        wait = max(waits) if waits else None
+        launch = Launch()
+
+        def stream(rank):
+            for n in range(launches):
+                for j in range(self.w):
+                    self._starts[(rank, j)].append((self.load64(self.rptr(rank, j) + 8), n))
+                launch.log.append(("start", rank, n))
+                live = [self.run_wg(launch, rank, t[3], gate, wait, n % 2) for t in self.work_groups(rank)]
+                while live:
+                    for g in list(live):
+                        try:
+                            next(g)
+                        except StopIteration:
+                            live.remove(g)
+                    yield
+                launch.log.append(("end", rank, n))
+
+        live, rounds = {r: stream(r) for r in range(self.w)}, 0
+        while live:
+            rounds += 1
+            if rounds > _SPIN_LIMIT * max(periods):
+                raise Hang(f"ranks {sorted(live)} still running")
+            for r, g in list(live.items()):
+                if rounds % periods[r] == 0:
+                    try:
+                        next(g)
+                    except StopIteration:
+                        del live[r]
+            self.pump(launch)
+        return launch
+
     def _finish(self, gens, launch):
         live, rounds, at = list(gens), 0, {}
         while live:
@@ -676,13 +816,13 @@ class World:
                     at.pop(id(g), None)
             self.pump(launch)
 
-    def counter_addrs(self, rank):
-        base = self.counters(rank)
+    def counter_addrs(self, rank, slot=0):
+        base = self.counters(rank, slot)
         return (base + FUSED_A2A_COUNTER1_OFFSET, base + FUSED_A2A_COUNTER2_OFFSET,
                 base + FUSED_A2A_COUNTER3_OFFSET)
 
-    def outbound(self, rank):
-        return self.flags(rank) + FUSED_A2A_OUTBOUND_OFFSET
+    def outbound(self, rank, slot=0):
+        return self.flags(rank, slot) + FUSED_A2A_OUTBOUND_OFFSET
 
 
 class Tile:

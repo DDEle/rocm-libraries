@@ -2741,9 +2741,9 @@ class Solution(collections.abc.Mapping):
         reject(state, printRejectionReason,
                "FusedA2A=GemmA2A requires a gfx94x/gfx95x/gfx1250 ISA")
         return
-      if fusedA2A != "GemmA2A" and isa[:2] not in ((9, 4), (9, 5)):
+      if fusedA2A != "GemmA2A" and isa[:2] not in ((9, 4), (9, 5), (12, 5)):
         reject(state, printRejectionReason,
-               "FusedA2A=%s requires a gfx94x/gfx95x ISA" % fusedA2A)
+               "FusedA2A=%s requires a gfx94x/gfx95x/gfx1250 ISA" % fusedA2A)
         return
       if isPersistent(state):
         reject(state, printRejectionReason,
@@ -2778,6 +2778,17 @@ class Solution(collections.abc.Mapping):
 
     if fusedA2A == "A2AGemm":
       _disableRuntimeStaggerU(state)
+      if isa[:2] == (12, 5):
+        if not state["TDMInst"]:
+          reject(state, printRejectionReason, "FusedA2A=A2AGemm on gfx1250 requires TDMInst")
+          return
+        if state["A2ASubRounds"] != 1:
+          reject(state, printRejectionReason, "A2ASubRounds > 1 is not implemented on gfx1250")
+          return
+        if state["UseSubtileImpl"]:
+          reject(state, printRejectionReason,
+                 "UseSubtileImpl with FusedA2A=A2AGemm is not implemented on gfx1250")
+          return
       if not state["ProblemType"]["DataTypeB"].isBFloat16():
         reject(state, printRejectionReason, "FusedA2A=A2AGemm requires a bf16 B")
         return

@@ -4,7 +4,7 @@
 
 The fused GEMM + all-to-all store path is only correct inside a narrow window,
 so ``Solution.assignDerivedParameters`` rejects every configuration outside it
-(gfx94x/gfx95x ISA, or gfx1250 for GemmA2A, bf16 D, ``StreamK=0``, ``MacroTile0/1`` in {128, 256},
+(gfx94x/gfx95x/gfx1250 ISA, A2AGemm on gfx1250 with TDM loads, bf16 D, ``StreamK=0``, ``MacroTile0/1`` in {128, 256},
 ``GlobalSplitU=1``). The end-to-end proof of the path itself needs four GPUs and
 cannot run in CI; these tests are the CPU-only unit coverage of the guard block,
 in the same shape as ``test_halfplr_streamk_rejects``.
@@ -211,10 +211,22 @@ def test_fused_a2a_gfx1250_is_accepted(_gp_gfx942, gfx1250_iim, assembler, capsy
     assert (sol["MacroTile0"], sol["MacroTile1"]) == (128, 128)
 
 
-def test_a2a_gemm_rejects_gfx1250(_gp_gfx942, gfx1250_iim, assembler, capsys):
+def test_a2a_gemm_gfx1250_is_accepted(_gp_gfx942, gfx1250_iim, assembler, capsys):
     sol, out = _derive(gfx1250_iim, assembler, capsys, mode="A2AGemm", **_GFX1250)
+    assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
+    assert sol["InternalSupportParams"]["SupportUserGSU"] is False
+
+
+@pytest.mark.parametrize("overrides, msg", [
+    ({"A2ASubRounds": 2}, "A2ASubRounds > 1 is not implemented on gfx1250"),
+    ({"TDMInst": 0}, "FusedA2A=A2AGemm on gfx1250 requires TDMInst"),
+    ({"UseSubtileImpl": True}, "UseSubtileImpl with FusedA2A=A2AGemm is not implemented on gfx1250"),
+])
+def test_a2a_gemm_gfx1250_rejects(_gp_gfx942, gfx1250_iim, assembler, capsys, overrides, msg):
+    sol, out = _derive(gfx1250_iim, assembler, capsys, mode="A2AGemm",
+                       **{**_GFX1250, **overrides})
     assert sol.get("Valid") is False
-    assert "FusedA2A=A2AGemm requires a gfx94x/gfx95x ISA" in out
+    assert msg in out
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +280,7 @@ def test_fused_a2a_rejects_non_unit_gsu(_gp_gfx942, gfx942_iim, assembler, capsy
 # FusedA2A=A2AGemm.
 # ---------------------------------------------------------------------------
 _A2A_GEMM_GUARDS = [
-    ({}, "a gfx94x/gfx95x ISA", "gfx90a"),
+    ({}, "a gfx94x/gfx95x/gfx1250 ISA", "gfx90a"),
     ({"GlobalSplitU": -1}, "GlobalSplitU=1", "gfx942"),
     ({"GlobalSplitU": 2}, "GlobalSplitU=1", "gfx942"),
     ({"TileProcessingStrategy": "StreamK", "WorkAssignment": "StaticGrid"},

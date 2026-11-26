@@ -1,0 +1,34 @@
+# RUN: %stinkytofu-opt --arch gfx1250 %s --StinkyBuildImplicitDependencyPass --StinkyWaitCntInsertionPass --print-output
+#
+# ^loopend is both the loop exit and, through ^switch, a second way back to
+# ^header; ^pre can skip the loop straight to ^loopend. The tensor_load in
+# ^header is still in flight on the loop-exit path, so the barrier in ^last
+# must drain it.
+#
+# CHECK-LABEL: @waitcnt_insertion_tensor_irreducible_loop_exit
+# CHECK: ^last:
+# CHECK-NEXT: s_wait_tensorcnt{{.*}}tlcnt = 0
+# CHECK-NEXT: s_barrier{{.*}}tokens = [0]
+
+st.func @waitcnt_insertion_tensor_irreducible_loop_exit() {
+^pre:
+  "st.tensor_load_to_lds"(s[20:23], s[30:37]) { mod.memtoken = { tokens = [1] } }
+  "st.s_cbranch_scc1"("loopend", SCC0)
+  Successors: ^loopend, ^header
+^header:
+  "st.s_barrier"() { mod.memtoken = { tokens = [0] } }
+  "st.tensor_load_to_lds"(s[0:3], s[10:17]) { mod.memtoken = { tokens = [0] } }
+  "st.s_wait_tensorcnt"(1)
+  "st.s_barrier"() { mod.memtoken = { tokens = [1] } }
+  "st.s_cbranch_scc0"("header", SCC0)
+  Successors: ^header, ^loopend
+^loopend:
+  "st.s_cbranch_scc1"("last", SCC0)
+  Successors: ^last, ^switch
+^switch:
+  "st.s_branch"("header")
+  Successors: ^header
+^last:
+  "st.s_barrier"() { mod.memtoken = { tokens = [0] } }
+  "st.s_endpgm"()
+}

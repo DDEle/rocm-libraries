@@ -684,6 +684,12 @@ def _emitGlobalReadsSplatFirst(kernel, tP1st, tP2nd, emit1st, emitMx, emit2nd):
     emit()
 
 
+# Workgroup barriers postMainLoopBarrierCheckAndReset keeps, matched on their comments.
+_PLANNER_KEPT_BARRIERS = ("PGR bypass sync", "SDMA handshake sync",
+                          "ticket published", "ticket read",
+                          "every wave passed its last flag wait")
+
+
 ################################################################################
 # Kernel Writer
 ################################################################################
@@ -12170,8 +12176,7 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
           keptItems.append(item)
         elif isinstance(item, SBarrier) \
              and "-3" not in str(item).split("//", 1)[0] \
-             and "PGR bypass sync" not in str(item) \
-             and "SDMA handshake sync" not in str(item):
+             and not any(kept in str(item) for kept in _PLANNER_KEPT_BARRIERS):
           # Pass-2 rebuilds only workgroup-scope barriers from token-state
           # transitions, so only those are cleared here. Cluster-scope split
           # barriers (s_barrier_signal/wait -3), e.g. the StreamKMulticast

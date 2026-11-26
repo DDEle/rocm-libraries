@@ -45,6 +45,8 @@ _SCHEDULER_FILL = ("s_wait_alu", "s_set_vgpr_msb", "s_nop", "s_wait_dscnt")
 # The segment switch: from the flag-slot arithmetic to the EXEC restore that closes it.
 _SWITCH_START = "flag slot = flag row + segment"
 _SWITCH_END = "restore EXEC = full"
+# Barriers of the A2AGemm protocol, matched on their comments.
+_A2A_BARRIERS = ("ticket published", "ticket read", "every wave passed its last flag wait")
 
 
 def _instructions(src):
@@ -148,6 +150,14 @@ def test_a2a_gemm_gfx1250_atomics_on_one_lane(results):
         assert idx, f"Kernel {base!r}: no ring or counter atomics"
         wrong = [insts[i] for i in idx if _last_exec_write(insts, i) != "1"]
         assert not wrong, f"Kernel {base!r}: atomics not on lane 0 alone: {wrong[:2]}"
+
+
+def test_a2a_gemm_gfx1250_keeps_its_barriers(results):
+    for base, src, _err in results:
+        insts = _instructions(src)
+        missing = [b for b in _A2A_BARRIERS
+                   if not any(ln.startswith("s_barrier_wait") and b in ln for ln in insts)]
+        assert not missing, f"Kernel {base!r}: barriers dropped: {missing}"
 
 
 def test_a2a_gemm_gfx1250_switch_has_no_tdm_drain(results):

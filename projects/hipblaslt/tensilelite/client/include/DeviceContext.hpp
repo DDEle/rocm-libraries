@@ -13,6 +13,8 @@
 
 #include <hip/hip_runtime.h>
 
+#include "FusedA2ATopology.hpp"
+
 #include <memory>
 #include <vector>
 
@@ -46,14 +48,16 @@ namespace TensileLite
 
         struct DeviceContext
         {
-            // sdmaPeers: device ids to enable P2P to and open one SDMA queue each for,
-            // indexed by rank; the entry equal to deviceId is a loopback queue.
+            // sdmaPeers: device ids to enable P2P to and open one SDMA queue each for outside
+            // directMask, indexed by rank; the entry equal to deviceId is a loopback queue.
             // sdmaRotate: the `rotate` of sdmaQueueEngine.
+            // fusedA2ADirect: sets directMask.
             DeviceContext(int                     deviceId,
                           bool                    useDefaultStream,
                           size_t                  commFlagsBytes = 0,
                           std::vector<int> const& sdmaPeers      = {},
-                          int                     sdmaRotate     = 0);
+                          int                     sdmaRotate     = 0,
+                          FusedA2ADirect          fusedA2ADirect = FusedA2ADirect::None);
             ~DeviceContext();
 
             DeviceContext(DeviceContext const&)            = delete;
@@ -68,6 +72,8 @@ namespace TensileLite
             size_t                                      commFlagsBytes;
             void*                                       commFlags = nullptr;
             std::vector<std::shared_ptr<SdmaQueue>>     sdmaQueues;
+            // Bit j: sdmaPeers[j] is direct (fusedA2ADirectMask); its sdmaQueues entry is null.
+            uint32_t directMask = 0;
 
         private:
             void release();

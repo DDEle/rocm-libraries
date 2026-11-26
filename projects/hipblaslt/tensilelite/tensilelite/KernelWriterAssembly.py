@@ -9477,7 +9477,8 @@ class KernelWriterAssembly(KernelWriter):
 
   def a2aCounterInc(self, kernel, module, dstSgpr, ptrSgpr, offSgpr, offset, comment, waitComment):
     """dstSgpr = atomic_inc(*(ptrSgpr + offSgpr + offset)) wrapping at dstSgpr's value, returning
-    the pre-op. offSgpr is an SGPR index or None. Needs lane 0 active; restores EXEC to full."""
+    the pre-op. offSgpr is an SGPR index or None. Without scalar atomics, runs on lane 0 and
+    leaves EXEC full."""
     if self.states.asmCaps["HasSAtomic"]:
       soffset = sgpr(offSgpr) if offSgpr is not None else hex(offset)
       module.add(SAtomicInc(dst=sgpr(dstSgpr), base=sgpr(ptrSgpr, 2), soffset=soffset,
@@ -9518,15 +9519,10 @@ class KernelWriterAssembly(KernelWriter):
         "A2AGemm with TDM loads needs A and B on one wave-separated descriptor set"
     return "tdm%sGroup0" % self.tdmDescriptorSetOwner(kernel, "A")
 
-  def a2aTdmCarriesB(self, kernel, module, serialSgpr=None):
-    """SCC = this wave carries B, from WaveIdx or from serialSgpr = Serial of lane 0."""
-    oddB = tdmWavePartition(kernel, "B")[1][0] % 2 == 1
-    if serialSgpr is None:
-      self._emitTdmWaveParitySCCAuto(module, kernel, comment="wave parity", tmpTag="a2aTdmParity")
-    else:
-      module.add(SBitcmp1B32(src0=sgpr(serialSgpr), src1=log2(kernel["WavefrontSize"]),
-                             comment="wave parity"))
-    return oddB
+  def a2aTdmCarriesB(self, kernel, module):
+    """SCC = this wave's parity; returns True when the odd waves carry B."""
+    self._emitTdmWaveParitySCCAuto(module, kernel, comment="wave parity", tmpTag="a2aTdmParity")
+    return tdmWavePartition(kernel, "B")[1][0] % 2 == 1
 
   def a2aShardOffset(self, kernel, module, tP, idxName, alongK, s):
     """sgpr(s + 2, 2) = `idxName` shards' worth of bytes of tP; s..s+3 scratch, s even."""
@@ -9552,7 +9548,7 @@ class KernelWriterAssembly(KernelWriter):
     module.add(scalarMultiply64Bpe(s + 2, s + 2, float(tP["bpeGR"]), s,
                                    comment="shard offset"))
 
-  def a2aTdmSegment(self, kernel, tPA, tPB, idxA, idxB, fromBase, stepBack, serialSgpr=None):
+  def a2aTdmSegment(self, kernel, tPA, tPB, idxA, idxB, fromBase, stepBack):
     """Point this wave's descriptor at shard idxA of A along K, or at segment idxB of B:
     from A2ATileBase<tc> when fromBase, else from where it points now; one tdmABIncs
     back when stepBack."""
@@ -9563,7 +9559,7 @@ class KernelWriterAssembly(KernelWriter):
       sB = tmpSgprInfo.idx + 4
       self.a2aShardOffset(kernel, module, tPA, idxA, True, sA)
       self.a2aShardOffset(kernel, module, tPB, idxB, False, sB)
-      oddB = self.a2aTdmCarriesB(kernel, module, serialSgpr)
+      oddB = self.a2aTdmCarriesB(kernel, module)
       offB, offA = (sB + 2, sA + 2) if oddB else (sA + 2, sB + 2)
       for i in range(2):
         module.add(SCSelectB32(dst=sgpr(sA + 2 + i), src0=sgpr(offB + i), src1=sgpr(offA + i),
@@ -9908,7 +9904,8 @@ class KernelWriterAssembly(KernelWriter):
     module.add(SCBranchSCC1(labelName=drawnLbl.getLabelName(), comment="wave 0 draws"))
     self.a2aCounterInc(kernel, module, data, ptr, None, FUSED_A2A_A2AGEMM_FLAG_OFFSET,
                        "ticket = atomic_inc(counter[iB]), wrap at DATA, return pre-op",
-                       "wait the election atomic return (SMEM -> lgkmcnt)")
+                       "wait the election atomic return"
+                       + (" (SMEM -> lgkmcnt)" if self.states.asmCaps["HasSAtomic"] else ""))
     self.sgprPool.checkIn(ptr)
 
     vAddr = self.vgprPool.checkOut(1, tag="a2aElect_ldsAddr")
@@ -10675,8 +10672,7 @@ class KernelWriterAssembly(KernelWriter):
                          comment="wrap the feature shard at W"))
       if tdm:
         module.add(self.a2aTdmSegment(kernel, tPA, tPB, "A2AFeatIdx", "A2AShardIdx",
-                                      fromBase=True, stepBack=stepBack,
-                                      serialSgpr=None if smemPoll else serial))
+                                      fromBase=True, stepBack=stepBack))
       elif subRounds > 1:
         module.add(SLShiftLeftB32(dst=sgpr(rank), shiftHex=log2(subRounds),
                                   src=sgpr("A2AFeatIdx"), comment="feature shard * S"))

@@ -594,12 +594,13 @@ class StateValues:
 
     self.nonPostLoopSgpr = []
 
-    # FusedA2A=GemmA2A store dispatch mode (codegen-time): "BOTH" emits the per-store
-    # runtime gate + both push/local versions (default, unchanged behavior);
-    # "PUSH"/"LOCAL" emit only that single version (gate hoisted to caller).
+    # FusedA2A store pass being emitted (codegen-time): "PUSH", then "LOCAL" (GemmA2A) or
+    # "RECV" (GemmRS); "BOTH" outside the two-pass store.
     self.fusedA2ADispatchMode = "BOTH"
     # gfx1250 GemmA2A direct stores of the PUSH replay being emitted (Components.GlobalWriteBatch.FusedA2ADirect).
     self.fusedA2ADirect = None
+    # GemmRS: the RECV pass's counter3 tally label, which the PUSH pass's handshake branches to.
+    self.fusedRSTallyLabel = None
 
     self.preloadGuard = []
     self.tmpvgpr = {}

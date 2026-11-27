@@ -8,6 +8,7 @@ cluster, and checks the tile, FusedRSDst and the latched segment sizes.
 """
 
 import os
+import pathlib
 import re
 
 import pytest
@@ -50,13 +51,13 @@ def _rs_config(tmp_path, cluster_dim):
     problem_type, group = config["BenchmarkProblems"][0]
     problem_type.update(FusedA2A="GemmRS", UseBeta=False)
     forks = [p for p in group["ForkParameters"]
-             if not {"ClusterDim", "ClusterAIDMapping"} & set(p)]
+             if not {"ClusterDim", "ClusterAIDMapping"} & set(p)] + [{"FusedRSWait": [0]}]
     if cluster_dim:
         forks += [{"ClusterDim": [list(cluster_dim)]}, {"ClusterAIDMapping": [-1]}]
     group["ForkParameters"] = forks
     group["BenchmarkFinalParameters"] = [{"ProblemSizes": [
         {"Exact": {"sizes": [4096, 2048, 1, 2048], "world": 2}}]}]
-    path = tmp_path / "fused_rs.yaml"
+    path = pathlib.Path(tmp_path) / "fused_rs.yaml"
     path.write_text(yaml.safe_dump(config))
     return str(path)
 

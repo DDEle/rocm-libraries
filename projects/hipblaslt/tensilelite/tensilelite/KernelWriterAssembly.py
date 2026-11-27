@@ -81,7 +81,7 @@ from .Components.LraTileAssignment import mx2dFreeOffset
 from .Components.GL2Prefetch import GL2PrefetchLoad
 from .Components.ClusterLoad import ClusterLoadTDM
 from .Components.GlobalWriteBatch import GlobalWriteBatchWriter, emitFusedA2AGate, FusedA2ADirect, \
-    emitFusedA2ADirectPrologue
+    emitFusedA2ADirectPrologue, emitFusedRSGate
 from .Components.Signature import FUSED_A2A_A2AGEMM_DONE_OFFSET, FUSED_A2A_A2AGEMM_FLAG_OFFSET, \
     FUSED_A2A_CURSOR_BYTES, FUSED_A2A_DRAIN_SEND, FUSED_A2A_LINE_BYTES, FUSED_A2A_MAX_RANKS, \
     PEER_GROUP_BYTES, fusedA2AKernArgLayout
@@ -22111,21 +22111,30 @@ class KernelWriterAssembly(KernelWriter):
             biasLocalBarrierInit = True
           return m
 
-        if kernel["ProblemType"]["FusedA2A"] == "GemmA2A":
+        if isFusedPush(kernel["ProblemType"]):
           # Hoist the PUSH/local dispatch gate out of the per-store body: emit ONE
           # runtime gate, then the whole store body twice -- once with only the PUSH
           # version (mode "PUSH"), once with only the local version (mode "LOCAL").
           # Between the two passes, roll back the codegen-time StoreState (ss) and
           # biasLocalBarrierInit to the batch-loop start so the LOCAL pass regenerates
           # identical addresses/waitcnts from the same starting state.
-          localLabel = Label(self.labels.getNameInc("fusedA2A_hoist_local"),
-                             "fused-A2A hoisted: WG>=AM_tiles -> local")
-          afterLabel = Label(self.labels.getNameInc("fusedA2A_hoist_after"),
-                             "fused-A2A hoisted: after PUSH/local")
-          direct = self._fusedA2ADirectEligible(kernel, edge, vectorWidth)
-          drainPair = self.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_dwDrain", preventOverflow=False) \
-                      if direct else None
-          emitFusedA2AGate(actLoopModule, self, localLabel.getLabelName(), drainPair=drainPair)
+          # GemmRS: the gate reads FusedRSDst and the second pass is "RECV".
+          gemmRS = kernel["ProblemType"]["FusedA2A"] == "GemmRS"
+          if gemmRS:
+            localLabel = Label(self.labels.getNameInc("fusedRS_hoist_recv"), "")
+            afterLabel = Label(self.labels.getNameInc("fusedRS_hoist_after"), "")
+            emitFusedRSGate(actLoopModule, localLabel.getLabelName())
+            self.states.fusedRSTallyLabel = Label(self.labels.getNameInc("fusedRS_counter3"), "")
+            direct = False
+          else:
+            localLabel = Label(self.labels.getNameInc("fusedA2A_hoist_local"),
+                               "fused-A2A hoisted: WG>=AM_tiles -> local")
+            afterLabel = Label(self.labels.getNameInc("fusedA2A_hoist_after"),
+                               "fused-A2A hoisted: after PUSH/local")
+            direct = self._fusedA2ADirectEligible(kernel, edge, vectorWidth)
+            drainPair = self.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_dwDrain", preventOverflow=False) \
+                        if direct else None
+            emitFusedA2AGate(actLoopModule, self, localLabel.getLabelName(), drainPair=drainPair)
           # self.states outlives this call, so a mid-pass raise would otherwise leak
           # "PUSH"/"LOCAL" into a subsequent kernel.
           try:
@@ -22150,14 +22159,16 @@ class KernelWriterAssembly(KernelWriter):
             biasLocalBarrierInit = False
             actLoopModule.add(localLabel)
             # LOCAL pass
-            self.states.fusedA2ADispatchMode = "LOCAL"
+            self.states.fusedA2ADispatchMode = "RECV" if gemmRS else "LOCAL"
             actLoopModule.add(_emit_batch_loop())
             actLoopModule.add(afterLabel)
+            assert self.states.fusedRSTallyLabel is None, "the GemmRS RECV pass placed no counter3 tally"
           finally:
             self.states.fusedA2ADispatchMode = "BOTH"
             if self.states.fusedA2ADirect is not None:
               self.states.fusedA2ADirect.checkIn(self)
               self.states.fusedA2ADirect = None
+            self.states.fusedRSTallyLabel = None
         else:
           actLoopModule.add(_emit_batch_loop())
 

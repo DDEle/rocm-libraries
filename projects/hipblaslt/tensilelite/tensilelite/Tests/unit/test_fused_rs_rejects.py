@@ -18,6 +18,8 @@ _RS_PT = {"UseBeta": False}
 def _derive_rs(request, assembler, capsys, arch="gfx1250", mode="GemmRS", **overrides):
     iim = request.getfixturevalue(f"{arch}_iim")
     params = dict(_GFX1250) if arch == "gfx1250" else {"arch": arch, "PrefetchLocalRead": 1}
+    if mode == "GemmRS":
+        params["FusedRSWait"] = 0
     params.update(overrides)
     params["arch"] = arch
     params["ProblemType"] = {**_RS_PT, **overrides.get("ProblemType", {})}
@@ -41,14 +43,14 @@ def test_gemm_rs_gfx1250_is_accepted(_gp_gfx942, request, assembler, capsys, clu
     sol, out = _derive_rs(request, assembler, capsys, ClusterDim=cluster)
     assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
     assert sol["InternalSupportParams"]["SupportUserGSU"] is False
-    assert sol["FusedRSWait"] == 1
+    assert sol["FusedRSWait"] == 0
 
 
-@pytest.mark.parametrize("wait", [0, 2])
-def test_gemm_rs_wait_modes_are_accepted(_gp_gfx942, request, assembler, capsys, wait):
+@pytest.mark.parametrize("wait", [1, 2])
+def test_gemm_rs_rejects_fused_rs_wait(_gp_gfx942, request, assembler, capsys, wait):
     sol, out = _derive_rs(request, assembler, capsys, FusedRSWait=wait)
-    assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
-    assert sol["FusedRSWait"] == wait
+    assert sol.get("Valid") is False
+    assert "FusedA2A=GemmRS requires FusedRSWait=0" in out
 
 
 @pytest.mark.parametrize("arch", ["gfx950", "gfx942"])
@@ -108,10 +110,10 @@ def test_fused_rs_wait_default_keeps_kernel_names(_gp_gfx942, request, assembler
     name = getKernelNameMin(a2a._state, False)
     del a2a._state["FusedRSWait"]
     assert getKernelNameMin(a2a._state, False) == name
-    rs, out = _derive_rs(request, assembler, capsys)
-    assert "FRSW" not in getKernelNameMin(rs._state, False)
-    rs0, out = _derive_rs(request, assembler, capsys, FusedRSWait=0)
+    rs0, out = _derive_rs(request, assembler, capsys)
+    assert rs0.get("Valid") is True, f"expected accept, rejected with: {out!r}"
     assert "_FRSW0" in getKernelNameMin(rs0._state, False)
+    assert "FRSW" not in getKernelNameMin(dict(rs0._state, FusedRSWait=1), False)
 
 
 # ---------------------------------------------------------------------------
@@ -188,9 +190,9 @@ def test_gemm_rs_shape_takes_the_gemm_a2a_shape_position(_gp_gfx942, request, as
 
 @pytest.mark.parametrize("wait", [0, 1, 2])
 def test_size_mapping_carries_fused_rs_wait(_gp_gfx942, request, assembler, capsys, wait):
-    sol, out = _derive_rs(request, assembler, capsys, FusedRSWait=wait)
+    sol, out = _derive_rs(request, assembler, capsys)
     assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
-    mapping = C.SizeMapping.FromOriginalState(dict(sol._state))
+    mapping = C.SizeMapping.FromOriginalState(dict(sol._state, FusedRSWait=wait))
     assert "fusedRSWait" in C.SizeMapping.StateKeys
     assert mapping.fusedRSWait == wait
 

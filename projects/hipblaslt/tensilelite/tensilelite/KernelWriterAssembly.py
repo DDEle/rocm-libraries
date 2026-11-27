@@ -102,6 +102,7 @@ from .Components.TDMFuse import tdmFusePaired, tdmGroupPartner, \
                                 tdmStashedMembers, tdmWaveComponents, tdmWaveGuard, \
                                 tdmWavePartition, tdmWaveRangeText, tdmWaveResident
 from .SolutionStructs import isPackedIndex
+from .SolutionStructs.Problem import isFusedPush
 from .AsmStoreState import StoreState, VectorDataTypes
 from .Activation import ActivationType
 from .CustomKernels import isCustomKernelConfig, getCustomKernelFilepath, getCustomKernelSource, supportsUserSgprKernargPreload
@@ -116,7 +117,7 @@ from .Common.LdsReadPlan import fp32_lds_read_bytes, validate_gfx1250_fp32_lds_r
 from .Common.MatrixInstructionNaming import dataTypeNameAbbrevToInstType, matrixInstructionTypes
 from .Common.RegisterPool import RegisterPool, allocTmpGpr, allocTmpGprList
 from .Components.WorkGroupMappingAlgos import DefaultWGM, wgmXCC, SpaceFillingCurveWalk, \
-  FusedA2AWgRemap
+  FusedA2AWgRemap, FusedRSWgRemap
 
 from .KernelWriter import KernelWriter, ABMatrixInfo
 from .SolutionStructs.Naming import getKernelFileBase
@@ -4596,7 +4597,9 @@ class KernelWriterAssembly(KernelWriter):
 
     # Start of WGM algos
     sgprWGM = "WGM"
-    if len(kernel["SpaceFillingAlgo"]):
+    if kernel["ProblemType"]["FusedA2A"] == "GemmRS":
+      module.add(FusedRSWgRemap(self, kernel))
+    elif len(kernel["SpaceFillingAlgo"]):
       module.addComment0("Start of Generic WGM algo")
       self.states.WGMTransformLevels = len(kernel["SpaceFillingAlgo"])
       module.add(SpaceFillingCurveWalk(self, kernel, sgprWGM))
@@ -4610,12 +4613,14 @@ class KernelWriterAssembly(KernelWriter):
     # up host-side, but those padded work-groups s_endpgm in the prologue
     # (clusterPadEarlyExit).
     if kernel["ProblemType"]["FusedA2A"] == "GemmA2A":
-      from .Components.GlobalWriteBatch import emitFusedA2ACounterPtrLatch, \
-        emitFusedA2ANShardLatch
       module.add(FusedA2AWgRemap(self, kernel))
+    if isFusedPush(kernel["ProblemType"]):
       module.add(SMulI32(dst=sgpr("FusedTotalWGs"), src0=sgpr("NumWorkGroups0"),
                          src1=sgpr("NumWorkGroups1"),
                          comment="FusedTotalWGs = NumWorkGroups0 * NumWorkGroups1 (counter3 election target)"))
+    if kernel["ProblemType"]["FusedA2A"] == "GemmA2A":
+      from .Components.GlobalWriteBatch import emitFusedA2ACounterPtrLatch, \
+        emitFusedA2ANShardLatch
       emitFusedA2ACounterPtrLatch(module, self, "FusedCounterPtr", "FusedTokenTiles")
       emitFusedA2ANShardLatch(module, self, "FusedNShard")
 

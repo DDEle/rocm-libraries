@@ -63,7 +63,7 @@ from .Components.DecouplePGR import decouplePGRBlocks, decoupledSingleBuffered, 
 from .Components.DecouplePGR import tdmWaveIssueOrder, decoupledThickGateRelaxation, dcpThickGateFromTokenPasses, dcpThickGateUncoveredSites, dcpIsFillLabel, DCP_TENSORCNT_RE, DCP_THICK_GATE_TEXT, DCP_THICK_GATE_TOKENS
 from .Components.TDMFuse import tdmWavePartition
 from .SolutionStructs import Solution, isPackedIndex
-from .SolutionStructs.Problem import isFusedA2A
+from .SolutionStructs.Problem import isFusedA2A, isFusedPush
 from .SolutionStructs.Utilities import getMiInputType, isSubtileIterateMode
 from .SolutionStructs.segment_interleave import wave_tile_span
 from .AsmMemoryInstruction import MemoryInstruction
@@ -10650,7 +10650,7 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
 
     # Persistent copy of the grid-wide WG count for the counter3 last-WG election;
     # latched in graWorkGroup because NumWorkGroups0/1 can be borrowed as temps later.
-    if kernel["ProblemType"]["FusedA2A"] == "GemmA2A":
+    if isFusedPush(kernel["ProblemType"]):
       self.defineSgpr("FusedTotalWGs", 1)
       # Counter-block base, loaded once in the prologue. Every region is reached
       # from it by immediate offset (client/src/DeviceContext.cpp).
@@ -10659,14 +10659,18 @@ class KernelWriter(PersistentKernelState, StreamKKernelState, metaclass=abc.ABCM
       self.defineSgpr("FusedCounterPtr", 2, 2)
       # n_shard = FusedAM / FusedW, divided once in the prologue (W is not a
       # power of two, so this is a real u32 divide, not a shift).
+      # GemmRS: segN = N / FusedW, latched as FusedTokenTiles << log2(MT1 * Ck).
       self.defineSgpr("FusedNShard", 1)
       # ceil(N / (MT1 * tiles per band)), needed by both the counter3 address and the handshake's
-      # counter index; latched so the two do not each recompute it.
+      # counter index; latched so the two do not each recompute it. GemmRS: bands per segment.
       self.defineSgpr("FusedTokenTiles", 1)
       # Offset of this WG's peer group within the kernarg segment. Every pointer
       # the epilogue needs for that peer is an immediate off it, so the SDMA
       # emitters do no address arithmetic of their own.
       self.defineSgpr("FusedPeerGroupPtr", 1)
+      if kernel["ProblemType"]["FusedA2A"] == "GemmRS":
+        # Owner rank of this WG's token segment, -1 when the segment is this rank's own.
+        self.defineSgpr("FusedRSDst", 1)
 
     # Calculate numSgpr preload
     self.states.preloadGuard = []

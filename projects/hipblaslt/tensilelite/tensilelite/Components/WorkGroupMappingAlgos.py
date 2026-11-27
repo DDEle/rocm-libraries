@@ -31,7 +31,7 @@ from rocisa.container import vgpr, sgpr, SMEMModifiers, replaceHolder, EXEC,\
 from rocisa.instruction import SAbsI32, SAddCU32, SAddI32, SAddU32, SAndB32, SBarrier, \
     SBranch, SBfmB32, SCBranchSCC0, SCBranchSCC1, SCMovB32, SCSelectB32, SCSelectB64, SCmpEQU32, SCmpEQU64, \
     SCmpGeI32, SCmpGeU32, SCmpGtI32, SCmpGtU32, SCmpLeU32, SCmpLtU32, SFf1B32, SFlbitI32B32, \
-    SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SLoadB32, \
+    SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SLoadB32, SLoadB64, \
     SMaxU32, SMinU32, SMovB32, SMovB64, SMulI32, SNop, SOrB32, SSExtI16toI32, SSleep, SStoreB32, SSubU32, SXorB32, \
     SWaitCnt, VAddF32, VAddF64, VAddPKF16, VAddU32, VLShiftRightB32, VMovB32, VMovB64, VMulF32, VMulF64, \
     VReadfirstlaneB32, VReadlaneB32, VWritelaneB32, VCvtBF16toFP32, VCvtU32toF32, VCvtU32toF64, VRcpIFlagF32, \
@@ -1516,4 +1516,120 @@ def FusedA2AWgRemap(writer, kernel):
     writer.sgprPool.checkIn(sS)
     writer.sgprPool.checkIn(sT)
     writer.sgprPool.checkIn(sA)
+    return module
+
+def FusedRSWgRemap(writer, kernel):
+    """Emit the FusedA2A=GemmRS map from the dispatch index u to the tile and FusedRSDst.
+
+        R = N0/Cs,  segBands = (N1/Ck)/W,  P = R*(W-1)*segBands,  q, m = u // R, u % R
+        u <  P:  b, o = q // (W-1), q % (W-1),  dst = (myRank+1+o) % W,  band = dst*segBands + b
+        u >= P:  band = myRank*segBands + q - (W-1)*segBands,  dst = -1
+        WorkGroup0 = m*Cs + peer x,  WorkGroup1 = band*Ck + peer y,  FusedRSDst = dst
+
+    u = (WorkGroup0 >> log2(Cs)) + R*(WorkGroup1 >> log2(Ck)) under a cluster, else
+    WorkGroup1*N0 + WorkGroup0. Also latches FusedCounterPtr, FusedTokenTiles = segBands and
+    FusedNShard = segBands*MT1*Ck = N/W.
+    """
+    cs, ck = kernel["ClusterDim"]
+    if cs & (cs - 1) or ck & (ck - 1):
+        raise RuntimeError("FusedRSWgRemap requires a power-of-two ClusterDim, got %s" % [cs, ck])
+    cluster = clusterEnabled(kernel["ClusterDim"])
+    log2cs, log2ck = int(log2(cs)), int(log2(ck))
+    mt1 = kernel["MacroTile1"]
+
+    from .Signature import fusedA2AKernArgLayout
+    layout = fusedA2AKernArgLayout()
+    fusedBase = writer.states.fusedA2AKernArgBase
+
+    module = Module("FusedRSWgRemap")
+    module.addComment1("fused-RS: tile from the dispatch index, PUSH units before RECV units")
+
+    sRank = writer.sgprPool.checkOutAligned(2, 2, tag="fusedRSWgRemap_rankW", preventOverflow=False)
+    sW = sRank + 1
+    sU = writer.sgprPool.checkOut(1, tag="fusedRSWgRemap_u", preventOverflow=False)
+    sQ = writer.sgprPool.checkOut(1, tag="fusedRSWgRemap_q", preventOverflow=False)
+    sB = writer.sgprPool.checkOut(1, tag="fusedRSWgRemap_b", preventOverflow=False)
+    sO = writer.sgprPool.checkOut(1, tag="fusedRSWgRemap_o", preventOverflow=False)
+    sX = writer.sgprPool.checkOut(1, tag="fusedRSWgRemap_x", preventOverflow=False)
+    sT = writer.sgprPool.checkOut(1, tag="fusedRSWgRemap_t", preventOverflow=False)
+    sR = writer.sgprPool.checkOut(1, tag="fusedRSWgRemap_R", preventOverflow=False) \
+        if cluster else "NumWorkGroups0"
+    sC = writer.sgprPool.checkOut(1, tag="fusedRSWgRemap_bands", preventOverflow=False) \
+        if cluster else "NumWorkGroups1"
+    sM = writer.sgprPool.checkOut(1, tag="fusedRSWgRemap_m", preventOverflow=False) \
+        if cluster else "WorkGroup0"
+
+    module.add(SLoadB64(dst=sgpr(sRank, 2), base=sgpr("KernArgAddress", 2),
+                        soffset=hex(fusedBase + layout["FusedMyRank"]), comment="FusedMyRank, FusedW"))
+    module.add(SLoadB64(dst=sgpr("FusedCounterPtr", 2), base=sgpr("KernArgAddress", 2),
+                        soffset=hex(fusedBase + layout["counter_ptr"]), comment="counter_ptr"))
+    if cluster:
+        module.add(SLShiftRightB32(dst=sgpr(sR), shiftHex=log2cs, src=sgpr("NumWorkGroups0"),
+                                   comment="R = N0 / Cs (dispatch units per band)"))
+        module.add(SLShiftRightB32(dst=sgpr(sC), shiftHex=log2ck, src=sgpr("NumWorkGroups1"),
+                                   comment="bands = N1 / Ck"))
+        module.add(SLShiftRightB32(dst=sgpr(sU), shiftHex=log2ck, src=sgpr("WorkGroup1"), comment="cy"))
+        module.add(SMulI32(dst=sgpr(sU), src0=sgpr(sU), src1=sgpr(sR), comment="u = cy*R ..."))
+        module.add(SLShiftRightB32(dst=sgpr(sT), shiftHex=log2cs, src=sgpr("WorkGroup0"), comment="cx"))
+        module.add(SAddU32(dst=sgpr(sU), src0=sgpr(sU), src1=sgpr(sT),
+                           comment="... + cx (cluster dispatch index)"))
+        module.add(SAndB32(dst=sgpr("WorkGroup0"), src0=sgpr("WorkGroup0"), src1=hex(cs - 1), comment="peer x"))
+        module.add(SAndB32(dst=sgpr("WorkGroup1"), src0=sgpr("WorkGroup1"), src1=hex(ck - 1), comment="peer y"))
+    else:
+        module.add(SMulI32(dst=sgpr(sU), src0=sgpr("NumWorkGroups0"), src1=sgpr("WorkGroup1"),
+                           comment="u = wg1*N0 ..."))
+        module.add(SAddU32(dst=sgpr(sU), src0=sgpr(sU), src1=sgpr("WorkGroup0"),
+                           comment="... + wg0 (dispatch index)"))
+    module.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank, FusedW and counter_ptr"))
+
+    tmpVgpr = writer.vgprPool.checkOutAligned(4, 2, "fusedRSWgRemap_div")
+    tmpVgprRes = ContinuousRegister(idx=tmpVgpr, size=4)
+    wavewidth = kernel["WavefrontSize"]
+    module.add(scalarUInt24DivideAndRemainder(
+        qReg="FusedTokenTiles", dReg=sC, divReg=sW, rReg=sT, tmpVgprRes=tmpVgprRes,
+        wavewidth=wavewidth, doRemainder=False))
+    module.add(SLShiftLeftB32(dst=sgpr("FusedNShard"), shiftHex=int(log2(mt1 * ck)), src=sgpr("FusedTokenTiles"),
+                              comment="segN = segBands * (MT1=%u) * (Ck=%u)" % (mt1, ck)))
+    module.add(scalarUInt24DivideAndRemainder(
+        qReg=sQ, dReg=sU, divReg=sR, rReg=sM, tmpVgprRes=tmpVgprRes, wavewidth=wavewidth))
+    module.add(SSubU32(dst=sgpr(sX), src0=sgpr(sW), src1=1, comment="W-1"))
+    module.add(SMaxU32(dst=sgpr(sT), src0=sgpr(sX), src1=1, comment="max(W-1, 1)"))
+    module.add(scalarUInt24DivideAndRemainder(
+        qReg=sB, dReg=sQ, divReg=sT, rReg=sO, tmpVgprRes=tmpVgprRes, wavewidth=wavewidth))
+    writer.vgprPool.checkIn(tmpVgpr)
+
+    module.add(SMulI32(dst=sgpr(sX), src0=sgpr(sX), src1=sgpr("FusedTokenTiles"),
+                       comment="(W-1)*segBands (PUSH bands)"))
+    module.add(SSubU32(dst=sgpr(sQ), src0=sgpr(sQ), src1=sgpr(sX),
+                       comment="q - (W-1)*segBands"))
+    module.add(SMulI32(dst=sgpr(sT), src0=sgpr(sRank), src1=sgpr("FusedTokenTiles"), comment="myRank*segBands"))
+    module.add(SAddU32(dst=sgpr(sQ), src0=sgpr(sQ), src1=sgpr(sT), comment="own band"))
+    module.add(SAddU32(dst=sgpr(sO), src0=sgpr(sO), src1=sgpr(sRank), comment="myRank+o ..."))
+    module.add(SAddU32(dst=sgpr(sO), src0=sgpr(sO), src1=1, comment="... + 1"))
+    module.add(SSubU32(dst=sgpr(sT), src0=sgpr(sO), src1=sgpr(sW)))
+    module.add(SCmpGeU32(src0=sgpr(sO), src1=sgpr(sW)))
+    module.add(SCSelectB32(dst=sgpr(sO), src0=sgpr(sT), src1=sgpr(sO), comment="dst = (myRank+1+o) % W"))
+    module.add(SMulI32(dst=sgpr(sT), src0=sgpr(sO), src1=sgpr("FusedTokenTiles"), comment="dst*segBands"))
+    module.add(SAddU32(dst=sgpr(sB), src0=sgpr(sB), src1=sgpr(sT), comment="PUSH band"))
+    module.add(SMulI32(dst=sgpr(sX), src0=sgpr(sX), src1=sgpr(sR), comment="P = R*(W-1)*segBands"))
+
+    band = sB if cluster else "WorkGroup1"
+    module.add(SCmpLtU32(src0=sgpr(sU), src1=sgpr(sX), comment="u < P? (PUSH)"))
+    module.add(SCSelectB32(dst=sgpr(band), src0=sgpr(sB), src1=sgpr(sQ),
+                           comment="band = PUSH band if PUSH else own band"))
+    module.add(SCSelectB32(dst=sgpr("FusedRSDst"), src0=sgpr(sO), src1=-1,
+                           comment="FusedRSDst = dst if PUSH else -1"))
+    if cluster:
+        module.add(SLShiftLeftB32(dst=sgpr(sM), shiftHex=log2cs, src=sgpr(sM), comment="m * Cs"))
+        module.add(SAddU32(dst=sgpr("WorkGroup0"), src0=sgpr("WorkGroup0"), src1=sgpr(sM),
+                           comment="WorkGroup0 = m * Cs + peer x"))
+        module.add(SLShiftLeftB32(dst=sgpr(sB), shiftHex=log2ck, src=sgpr(sB), comment="band * Ck"))
+        module.add(SAddU32(dst=sgpr("WorkGroup1"), src0=sgpr("WorkGroup1"), src1=sgpr(sB),
+                           comment="WorkGroup1 = band * Ck + peer y"))
+        writer.sgprPool.checkIn(sM)
+        writer.sgprPool.checkIn(sC)
+        writer.sgprPool.checkIn(sR)
+
+    for s in (sT, sX, sO, sB, sQ, sU, sRank):
+        writer.sgprPool.checkIn(s)
     return module

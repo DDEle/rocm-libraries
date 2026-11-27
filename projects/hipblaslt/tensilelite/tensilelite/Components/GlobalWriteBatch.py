@@ -33,7 +33,7 @@ from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, \
   SAndB64, SAtomicDec, SAtomicInc, SBarrier, SBfeU32, SBfmB32, SBfmB64, SBitcmp1B32, SBranch, \
   SCBranchExecNZ, SCBranchExecZ, \
   SCBranchSCC0, SCBranchSCC1, SCBranchVCCNZ, SCmpGtU32, SCmpLgU32, SCmpKGtU32, SCSelectB32, SCmpEQI32, SCmpEQU32, SCmpGtI32, SCmpLeI32, SCmpLeU32, SMinU32, SEndpgm, \
-  SAndN2B32, SCmpLtI32, SCBranchVCCZ, SCmpLtU32, SSubBU32, GlobalInv, \
+  GlobalInv, SAndN2B32, SCBranchVCCZ, SCmpLtI32, SCmpLtU32, SSubBU32, \
   SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SLShiftRightB64, SMovB32, SMovB64, SMulHIU32, SMulI32, \
   SNop, SOrB32, SOrB64, SOrSaveExecB32, SOrSaveExecB64, SSleep, SSubI32, SSubU32, \
   SSwapPCB64, SWaitCnt, SWaitAlu, VAShiftRightI32, VAddCCOU32, VAddCOU32, VAddF32, VAddF64, \
@@ -244,8 +244,13 @@ def fusedRSRecvAdds(kernel):
     and kernel["GlobalSplitU"] == 1
 
 def fusedA2ALoadFlagBaseByRank(module, kw, flagBaseSgpr, rankSgpr, groupOffSgpr):
-  """flagBaseSgpr (4-aligned quad) = peer_<rank>_flagPtr, peer_<rank>_bufPtr; groupOffSgpr = rank's peer
-  group offset."""
+  """Load peer <rank>'s flag and recv bases, with rank's peer group offset as SOFFSET.
+
+  Args:
+    flagBaseSgpr: 4-ALIGNED quad receiving peer_<rank>_flagPtr then peer_<rank>_bufPtr.
+    rankSgpr:     1 SGPR, or the name of one, holding the rank index to select.
+    groupOffSgpr: 1 SGPR, or the name of one, to receive the group offset.
+  """
   from .Signature import fusedA2AKernArgLayout
   from .SdmaRingEmitter import PEER_GROUP_BYTES, OFF_flagPtr
   layout = fusedA2AKernArgLayout()
@@ -364,7 +369,7 @@ def emitFusedRSRecvWait(module, kw):
   module.add(SBranch(labelName=pollLabel.getLabelName(), comment="fused-RS: poll again"))
   module.add(arrivedLabel)
   module.add(GlobalInv(scope=CacheScope.SCOPE_SYS, comment="fused-RS RECV: acquire the receive slots"))
-  # The reload's wait also retires the global_inv.
+  # No separate wait for global_inv; the reload's s_wait_loadcnt retires it.
   fusedRSFlagPoll(module, flagBase, vOff, vVal, "fused-RS RECV: reload flag[lane] after global_inv", want, bits=True)
   module.add(SCBranchVCCNZ(labelName=pollLabel.getLabelName(), comment="fused-RS: a source is still sending"))
   kw.vgprPool.checkIn(vVal)
@@ -3246,25 +3251,7 @@ class GlobalWriteBatchWriter:
       tmpSgpr:      2 scratch SGPRs; tmpSgpr+0 = n_col_base_wg, tmpSgpr+1 = candidate.
     """
     emitFusedA2ADstRankScan(module, self.parentWriter, dstRankSgpr, nShardSgpr, tmpSgpr)
-    self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, dstRankSgpr, "FusedPeerGroupPtr")
-
-  def _fusedA2ALoadFlagBaseByRank(self, module, flagBaseSgpr, rankSgpr, groupOffSgpr):
-    """Compute peer group offset for rankSgpr into groupOffSgpr, then load that
-    peer's flag and recv bases with it as SOFFSET.
-
-    DRAIN calls this with my_rank (the elected last WG polls THIS card's own
-    flag buffer) and a scratch group offset; _fusedA2ALoadFlagBaseAndRank calls
-    it with the rank it just scanned and the persistent FusedPeerGroupPtr, which
-    the SDMA emitters then reuse. DRAIN reads only the flag half.
-
-    Args:
-      module:       Module to append instructions to.
-      flagBaseSgpr: 4-ALIGNED quad receiving peer_<rank>_flagPtr then
-                    peer_<rank>_bufPtr.
-      rankSgpr:     1 SGPR holding the rank index to select.
-      groupOffSgpr: 1 SGPR, or the name of one, to receive the group offset.
-    """
-    fusedA2ALoadFlagBaseByRank(module, self.parentWriter, flagBaseSgpr, rankSgpr, groupOffSgpr)
+    fusedA2ALoadFlagBaseByRank(module, self.parentWriter, flagBaseSgpr, dstRankSgpr, "FusedPeerGroupPtr")
 
   def _fusedA2AComputeCopyFields(self, module, packetElementLog2,
                                  pS, jS, myRankS, nS, nShardS,
@@ -3634,7 +3621,7 @@ class GlobalWriteBatchWriter:
     # below need FusedPeerGroupPtr left pointing at dst_rank's queue.
     selfBaseSgpr = kw.sgprPool.checkOutAligned(4, 4, tag="fusedA2A_obSelfBase", preventOverflow=False)
     grpTmpSgpr   = kw.sgprPool.checkOut(1, tag="fusedA2A_obGroup", preventOverflow=False)
-    self._fusedA2ALoadFlagBaseByRank(module, selfBaseSgpr, myRankSgpr, grpTmpSgpr)
+    fusedA2ALoadFlagBaseByRank(module, self.parentWriter, selfBaseSgpr, myRankSgpr, grpTmpSgpr)
     kw.sgprPool.checkIn(grpTmpSgpr)
 
     module.add(SAddU32(dst=sgpr(selfBaseSgpr + 0), src0=sgpr(selfBaseSgpr + 0),
@@ -4181,7 +4168,7 @@ class GlobalWriteBatchWriter:
     module.add(kw.argLoader.loadKernArg(c3WSgpr, "KernArgAddress",
       sgprOffset=hex(fusedBase + layout["FusedW"]), dword=1))
     module.add(SWaitCnt(kmcnt=0, comment="wait FusedMyRank/FusedW"))
-    self._fusedA2ALoadFlagBaseByRank(module, drainFlagBase, drainRankSgpr, drainTmp2)
+    fusedA2ALoadFlagBaseByRank(module, self.parentWriter, drainFlagBase, drainRankSgpr, drainTmp2)
     kw.sgprPool.checkIn(drainRankSgpr)
 
     module.add(SAndB32(dst=sgpr(drainBitSgpr), src0=sgpr(drainSgpr), src1=FUSED_A2A_DRAIN_RECV,
@@ -4426,7 +4413,7 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(targetSgpr)
 
     flagBaseSgpr = kw.sgprPool.checkOutAligned(4, 4, tag="fusedRS_flagBase", preventOverflow=False)
-    self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, "FusedRSDst", "FusedPeerGroupPtr")
+    fusedA2ALoadFlagBaseByRank(module, self.parentWriter, flagBaseSgpr, "FusedRSDst", "FusedPeerGroupPtr")
     self._emitFusedA2ASdmaIssue(module, "FusedRSDst", myRankSgpr, "FusedNShard",
                                 flagBaseSgpr, tmpSgpr, bandSgpr, mt1 * ck)
     if ck > 1:
@@ -4463,16 +4450,8 @@ class GlobalWriteBatchWriter:
     kw = self.parentWriter
     c3Tmp = kw.sgprPool.checkOut(1, tag="fusedA2A_c3Tmp", preventOverflow=False)
     # S_ATOMIC_INC:  MEM[addr] = (tmp >= DATA) ? 0 : tmp + 1 ;  RETURN_DATA = tmp
-    #
-    # SDATA is both operands -- the wrap limit goes in, the pre-op value comes back
-    # out of the same register.  A limit of FusedTotalWGs-1 makes the globally last
-    # WG read back FusedTotalWGs-1 and leaves the counter at 0 behind it.
-    #
-    # On SMEM, GLC is also what makes an atomic return its pre-op value at all
-    # (CDNA4 ISA Table 75); without it this is a fire-and-forget increment whose
-    # "pre-op value" is whatever the register already held.
-    #
-    # SMEM ignores EXEC, so the wave-0 gate alone is what keeps this once per WG.
+    # A limit of FusedTotalWGs-1 makes the globally last WG read back FusedTotalWGs-1
+    # and leaves the counter at 0 behind it.
     c3Limit = kw.sgprPool.checkOut(1, tag="fusedA2A_c3Limit", preventOverflow=False)
     module.add(SSubU32(dst=sgpr(c3Limit), src0=sgpr("FusedTotalWGs"), src1=1,
                        comment="wrap limit = FusedTotalWGs - 1 (what the last WG reads back)"))
@@ -4518,7 +4497,7 @@ class GlobalWriteBatchWriter:
 
     flagBaseSgpr = kw.sgprPool.checkOutAligned(4, 4, tag="fusedRS_drainFlagBase", preventOverflow=False)
     tmpSgpr = kw.sgprPool.checkOut(2, tag="fusedRS_drainTmp", preventOverflow=False)
-    self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, rankWSgpr, tmpSgpr)
+    fusedA2ALoadFlagBaseByRank(module, self.parentWriter, flagBaseSgpr, rankWSgpr, tmpSgpr)
     fusedRSOtherSourcesExec(module, tmpSgpr, rankWSgpr)
     want = None
     if self.kernel["FusedRSWait"] == 2:

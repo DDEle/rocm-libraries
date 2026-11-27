@@ -247,6 +247,7 @@ rocblaslt_status rocblaslt_matmul_impl(const rocblaslt_handle       handle,
     problem.fused_a2a_world     = handle->device_comm_world;
     problem.fused_a2a_rank      = handle->device_comm_rank;
     problem.fused_a2a_peer_flag = handle->device_comm_peer_flags;
+    problem.fused_a2a_direct_mask = handle->device_comm_direct_mask;
 
     if(auto gate = validate_fused_a2a(handle, problem); gate != rocblaslt_status_success)
         return gate;

@@ -250,6 +250,8 @@ namespace
 } // namespace
 
 #if HIPBLASLT_HAS_GEMM_A2A_FUSION
+#include <Tensile/FusedA2AKernArg.hpp>
+
 /********************************************************************************
  * Fusion descriptor.
  *
@@ -595,6 +597,8 @@ namespace
         void*             flags;
         uint32_t          ipcValid;
         hipIpcMemHandle_t ipc;
+        // Zero off gfx1250.
+        TensileLite::PciBusId pci;
     };
 
     constexpr uint32_t kDeviceCommMagic = 0x41324131u; // "1A2A"
@@ -618,9 +622,10 @@ namespace
             handle->device_comm_peer_flags[j]        = nullptr;
             handle->device_comm_peer_flags_mapped[j] = false;
         }
-        handle->device_comm_rank     = 0;
-        handle->device_comm_channels = 0;
-        handle->device_comm_world    = 0;
+        handle->device_comm_rank        = 0;
+        handle->device_comm_channels    = 0;
+        handle->device_comm_direct_mask = 0;
+        handle->device_comm_world       = 0;
     }
 }
 
@@ -1352,6 +1357,21 @@ try
         return HIPBLAS_STATUS_NOT_SUPPORTED;
     }
 
+    const bool directWrite
+        = rocblaslt_internal_get_arch_name(myDevice).find("gfx1250") != std::string::npos;
+    TensileLite::PciBusId myPci;
+    if(directWrite)
+    {
+        char busId[64] = {};
+        if(hipDeviceGetPCIBusId(busId, sizeof(busId), myDevice) != hipSuccess
+           || !TensileLite::parsePciBusId(busId, myPci))
+        {
+            log_error(__func__, "could not resolve this rank's PCI bus id");
+            rocblaslt::Debug::Instance().markerStop();
+            return HIPBLAS_STATUS_NOT_SUPPORTED;
+        }
+    }
+
     // The kernel owns the flag region's layout, so its size is asked for rather
     // than recomputed here; that keeps one definition of it.
     void*        flags = nullptr;
@@ -1382,6 +1402,7 @@ try
     // Only needed by a peer in another process; a failure here is reported when
     // such a peer is actually found, not before.
     mine.ipcValid = (hipIpcGetMemHandle(&mine.ipc, flags) == hipSuccess) ? 1u : 0u;
+    mine.pci      = myPci;
 
     std::vector<DeviceCommExchange> all(world);
     hipblasStatus_t                 status
@@ -1446,6 +1467,13 @@ try
         h->device_comm_peer_flags_mapped[j] = true;
     }
 
+    if(directWrite)
+    {
+        std::vector<TensileLite::PciBusId> pcis(world);
+        for(uint32_t j = 0; j < world; ++j)
+            pcis[j] = all[j].pci;
+        h->device_comm_direct_mask = TensileLite::fusedA2ADirectMask(myPci, pcis);
+    }
     h->device_comm_channels = nChannels;
     // Last, and what makes the handle registered: every peer's region is in hand.
     h->device_comm_world = world;

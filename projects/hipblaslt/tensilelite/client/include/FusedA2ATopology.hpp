@@ -3,41 +3,16 @@
 
 #pragma once
 
+#include <Tensile/FusedA2AKernArg.hpp>
+
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <vector>
 
 namespace TensileLite
 {
     namespace Client
     {
-        struct PciBusId
-        {
-            unsigned domain   = 0;
-            unsigned bus      = 0;
-            unsigned device   = 0;
-            unsigned function = 0;
-        };
-
-        // Parses the "domain:bus:device.function" hex form of hipDeviceGetPCIBusId.
-        inline bool parsePciBusId(char const* text, PciBusId& id)
-        {
-            return std::sscanf(text, "%x:%x:%x.%x", &id.domain, &id.bus, &id.device, &id.function)
-                   == 4;
-        }
-
-        // Bit j set iff peers[j] is on self's card: the same PCI domain, bus and device.
-        inline uint32_t fusedA2ADirectMask(PciBusId const& self, std::vector<PciBusId> const& peers)
-        {
-            uint32_t mask = 0;
-            for(size_t j = 0; j < peers.size(); j++)
-                if(peers[j].domain == self.domain && peers[j].bus == self.bus
-                   && peers[j].device == self.device)
-                    mask |= 1u << j;
-            return mask;
-        }
-
         // The k-th engine set in `mask`, wrapping; 0 for an empty mask.
         inline uint32_t sdmaMaskEngine(uint32_t mask, size_t k)
         {

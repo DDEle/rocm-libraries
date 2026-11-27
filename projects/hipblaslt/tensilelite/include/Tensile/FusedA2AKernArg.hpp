@@ -9,8 +9,10 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace TensileLite
 {
@@ -65,6 +67,31 @@ namespace TensileLite
             ++count;
         return FUSED_A2A_DRAIN_RECV | FUSED_A2A_DRAIN_SEND | mask << FUSED_A2A_DIRECT_MASK_SHIFT
                | count << FUSED_A2A_DIRECT_COUNT_SHIFT;
+    }
+
+    struct PciBusId
+    {
+        unsigned domain   = 0;
+        unsigned bus      = 0;
+        unsigned device   = 0;
+        unsigned function = 0;
+    };
+
+    // Parses the "domain:bus:device.function" hex form of hipDeviceGetPCIBusId.
+    inline bool parsePciBusId(char const* text, PciBusId& id)
+    {
+        return std::sscanf(text, "%x:%x:%x.%x", &id.domain, &id.bus, &id.device, &id.function) == 4;
+    }
+
+    // Bit j set iff peers[j] is on self's card: the same PCI domain, bus and device.
+    inline uint32_t fusedA2ADirectMask(PciBusId const& self, std::vector<PciBusId> const& peers)
+    {
+        uint32_t mask = 0;
+        for(size_t j = 0; j < peers.size(); j++)
+            if(peers[j].domain == self.domain && peers[j].bus == self.bus
+               && peers[j].device == self.device)
+                mask |= 1u << j;
+        return mask;
     }
 
     // One group per peer: flag base, buffer base, then the queue pointers.

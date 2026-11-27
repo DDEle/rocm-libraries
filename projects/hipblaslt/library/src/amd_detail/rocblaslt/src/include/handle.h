@@ -281,6 +281,8 @@ struct _rocblaslt_handle
     uint32_t device_comm_rank     = 0;
     uint32_t device_comm_world    = 0;
     uint32_t device_comm_channels = 0;
+    // Ranks on this rank's card, this rank included, on gfx1250; 0 elsewhere.
+    uint32_t device_comm_direct_mask = 0;
 
     // Completion flags: device_comm_channels independent regions per rank, never
     // passed in nor readable by the caller. device_comm_peer_flags[j] is rank j's

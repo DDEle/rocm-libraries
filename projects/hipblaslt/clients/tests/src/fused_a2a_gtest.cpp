@@ -15,6 +15,8 @@
 #include <hipblaslt/hipblaslt-ext.hpp>
 #include <hipblaslt/hipblaslt.h>
 
+#include "rocblaslt_fused_a2a_peers.hpp"
+
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -490,6 +492,52 @@ namespace
 
         EXPECT_EQ(hipblasLtFusionDestroy(prologue), HIPBLAS_STATUS_SUCCESS);
         EXPECT_EQ(hipblasLtMatmulDescDestroy(matmulDesc), HIPBLAS_STATUS_SUCCESS);
+    }
+
+    /************************************************************************
+     * Kernel arguments of the ranks a gfx1250 epilogue writes directly.
+     ***********************************************************************/
+
+    TEST(FusedA2ADirectPeers_pre_checkin, DirectRanksGetNoQueue)
+    {
+        constexpr uint32_t                world      = 4;
+        constexpr uint32_t                directMask = 0x6;
+        std::vector<hipblasLtSdmaQueue_t> queues;
+        std::vector<void*>                recv;
+        for(uint32_t j = 0; j < world; ++j)
+        {
+            queues.push_back(fakeQueue(0x10000 * (j + 1)));
+            recv.push_back(reinterpret_cast<void*>(0x900000 + 0x1000 * j));
+        }
+
+        const auto peers = rocblaslt::buildFusedA2APeerFields(
+            nullptr, recv.data(), world, 0, queues.data(), directMask);
+        for(uint32_t j = 0; j < world; ++j)
+        {
+            const bool direct = (directMask >> j) & 1u;
+            EXPECT_EQ(peers[j][TensileLite::FUSED_A2A_SLOT_BUF_PTR], recv[j]) << j;
+            EXPECT_EQ(peers[j][TensileLite::FUSED_A2A_SLOT_QUEUE_BUF],
+                      direct ? nullptr : queues[j].queueBuf)
+                << j;
+            EXPECT_EQ(peers[j][TensileLite::FUSED_A2A_SLOT_RPTR], direct ? nullptr : queues[j].rptr)
+                << j;
+            EXPECT_EQ(peers[j][TensileLite::FUSED_A2A_SLOT_WPTR], direct ? nullptr : queues[j].wptr)
+                << j;
+            EXPECT_EQ(peers[j][TensileLite::FUSED_A2A_SLOT_DOORBELL],
+                      direct ? nullptr : queues[j].doorbell)
+                << j;
+        }
+    }
+
+    TEST(FusedA2ADirectPeers_pre_checkin, DrainCarriesTheDirectRanks)
+    {
+        constexpr uint32_t both
+            = TensileLite::FUSED_A2A_DRAIN_RECV | TensileLite::FUSED_A2A_DRAIN_SEND;
+        EXPECT_EQ(rocblaslt::fusedA2ADrainFor(HIPBLASLT_A2A_COMPLETION_IN_KERNEL_FULL, 0, 4), both);
+        EXPECT_EQ(rocblaslt::fusedA2ADrainFor(HIPBLASLT_A2A_COMPLETION_IN_KERNEL_FULL, 0x6, 4),
+                  both | 0x6u << 8 | 2u << 16);
+        EXPECT_EQ(rocblaslt::fusedA2ADrainFor(HIPBLASLT_A2A_COMPLETION_IN_KERNEL_FULL, 0x13, 4),
+                  both | 0x3u << 8 | 2u << 16);
     }
 
     /************************************************************************

@@ -3157,15 +3157,20 @@ namespace
         RocblasltFusionInfo fusedInfo;
         if(rocblaslt_resolve_fused_a2a(prob, fusedInfo))
         {
-            const auto buffers     = fusedA2ABufferTable(fusedInfo, prob);
+            const auto     buffers = fusedA2ABufferTable(fusedInfo, prob);
+            const uint32_t direct  = fusedInfo.mode == RocblasltFusionInfo::Mode::GemmA2A
+                                         ? prob.fused_a2a_direct_mask
+                                         : 0u;
             inputs.fusedA2ACounter = prob.Synchronizer;
             inputs.fusedA2APeers   = rocblaslt::buildFusedA2APeerFields(prob.fused_a2a_peer_flag,
                                                                       buffers.data(),
                                                                       prob.fused_a2a_world,
                                                                       fusedInfo.commChannel,
-                                                                      fusedInfo.a2aSdmaQueues);
+                                                                      fusedInfo.a2aSdmaQueues,
+                                                                      direct);
             inputs.fusedA2AMyRank  = prob.fused_a2a_rank;
-            inputs.fusedA2ADrain   = rocblaslt::fusedA2ADrainFor(fusedInfo.a2aCompletionMode);
+            inputs.fusedA2ADrain   = rocblaslt::fusedA2ADrainFor(
+                fusedInfo.a2aCompletionMode, direct, prob.fused_a2a_world);
         }
 #endif
 

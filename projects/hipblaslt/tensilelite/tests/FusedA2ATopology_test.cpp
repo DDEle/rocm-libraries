@@ -9,6 +9,7 @@
 #include <set>
 #include <vector>
 
+using namespace TensileLite;
 using namespace TensileLite::Client;
 
 namespace

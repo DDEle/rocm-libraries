@@ -17,16 +17,18 @@
 
 namespace rocblaslt
 {
-    // The drain bits this layer asks for. IN_KERNEL_FULL maps to both.
-    constexpr uint32_t fusedA2ADrainFor(hipblasLtA2ACompletionMode_t mode)
+    // FusedDrain for this layer. IN_KERNEL_FULL maps to both drains and the direct peers.
+    constexpr uint32_t
+        fusedA2ADrainFor(hipblasLtA2ACompletionMode_t mode, uint32_t directMask, uint32_t world)
     {
         return mode == HIPBLASLT_A2A_COMPLETION_IN_KERNEL_FULL
-                   ? (TensileLite::FUSED_A2A_DRAIN_RECV | TensileLite::FUSED_A2A_DRAIN_SEND)
+                   ? TensileLite::fusedA2ADrain(directMask, world)
                    : 0u;
     }
 
     // One group per rank in FUSED_A2A_PEER_FIELDS order. Fills the flag, recv and SDMA
-    // queue slots. Any of the three sources may be null, leaving its slots null. Returns
+    // queue slots, the latter only for ranks outside directMask. Any of the three sources
+    // may be null, leaving its slots null. Returns
     // an all-null table when world does not fit the segment. The flag slot is biased to
     // the caller's channel within each peer's region.
     inline TensileLite::FusedA2APeerTable
@@ -34,7 +36,8 @@ namespace rocblaslt
                                 void* const*                recvPtrs,
                                 uint32_t                    world,
                                 uint32_t                    channel,
-                                const hipblasLtSdmaQueue_t* queues)
+                                const hipblasLtSdmaQueue_t* queues,
+                                uint32_t                    directMask)
     {
         if(!TensileLite::fusedA2AWorldSizeValid(static_cast<int>(world)))
             return {};
@@ -50,7 +53,7 @@ namespace rocblaslt
                       : nullptr;
             peers[j][TensileLite::FUSED_A2A_SLOT_BUF_PTR]
                 = recvPtrs != nullptr ? recvPtrs[j] : nullptr;
-            if(queues != nullptr)
+            if(queues != nullptr && ((directMask >> j) & 1u) == 0)
             {
                 peers[j][TensileLite::FUSED_A2A_SLOT_QUEUE_BUF] = queues[j].queueBuf;
                 peers[j][TensileLite::FUSED_A2A_SLOT_RPTR]      = queues[j].rptr;

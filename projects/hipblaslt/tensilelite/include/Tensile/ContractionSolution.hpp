@@ -439,6 +439,7 @@ namespace TensileLite
     struct SizeMapping
     {
         int                    a2aSubRounds     = 1;
+        int                    fusedRSWait      = 1;
         bool                   activationFused  = true;
         int                    adaptiveGemm     = 0;
         int                    adaptiveGemmGSUA = 0;

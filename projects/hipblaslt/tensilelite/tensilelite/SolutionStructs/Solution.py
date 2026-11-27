@@ -80,7 +80,7 @@ from ..Common.ValidParameters import validParameters, \
                                             SW_INSTRUCTION_PREFETCH_ABSOLUTE, \
                                             SW_INSTRUCTION_PREFETCH_AUTO
 from .Naming import getSolutionNameFull
-from .Problem import ProblemType
+from .Problem import ProblemType, isFusedPush
 from .lds_layout import format_lds_layout
 from .segment_interleave import evaluate as segIntEval, aligned_budget_ok as segAlignedBudget, \
   b_rotate_reason as segBRotateReason, \
@@ -2741,7 +2741,10 @@ class Solution(collections.abc.Mapping):
         reject(state, printRejectionReason,
                "FusedA2A=GemmA2A requires a gfx94x/gfx95x/gfx1250 ISA")
         return
-      if fusedA2A != "GemmA2A" and isa[:2] not in ((9, 4), (9, 5)):
+      if fusedA2A == "GemmRS" and isa[:2] != (12, 5):
+        reject(state, printRejectionReason, "FusedA2A=GemmRS requires a gfx1250 ISA")
+        return
+      if fusedA2A == "A2AGemm" and isa[:2] not in ((9, 4), (9, 5)):
         reject(state, printRejectionReason,
                "FusedA2A=%s requires a gfx94x/gfx95x ISA" % fusedA2A)
         return
@@ -2763,11 +2766,11 @@ class Solution(collections.abc.Mapping):
         return
       state["InternalSupportParams"]["SupportUserGSU"] = False # Disable UserGSU for the last-WG election
 
-    if fusedA2A == "GemmA2A":
+    if isFusedPush(state["ProblemType"]):
       if not state["ProblemType"]["DestDataType"].isBFloat16():
-        reject(state, printRejectionReason, "FusedA2A=GemmA2A requires a bf16 D")
+        reject(state, printRejectionReason, "FusedA2A=%s requires a bf16 D" % fusedA2A)
         return
-      if isa[:2] == (12, 5):
+      if fusedA2A == "GemmA2A" and isa[:2] == (12, 5):
         unsupported = [name for name in ("UseSubtileImpl", "CompactLoopStore") if state[name]]
         if state["StoreRemapVectorWidth"] > 0:
           unsupported.append("StoreRemapVectorWidth")
@@ -2776,12 +2779,40 @@ class Solution(collections.abc.Mapping):
                  "FusedA2A=GemmA2A on gfx1250 does not support %s" % ", ".join(unsupported))
           return
 
+    if fusedA2A == "GemmRS":
+      cs, ck = state["ClusterDim"]
+      if not state["ProblemType"]["HighPrecisionAccumulate"]:
+        reject(state, printRejectionReason, "FusedA2A=GemmRS requires HighPrecisionAccumulate")
+        return
+      if cs & (cs - 1) or ck & (ck - 1):
+        reject(state, printRejectionReason, "FusedA2A=GemmRS requires a power-of-two ClusterDim")
+        return
+      if state["ClusterAIDMapping"] != -1:
+        reject(state, printRejectionReason, "FusedA2A=GemmRS requires ClusterAIDMapping=-1")
+        return
+      if state["WorkGroupMapping"] != 1:
+        reject(state, printRejectionReason, "FusedA2A=GemmRS requires WorkGroupMapping=1")
+        return
+      if state["WorkGroupMappingXCC"] != 1:
+        reject(state, printRejectionReason, "FusedA2A=GemmRS requires WorkGroupMappingXCC=1")
+        return
+      if state["SpaceFillingAlgo"]:
+        reject(state, printRejectionReason, "FusedA2A=GemmRS requires SpaceFillingAlgo=[]")
+        return
+      if state["UseSubtileImpl"]:
+        reject(state, printRejectionReason, "FusedA2A=GemmRS requires UseSubtileImpl=0")
+        return
+
     if state["A2ASubRounds"] != 1 and fusedA2A != "A2AGemm":
       reject(state, printRejectionReason, "A2ASubRounds > 1 requires FusedA2A=A2AGemm")
       return
 
     if state["A2APeerGroups"] != 0 and fusedA2A != "A2AGemm":
       reject(state, printRejectionReason, "A2APeerGroups > 0 requires FusedA2A=A2AGemm")
+      return
+
+    if state["FusedRSWait"] != 1 and fusedA2A != "GemmRS":
+      reject(state, printRejectionReason, "FusedRSWait != 1 requires FusedA2A=GemmRS")
       return
 
     if fusedA2A == "A2AGemm":

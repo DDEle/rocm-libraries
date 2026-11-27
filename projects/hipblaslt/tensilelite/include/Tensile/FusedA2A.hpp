@@ -15,6 +15,7 @@ namespace TensileLite
         Disabled = 0,
         GemmA2A,
         A2AGemm,
+        GemmRS,
         Count
     };
 
@@ -28,6 +29,8 @@ namespace TensileLite
             return "GemmA2A";
         case FusedA2A::A2AGemm:
             return "A2AGemm";
+        case FusedA2A::GemmRS:
+            return "GemmRS";
         default:
             return "Invalid";
         }
@@ -49,6 +52,6 @@ namespace TensileLite
                 return stream;
             }
         throw std::invalid_argument("FusedA2A '" + name
-                                    + "' is not one of Disabled, GemmA2A, A2AGemm");
+                                    + "' is not one of Disabled, GemmA2A, A2AGemm, GemmRS");
     }
 } // namespace TensileLite

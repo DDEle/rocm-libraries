@@ -170,6 +170,7 @@ namespace
         char const*          biasSrc            = nullptr;
         std::vector<int64_t> scaleBlockSizesA;
         char const*          int4EncodingA     = nullptr;
+        char const*          fusedA2A          = "Disabled";
         std::vector<int64_t> threadTile        = {4, 2, 1};
         std::vector<int64_t> matrixInstruction = {16, 16, 16, 1};
         char const*          tileStrategy      = nullptr;
@@ -256,7 +257,7 @@ namespace
         type.boolean("TLUB", false);
         type.boolean("SwizzleTensorA", false);
         type.boolean("SwizzleTensorB", false);
-        type.text("FusedA2A", "Disabled");
+        type.text("FusedA2A", options.fusedA2A);
         type.boolean("UseBeta", true);
         type.boolean("StridedBatched", true);
         return type;
@@ -927,6 +928,52 @@ TEST(SolutionState, ClusterAIDMappingRequiresEightXccs)
     auto const& disabled  = dynamic_cast<Predicates::IsSubclass<Hardware, AMDGPU> const&>(
         *build(options)->hardwarePredicate);
     EXPECT_NE(dynamic_cast<Predicates::GPU::ProcessorEqual const*>(disabled.value.get()), nullptr);
+}
+
+TEST(SolutionState, GemmRSShapeCarriesTilesClusterAndFieldWidths)
+{
+    using Predicates::Contraction::GemmA2AShape;
+    using Predicates::Contraction::GemmRSShape;
+
+    StateOptions options;
+    options.fusedA2A    = "GemmRS";
+    options.isa         = {12, 5, 0};
+    options.clusterDim  = {2, 4, 1};
+    auto        gfx1250 = build(options);
+    auto const* shape   = onlyDirect<GemmRSShape>(gfx1250->problemPredicate);
+    ASSERT_NE(shape, nullptr);
+    EXPECT_EQ(shape->value, (std::array<int64_t, 6>{32, 8, 2, 4, 16, 16}));
+    EXPECT_EQ(onlyDirect<GemmA2AShape>(gfx1250->problemPredicate), nullptr);
+
+    options.isa        = {9, 5, 0};
+    options.clusterDim = {};
+    auto gfx950        = build(options);
+    shape              = onlyDirect<GemmRSShape>(gfx950->problemPredicate);
+    ASSERT_NE(shape, nullptr);
+    EXPECT_EQ(shape->value, (std::array<int64_t, 6>{32, 8, 1, 1, 19, 14}));
+
+    options.fusedA2A = "GemmA2A";
+    auto gemmA2A     = build(options);
+    EXPECT_EQ(onlyDirect<GemmRSShape>(gemmA2A->problemPredicate), nullptr);
+    EXPECT_NE(onlyDirect<GemmA2AShape>(gemmA2A->problemPredicate), nullptr);
+}
+
+TEST(SolutionState, GemmRSModeIsRead)
+{
+    StateOptions options;
+    options.fusedA2A = "GemmRS";
+    EXPECT_EQ(build(options)->problemType.fusedA2A, FusedA2A::GemmRS);
+}
+
+TEST(SolutionState, FusedRSWaitDefaultsToOne)
+{
+    StateOptions options;
+    EXPECT_EQ(build(options)->sizeMapping.fusedRSWait, 1);
+    for(int64_t wait : {0, 1, 2})
+    {
+        options.extraIntegers = {{"FusedRSWait", wait}};
+        EXPECT_EQ(build(options)->sizeMapping.fusedRSWait, wait);
+    }
 }
 
 TEST(SolutionState, IsaSteppingIsHexadecimal)

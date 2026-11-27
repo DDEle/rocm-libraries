@@ -23,6 +23,7 @@
 
 from ..Common.Constants import CLUSTER_AID_MAPPING_XCC_COUNT
 from ..ExecutionPolicy import isPersistent
+from ..SolutionStructs.Problem import isFusedPush
 from rocisa.code import Module, Label, ValueSet
 from rocisa.instruction import SSendMsgRtnB32
 from rocisa.container import vgpr, sgpr, SMEMModifiers, replaceHolder, EXEC,\
@@ -434,7 +435,7 @@ def ClusterAIDRemap(writer, kernel, sgprWGM):
     start = kernel["ClusterAIDMapping"]
     cs, ck = kernel["ClusterDim"]
     if start == -1 or isPersistent(kernel) or cs & (cs - 1) or ck & (ck - 1) \
-            or kernel["ProblemType"]["FusedA2A"] == "GemmA2A":
+            or isFusedPush(kernel["ProblemType"]):
         return module
     numXCC = CLUSTER_AID_MAPPING_XCC_COUNT
     xccPerAID = numXCC // 2

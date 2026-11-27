@@ -84,6 +84,10 @@ def _a2aGemmType(**overrides):
     return ProblemType({**_FUSED_CONFIG, "FusedA2A": "A2AGemm", **overrides}, False)
 
 
+def _gemmRSType():
+    return ProblemType({**_FUSED_CONFIG, "FusedA2A": "GemmRS", "UseBeta": False}, False)
+
+
 class TestA2AGemmExactDict:
     def test_extent_defaults_to_k(self):
         ps = _sizes(_a2aGemmType(), {"sizes": [3072, 2048, 1, 4096], "world": 4})
@@ -100,6 +104,12 @@ class TestA2AGemmExactDict:
     def test_k_must_divide_by_world(self):
         with pytest.raises(RuntimeError, match="K=4100"):
             _sizes(_a2aGemmType(), {"sizes": [3072, 2048, 1, 4100], "world": 8})
+
+
+class TestGemmRSExactDict:
+    def test_n_must_be_positive(self):
+        with pytest.raises(RuntimeError, match="N=0 must be positive"):
+            _sizes(_gemmRSType(), {"sizes": [8192, 0, 1, 2048], "world": 4})
 
 
 class TestA2AGemmPipeline:
@@ -303,6 +313,14 @@ class TestBenchmarkDataRoundTrip:
         ps = ProblemSizes(pt, loaded)
         assert (ps.exacts[0].world, ps.exacts[0].a2aExtent) == (4, 2048)
 
+    def test_gemm_rs_exact_line_reloads(self):
+        import yaml
+        pt = _gemmRSType()
+        written = _sizes(pt, {"sizes": [8192, 16384, 1, 2048], "world": 4}).exacts[0]
+        loaded = yaml.load("- Exact: {}\n".format(written), yaml.CSafeLoader)
+        ps = ProblemSizes(pt, loaded)
+        assert (ps.exacts[0].world, ps.exacts[0].a2aExtent) == (4, 8192)
+
 
 class TestLibLogicToYamlWorld:
     _ROW = [3072, 512, 1, 2048, 3072, 3072, 2048, 2048]
@@ -327,6 +345,13 @@ class TestLibLogicToYamlWorld:
         p = self._reload(_problemType(), data)[0]
         assert (list(p.sizes[:4]), p.world, p.a2aExtent) == ([3072, 512, 1, 2048], 2, 2048)
 
+    def test_gemm_rs_logic_row_reloads(self):
+        from tensilelite.lib_logic_to_yaml import formProblemSize
+        row = [8192, 16384, 1, 2048, 8192, 8192, 2048, 2048]
+        data = formProblemSize([(row + [4, 8192], [0, 1.0])], 0, dict(_gemmRSType().state))
+        p = self._reload(_gemmRSType(), data)[0]
+        assert (list(p.sizes), p.world, p.a2aExtent) == (row, 4, 8192)
+
 
 class TestProblemStrRoundTrip:
     @staticmethod
@@ -343,6 +368,10 @@ class TestProblemStrRoundTrip:
     def test_gemm_a2a_keeps_world_and_extent(self):
         p = self._roundTrip(_problemType(), {"sizes": [3072, 512, 1, 2048], "world": 4, "a2aExtent": 1024})
         assert (p.world, p.a2aExtent) == (4, 1024)
+
+    def test_gemm_rs_keeps_world_and_extent(self):
+        p = self._roundTrip(_gemmRSType(), {"sizes": [8192, 16384, 1, 2048], "world": 4})
+        assert (p.world, p.a2aExtent) == (4, 8192)
 
 
 class TestLibLogicToYamlA2AGemm:

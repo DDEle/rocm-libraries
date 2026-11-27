@@ -2100,6 +2100,11 @@ namespace TensileLite
                                      "WorkGroupMappingXCC = 1; got "
                                      + std::to_string(wgm) + " and " + std::to_string(wgmxcc)
                                      + ".");
+        if(problemType.fusedA2A == FusedA2A::GemmRS && (wgm != 1 || wgmxcc > 1))
+            throw std::runtime_error("[fused-a2a] GemmRS requires WorkGroupMapping = 1 and "
+                                     "WorkGroupMappingXCC <= 1; got "
+                                     + std::to_string(wgm) + " and " + std::to_string(wgmxcc)
+                                     + ".");
 
         internalArg0 = 0;
         internalArg1 = 0;

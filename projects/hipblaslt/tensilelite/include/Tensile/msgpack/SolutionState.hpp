@@ -55,7 +55,7 @@ namespace TensileLite
      *    translates (a PersistentLoop selector, which Python refuses as
      *    well, also throws);
      *  - an Int4EncodingA other than Signed or UnsignedBias8;
-     *  - a FusedA2A other than Disabled, GemmA2A or A2AGemm;
+     *  - a FusedA2A other than Disabled, GemmA2A, A2AGemm or GemmRS;
      *  - no ISA, which Python takes from the device for an assembly kernel, or
      *    an ISA naming a processor TensileLite does not know;
      *  - a KernelLanguage that TensileLite has no name for;

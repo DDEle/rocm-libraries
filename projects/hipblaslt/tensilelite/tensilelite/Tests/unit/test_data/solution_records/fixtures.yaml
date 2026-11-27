@@ -195,3 +195,15 @@ gfx1250-streamk-cluster-gl2-metadata:
     ProblemType.Sparse: 2
     ProblemType.TLUMetadata: true
     ProblemType.MXBlockFreeB: -1
+
+# GemmRSShape on a 256x128 tile and a 4x2 cluster, so MacroTile0, MacroTile1,
+# ClusterDim[0] and ClusterDim[1] all differ, and FusedRSWait off its default.
+gfx1250-streamk-cluster-gemm-rs:
+  base: gfx1250-streamk-cluster
+  set:
+    MacroTile0: 256
+    MacroTile1: 128
+    ClusterDim: [4, 2]
+    FusedRSWait: 2
+    ProblemType.FusedA2A: GemmRS
+    ProblemType.UseBeta: false

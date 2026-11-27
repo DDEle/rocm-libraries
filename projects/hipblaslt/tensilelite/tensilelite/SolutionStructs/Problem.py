@@ -283,6 +283,15 @@ class ExactDict(Problem):
           self.a2aExtent = self.sizes[0]
         if not 1 <= self.a2aExtent <= self.sizes[0]:
           raise RuntimeError("a2aExtent=%d must be in [1, M=%d]" % (self.a2aExtent, self.sizes[0]))
+      elif mode == "GemmRS":
+        if self.a2aExtent is None:
+          self.a2aExtent = self.sizes[0]
+        if self.a2aExtent != self.sizes[0]:
+          raise RuntimeError("a2aExtent=%d must equal M=%d" % (self.a2aExtent, self.sizes[0]))
+        if self.sizes[1] < 1:
+          raise RuntimeError("N=%d must be positive" % self.sizes[1])
+        if self.sizes[1] % self.world != 0:
+          raise RuntimeError("N=%d is not a multiple of world=%d" % (self.sizes[1], self.world))
       else:
         if self.a2aExtent is None:
           self.a2aExtent = self.sizes[3]
@@ -553,6 +562,7 @@ _defaultProblemType = {
     "OutputPeerD": False,
     # GemmA2A: the GEMM epilogue PUSHes the first AM feature columns to the peers.
     # A2AGemm: B's K shards are gathered from the peers into a2aBuf one shard at a time.
+    # GemmRS: the epilogue PUSHes the peers' N segments and adds the W-1 received partial D's to its own.
     "FusedA2A": "Disabled",
     # For kernels putting arguments in workspaces instead of kernel arguments, they can choose to support user arguments input instead.
     "SupportUserArgs": True,
@@ -574,12 +584,17 @@ _defaultProblemType = {
     "DataTypeMXSB": "E8",
 }
 
-FUSED_A2A_MODES = ("Disabled", "GemmA2A", "A2AGemm")
+FUSED_A2A_MODES = ("Disabled", "GemmA2A", "A2AGemm", "GemmRS")
 
 
 def isFusedA2A(problemType):
   """problemType: a ProblemType or a raw logic ProblemType dict."""
   return (problemType or {}).get("FusedA2A", "Disabled") != "Disabled"
+
+
+def isFusedPush(problemType):
+  """True for the modes whose epilogue pushes D tiles to peers: GemmA2A and GemmRS."""
+  return (problemType or {}).get("FusedA2A", "Disabled") in ("GemmA2A", "GemmRS")
 
 
 def splitFusedA2ARow(size, problemType):
@@ -1205,7 +1220,8 @@ class ProblemType(Mapping):
           ("GroupedGemm", self["GroupedGemm"]),
           ("Activation", self["ActivationType"] != 'none'),
           ("TransposeB", self["FusedA2A"] == "A2AGemm" and self["TransposeB"]),
-          ("UseInitialStridesAB", self["FusedA2A"] == "A2AGemm" and self["UseInitialStridesAB"])) if used]
+          ("UseInitialStridesAB", self["FusedA2A"] == "A2AGemm" and self["UseInitialStridesAB"]),
+          ("UseBeta", self["FusedA2A"] == "GemmRS" and self["UseBeta"])) if used]
       if unsupported:
         raise Exception("FusedA2A=%s does not support %s" % (self["FusedA2A"], ", ".join(unsupported)))
 
@@ -1498,6 +1514,8 @@ class ProblemType(Mapping):
       name.append("GemmA2A")
     if self["FusedA2A"] == "A2AGemm":
       name.append("A2AGemm")
+    if self["FusedA2A"] == "GemmRS":
+      name.append("GemmRS")
     if self["Sparse"]:
       if self["Sparse"] == 2:
         name.append("SPBML%d"%(self["MetadataLayout"]))

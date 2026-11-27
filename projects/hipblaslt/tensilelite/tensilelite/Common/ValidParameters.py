@@ -609,6 +609,9 @@ validParameters = { # we need to make sure this matches develop
     "A2ASubRounds": [1, 2, 4],
     # FusedA2A=A2AGemm: cap on the peer groups of a batch; 0 = ceil(count / ceil(count / (W-1))).
     "A2APeerGroups": list(range(8)),
+    # FusedA2A=GemmRS: 0 = store the own segment without waiting, 1 = wait for every peer's whole segment
+    # and add it, 2 = wait per band.
+    "FusedRSWait": [0, 1, 2],
     # Load options:
     # (GRO = Global Read Offset)
     # BufferLoad=0:

@@ -19,6 +19,8 @@ pytestmark = pytest.mark.unit
         ({"FusedA2A": "GemmA2A"}, False, False),
         ({"FusedA2A": "A2AGemm"}, False, False),
         ({"FusedA2A": "GemmA2A"}, True, True),
+        ({"FusedA2A": "GemmRS"}, False, False),
+        ({"FusedA2A": "GemmRS"}, True, True),
     ],
 )
 def test_gemm_a2a_logic_requires_explicit_enable(problem_type, enabled, expected):

@@ -1408,6 +1408,7 @@
     'ExtraLatencyForLR',
     'ExtraMiLatencyLeft',
     'ForceDisableShadowInit',
+    'FusedRSWait',
     'GlobalReadPerMfma',
     'GlobalReadVectorWidthA',
     'GlobalReadVectorWidthB',
@@ -1923,6 +1924,15 @@
         True,
       ]),
       'len': 2,
+      'type': 'list',
+    }),
+    'FusedRSWait': dict({
+      'head': list([
+        0,
+        1,
+        2,
+      ]),
+      'len': 3,
       'type': 'list',
     }),
     'GlobalReadPerMfma': dict({

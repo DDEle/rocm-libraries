@@ -152,9 +152,10 @@ namespace TensileLite
 
             if(m_fusedA2A != FusedA2A::Disabled)
             {
-                if(m_fusedA2A == FusedA2A::A2AGemm && m_fusedA2AExtents.empty())
+                if(m_fusedA2A != FusedA2A::GemmA2A && m_fusedA2AExtents.empty())
                     for(auto const& sizes : m_problemSizes)
-                        m_fusedA2AExtents.push_back(static_cast<int>(sizes.at(3)));
+                        m_fusedA2AExtents.push_back(
+                            static_cast<int>(sizes.at(m_fusedA2A == FusedA2A::A2AGemm ? 3 : 0)));
 
                 if(m_worlds.size() != m_problemSizes.size()
                    || m_fusedA2AExtents.size() != m_problemSizes.size())
@@ -176,12 +177,12 @@ namespace TensileLite
                 {
                     int const extent = m_fusedA2AExtents[i];
                     int const k      = static_cast<int>(m_problemSizes[i].at(3));
-                    if(m_fusedA2A == FusedA2A::GemmA2A ? extent < 1 : extent != k)
+                    if(m_fusedA2A == FusedA2A::A2AGemm ? extent != k : extent < 1)
                         throw std::invalid_argument(concatenate(
                             "fused-a2a-extent=",
                             extent,
-                            m_fusedA2A == FusedA2A::GemmA2A ? std::string(" must be >= 1")
-                                                            : concatenate(" must equal K=", k)));
+                            m_fusedA2A == FusedA2A::A2AGemm ? concatenate(" must equal K=", k)
+                                                            : std::string(" must be >= 1")));
                 }
             }
             else if(!m_worlds.empty() || !m_fusedA2AExtents.empty())
@@ -770,6 +771,22 @@ namespace TensileLite
                                                         rv.back().boundSize(0),
                                                         " is not a multiple of world=",
                                                         m_worlds[i]));
+                                    if(m_fusedA2A == FusedA2A::GemmRS)
+                                    {
+                                        if(static_cast<size_t>(m_fusedA2AExtents[i])
+                                           != rv.back().freeSizeA(0))
+                                            throw std::invalid_argument(
+                                                concatenate("fused-a2a-extent=",
+                                                            m_fusedA2AExtents[i],
+                                                            " must equal M=",
+                                                            rv.back().freeSizeA(0)));
+                                        if(rv.back().freeSizeB(0) % m_worlds[i] != 0)
+                                            throw std::invalid_argument(
+                                                concatenate("N=",
+                                                            rv.back().freeSizeB(0),
+                                                            " is not a multiple of world=",
+                                                            m_worlds[i]));
+                                    }
                                     rv.back().setA2ABuf();
                                 }
                                 if(k < m_biasTypeArgs.size())

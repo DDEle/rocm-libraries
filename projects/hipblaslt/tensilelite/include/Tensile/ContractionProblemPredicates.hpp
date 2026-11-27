@@ -3566,6 +3566,85 @@ namespace TensileLite
                 }
             };
 
+            // value is {MacroTile0, MacroTile1, ClusterDim[0], ClusterDim[1],
+            // COPY_SUBWIN pitch bits, rect_x bits}.
+            struct GemmRSShape : public Predicate_CRTP<GemmRSShape, ContractionProblemGemm>
+            {
+                enum
+                {
+                    HasIndex = false,
+                    HasValue = true
+                };
+                std::array<int64_t, 6> value;
+
+                GemmRSShape() = default;
+                GemmRSShape(std::array<int64_t, 6> value)
+                    : value(value)
+                {
+                }
+
+                static std::string Type()
+                {
+                    return "GemmRSShape";
+                }
+
+                bool fits(ContractionProblemGemm const& problem) const
+                {
+                    if(problem.fusedA2A() != FusedA2A::GemmRS)
+                        return true;
+                    const int64_t world = problem.world();
+                    const int64_t mt0 = value[0], mt1 = value[1], cs = value[2], ck = value[3];
+                    if(world <= 0 || mt0 <= 0 || mt1 <= 0 || cs <= 0 || ck <= 0)
+                        return false;
+                    for(size_t i = 0; i < problem.batchIndices().size(); i++)
+                        if(problem.batchSize(i) != 1)
+                            return false;
+                    const auto& d = problem.d();
+                    if(d.elementBytes() != 2)
+                        return false;
+                    const int64_t m       = problem.freeSizeA(0);
+                    const int64_t n       = problem.freeSizeB(0);
+                    const int64_t bandSet = world * mt1 * ck;
+                    const size_t  mStride = d.strides()[problem.freeIndices()[0].d];
+                    const size_t  ldd     = d.strides()[problem.freeIndices()[1].d];
+                    return n >= bandSet && n % bandSet == 0 && n / bandSet <= 32
+                           && m % (mt0 * cs) == 0
+                           && mStride == 1 && ldd == size_t(m) && m % 8 == 0
+                           && (m >> 3) < (int64_t(1) << value[4])
+                           && (m >> 3) < (int64_t(1) << value[5]);
+                }
+
+                bool operator()(ContractionProblemGemm const& problem) const override
+                {
+                    return fits(problem);
+                }
+
+                bool debugEval(ContractionProblemGemm const& problem,
+                               std::ostream&                 stream) const override
+                {
+                    bool               rv = fits(problem);
+                    std::ostringstream details;
+                    if(problem.fusedA2A() == FusedA2A::GemmRS)
+                    {
+                        const auto& d = problem.d();
+                        details << "world=" << problem.world() << " dBytes=" << d.elementBytes()
+                                << " m=" << problem.freeSizeA(0) << " n=" << problem.freeSizeB(0)
+                                << " MT0=" << value[0] << " MT1=" << value[1] << " Cs=" << value[2]
+                                << " Ck=" << value[3]
+                                << " mStride=" << d.strides()[problem.freeIndices()[0].d]
+                                << " ldd=" << d.strides()[problem.freeIndices()[1].d];
+                        for(size_t i = 0; i < problem.batchIndices().size(); i++)
+                            details << " batch=" << problem.batchSize(i);
+                        details << " (need world >= 1, dBytes == 2, n % (world*MT1*Ck) == 0,"
+                                   " 1 <= n / (world*MT1*Ck) <= 32, m % (MT0*Cs) == 0, mStride == 1,"
+                                   " ldd == m, m % 8 == 0, m>>3 < 2^"
+                                << value[4] << ", m>>3 < 2^" << value[5] << ", batch == 1)";
+                    }
+                    PredicateDebugger::printRow(stream, rv, this->type(), details.str());
+                    return rv;
+                }
+            };
+
             // value is the solution's DepthU * A2ASubRounds.
             struct A2AGemmShape : public Predicate_CRTP<A2AGemmShape, ContractionProblemGemm>
             {

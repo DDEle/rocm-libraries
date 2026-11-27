@@ -918,7 +918,7 @@ namespace TensileLite
         }
 
         // Contractions.ProblemType.FromOriginalState reads FusedA2A as one of
-        // Disabled, GemmA2A or A2AGemm, and a missing key as Disabled.
+        // Disabled, GemmA2A, A2AGemm or GemmRS, and a missing key as Disabled.
         FusedA2A fusedA2AMode(Dict const& d)
         {
             if(!d.has("FusedA2A"))
@@ -930,7 +930,7 @@ namespace TensileLite
                 if(ToString(mode) == name)
                     return mode;
             }
-            throw std::runtime_error("FusedA2A must be Disabled, GemmA2A or A2AGemm");
+            throw std::runtime_error("FusedA2A must be Disabled, GemmA2A, A2AGemm or GemmRS");
         }
 
         // Contractions.ProblemType.FromOriginalState.
@@ -1466,6 +1466,23 @@ namespace TensileLite
                 rv.push_back(withValue<GemmA2AShape>(std::array<int64_t, 3>{
                     state.integer("MacroTile0"), gfx1250 ? 16 : 19, gfx1250 ? 16 : 14}));
             }
+            else if(problemType.record.fusedA2A == FusedA2A::GemmRS)
+            {
+                auto const           isa     = state["ISA"].list();
+                bool const           gfx1250 = isa[0].integer() == 12 && isa[1].integer() == 5;
+                std::vector<int64_t> clusterDim{1, 1};
+                if(auto const* dim = state.find("ClusterDim"))
+                    clusterDim = dim->integers();
+                if(clusterDim.size() < 2)
+                    state["ClusterDim"].fail("a list of 2 values");
+                rv.push_back(
+                    withValue<GemmRSShape>(std::array<int64_t, 6>{state.integer("MacroTile0"),
+                                                                  state.integer("MacroTile1"),
+                                                                  clusterDim[0],
+                                                                  clusterDim[1],
+                                                                  gfx1250 ? 16 : 19,
+                                                                  gfx1250 ? 16 : 14}));
+            }
 
             // Exact-size custom kernels record the M/N/K window they won.
             if(auto const* bounds = state.find("CustomKernelSizePredicate"))
@@ -1705,6 +1722,7 @@ namespace TensileLite
             s.workspaceSizePerElemC    = d.integer("_WorkspaceSizePerElemC");
             s.workspaceSizePerElemBias = d.integer("_WorkspaceSizePerElemBias");
             s.a2aSubRounds             = int(d.integer("A2ASubRounds", 1));
+            s.fusedRSWait              = int(d.integer("FusedRSWait", 1));
             s.activationFused          = d.truthy("ActivationFused");
             s.workGroupMappingXCC      = int(d.integer("WorkGroupMappingXCC"));
             s.workGroupMappingXCCGroup = int(d.integer("WorkGroupMappingXCCGroup"));

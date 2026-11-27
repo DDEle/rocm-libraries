@@ -597,6 +597,7 @@ defaultBenchmarkCommonParameters = [
     {"UseSubtileImpl": [False]},
     {"A2ASubRounds": [1]},
     {"A2APeerGroups": [0]},
+    {"FusedRSWait": [1]},
     {"UseSgprForGRO": [-1]},
     {"UseInstOffsetForGRO": [0]},
     {"AssertSummationElementMultiple": [1]},

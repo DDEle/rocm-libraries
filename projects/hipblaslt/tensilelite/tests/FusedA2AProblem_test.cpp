@@ -13,7 +13,14 @@
 #include <Tensile/KernelArguments.hpp>
 #include <Tensile/SolutionLibrary.hpp>
 
+#ifdef TENSILE_YAML
+#include <Tensile/Serialization.hpp>
+#include <Tensile/llvm/YAML.hpp>
+#endif
+
+#include <array>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -350,4 +357,271 @@ TEST(FusedA2AClientProblemFactory, A2AGemmAcceptsKBeyondM)
     Client::ClientProblemFactory factory(args);
     ASSERT_EQ(factory.problems().size(), 1u);
     EXPECT_EQ(gemmAt(factory, 0).fusedA2AExtent(), 2048);
+}
+
+// factoryArgs uses problem-size {3072, 512, 1, 2048}, so M is 3072 and N is 512.
+TEST(FusedA2AClientProblemFactory, GemmRSRejectsExtentOtherThanMAndIndivisibleN)
+{
+    for(auto const& c : std::vector<std::pair<int, int>>{{2, 2048}, {2, 0}, {2, 4096}, {3, 3072}})
+    {
+        auto args = factoryArgs(true, 1);
+        setOption(args, "fused-a2a", FusedA2A::GemmRS);
+        setOption(args, "world", std::vector<int>{c.first});
+        setOption(args, "fused-a2a-extent", std::vector<int>{c.second});
+        EXPECT_THROW(Client::ClientProblemFactory{args}, std::invalid_argument)
+            << c.first << " " << c.second;
+    }
+}
+
+TEST(FusedA2AClientProblemFactory, GemmRSExtentDefaultsToM)
+{
+    auto args = factoryArgs(true, 1);
+    setOption(args, "fused-a2a", FusedA2A::GemmRS);
+    setOption(args, "world", std::vector<int>{2});
+    Client::ClientProblemFactory factory(args);
+    ASSERT_EQ(factory.problems().size(), 1u);
+    EXPECT_EQ(gemmAt(factory, 0).fusedA2AExtent(), 3072);
+}
+
+namespace
+{
+    using Predicates::Contraction::GemmRSShape;
+
+    // GemmRSShape value: {MT0, MT1, Cs, Ck, pitch bits, rect_x bits}.
+    GemmRSShape const rs256({256, 256, 2, 2, 16, 16});
+
+    ContractionProblemGemm rsProblem(size_t           M,
+                                     size_t           N,
+                                     uint32_t         world,
+                                     size_t           ldd   = 0,
+                                     size_t           batch = 1,
+                                     rocisa::DataType dType = rocisa::DataType::BFloat16)
+    {
+        auto p = fusedProblem(M, N, ldd ? ldd : M, world, M, batch, dType);
+        p.setFusedA2A(FusedA2A::GemmRS);
+        return p;
+    }
+}
+
+TEST(FusedA2AProblem, GemmRSModeRoundTrips)
+{
+    EXPECT_EQ(static_cast<int>(FusedA2A::GemmRS), static_cast<int>(FusedA2A::A2AGemm) + 1);
+    EXPECT_EQ(static_cast<int>(FusedA2A::Count), static_cast<int>(FusedA2A::GemmRS) + 1);
+    EXPECT_EQ(ToString(FusedA2A::GemmRS), "GemmRS");
+    for(int i = 0; i < static_cast<int>(FusedA2A::Count); i++)
+    {
+        auto const         mode = static_cast<FusedA2A>(i);
+        FusedA2A           parsed{FusedA2A::Count};
+        std::istringstream in(ToString(mode));
+        in >> parsed;
+        EXPECT_EQ(parsed, mode) << ToString(mode);
+    }
+    FusedA2A           parsed{};
+    std::istringstream in("GemmRs");
+    EXPECT_THROW(in >> parsed, std::invalid_argument);
+}
+
+TEST(GemmRSShape, OnlyConstrainsGemmRS)
+{
+    auto indivisible = rsProblem(8192, 3 * 1024, 4);
+    EXPECT_FALSE(rs256(indivisible));
+    indivisible.setFusedA2A(FusedA2A::GemmA2A);
+    EXPECT_TRUE(rs256(indivisible));
+    indivisible.setFusedA2A(FusedA2A::Disabled);
+    EXPECT_TRUE(rs256(indivisible));
+}
+
+TEST(GemmRSShape, TP4OutputProjection)
+{
+    EXPECT_TRUE(rs256(rsProblem(8192, 16384, 4)));
+    EXPECT_TRUE(rs256(rsProblem(8192, 16384, 2)));
+    EXPECT_TRUE(rs256(rsProblem(8192, 16384, 1)));
+}
+
+TEST(GemmRSShape, World)
+{
+    EXPECT_TRUE(rs256(rsProblem(8192, 2048, 4)));
+    EXPECT_FALSE(rs256(rsProblem(8192, 2048, 0)));
+}
+
+TEST(GemmRSShape, Batch)
+{
+    EXPECT_TRUE(rs256(rsProblem(8192, 16384, 4, 0, 1)));
+    EXPECT_FALSE(rs256(rsProblem(8192, 16384, 4, 0, 2)));
+}
+
+TEST(GemmRSShape, DIsTwoBytes)
+{
+    EXPECT_TRUE(rs256(rsProblem(8192, 16384, 4, 0, 1, rocisa::DataType::Half)));
+    EXPECT_FALSE(rs256(rsProblem(8192, 16384, 4, 0, 1, rocisa::DataType::Float)));
+}
+
+TEST(GemmRSShape, NDividesIntoWorldBands)
+{
+    // W * MT1 * Ck = 4 * 256 * 2 = 2048.
+    EXPECT_TRUE(rs256(rsProblem(8192, 3 * 2048, 4)));
+    EXPECT_FALSE(rs256(rsProblem(8192, 3 * 2048 + 1024, 4)));
+    // W = 3: 3 * 256 * 2 = 1536.
+    EXPECT_TRUE(rs256(rsProblem(8192, 2 * 1536, 3)));
+    EXPECT_FALSE(rs256(rsProblem(8192, 2 * 1536, 4)));
+    GemmRSShape const ck1({256, 256, 2, 1, 16, 16});
+    EXPECT_TRUE(ck1(rsProblem(8192, 3 * 2048 + 1024, 4)));
+}
+
+TEST(GemmRSShape, MDividesIntoClusterTiles)
+{
+    // MT0 * Cs = 512.
+    EXPECT_TRUE(rs256(rsProblem(8192 + 512, 16384, 4)));
+    EXPECT_FALSE(rs256(rsProblem(8192 + 256, 16384, 4)));
+    GemmRSShape const cs1({256, 256, 1, 2, 16, 16});
+    EXPECT_TRUE(cs1(rsProblem(8192 + 256, 16384, 4)));
+}
+
+TEST(GemmRSShape, MStrideIsOne)
+{
+    auto p = rsProblem(8192, 16384, 4);
+    EXPECT_TRUE(rs256(p));
+    p.resetTensor(ContractionProblemGemm::TENSOR::D,
+                  rocisa::DataType::BFloat16,
+                  {8192, 16384, 1},
+                  {2, 8192, 8192 * 16384});
+    EXPECT_FALSE(rs256(p));
+}
+
+TEST(GemmRSShape, LddIsM)
+{
+    EXPECT_TRUE(rs256(rsProblem(8192, 16384, 4, 8192)));
+    EXPECT_FALSE(rs256(rsProblem(8192, 16384, 4, 8192 + 8)));
+}
+
+TEST(GemmRSShape, MIsAMultipleOf8)
+{
+    GemmRSShape const mt1({1, 256, 1, 2, 16, 16});
+    EXPECT_TRUE(mt1(rsProblem(8200, 16384, 4)));
+    EXPECT_FALSE(mt1(rsProblem(8196, 16384, 4)));
+}
+
+TEST(GemmRSShape, MFitsThePitchField)
+{
+    GemmRSShape const pitch10({8, 256, 1, 2, 10, 16});
+    EXPECT_TRUE(pitch10(rsProblem(8184, 16384, 4)));
+    EXPECT_FALSE(pitch10(rsProblem(8192, 16384, 4)));
+}
+
+TEST(GemmRSShape, MFitsTheRectXField)
+{
+    GemmRSShape const rectX10({8, 256, 1, 2, 16, 10});
+    EXPECT_TRUE(rectX10(rsProblem(8184, 16384, 4)));
+    EXPECT_FALSE(rectX10(rsProblem(8192, 16384, 4)));
+}
+
+TEST(GemmRSShape, Gfx1250FieldWidths)
+{
+    // (M >> 3) == 2^16 - 64 and 2^16.
+    EXPECT_TRUE(rs256(rsProblem(524288 - 512, 2048, 4)));
+    EXPECT_FALSE(rs256(rsProblem(524288, 2048, 4)));
+}
+
+TEST(GemmRSShape, AtLeastOneBandPerSegment)
+{
+    EXPECT_TRUE(rs256(rsProblem(8192, 2048, 4)));
+    EXPECT_FALSE(rs256(rsProblem(8192, 0, 4)));
+}
+
+TEST(GemmRSShape, AtMost32BandsPerSegment)
+{
+    // N / (W * MT1 * Ck) == 32 and 33.
+    EXPECT_TRUE(rs256(rsProblem(8192, 32 * 2048, 4)));
+    EXPECT_FALSE(rs256(rsProblem(8192, 33 * 2048, 4)));
+}
+
+#ifdef TENSILE_YAML
+TEST(GemmRSShape, YamlRoundTrip)
+{
+    using Pointer = std::shared_ptr<Predicates::Predicate<ContractionProblemGemm>>;
+    auto read     = [](std::string const& text) {
+        Pointer           p;
+        llvm::yaml::Input in(text);
+        in >> p;
+        EXPECT_FALSE(in.error()) << text;
+        return p;
+    };
+    auto const  first = read("{type: GemmRSShape, value: [256, 128, 2, 4, 16, 16]}");
+    auto const* shape = dynamic_cast<GemmRSShape const*>(first.get());
+    ASSERT_NE(shape, nullptr);
+    EXPECT_EQ(shape->value, (std::array<int64_t, 6>{256, 128, 2, 4, 16, 16}));
+
+    std::string text;
+    {
+        llvm::raw_string_ostream stream(text);
+        llvm::yaml::Output       out(stream);
+        Pointer                  copy = first;
+        out << copy;
+    }
+    auto const  second = read(text);
+    auto const* again  = dynamic_cast<GemmRSShape const*>(second.get());
+    ASSERT_NE(again, nullptr) << text;
+    EXPECT_EQ(again->value, shape->value);
+}
+
+TEST(GemmRSShape, FusedRSWaitYamlRoundTrip)
+{
+    SizeMapping written;
+    written.fusedRSWait = 2;
+    std::string text;
+    {
+        llvm::raw_string_ostream stream(text);
+        llvm::yaml::Output       out(stream);
+        out << written;
+    }
+    EXPECT_NE(text.find("fusedRSWait"), std::string::npos) << text;
+    SizeMapping       read;
+    llvm::yaml::Input in(text);
+    in >> read;
+    ASSERT_FALSE(in.error()) << text;
+    EXPECT_EQ(read.fusedRSWait, 2);
+    EXPECT_EQ(SizeMapping{}.fusedRSWait, 1);
+}
+#endif
+
+TEST(GemmRSShape, RuntimeWgmOverrideThrows)
+{
+    ContractionSolution solution;
+    solution.internalArgsSupport.version  = 3;
+    solution.internalArgsSupport.wgm      = false;
+    solution.internalArgsSupport.staggerU = false;
+    auto problem = ContractionProblemGemm::GEMM(false, false, 4, 4, 4, 4, 4, 4, 1.0, false, 1);
+    auto pack    = [&](int32_t autoWGM, size_t autoWGMXCC) {
+        uint32_t arg0 = 0, arg1 = 0;
+        solution.calculateInternalArgs<false>(
+            arg0, arg1, nullptr, problem.getParams(), autoWGM, autoWGMXCC, 0, 0, 0, 0, 0, 1, {});
+    };
+
+    for(auto mode : {FusedA2A::GemmA2A, FusedA2A::GemmRS})
+    {
+        SCOPED_TRACE(ToString(mode));
+        bool const rs                 = mode == FusedA2A::GemmRS;
+        solution.problemType.fusedA2A = mode;
+        auto expectThrowIfRS          = [&](int32_t autoWGM, size_t autoWGMXCC) {
+            if(rs)
+                EXPECT_THROW(pack(autoWGM, autoWGMXCC), std::runtime_error)
+                    << autoWGM << " " << autoWGMXCC;
+            else
+                EXPECT_NO_THROW(pack(autoWGM, autoWGMXCC)) << autoWGM << " " << autoWGMXCC;
+        };
+
+        problem.setParams().setWgm(0);
+        problem.setParams().setWGMXCC(0);
+        EXPECT_NO_THROW(pack(1, 1));
+        EXPECT_NO_THROW(pack(1, 0));
+        for(int32_t wgm : {0, 6, -8})
+            expectThrowIfRS(wgm, 1);
+        expectThrowIfRS(1, 8);
+
+        problem.setParams().setWgm(4);
+        expectThrowIfRS(1, 1);
+        problem.setParams().setWgm(0);
+        problem.setParams().setWGMXCC(8);
+        expectThrowIfRS(1, 1);
+    }
 }

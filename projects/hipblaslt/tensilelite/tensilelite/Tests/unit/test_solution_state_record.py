@@ -298,6 +298,7 @@ def test_fixtures_cover_the_predicate_families():
         "CDStridesEqual",
         "GemmA2AShape",
         "A2AGemmShape",
+        "GemmRSShape",
     ):
         assert any(kind in kinds for kinds in types.values()), f"no {kind} predicate"
     assert any(
@@ -383,10 +384,17 @@ def test_fixtures_cover_the_predicate_families():
         "TDMInst",
         "Multicast",
         "a2aSubRounds",
+        "fusedRSWait",
     ):
         assert len({mapping[key] for mapping in mappings}) > 1, f"sizeMapping {key} never varies"
     assert some(lambda s: problem(s).get("FusedA2A") == "GemmA2A"), "no GemmA2A"
     assert some(lambda s: problem(s).get("FusedA2A") == "A2AGemm"), "no A2AGemm"
+    assert some(lambda s: problem(s).get("FusedA2A") == "GemmRS"), "no GemmRS"
+    assert any(
+        mt0 != mt1 and cs != ck
+        for payload in payloads.values()
+        for mt0, mt1, cs, ck, *_ in _predicate_values(payload["problem"], "GemmRSShape")
+    ), "no GemmRSShape with MacroTile0 != MacroTile1 and ClusterDim[0] != ClusterDim[1]"
     bounds = [item["type"] for item in payloads["gfx950-plain-a2a-gemm-bounds"]["problem"]["value"]]
     assert bounds.index("SizeEqual") < bounds.index("A2AGemmShape"), bounds
 

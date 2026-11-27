@@ -800,7 +800,7 @@ class ProblemPredicate(Properties.Predicate):
         if problemType.mxBlockA or problemType.mxBlockB:
             rv += [cls('MXScaleFormatEquals', value=mxScaleFormatId(state))]
 
-        # Develop names this FusedA2A ('GemmA2A', 'A2AGemm', or 'Disabled').
+        # Develop names this FusedA2A ('GemmA2A', 'A2AGemm', 'GemmRS', or 'Disabled').
         # Older states used a bool FusedGemmA2A. A missing key, and 'Disabled',
         # are not a fused GEMM.
         fusedA2A = state['ProblemType'].get('FusedA2A')
@@ -808,6 +808,10 @@ class ProblemPredicate(Properties.Predicate):
         if fusedA2A == 'GemmA2A' or fusedGemm is True:
             rv += [cls('GemmA2AShape', value=[state['MacroTile0'],
                                               *copyFieldBits(tuple(state['ISA'][:2]) == (12, 5))])]
+        elif fusedA2A == 'GemmRS':
+            rv += [cls('GemmRSShape', value=[state['MacroTile0'], state['MacroTile1'],
+                                             *state.get('ClusterDim', [1, 1]),
+                                             *copyFieldBits(tuple(state['ISA'][:2]) == (12, 5))])]
 
         # A rocRoller custom kernel is a pre-assembled object captured at one tile.
         # It carries no generated edge handling in M and no partial-k-tile drain, so
@@ -946,6 +950,7 @@ class SizeMapping:
                  'enableLDSTrA',
                  'enableLDSTrB',
                  'ExpertSchedulingMode',
+                 'fusedRSWait',
                  'globalAccumulation',
                  'globalSplitU',
                  'globalSplitUCoalesced',
@@ -1069,6 +1074,7 @@ class SizeMapping:
                    enableLDSTrA             = bool(d.get('enableLDSTrA', False)),
                    enableLDSTrB             = bool(d.get('enableLDSTrB', False)),
                    ExpertSchedulingMode     = d.get('ExpertSchedulingMode', 0),
+                   fusedRSWait              = d.get('FusedRSWait', 1),
                    globalAccumulation       = globalAccum,
                    globalSplitU             = d['GlobalSplitU'],
                    globalSplitUCoalesced    = d['GlobalSplitUCoalesced'],

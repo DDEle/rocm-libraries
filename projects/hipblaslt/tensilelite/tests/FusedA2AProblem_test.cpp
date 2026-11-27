@@ -826,6 +826,68 @@ TEST(GemmRSCommBuffers, ReceiveBufferIsClearedToZero)
     EXPECT_EQ(Client::a2aBufClearByte(FusedA2A::A2AGemm), 0xC7);
 }
 
+TEST(GemmRSCommBuffers, PoisonCoversEveryOtherSourcesSlot)
+{
+    for(int world : {2, 4, 8})
+    {
+        auto args = factoryArgs(true, 1);
+        setOption(args, "fused-a2a", FusedA2A::GemmRS);
+        setOption(args, "world", std::vector<int>{world});
+        Client::ClientProblemFactory factory(args);
+        ASSERT_EQ(factory.problems().size(), 1u);
+        auto const&  p         = gemmAt(factory, 0);
+        size_t const slotBytes = 3072 * (512 / world) * 2;
+        ASSERT_EQ(p.tensors()[ContractionProblemGemm::TENSOR::A2A_BUF].totalAllocatedBytes(),
+                  slotBytes * world);
+        for(size_t rank = 0; rank < size_t(world); rank++)
+        {
+            std::vector<std::pair<size_t, size_t>> expected;
+            for(size_t s = 0; s < size_t(world); s++)
+                if(s != rank)
+                    expected.emplace_back(s * slotBytes, slotBytes);
+            EXPECT_EQ(Client::gemmRSPeerSlotBytes(p, rank), expected) << world << " " << rank;
+        }
+    }
+}
+
+TEST(GemmRSCommBuffers, PoisonAfterALaunchOnlyWhenItsSlotIsReusedBeforeTheValidation)
+{
+    // Warmup 0 alone, then warmup 1 and 3 enqueues before the next validation, 2 slots.
+    EXPECT_FALSE(Client::gemmRSSlotReusedBefore(0, 2, 1));
+    EXPECT_TRUE(Client::gemmRSSlotReusedBefore(1, 2, 5));
+    EXPECT_TRUE(Client::gemmRSSlotReusedBefore(2, 2, 5));
+    EXPECT_FALSE(Client::gemmRSSlotReusedBefore(3, 2, 5));
+    EXPECT_FALSE(Client::gemmRSSlotReusedBefore(4, 2, 5));
+    // 4 enqueues on 3 slots: only launch 0's slot comes back.
+    EXPECT_TRUE(Client::gemmRSSlotReusedBefore(0, 3, 4));
+    EXPECT_FALSE(Client::gemmRSSlotReusedBefore(1, 3, 4));
+    // One slot: never.
+    EXPECT_FALSE(Client::gemmRSSlotReusedBefore(0, 1, 4));
+}
+
+TEST(GemmRSCommBuffers, PoisonIsOffUnlessValidatingGemmRSAcrossRanks)
+{
+    std::vector<std::shared_ptr<Client::DeviceContext>> none;
+    auto problemOf = [](FusedA2A mode, int world) {
+        auto args = factoryArgs(true, 1);
+        setOption(args, "fused-a2a", mode);
+        setOption(args, "world", std::vector<int>{world});
+        setOption(args, "fused-a2a-extent", std::vector<int>{3072});
+        return Client::ClientProblemFactory(args).problems().at(0);
+    };
+    EXPECT_TRUE(Client::GemmRSRecvPoison(*problemOf(FusedA2A::GemmRS, 2), none, true).enabled());
+    EXPECT_FALSE(Client::GemmRSRecvPoison(*problemOf(FusedA2A::GemmRS, 2), none, false).enabled());
+    EXPECT_FALSE(Client::GemmRSRecvPoison(*problemOf(FusedA2A::GemmRS, 1), none, true).enabled());
+    EXPECT_FALSE(Client::GemmRSRecvPoison(*problemOf(FusedA2A::GemmA2A, 2), none, true).enabled());
+
+    Client::GemmRSRecvPoison off(*problemOf(FusedA2A::GemmRS, 2), none, false);
+    off.fillIdle();
+    off.validateBefore(8);
+    off.afterLaunch(0, 0);
+    EXPECT_EQ(off.idleFills(), 0u);
+    EXPECT_EQ(off.launchFills(), 0u);
+}
+
 TEST(GemmRSReference, RejectsTokensNotDivisibleByWorld)
 {
     auto const               problem = rsProblem(2, 4, 3);

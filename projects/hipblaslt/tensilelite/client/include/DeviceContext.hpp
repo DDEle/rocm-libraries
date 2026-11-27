@@ -14,6 +14,7 @@
 #include <hip/hip_runtime.h>
 
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace TensileLite
@@ -147,5 +148,59 @@ namespace TensileLite
                 f(*devices[d], d);
             }
         }
+
+        // {offset, bytes} of every other source's slot in rank `rank`'s GemmRS receive buffer.
+        std::vector<std::pair<size_t, size_t>>
+            gemmRSPeerSlotBytes(ContractionProblemGemm const& problem, size_t rank);
+
+        // Whether launch `launch` (rotating slot launch % slots) is followed by another launch of
+        // its slot before launch `end`; false with fewer than 2 slots.
+        bool gemmRSSlotReusedBefore(size_t launch, size_t slots, size_t end);
+
+        // Fills the gemmRSPeerSlotBytes ranges of every rank with 0xFF (BF16 NaN). Every call is a
+        // no-op unless `validating` and the problem is GemmRS with world > 1.
+        class GemmRSRecvPoison
+        {
+        public:
+            GemmRSRecvPoison(ContractionProblem const&                          problem,
+                             std::vector<std::shared_ptr<DeviceContext>> const& devices,
+                             bool                                               validating);
+
+            bool enabled() const
+            {
+                return m_gemm != nullptr;
+            }
+
+            // Synchronizes every stream, fills every rotating slot, synchronizes again.
+            void fillIdle();
+
+            // The next validation follows launch end - 1.
+            void validateBefore(size_t end)
+            {
+                m_end = end;
+            }
+
+            // Fills, on rank d's stream, the slot of launch `launch` when gemmRSSlotReusedBefore.
+            void afterLaunch(size_t d, size_t launch);
+
+            size_t idleFills() const
+            {
+                return m_idleFills;
+            }
+
+            size_t launchFills() const
+            {
+                return m_launchFills;
+            }
+
+        private:
+            void fill(size_t d, size_t slot);
+
+            ContractionProblemGemm const*                      m_gemm = nullptr;
+            std::vector<std::shared_ptr<DeviceContext>> const& m_devices;
+            size_t                                             m_end         = 0;
+            size_t                                             m_idleFills   = 0;
+            size_t                                             m_launchFills = 0;
+        };
     } // namespace Client
 } // namespace TensileLite

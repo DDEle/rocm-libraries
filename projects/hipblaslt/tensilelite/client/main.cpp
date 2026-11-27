@@ -1826,11 +1826,16 @@ int main(int argc, const char* argv[])
                                 };
 
                                 // One counter across warmups, the profiler run and every sync.
-                                size_t launchIdx = 0;
-                                auto   launchAll = [&](TimingEvents const* startEvents,
+                                size_t           launchIdx = 0;
+                                GemmRSRecvPoison recvPoison(
+                                    *problem,
+                                    active,
+                                    args["num-elements-to-validate"].as<int>() != 0);
+                                auto launchAll = [&](TimingEvents const* startEvents,
                                                      TimingEvents const* stopEvents,
                                                      size_t              invocation) {
-                                    auto const& launch = kernels[launchIdx++ % kernels.size()];
+                                    const size_t launchNo = launchIdx;
+                                    auto const&  launch   = kernels[launchIdx++ % kernels.size()];
                                     for(size_t d = 0; d < active.size(); d++)
                                     {
                                         auto&        ctx = *active[d];
@@ -1844,6 +1849,7 @@ int main(int argc, const char* argv[])
                                         else
                                             HIP_CHECK_EXC(ctx.adapter->launchKernels(
                                                 launch[d], ctx.stream, nullptr, nullptr));
+                                        recvPoison.afterLaunch(d, launchNo);
                                         if(!joinSplit)
                                             publish(d);
                                     }
@@ -1872,6 +1878,13 @@ int main(int argc, const char* argv[])
                                 // end-of-iteration attribution sync below).
                                 bool iterationLaunched = false;
 
+                                const size_t firstSyncLaunches
+                                    = listeners.numSyncs() > 0 ? listeners.numEnqueuesPerSync() : 0;
+                                recvPoison.fillIdle();
+                                recvPoison.validateBefore(
+                                    launchIdx
+                                    + (warmupInvocations > 0 ? 1 : kProfilerRuns + firstSyncLaunches));
+
                                 if(warmupInvocations > 0)
                                 {
                                     {
@@ -1898,6 +1911,9 @@ int main(int argc, const char* argv[])
                                         listeners.validateWarmups(
                                             {0}, warmupStartEvents, warmupStopEvents);
                                     }
+                                    recvPoison.fillIdle();
+                                    recvPoison.validateBefore(launchIdx + warmupInvocations - 1
+                                                              + kProfilerRuns + firstSyncLaunches);
 
                                     {
                                         ScopedTimer timer("warmup_runs");
@@ -1931,6 +1947,11 @@ int main(int argc, const char* argv[])
                                     if(enq)
                                         for(int i = 0; i < syncs; i++)
                                         {
+                                            if(i > 0)
+                                            {
+                                                recvPoison.fillIdle();
+                                                recvPoison.validateBefore(launchIdx + enq);
+                                            }
                                             // Declared first => destroyed last: times the event
                                             // destruction at the end of the iteration (mark() below).
                                             ScopeTeardownTimer eventsTeardownTimer(
@@ -1980,6 +2001,11 @@ int main(int argc, const char* argv[])
                                         listeners.postSyncs();
                                     }
                                 }
+                                if(recvPoison.enabled())
+                                    std::cout << "GemmRS receive-slot poison: "
+                                              << recvPoison.idleFills() << " idle fills, "
+                                              << recvPoison.launchFills()
+                                              << " fills after a launch" << std::endl;
 
                                 // Attribution only: wait for everything this iteration queued
                                 // (e.g. warmups 1..N-1 with SyncsPerBenchmark: 0) under its own

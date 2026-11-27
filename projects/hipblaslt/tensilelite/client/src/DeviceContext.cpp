@@ -333,5 +333,71 @@ namespace TensileLite
             scratch.fusedA2ADrain   = fusedA2ADrain(devices[rank]->directMask, world);
             return &scratch;
         }
+
+        std::vector<std::pair<size_t, size_t>>
+            gemmRSPeerSlotBytes(ContractionProblemGemm const& problem, size_t rank)
+        {
+            auto const&  recv = problem.tensors()[ContractionProblemGemm::TENSOR::A2A_BUF];
+            const size_t slotBytes
+                = recv.strides()[2] * static_cast<size_t>(recv.elementBytes());
+            std::vector<std::pair<size_t, size_t>> ranges;
+            for(size_t s = 0; s < problem.world(); s++)
+                if(s != rank)
+                    ranges.emplace_back(s * slotBytes, slotBytes);
+            return ranges;
+        }
+
+        bool gemmRSSlotReusedBefore(size_t launch, size_t slots, size_t end)
+        {
+            return slots >= 2 && launch + slots < end;
+        }
+
+        GemmRSRecvPoison::GemmRSRecvPoison(
+            ContractionProblem const&                          problem,
+            std::vector<std::shared_ptr<DeviceContext>> const& devices,
+            bool                                               validating)
+            : m_devices(devices)
+        {
+            auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
+            if(validating && gemm != nullptr && gemm->fusedA2A() == FusedA2A::GemmRS
+               && gemm->world() > 1)
+                m_gemm = gemm;
+        }
+
+        void GemmRSRecvPoison::fill(size_t d, size_t slot)
+        {
+            auto&       ctx    = *m_devices[d];
+            auto const& inputs = dynamic_cast<ContractionInputs const&>(*ctx.inputArr[slot]);
+            for(auto const& [offset, bytes] : gemmRSPeerSlotBytes(*m_gemm, d))
+                HIP_CHECK_EXC(hipMemsetAsync(
+                    static_cast<char*>(inputs.a2aBuf) + offset, 0xFF, bytes, ctx.stream));
+        }
+
+        void GemmRSRecvPoison::fillIdle()
+        {
+            if(m_gemm == nullptr)
+                return;
+            auto sync = [](DeviceContext& ctx) { HIP_CHECK_EXC(hipStreamSynchronize(ctx.stream)); };
+            forEachDevice(m_devices, sync);
+            forEachDeviceIndexed(m_devices, [&](DeviceContext& ctx, size_t d) {
+                if(d < m_gemm->world())
+                    for(size_t slot = 0; slot < ctx.inputArr.size(); slot++)
+                        fill(d, slot);
+            });
+            forEachDevice(m_devices, sync);
+            m_idleFills++;
+        }
+
+        void GemmRSRecvPoison::afterLaunch(size_t d, size_t launch)
+        {
+            if(m_gemm == nullptr || d >= m_gemm->world())
+                return;
+            const size_t slots = m_devices[d]->inputArr.size();
+            if(!gemmRSSlotReusedBefore(launch, slots, m_end))
+                return;
+            ScopedDevice device(m_devices[d]->deviceId);
+            fill(d, launch % slots);
+            m_launchFills++;
+        }
     } // namespace Client
 } // namespace TensileLite

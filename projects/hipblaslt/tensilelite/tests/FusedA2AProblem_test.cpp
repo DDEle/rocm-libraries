@@ -4,6 +4,9 @@
 #include <gtest/gtest.h>
 
 #include "ClientProblemFactory.hpp"
+#include "DeviceContext.hpp"
+#include "FallbackTestUtils.hpp"
+#include "ReferenceValidator.hpp"
 
 #include <Tensile/ContractionProblem.hpp>
 #include <Tensile/ContractionProblemPredicates.hpp>
@@ -19,10 +22,15 @@
 #endif
 
 #include <array>
+#include <cmath>
+#include <cstring>
+#include <iomanip>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace TensileLite;
@@ -373,6 +381,25 @@ TEST(FusedA2AClientProblemFactory, GemmRSRejectsExtentOtherThanMAndIndivisibleN)
     }
 }
 
+TEST(FusedA2AClientProblemFactory, GemmRSReceiveBufferHoldsOneTokenSegmentPerSource)
+{
+    for(int world : {1, 2, 4})
+    {
+        auto args = factoryArgs(true, 1);
+        setOption(args, "fused-a2a", FusedA2A::GemmRS);
+        setOption(args, "world", std::vector<int>{world});
+        setOption(args, "fused-a2a-extent", std::vector<int>{3072});
+        Client::ClientProblemFactory factory(args);
+        ASSERT_EQ(factory.problems().size(), 1u);
+        auto const&  p    = gemmAt(factory, 0);
+        size_t const segN = 512 / world;
+        auto const&  recv = p.tensors()[ContractionProblemGemm::TENSOR::A2A_BUF];
+        EXPECT_EQ(recv.dataType(), p.d().dataType());
+        EXPECT_EQ(recv.sizes(), (std::vector<size_t>{3072, segN, size_t(world)})) << world;
+        EXPECT_EQ(recv.strides(), (std::vector<size_t>{1, 3072, 3072 * segN})) << world;
+    }
+}
+
 TEST(FusedA2AClientProblemFactory, GemmRSExtentDefaultsToM)
 {
     auto args = factoryArgs(true, 1);
@@ -623,5 +650,513 @@ TEST(GemmRSShape, RuntimeWgmOverrideThrows)
         problem.setParams().setWgm(0);
         problem.setParams().setWGMXCC(8);
         expectThrowIfRS(1, 1);
+    }
+}
+
+TEST(GemmRSShape, KernargFusedAMIsM)
+{
+    ContractionSolution solution;
+    solution.kernelName                                    = "gemm_rs";
+    solution.sizeMapping.tileProcessingStrategy            = TileProcessingStrategy::DataParallel;
+    solution.sizeMapping.workAssignment                    = WorkAssignment::StaticGrid;
+    solution.sizeMapping.macroTile                         = TensileLite::dim3(128, 128, 1);
+    solution.sizeMapping.depthU                            = 64;
+    solution.sizeMapping.workGroupSize                     = TensileLite::dim3(256, 1, 1);
+    solution.sizeMapping.waveNum                           = 4;
+    solution.sizeMapping.matrixInstruction                 = {16, 16, 4, 1};
+    solution.sizeMapping.globalSplitU                      = 1;
+    solution.sizeMapping.globalAccumulation                = 0;
+    solution.sizeMapping.workGroupMapping                  = 1;
+    solution.sizeMapping.workGroupMappingXCC               = 1;
+    solution.sizeMapping.CUOccupancy                       = 1;
+    solution.internalArgsSupport.version                   = 3;
+    solution.internalArgsSupport.persistentLoopArgsVersion = 1;
+    solution.internalArgsSupport.useUniversalArgs          = true;
+
+    auto device = TensileLite::testing::makeDevice(
+        TensileLite::testing::_MI350_CHIP_ID, TensileLite::testing::_CPX_CU, "mi350cpx");
+    device.persistentDynamicGrid = 0;
+    device.persistentFixedGrid   = 7;
+    ContractionInputs inputs;
+    inputs.alpha = 1.0f;
+    inputs.beta  = 0.0f;
+
+    for(auto mode : {FusedA2A::GemmA2A, FusedA2A::GemmRS})
+    {
+        SCOPED_TRACE(ToString(mode));
+        auto problem
+            = ContractionProblemGemm::GEMM(false, false, 3072, 512, 256, 3072, 256, 3072, 1.0, false, 1);
+        problem.setComputeInputTypeA(rocisa::DataType::Float);
+        problem.setComputeInputTypeB(rocisa::DataType::Float);
+        problem.setAlphaType(rocisa::DataType::Float);
+        problem.setBetaType(rocisa::DataType::Float);
+        problem.setFusedA2A(mode);
+        problem.setWorld(2);
+        problem.setFusedA2AExtent(1024);
+        solution.problemType.fusedA2A = mode;
+        auto call = solution.generateSingleCall<true>(
+            problem, inputs, device, solution.resolvePersistentSettings(problem, device), GSUSettings{});
+        KernelArguments::const_iterator it(call.args, "FusedAM");
+        ASSERT_TRUE(it != call.args.end());
+        uint32_t am = 0;
+        ASSERT_EQ((*it).second, sizeof(am));
+        std::memcpy(&am, (*it).first, sizeof(am));
+        EXPECT_EQ(am, mode == FusedA2A::GemmRS ? 3072u : 1024u);
+    }
+}
+
+TEST(GemmRSReference, SumsEveryRankOverItsOwnTokensAndRoundsOnce)
+{
+    // M = 2, N = 3, W = 3: rank d owns token column d.
+    constexpr size_t M = 2, N = 3, W = 3;
+    auto const       problem = rsProblem(M, N, W);
+    auto const       value   = [](size_t r, size_t t, size_t f) {
+        return f == 0 ? (r == 0 ? 1.0f : 0x1p-8f) : float(1 + r + 4 * t);
+    };
+    std::vector<std::vector<BFloat16>> golden(W, std::vector<BFloat16>(M * N));
+    std::vector<void const*>           goldenPtrs;
+    for(size_t r = 0; r < W; r++)
+    {
+        for(size_t t = 0; t < N; t++)
+            for(size_t f = 0; f < M; f++)
+                golden[r][t * M + f] = BFloat16(value(r, t, f));
+        goldenPtrs.push_back(golden[r].data());
+    }
+
+    std::vector<std::vector<uint8_t>> recvs, reduced;
+    Client::gemmRSReferences(problem, goldenPtrs, recvs, reduced);
+    ASSERT_EQ(recvs.size(), W);
+    ASSERT_EQ(reduced.size(), W);
+    auto at = [](std::vector<uint8_t> const& bytes, size_t i) {
+        BFloat16 v;
+        std::memcpy(&v, bytes.data() + i * sizeof(BFloat16), sizeof(BFloat16));
+        return v;
+    };
+    for(size_t d = 0; d < W; d++)
+    {
+        SCOPED_TRACE(d);
+        ASSERT_EQ(recvs[d].size(), M * (N / W) * W * sizeof(BFloat16));
+        ASSERT_EQ(reduced[d].size(), M * N * sizeof(BFloat16));
+        for(size_t src = 0; src < W; src++)
+            for(size_t f = 0; f < M; f++)
+                EXPECT_EQ(at(recvs[d], src * M + f).data,
+                          src == d ? 0 : golden[src][d * M + f].data)
+                    << src << " " << f;
+        for(size_t t = 0; t < N; t++)
+            for(size_t f = 0; f < M; f++)
+                if(t != d)
+                    EXPECT_EQ(at(reduced[d], t * M + f).data, golden[d][t * M + f].data);
+        EXPECT_EQ(float(at(reduced[d], d * M)), 1.0f + 0x1p-7f);
+        EXPECT_EQ(float(at(reduced[d], d * M + 1)), float(6 + 12 * d));
+        EXPECT_NE(at(reduced[d], d * M).data, golden[d][d * M].data);
+        EXPECT_NE(at(reduced[d], d * M + 1).data, golden[d][d * M + 1].data);
+    }
+}
+
+TEST(GemmRSReference, ReceiveSlotsAreSourceMajor)
+{
+    // M = 3, N = 6, W = 2: rank d owns tokens [3d, 3d + 3).
+    constexpr size_t M = 3, N = 6, W = 2, S = N / W;
+    auto const       problem = rsProblem(M, N, W);
+    std::vector<std::vector<BFloat16>> golden(W, std::vector<BFloat16>(M * N));
+    std::vector<void const*>           goldenPtrs;
+    for(size_t r = 0; r < W; r++)
+    {
+        for(size_t t = 0; t < N; t++)
+            for(size_t f = 0; f < M; f++)
+                golden[r][t * M + f] = BFloat16(float(1 + 100 * r + 10 * t + f));
+        goldenPtrs.push_back(golden[r].data());
+    }
+
+    std::vector<std::vector<uint8_t>> recvs, reduced;
+    Client::gemmRSReferences(problem, goldenPtrs, recvs, reduced);
+    ASSERT_EQ(recvs.size(), W);
+    for(size_t d = 0; d < W; d++)
+    {
+        ASSERT_EQ(recvs[d].size(), M * S * W * sizeof(BFloat16));
+        auto const* recv = reinterpret_cast<BFloat16 const*>(recvs[d].data());
+        for(size_t src = 0; src < W; src++)
+            for(size_t t = 0; t < S; t++)
+                for(size_t f = 0; f < M; f++)
+                    EXPECT_EQ(recv[f + M * t + M * S * src].data,
+                              src == d ? 0 : golden[src][(d * S + t) * M + f].data)
+                        << d << " " << src << " " << t << " " << f;
+    }
+}
+
+TEST(GemmRSReference, DIsComparedToTheReducedDOnlyWhenTheKernelWaits)
+{
+    for(auto mode : {FusedA2A::Disabled, FusedA2A::GemmA2A, FusedA2A::A2AGemm})
+        for(int wait : {0, 1, 2})
+            EXPECT_FALSE(Client::comparesReducedD(mode, wait)) << ToString(mode) << " " << wait;
+    EXPECT_FALSE(Client::comparesReducedD(FusedA2A::GemmRS, 0));
+    EXPECT_TRUE(Client::comparesReducedD(FusedA2A::GemmRS, 1));
+    EXPECT_TRUE(Client::comparesReducedD(FusedA2A::GemmRS, 2));
+}
+
+TEST(GemmRSReference, ReceiveBufferIsValidatedForThePushModes)
+{
+    EXPECT_FALSE(Client::validatesRecvBuffer(FusedA2A::Disabled));
+    EXPECT_FALSE(Client::validatesRecvBuffer(FusedA2A::A2AGemm));
+    EXPECT_TRUE(Client::validatesRecvBuffer(FusedA2A::GemmA2A));
+    EXPECT_TRUE(Client::validatesRecvBuffer(FusedA2A::GemmRS));
+}
+
+TEST(GemmRSCommBuffers, PeersPointAtTheirReceiveBuffer)
+{
+    int               buf = 0, b = 0;
+    ContractionInputs peer;
+    peer.a2aBuf = &buf;
+    peer.b      = &b;
+    for(auto mode : {FusedA2A::GemmA2A, FusedA2A::GemmRS, FusedA2A::A2AGemm})
+        for(size_t j : {0, 1})
+        {
+            SCOPED_TRACE(concatenate(ToString(mode), " ", j));
+            void const* expected = mode == FusedA2A::A2AGemm && j != 0
+                                       ? static_cast<void const*>(&b)
+                                       : static_cast<void const*>(&buf);
+            EXPECT_EQ(Client::peerBuffer(mode, j, 0, peer), expected);
+        }
+}
+
+TEST(GemmRSCommBuffers, ReceiveBufferIsClearedToZero)
+{
+    EXPECT_EQ(Client::a2aBufClearByte(FusedA2A::GemmRS), 0);
+    EXPECT_EQ(Client::a2aBufClearByte(FusedA2A::GemmA2A), 0);
+    EXPECT_EQ(Client::a2aBufClearByte(FusedA2A::A2AGemm), 0xC7);
+}
+
+TEST(GemmRSReference, RejectsTokensNotDivisibleByWorld)
+{
+    auto const               problem = rsProblem(2, 4, 3);
+    std::vector<BFloat16>    golden(2 * 4);
+    std::vector<void const*> goldenPtrs(3, golden.data());
+    std::vector<std::vector<uint8_t>> recvs, reduced;
+    EXPECT_THROW(Client::gemmRSReferences(problem, goldenPtrs, recvs, reduced),
+                 std::runtime_error);
+}
+
+TEST(GemmRSReference, RejectsBatch)
+{
+    auto const               problem = rsProblem(1, 2, 2, 0, 2);
+    std::vector<BFloat16>    golden(2 * 2 * 2);
+    std::vector<void const*> goldenPtrs(2, golden.data());
+    std::vector<std::vector<uint8_t>> recvs, reduced;
+    EXPECT_THROW(Client::gemmRSReferences(problem, goldenPtrs, recvs, reduced),
+                 std::runtime_error);
+}
+
+namespace
+{
+    // M = 1, N = 2, W = 2: rank 0's segment is element 0, where rank 0's partial is own and rank
+    // 1's is peer. Returns the reduced reference there afterwards.
+    float acceptOwnRounding(float                      own,
+                            float                      peer,
+                            float                      device,
+                            Client::GemmRSOwnRounding* stats = nullptr)
+    {
+        auto const               problem = rsProblem(1, 2, 2);
+        std::vector<BFloat16>    g0(2, BFloat16(own)), g1(2, BFloat16(peer));
+        std::vector<void const*> golden{g0.data(), g1.data()};
+        std::vector<std::vector<uint8_t>> recvs, reduced;
+        Client::gemmRSReferences(problem, golden, recvs, reduced);
+        BFloat16 const dev(device);
+        auto const     s = Client::gemmRSAcceptOwnRounding(problem, 0, golden, &dev, reduced[0]);
+        if(stats != nullptr)
+            *stats = s;
+        auto const* r = reinterpret_cast<BFloat16 const*>(reduced[0].data());
+        EXPECT_EQ(r[1].data, g0[1].data);
+        return float(r[0]);
+    }
+}
+
+TEST(GemmRSOwnRounding, AcceptsTheSumMovedByHalfAnUlpOfTheOwnPartial)
+{
+    // own 1000: half ulp 2.
+    EXPECT_EQ(acceptOwnRounding(1000, -1000, 2), 2.0f);
+    EXPECT_EQ(acceptOwnRounding(1000, -1000, 2.015625f), 0.0f);
+    EXPECT_EQ(acceptOwnRounding(1000, -1000, -2), -2.0f);
+    EXPECT_EQ(acceptOwnRounding(1000, -1000, -2.015625f), 0.0f);
+    EXPECT_EQ(acceptOwnRounding(1000, -936, 66), 66.0f);
+    EXPECT_EQ(acceptOwnRounding(1000, -936, 66.5f), 64.0f);
+    // own 1024: half ulp 4.
+    EXPECT_EQ(acceptOwnRounding(1024, -1024, 4), 4.0f);
+    EXPECT_EQ(acceptOwnRounding(1024, -1024, 4.03125f), 0.0f);
+}
+
+TEST(GemmRSOwnRounding, NegativeValues)
+{
+    EXPECT_EQ(acceptOwnRounding(-1000, 936, -66), -66.0f);
+    EXPECT_EQ(acceptOwnRounding(-1000, 936, -66.5f), -64.0f);
+    EXPECT_EQ(acceptOwnRounding(-1000, 936, -62), -62.0f);
+    EXPECT_EQ(acceptOwnRounding(-1000, 936, -61.5f), -64.0f);
+}
+
+TEST(GemmRSOwnRounding, NoResultUlpBeyondTheOwnTerm)
+{
+    // own 100: half ulp 0.25; the sum 120 has spacing 0.5.
+    EXPECT_EQ(acceptOwnRounding(100, 20, 120.5f), 120.0f);
+    EXPECT_EQ(acceptOwnRounding(100, 20, 119.5f), 120.0f);
+    EXPECT_EQ(acceptOwnRounding(0, 3, 3.015625f), 3.0f);
+}
+
+TEST(GemmRSOwnRounding, ZeroAndSubnormalOwnPartialsUseTheSubnormalSpacing)
+{
+    float const minSub = 0x1p-133f;
+    // Half ulp 2^-134: the ends of the interval are BF16 ties.
+    EXPECT_EQ(acceptOwnRounding(0, minSub, 2 * minSub), 2 * minSub);
+    EXPECT_EQ(acceptOwnRounding(0, minSub, 3 * minSub), minSub);
+    EXPECT_EQ(acceptOwnRounding(0, 0, minSub), 0.0f);
+    EXPECT_EQ(acceptOwnRounding(0x1p-130f, minSub, 10 * minSub), 10 * minSub);
+    EXPECT_EQ(acceptOwnRounding(0x1p-130f, minSub, 8 * minSub), 8 * minSub);
+    EXPECT_EQ(acceptOwnRounding(0x1p-130f, minSub, 11 * minSub), 9 * minSub);
+}
+
+TEST(GemmRSOwnRounding, NonFiniteIsLeftToTheGenericComparison)
+{
+    float const inf = std::numeric_limits<float>::infinity();
+    EXPECT_EQ(acceptOwnRounding(inf, 3, 3), inf);
+    EXPECT_TRUE(std::isnan(acceptOwnRounding(inf, -inf, 3)));
+    EXPECT_EQ(acceptOwnRounding(1000, -1000, inf), 0.0f);
+    EXPECT_EQ(acceptOwnRounding(1000, -1000, std::nanf("")), 0.0f);
+}
+
+TEST(GemmRSOwnRounding, OwnSpanCoversTheRanksTokens)
+{
+    // M = 3, ldd = 4, N = 6, W = 3.
+    auto const problem = rsProblem(3, 6, 3, 4);
+    EXPECT_EQ(Client::gemmRSOwnSpan(problem, 0, 3), std::make_pair(size_t(0), size_t(7)));
+    EXPECT_EQ(Client::gemmRSOwnSpan(problem, 1, 3), std::make_pair(size_t(8), size_t(15)));
+    EXPECT_EQ(Client::gemmRSOwnSpan(problem, 2, 3), std::make_pair(size_t(16), size_t(23)));
+}
+
+namespace
+{
+    // M = 3, ldd = 4, N = 6, W = 3: rank r owns tokens [2r, 2r + 2); f = 3 is padding. Every
+    // segment sums to 0 with an own half ulp of at least 2.
+    constexpr size_t rsM = 3, rsLdd = 4, rsN = 6, rsW = 3, rsS = rsN / rsW;
+
+    std::vector<std::vector<BFloat16>> rsGolden()
+    {
+        std::vector<std::vector<BFloat16>> golden;
+        for(float v : {1000.0f, 1000.0f, -2000.0f})
+            golden.emplace_back(rsLdd * rsN, BFloat16(v));
+        return golden;
+    }
+}
+
+TEST(GemmRSOwnRounding, TouchesOnlyTheRanksTokenSegment)
+{
+    auto const               problem = rsProblem(rsM, rsN, rsW, rsLdd);
+    auto const               golden  = rsGolden();
+    std::vector<void const*> goldenPtrs{golden[0].data(), golden[1].data(), golden[2].data()};
+    std::vector<std::vector<uint8_t>> recvs, reduced;
+    Client::gemmRSReferences(problem, goldenPtrs, recvs, reduced);
+    std::vector<BFloat16> device(rsLdd * rsN, BFloat16(1.0f));
+    device[1 + 3 * rsLdd] = BFloat16(3.0f);
+    for(size_t rank = 0; rank < rsW; rank++)
+    {
+        SCOPED_TRACE(rank);
+        auto const first = Client::gemmRSOwnSpan(problem, rank, rsW).first;
+        Client::gemmRSAcceptOwnRounding(
+            problem, rank, goldenPtrs, device.data() + first, reduced[rank]);
+        auto const* r = reinterpret_cast<BFloat16 const*>(reduced[rank].data());
+        ASSERT_EQ(reduced[rank].size(), (rsLdd * rsN - 1) * sizeof(BFloat16));
+        for(size_t t = 0; t < rsN; t++)
+            for(size_t f = 0; f < rsLdd && f + t * rsLdd < rsLdd * rsN - 1; f++)
+            {
+                size_t const i      = f + t * rsLdd;
+                bool const   inside = f < rsM && t / rsS == rank;
+                float const  want   = !inside                ? float(golden[rank][i])
+                                      : i == 1 + 3 * rsLdd ? 0.0f
+                                                           : 1.0f;
+                EXPECT_EQ(float(r[i]), want) << t << " " << f;
+            }
+    }
+}
+
+TEST(GemmRSOwnRounding, AcceptsTheUnroundedOwnPartialAfterCancellation)
+{
+    // M = 1, N = 2, W = 2. Rank 0's partial 999 rounds to golden 1000; rank 1's is -1000. The
+    // device adds the unrounded 999 and stores -1, the reference bf16(1000 - 1000) = 0.
+    ASSERT_EQ(float(BFloat16(999.0f)), 1000.0f);
+    for(float device : {-1.0f, 1.0f, -2.0f, -3.0f})
+    {
+        SCOPED_TRACE(device);
+        EXPECT_EQ(acceptOwnRounding(999, -1000, device), device == -3.0f ? 0.0f : device);
+    }
+}
+
+TEST(GemmRSOwnRounding, CountsAndMaximaAreTakenBeforeTheAcceptance)
+{
+    // M = 4, N = 2, W = 2: rank 0's segment is elements 0..3.
+    auto const            problem = rsProblem(4, 2, 2);
+    std::vector<BFloat16> g0(8, BFloat16(5.0f)), g1(8, BFloat16(6.0f)), device(4);
+    float const           own[] = {1000, 100, 1000, 7}, peer[] = {-1000, 20, -1000, 0};
+    float const           dev[] = {-1, 120, 3, 7};
+    for(size_t i = 0; i < 4; i++)
+    {
+        g0[i]     = BFloat16(own[i]);
+        g1[i]     = BFloat16(peer[i]);
+        device[i] = BFloat16(dev[i]);
+    }
+    std::vector<void const*>          golden{g0.data(), g1.data()};
+    std::vector<std::vector<uint8_t>> recvs, reduced;
+    Client::gemmRSReferences(problem, golden, recvs, reduced);
+    auto const stats
+        = Client::gemmRSAcceptOwnRounding(problem, 0, golden, device.data(), reduced[0]);
+    EXPECT_EQ(stats.elements, 4u);
+    EXPECT_EQ(stats.differing, 2u);
+    EXPECT_EQ(stats.accepted, 1u);
+    EXPECT_EQ(stats.maxDiff, 3.0);
+    EXPECT_EQ(stats.boundAtMaxDiff, 2.0);
+    EXPECT_EQ(stats.maxRatio, 1.5);
+    auto const* r = reinterpret_cast<BFloat16 const*>(reduced[0].data());
+    EXPECT_EQ(float(r[0]), -1.0f);
+    EXPECT_EQ(float(r[1]), 120.0f);
+    EXPECT_EQ(float(r[2]), 0.0f);
+    EXPECT_EQ(float(r[3]), 7.0f);
+    std::ostringstream line;
+    line << std::fixed << std::setprecision(2) << stats << " " << 0.5;
+    EXPECT_EQ(line.str(),
+              "own-segment elements 4, differing from reference 2, accepted within rounding bound "
+              "1, max |device - reference| 3 (bound there 2), max |device - reference| / bound "
+              "1.5 0.50");
+}
+
+TEST(GemmRSOwnRounding, StatisticsOfEqualAndZeroBoundElements)
+{
+    Client::GemmRSOwnRounding stats;
+    EXPECT_EQ(acceptOwnRounding(100, 20, 120, &stats), 120.0f);
+    EXPECT_EQ(stats.elements, 1u);
+    EXPECT_EQ(stats.differing, 0u);
+    EXPECT_EQ(stats.maxDiff, 0.0);
+    EXPECT_EQ(stats.maxRatio, 0.0);
+
+    EXPECT_EQ(acceptOwnRounding(100, 20, 120.5f, &stats), 120.0f);
+    EXPECT_EQ(stats.differing, 1u);
+    EXPECT_EQ(stats.accepted, 0u);
+    EXPECT_EQ(stats.maxDiff, 0.5);
+    EXPECT_EQ(stats.boundAtMaxDiff, 0.0);
+    EXPECT_EQ(stats.maxRatio, std::numeric_limits<double>::infinity());
+
+    std::ostringstream line;
+    line << stats;
+    EXPECT_EQ(line.str(),
+              "own-segment elements 1, differing from reference 1, accepted within rounding bound "
+              "0, max |device - reference| 0.5 (bound there 0), max |device - reference| / bound "
+              "inf");
+
+    acceptOwnRounding(0, 0x1p-130f, 0x1p-130f + 0x1p-133f, &stats);
+    line.str("");
+    line << stats;
+    EXPECT_NE(line.str().find("max |device - reference| 9.1835496157991212e-41 "),
+              std::string::npos)
+        << line.str();
+}
+
+TEST(GemmRSOwnRounding, ScopeReadsTheOwnSpanOfDAndRestoresTheReference)
+{
+    auto const               problem = rsProblem(rsM, rsN, rsW, rsLdd);
+    auto const               golden  = rsGolden();
+    std::vector<void const*> goldenPtrs{golden[0].data(), golden[1].data(), golden[2].data()};
+    std::vector<std::vector<uint8_t>> recvs, reduced;
+    Client::gemmRSReferences(problem, goldenPtrs, recvs, reduced);
+    auto const            before = reduced[1];
+    std::vector<BFloat16> d(rsLdd * rsN, BFloat16(1.0f));
+    ContractionInputs     result;
+    result.d   = d.data();
+    result.gpu = false;
+    {
+        Client::GemmRSOwnRoundingScope scope(problem, 1, goldenPtrs, result, reduced[1]);
+        EXPECT_EQ(scope.stats().elements, rsM * rsS);
+        EXPECT_EQ(scope.stats().accepted, rsM * rsS);
+        auto const* r = reinterpret_cast<BFloat16 const*>(reduced[1].data());
+        auto const* b = reinterpret_cast<BFloat16 const*>(before.data());
+        for(size_t i = 0; i + 1 < rsLdd * rsN; i++)
+        {
+            bool const inside = i % rsLdd < rsM && i / rsLdd / rsS == 1;
+            EXPECT_EQ(float(r[i]), inside ? 1.0f : float(b[i])) << i;
+        }
+    }
+    EXPECT_EQ(reduced[1], before);
+
+    EXPECT_THROW(
+        {
+            Client::GemmRSOwnRoundingScope scope(problem, 1, goldenPtrs, result, reduced[1]);
+            throw std::runtime_error("validate");
+        },
+        std::runtime_error);
+    EXPECT_EQ(reduced[1], before);
+}
+
+TEST(GemmRSRotatingSlots, BackToBackLaunchesNeedTwoSlots)
+{
+    auto const rs  = rsProblem(8192, 16384, 4);
+    auto       a2a = rs;
+    a2a.setFusedA2A(FusedA2A::GemmA2A);
+    auto const rs1 = rsProblem(8192, 16384, 1);
+    struct Case
+    {
+        size_t warmups, profilerRuns, syncs, enqueues;
+        bool   backToBack;
+    };
+    for(auto const& c : std::vector<Case>{{1, 0, 0, 3, false},
+                                          {0, 0, 3, 1, false},
+                                          {1, 0, 0, 0, false},
+                                          {0, 0, 0, 0, false},
+                                          {0, 1, 0, 0, false},
+                                          {2, 0, 0, 1, true},
+                                          {0, 0, 1, 2, true},
+                                          {1, 0, 1, 1, true},
+                                          {3, 0, 2, 4, true},
+                                          {1, 1, 0, 0, true},
+                                          {0, 1, 1, 1, true}})
+    {
+        SCOPED_TRACE(
+            concatenate(c.warmups, " ", c.profilerRuns, " ", c.syncs, " ", c.enqueues));
+        size_t const plain = std::max(c.warmups, c.syncs * c.enqueues);
+        auto slots = [&](ContractionProblem const& p) {
+            return Client::fusedRotatingSlots(p, c.warmups, c.profilerRuns, c.syncs, c.enqueues);
+        };
+        auto check = [&](ContractionProblem const& p, size_t n) {
+            Client::checkFusedRotatingSlots(p, n, c.warmups, c.profilerRuns, c.syncs, c.enqueues);
+        };
+        EXPECT_EQ(slots(a2a), plain);
+        EXPECT_EQ(slots(rs1), plain);
+        EXPECT_EQ(slots(rs), c.backToBack ? std::max<size_t>(plain, 2) : plain);
+        EXPECT_NO_THROW(check(a2a, 1));
+        EXPECT_NO_THROW(check(rs1, 1));
+        EXPECT_NO_THROW(check(rs, 2));
+        if(c.backToBack)
+            EXPECT_THROW(check(rs, 1), std::runtime_error);
+        else
+            EXPECT_NO_THROW(check(rs, 1));
+    }
+}
+
+TEST(GemmRSCounter, UsesTheGemmA2ACounterLayout)
+{
+    ContractionSolution solution;
+    solution.sizeMapping.macroTile = TensileLite::dim3(256, 256, 1);
+    AMDGPU     noCuCount;
+    auto       problem = rsProblem(8192, 16384, 4);
+    auto const tiles   = 16384 / 256;
+    // The GemmA2A layout: counter1 at +256, W * tokenTiles u32.
+    for(auto [bytes, fits] : std::vector<std::pair<size_t, bool>>{
+            {256 + 4 * tiles * 4, true}, {256 + 4 * tiles * 4 - 4, false}})
+    {
+        problem.setSynchronizer(rocisa::DataType::Int32, bytes / 4);
+        for(auto mode : {FusedA2A::GemmA2A, FusedA2A::GemmRS})
+        {
+            SCOPED_TRACE(concatenate(ToString(mode), " ", bytes));
+            problem.setFusedA2A(mode);
+            solution.problemType.fusedA2A = mode;
+            if(fits)
+                EXPECT_NO_THROW(Client::checkFusedA2ASolution(problem, solution, noCuCount, 4));
+            else
+                EXPECT_THROW(Client::checkFusedA2ASolution(problem, solution, noCuCount, 4),
+                             std::runtime_error);
+        }
     }
 }

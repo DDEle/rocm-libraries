@@ -13,6 +13,7 @@
 #include "SdmaQueue.hpp"
 #endif
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace TensileLite
@@ -89,6 +90,18 @@ namespace TensileLite
                 return id;
             }
 #endif
+
+            bool needsTwoSlots(ContractionProblem const& problem,
+                               size_t                    warmups,
+                               size_t                    syncs,
+                               size_t                    enqueues)
+            {
+                auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
+                if(gemm == nullptr || gemm->fusedA2A() != FusedA2A::GemmRS || gemm->world() < 2)
+                    return false;
+                return warmups >= 2 || (syncs >= 1 && enqueues >= 2)
+                       || (warmups >= 1 && syncs >= 1 && enqueues >= 1);
+            }
         }
 
         DeviceContext::DeviceContext(int                     deviceId,
@@ -186,9 +199,9 @@ namespace TensileLite
             const size_t macroTileN = solution.sizeMapping.macroTile.y;
             const size_t tokenTiles = (gemm->freeSizeB(0) + macroTileN - 1) / macroTileN;
             const size_t counterBytes
-                = gemm->fusedA2A() == FusedA2A::GemmA2A
-                      ? kCounter1Offset + world * tokenTiles * sizeof(uint32_t)
-                      : a2aGemmCounterBytes(*gemm, solution, hardware, world);
+                = gemm->fusedA2A() == FusedA2A::A2AGemm
+                      ? a2aGemmCounterBytes(*gemm, solution, hardware, world)
+                      : kCounter1Offset + world * tokenTiles * sizeof(uint32_t);
             const size_t synchronizerBytes
                 = gemm->tensors()[ContractionProblemGemm::TENSOR::Synchronizer]
                       .totalAllocatedBytes();
@@ -209,7 +222,7 @@ namespace TensileLite
             auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(&problem);
             if(gemm == nullptr || gemm->fusedA2A() == FusedA2A::Disabled)
                 return;
-            const bool   gemmA2A = gemm->fusedA2A() == FusedA2A::GemmA2A;
+            const int    fill    = a2aBufClearByte(gemm->fusedA2A());
             auto const&  tensors = gemm->tensors();
             const size_t bufBytes
                 = tensors[ContractionProblemGemm::TENSOR::A2A_BUF].totalAllocatedBytes();
@@ -220,11 +233,58 @@ namespace TensileLite
                 for(auto const& slot : ctx.inputArr)
                 {
                     auto const& inputs = dynamic_cast<ContractionInputs const&>(*slot);
-                    HIP_CHECK_EXC(
-                        hipMemset(inputs.a2aBuf, gemmA2A ? 0 : kA2AGemmPoisonByte, bufBytes));
+                    HIP_CHECK_EXC(hipMemset(inputs.a2aBuf, fill, bufBytes));
                     HIP_CHECK_EXC(hipMemset(inputs.Synchronizer, 0, synchronizerBytes));
                 }
             });
+        }
+
+        size_t fusedRotatingSlots(ContractionProblem const& problem,
+                                  size_t                    warmups,
+                                  size_t                    profilerRuns,
+                                  size_t                    syncs,
+                                  size_t                    enqueues)
+        {
+            const size_t slots = std::max(warmups, syncs * enqueues);
+            if(needsTwoSlots(problem, warmups + profilerRuns, syncs, enqueues))
+                return std::max<size_t>(slots, 2);
+            return slots;
+        }
+
+        void checkFusedRotatingSlots(ContractionProblem const& problem,
+                                     size_t                    slots,
+                                     size_t                    warmups,
+                                     size_t                    profilerRuns,
+                                     size_t                    syncs,
+                                     size_t                    enqueues)
+        {
+            if(slots < 2 && needsTwoSlots(problem, warmups + profilerRuns, syncs, enqueues))
+                throw std::runtime_error(
+                    concatenate("[fused-a2a] GemmRS needs 2 rotating buffers when launches run "
+                                "back to back (",
+                                warmups,
+                                " warmups, ",
+                                profilerRuns,
+                                " profiler runs, ",
+                                syncs,
+                                " syncs of ",
+                                enqueues,
+                                " enqueues); got ",
+                                slots,
+                                ". Raise RotatingBufferSize."));
+        }
+
+        int a2aBufClearByte(FusedA2A mode)
+        {
+            return mode == FusedA2A::A2AGemm ? kA2AGemmPoisonByte : 0;
+        }
+
+        void const* peerBuffer(FusedA2A                 mode,
+                               size_t                   peer,
+                               size_t                   rank,
+                               ContractionInputs const& peerInputs)
+        {
+            return mode != FusedA2A::A2AGemm || peer == rank ? peerInputs.a2aBuf : peerInputs.b;
         }
 
         ProblemInputs const* rankInputs(ContractionInputs&                                 scratch,
@@ -261,8 +321,7 @@ namespace TensileLite
                 const HsaQueueResource* q     = queue ? &queue->queueResource() : nullptr;
                 scratch.fusedA2APeers[j]
                     = {(char*)devices[j]->commFlags + channel * FUSED_A2A_FLAG_BLOCK_BYTES,
-                       mode == FusedA2A::GemmA2A || j == rank ? peer.a2aBuf
-                                                              : const_cast<void*>(peer.b),
+                       const_cast<void*>(peerBuffer(mode, j, rank, peer)),
                        queue ? queue->ringBase() : nullptr,
                        q ? (void*)q->Queue_read_ptr_aql : nullptr,
                        q ? (void*)q->Queue_write_ptr_aql : nullptr,

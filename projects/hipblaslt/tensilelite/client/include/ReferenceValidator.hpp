@@ -38,6 +38,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iosfwd>
+#include <utility>
 #include <vector>
 
 namespace TensileLite
@@ -46,6 +48,73 @@ namespace TensileLite
     {
 
         class ClientProblemFactory;
+
+        // GemmRS references from golden[r], rank r's reference D. For every rank d, recvs[d] is
+        // d's receive buffer (A2A_BUF): slot s holds golden[s] over d's token segment and slot d
+        // is zero. reduced[d] is golden[d] with d's token segment replaced by
+        // bf16(sum over s of float(golden[s])).
+        void gemmRSReferences(ContractionProblemGemm const&      problem,
+                              std::vector<void const*> const&    golden,
+                              std::vector<std::vector<uint8_t>>& recvs,
+                              std::vector<std::vector<uint8_t>>& reduced);
+
+        struct GemmRSOwnRounding
+        {
+            size_t elements       = 0;
+            size_t differing      = 0;
+            size_t accepted       = 0;
+            double maxDiff        = 0;
+            double boundAtMaxDiff = 0;
+            double maxRatio       = 0;
+        };
+
+        std::ostream& operator<<(std::ostream& stream, GemmRSOwnRounding const& stats);
+
+        // D elements [first, last) spanning rank's token segment.
+        std::pair<size_t, size_t>
+            gemmRSOwnSpan(ContractionProblemGemm const& problem, size_t rank, size_t world);
+
+        // Over rank's token segment, with Y = sum over s of float(golden[s][i]) and e = half a BF16
+        // ulp of golden[rank][i] (the ulp of zero and subnormals is 2^-133), sets reduced[i] to the
+        // device value where both are finite and it lies in [bf16(Y - e), bf16(Y + e)]. The bound
+        // at i is the distance from reduced[i] to the end of that interval on the device value's
+        // side. Assumes every partial and partial sum is exact in FP32. device holds D from
+        // gemmRSOwnSpan's first element. Returns the comparison with reduced before the change.
+        GemmRSOwnRounding gemmRSAcceptOwnRounding(ContractionProblemGemm const&   problem,
+                                                  size_t                          rank,
+                                                  std::vector<void const*> const& golden,
+                                                  void const*                     device,
+                                                  std::vector<uint8_t>&           reduced);
+
+        // Reads result.d over gemmRSOwnSpan (from the device if result.gpu), applies
+        // gemmRSAcceptOwnRounding to reduced and restores reduced on destruction.
+        class GemmRSOwnRoundingScope
+        {
+        public:
+            GemmRSOwnRoundingScope(ContractionProblemGemm const&   problem,
+                                   size_t                          rank,
+                                   std::vector<void const*> const& golden,
+                                   ContractionInputs const&        result,
+                                   std::vector<uint8_t>&           reduced);
+            ~GemmRSOwnRoundingScope();
+            GemmRSOwnRoundingScope(GemmRSOwnRoundingScope const&)            = delete;
+            GemmRSOwnRoundingScope& operator=(GemmRSOwnRoundingScope const&) = delete;
+
+            GemmRSOwnRounding const& stats() const
+            {
+                return m_stats;
+            }
+
+        private:
+            BFloat16*             m_first = nullptr;
+            std::vector<BFloat16> m_saved;
+            GemmRSOwnRounding     m_stats;
+        };
+
+        bool validatesRecvBuffer(FusedA2A mode);
+
+        // D is compared against gemmRSReferences' reduced D rather than the golden D.
+        bool comparesReducedD(FusedA2A mode, int fusedRSWait);
 
         class ReferenceValidator : public RunListener
         {
@@ -154,6 +223,7 @@ namespace TensileLite
 
             std::vector<std::shared_ptr<ProblemInputs>> m_referenceInputs;
             std::vector<std::vector<uint8_t>>           m_referenceRecvs;
+            std::vector<std::vector<uint8_t>>           m_gemmRSReduced;
             std::vector<std::vector<uint8_t>>           m_a2aGemmB;
 
             size_t                   m_cpuResultBufferSize = 0;
@@ -169,6 +239,7 @@ namespace TensileLite
 
             bool m_enabled;
             FusedA2A m_fusedA2A              = FusedA2A::Disabled;
+            int      m_fusedRSWait           = 0;
             bool     m_validateAfterEnqueues = false;
 
             int  m_elementsToValidate;
@@ -196,6 +267,7 @@ namespace TensileLite
 
             bool validateSolution(size_t card, std::shared_ptr<ProblemInputs> inputs);
             void referenceRecvs(ContractionProblemGemm const& problem);
+            std::vector<void const*> goldenDs() const;
             void interleaveA2AGemmReferences(ContractionProblemGemm const& problem);
         };
     } // namespace Client

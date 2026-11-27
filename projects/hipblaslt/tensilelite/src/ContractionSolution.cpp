@@ -2423,6 +2423,12 @@ namespace TensileLite
         {
             return {checkedMultiply(clusters, clusterDim.x), clusterDim.y, 1};
         }
+
+        uint32_t fusedAM(ContractionProblemGemm const& problem, FusedA2A mode)
+        {
+            return static_cast<uint32_t>(mode == FusedA2A::GemmRS ? problem.freeSizeA(0)
+                                                                  : problem.fusedA2AExtent());
+        }
     }
 
     // Temporary: restored from develop. Builds the kernarg buffer via the
@@ -2623,7 +2629,7 @@ namespace TensileLite
                                inputs.fusedA2AMyRank,
                                problem.world(),
                                inputs.fusedA2ADrain,
-                               static_cast<uint32_t>(problem.fusedA2AExtent()),
+                               fusedAM(problem, problemType.fusedA2A),
                                static_cast<uint32_t>(pAMDGPU ? pAMDGPU->computeUnitCount : 0));
         }
 
@@ -3614,7 +3620,7 @@ namespace TensileLite
                         inputs.fusedA2AMyRank,
                         problem.world(),
                         inputs.fusedA2ADrain,
-                        static_cast<uint32_t>(problem.fusedA2AExtent()),
+                        fusedAM(problem, problemType.fusedA2A),
                         static_cast<uint32_t>(pAMDGPU ? pAMDGPU->computeUnitCount : 0));
                     break;
                 }

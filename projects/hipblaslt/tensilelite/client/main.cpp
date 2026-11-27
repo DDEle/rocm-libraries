@@ -245,7 +245,7 @@ namespace TensileLite
                 ("mx-b-type",                po::value<rocisa::DataType>()->default_value(rocisa::DataType::E8), "type of mx datatype input matrix B")
                 ("swizzle-tensor-a",         po::value<bool>()->default_value(false), "Swizzle input tensor A.")
                 ("swizzle-tensor-b",         po::value<bool>()->default_value(false), "Swizzle input tensor B.")
-                ("fused-a2a",                po::value<FusedA2A>()->default_value(FusedA2A::Disabled), "Fused A2A mode: Disabled, GemmA2A (all-to-all PUSH from the GEMM epilogue) or A2AGemm (B's K shards gathered from the peers into a2aBuf one shard at a time).")
+                ("fused-a2a",                po::value<FusedA2A>()->default_value(FusedA2A::Disabled), "Fused A2A mode: Disabled, GemmA2A (all-to-all PUSH from the GEMM epilogue), A2AGemm (B's K shards gathered from the peers into a2aBuf one shard at a time) or GemmRS (reduce-scatter of D along N: each rank's token segment gets every rank's partial D).")
                 ("split-devices",          po::value<int>()->default_value(1), "Split each problem across N consecutive devices (device-idx .. device-idx+N-1), one stream each, and run the slices concurrently. Devices 0..N-2 get size/N, the last device gets the rest; that share is rounded up so each device's D slice starts on a multiple of 256 bytes when the last device then has at most 1% less work, else it is not rounded and a hint says how to pad. --split-dim M: A is split, B replicated. --split-dim N: B is split, A replicated. Each device writes its slice into its own full-size D at the slice's final offset (nothing goes to a peer); the slices are read back and validated after the timed run. Reported time is the slowest device; reported GFlops are for the full problem. Needs the all-solutions run (no --best-solution). For partitioned GPUs (e.g. NPS2: N=2). 1 = off.")
                 ("split-dim",              po::value<std::string>()->default_value("M"), "Dimension --split-devices splits: M or N.")
                 ("split-align",            po::value<std::string>()->default_value("auto"), "With --split-devices, how the share of the split dimension is rounded so each device's slice of the split operand, C and D starts on a multiple of 256 bytes, the same rule as hipBLASLt PartitionedGemm: auto = round up when the balance changes by at most 1%; off = always size/N (to measure the misaligned case); force = always round up, as long as the last device keeps work.")
@@ -904,6 +904,12 @@ namespace TensileLite
     } // namespace Client
 } // namespace TensileLite
 
+#if TENSILELITE_CLIENT_ENABLE_ROCPROFSDK
+constexpr size_t kProfilerRuns = 1;
+#else
+constexpr size_t kProfilerRuns = 0;
+#endif
+
 int main(int argc, const char* argv[])
 {
     // One-line identity queries. They touch no GPU, so callers can run them
@@ -1551,7 +1557,8 @@ int main(int argc, const char* argv[])
                 size_t warmupInvocations    = listeners.numWarmupRuns();
                 size_t syncs                = listeners.numSyncs();
                 size_t enq                  = listeners.numEnqueuesPerSync();
-                size_t maxRotatingBufferNum = std::max(warmupInvocations, syncs * enq);
+                size_t maxRotatingBufferNum
+                    = fusedRotatingSlots(*problem, warmupInvocations, kProfilerRuns, syncs, enq);
 
                 {
                     // Nothing may still be writing into the previous problem's outputs.
@@ -1710,6 +1717,12 @@ int main(int argc, const char* argv[])
                         try
                         {
                             checkFusedA2ASolution(*problem, *solution, *hardware, active.size());
+                            checkFusedRotatingSlots(*problem,
+                                                    device0->inputArr.size(),
+                                                    warmupInvocations,
+                                                    kProfilerRuns,
+                                                    syncs,
+                                                    enq);
                             resetCommBuffers(*problem, active);
                             while(listeners.needMoreRunsInSolution())
                             {

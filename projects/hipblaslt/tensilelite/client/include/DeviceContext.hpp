@@ -102,6 +102,32 @@ namespace TensileLite
         void resetCommBuffers(ContractionProblem const&                          problem,
                               std::vector<std::shared_ptr<DeviceContext>> const& devices);
 
+        // Rotating slots to request for `warmups` warmup launches, `profilerRuns` profiler
+        // launches and `syncs` groups of `enqueues` launches: at least 2 for GemmRS at world > 1
+        // when two launches can be queued with no host synchronization between them.
+        size_t fusedRotatingSlots(ContractionProblem const& problem,
+                                  size_t                    warmups,
+                                  size_t                    profilerRuns,
+                                  size_t                    syncs,
+                                  size_t                    enqueues);
+
+        // Throws when fusedRotatingSlots would request 2 for GemmRS and there are fewer.
+        void checkFusedRotatingSlots(ContractionProblem const& problem,
+                                     size_t                    slots,
+                                     size_t                    warmups,
+                                     size_t                    profilerRuns,
+                                     size_t                    syncs,
+                                     size_t                    enqueues);
+
+        int a2aBufClearByte(FusedA2A mode);
+
+        // The buffer rank `rank` writes to on peer `peer`: the peer's a2aBuf, or its B for
+        // A2AGemm on another rank.
+        void const* peerBuffer(FusedA2A                 mode,
+                               size_t                   peer,
+                               size_t                   rank,
+                               ContractionInputs const& peerInputs);
+
         // Copies devices[rank]'s inputs into scratch and adds the peers of the launch's slot
         // and channel.
         ProblemInputs const* rankInputs(ContractionInputs&                                 scratch,

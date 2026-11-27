@@ -1423,10 +1423,22 @@ namespace TensileLite
         }
 
         // [W][N][extent/W]: recv in D's type for GemmA2A, gathered in B's type for A2AGemm.
+        // GemmRS: [W][N/W][M] in D's type.
         void setA2ABuf()
         {
             const size_t world  = m_world;
             const size_t tokens = freeSizeB(0);
+            if(m_fusedA2A == FusedA2A::GemmRS)
+            {
+                const size_t m    = freeSizeA(0);
+                const size_t segN = tokens / world;
+                m_tensors[ContractionProblemGemm::TENSOR::A2A_BUF]
+                    = {"a2aBuf",
+                       m_tensors[ContractionProblemGemm::TENSOR::D].dataType(),
+                       {m, segN, world},
+                       {1, m, m * segN}};
+                return;
+            }
             const bool   gather = m_fusedA2A == FusedA2A::A2AGemm;
             const size_t shard  = m_fusedA2AExtent / world;
             m_tensors[ContractionProblemGemm::TENSOR::A2A_BUF]

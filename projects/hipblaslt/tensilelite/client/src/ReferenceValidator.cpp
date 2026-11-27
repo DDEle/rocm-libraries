@@ -36,9 +36,11 @@
 #include <Tensile/hip/HipUtils.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
 
@@ -161,6 +163,13 @@ namespace TensileLite
                 if(auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(problem);
                    gemm != nullptr && gemm->fusedA2A() == FusedA2A::GemmA2A)
                     referenceRecvs(*gemm);
+                if(auto const* gemm = dynamic_cast<ContractionProblemGemm const*>(problem);
+                   gemm != nullptr && gemm->fusedA2A() == FusedA2A::GemmRS
+                   && m_elementsToValidate != 0)
+                {
+                    ScopedTimer timer("cpu_reference_gemm_rs");
+                    gemmRSReferences(*gemm, goldenDs(), m_referenceRecvs, m_gemmRSReduced);
+                }
             }
         }
 
@@ -204,6 +213,7 @@ namespace TensileLite
             m_errorInSolution   = false;
             m_executedSolution  = false;
             m_fusedA2A = solution != nullptr ? solution->problemType.fusedA2A : FusedA2A::Disabled;
+            m_fusedRSWait = solution != nullptr ? solution->sizeMapping.fusedRSWait : 0;
 
             // Re-run CPU reference after DataInitialization refreshes MX inputs.
             if(!m_enabled || m_problem == nullptr || m_referenceInputs.empty()
@@ -292,6 +302,15 @@ namespace TensileLite
                         reference.emplace(dynamic_cast<ContractionInputs const&>(*m_referenceInputs[card]));
                         result.emplace(dynamic_cast<ContractionInputs const&>(*inputs));
                     }
+                    std::optional<GemmRSOwnRoundingScope> ownRounding;
+                    if(comparesReducedD(m_fusedA2A, m_fusedRSWait))
+                    {
+                        auto& reduced = m_gemmRSReduced.at(card);
+                        ownRounding.emplace(*problem, card, goldenDs(), *result, reduced);
+                        std::cout << "GemmRS reduced-D rank " << card << ": "
+                                  << ownRounding->stats() << std::endl;
+                        reference->d = reduced.data();
+                    }
                     rv = validate(*problem, *reference, *result);
 
                     // OutputPeerD: this card's D also holds the slice of every other card.
@@ -374,7 +393,7 @@ namespace TensileLite
                 {
                     auto const& inputs = (*m_devices)[d]->inputArr[slot];
                     validateSolution(d, inputs);
-                    if(m_fusedA2A == FusedA2A::GemmA2A && m_elementsToValidate != 0)
+                    if(validatesRecvBuffer(m_fusedA2A) && m_elementsToValidate != 0)
                     {
                         auto const& problem
                             = dynamic_cast<ContractionProblemGemm const&>(*m_problem);
@@ -417,6 +436,14 @@ namespace TensileLite
             }
         }
 
+        std::vector<void const*> ReferenceValidator::goldenDs() const
+        {
+            std::vector<void const*> golden;
+            for(auto const& ref : m_referenceInputs)
+                golden.push_back(dynamic_cast<ContractionInputs const&>(*ref).d);
+            return golden;
+        }
+
         void ReferenceValidator::referenceRecvs(ContractionProblemGemm const& problem)
         {
             const size_t W        = m_referenceInputs.size();
@@ -441,6 +468,198 @@ namespace TensileLite
                                 m_referenceRecvs[dst].data() + ((src * N + t) * nShard + f) * elem,
                                 goldenD + ((dst * nShard + f) * dMStride + t * dNStride) * elem,
                                 elem);
+            }
+        }
+
+        bool validatesRecvBuffer(FusedA2A mode)
+        {
+            return mode == FusedA2A::GemmA2A || mode == FusedA2A::GemmRS;
+        }
+
+        bool comparesReducedD(FusedA2A mode, int fusedRSWait)
+        {
+            return mode == FusedA2A::GemmRS && fusedRSWait != 0;
+        }
+
+        static double bf16Ulp(float x)
+        {
+            return std::ldexp(1.0, std::max(std::ilogb(x), -126) - 7);
+        }
+
+        std::ostream& operator<<(std::ostream& stream, GemmRSOwnRounding const& stats)
+        {
+            auto const flags     = stream.flags();
+            auto const precision = stream.precision(17);
+            stream << std::defaultfloat << "own-segment elements " << stats.elements
+                   << ", differing from reference " << stats.differing
+                   << ", accepted within rounding bound " << stats.accepted
+                   << ", max |device - reference| " << stats.maxDiff << " (bound there "
+                   << stats.boundAtMaxDiff << "), max |device - reference| / bound "
+                   << stats.maxRatio;
+            stream.flags(flags);
+            stream.precision(precision);
+            return stream;
+        }
+
+        std::pair<size_t, size_t>
+            gemmRSOwnSpan(ContractionProblemGemm const& problem, size_t rank, size_t world)
+        {
+            auto const&  dDesc    = problem.d();
+            const size_t M        = problem.freeSizeA(0);
+            const size_t S        = problem.freeSizeB(0) / world;
+            const size_t dMStride = dDesc.strides()[problem.freeIndices()[0].d];
+            const size_t dNStride = dDesc.strides()[problem.freeIndices()[1].d];
+            const size_t first    = rank * S * dNStride;
+            if(M == 0 || S == 0)
+                return {first, first};
+            return {first, (M - 1) * dMStride + (rank * S + S - 1) * dNStride + 1};
+        }
+
+        static void keepMaxDiff(GemmRSOwnRounding& stats, double diff, double bound)
+        {
+            if(diff > stats.maxDiff || (diff == stats.maxDiff && bound < stats.boundAtMaxDiff))
+            {
+                stats.maxDiff        = diff;
+                stats.boundAtMaxDiff = bound;
+            }
+        }
+
+        GemmRSOwnRounding gemmRSAcceptOwnRounding(ContractionProblemGemm const&   problem,
+                                                  size_t                          rank,
+                                                  std::vector<void const*> const& golden,
+                                                  void const*                     device,
+                                                  std::vector<uint8_t>&           reduced)
+        {
+            auto const&  dDesc    = problem.d();
+            const size_t W        = golden.size();
+            const size_t M        = problem.freeSizeA(0);
+            const size_t S        = problem.freeSizeB(0) / W;
+            const size_t dMStride = dDesc.strides()[problem.freeIndices()[0].d];
+            const size_t dNStride = dDesc.strides()[problem.freeIndices()[1].d];
+            const size_t first    = gemmRSOwnSpan(problem, rank, W).first;
+            auto const   g        = [&](size_t r, size_t i) {
+                return static_cast<BFloat16 const*>(golden[r])[i];
+            };
+            auto const* dev = static_cast<BFloat16 const*>(device);
+            auto*       ref = reinterpret_cast<BFloat16*>(reduced.data());
+
+            GemmRSOwnRounding total;
+            total.elements = M * S;
+#pragma omp parallel
+            {
+                GemmRSOwnRounding part;
+#pragma omp for nowait
+                for(size_t t = 0; t < S; t++)
+                    for(size_t f = 0; f < M; f++)
+                    {
+                        const size_t   i = f * dMStride + (rank * S + t) * dNStride;
+                        BFloat16 const d = dev[i - first];
+                        const float    a = float(d);
+                        const float    b = float(ref[i]);
+                        if(a == b)
+                            continue;
+                        part.differing++;
+                        float y = 0.0f;
+                        for(size_t s = 0; s < W; s++)
+                            y += float(g(s, i));
+                        if(!std::isfinite(a) || !std::isfinite(b) || !std::isfinite(y))
+                            continue;
+                        const double e     = 0.5 * bf16Ulp(float(g(rank, i)));
+                        const double diff  = std::fabs(double(a) - double(b));
+                        const double bound = a > b ? double(BFloat16(y + e)) - b
+                                                   : b - double(BFloat16(y - e));
+                        if(diff <= bound)
+                        {
+                            part.accepted++;
+                            ref[i] = d;
+                        }
+                        part.maxRatio = std::max(part.maxRatio,
+                                                 bound > 0 ? diff / bound
+                                                           : std::numeric_limits<double>::infinity());
+                        keepMaxDiff(part, diff, bound);
+                    }
+#pragma omp critical
+                {
+                    total.differing += part.differing;
+                    total.accepted += part.accepted;
+                    total.maxRatio = std::max(total.maxRatio, part.maxRatio);
+                    keepMaxDiff(total, part.maxDiff, part.boundAtMaxDiff);
+                }
+            }
+            return total;
+        }
+
+        GemmRSOwnRoundingScope::GemmRSOwnRoundingScope(ContractionProblemGemm const&   problem,
+                                                       size_t                          rank,
+                                                       std::vector<void const*> const& golden,
+                                                       ContractionInputs const&        result,
+                                                       std::vector<uint8_t>&           reduced)
+        {
+            auto const [first, last] = gemmRSOwnSpan(problem, rank, golden.size());
+            auto const* d            = static_cast<BFloat16 const*>(result.d) + first;
+            std::vector<BFloat16> device(last - first);
+            if(result.gpu)
+                HIP_CHECK_EXC(hipMemcpy(device.data(),
+                                        d,
+                                        device.size() * sizeof(BFloat16),
+                                        hipMemcpyDeviceToHost));
+            else
+                std::copy(d, d + device.size(), device.begin());
+            m_first = reinterpret_cast<BFloat16*>(reduced.data()) + first;
+            m_saved.assign(m_first, m_first + device.size());
+            m_stats = gemmRSAcceptOwnRounding(problem, rank, golden, device.data(), reduced);
+        }
+
+        GemmRSOwnRoundingScope::~GemmRSOwnRoundingScope()
+        {
+            std::copy(m_saved.begin(), m_saved.end(), m_first);
+        }
+
+        void gemmRSReferences(ContractionProblemGemm const&      problem,
+                              std::vector<void const*> const&    golden,
+                              std::vector<std::vector<uint8_t>>& recvs,
+                              std::vector<std::vector<uint8_t>>& reduced)
+        {
+            auto const&  dDesc = problem.d();
+            const size_t W     = golden.size();
+            const size_t M     = problem.freeSizeA(0);
+            const size_t N     = problem.freeSizeB(0);
+            if(dDesc.dataType() != rocisa::DataType::BFloat16)
+                throw std::runtime_error("[fused-a2a] the GemmRS reference needs a BF16 D.");
+            if(W == 0 || N % W != 0)
+                throw std::runtime_error(
+                    concatenate("[fused-a2a] N=", N, " is not a multiple of world=", W));
+            if(problem.batchSize(0) != 1)
+                throw std::runtime_error(concatenate(
+                    "[fused-a2a] the GemmRS reference needs batch 1, got ", problem.batchSize(0)));
+            const size_t S        = N / W;
+            const size_t dMStride = dDesc.strides()[problem.freeIndices()[0].d];
+            const size_t dNStride = dDesc.strides()[problem.freeIndices()[1].d];
+            const size_t dElems   = dDesc.totalAllocatedElements();
+            auto const   g        = [&](size_t r, size_t f, size_t t) {
+                return static_cast<BFloat16 const*>(golden[r])[f * dMStride + t * dNStride];
+            };
+
+            recvs.assign(W, std::vector<uint8_t>(M * S * W * sizeof(BFloat16)));
+            reduced.assign(W, std::vector<uint8_t>(dElems * sizeof(BFloat16)));
+            for(size_t d = 0; d < W; d++)
+            {
+                auto* recv = reinterpret_cast<BFloat16*>(recvs[d].data());
+                auto* out  = reinterpret_cast<BFloat16*>(reduced[d].data());
+                std::memcpy(out, golden[d], dElems * sizeof(BFloat16));
+#pragma omp parallel for
+                for(size_t t = 0; t < S; t++)
+                    for(size_t f = 0; f < M; f++)
+                    {
+                        float sum = 0.0f;
+                        for(size_t src = 0; src < W; src++)
+                        {
+                            BFloat16 const v = g(src, f, d * S + t);
+                            sum += float(v);
+                            recv[(src * S + t) * M + f] = src == d ? BFloat16() : v;
+                        }
+                        out[f * dMStride + (d * S + t) * dNStride] = BFloat16(sum);
+                    }
             }
         }
 

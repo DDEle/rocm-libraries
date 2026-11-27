@@ -53,7 +53,7 @@ BenchmarkProblems:
         - WorkGroupMapping: [1]
         - WorkGroupMappingXCC: [1]
         - StaggerU: [0]
-        - FusedRSWait: [0]
+        - FusedRSWait: [0, 1]
       BenchmarkJoinParameters:
       BenchmarkFinalParameters:
         - ProblemSizes:
@@ -91,7 +91,7 @@ BenchmarkProblems:
         - StaggerU: [0]
         - ClusterDim: [[2, 2], [4, 2], [2, 4]]
         - ClusterAIDMapping: [-1]
-        - FusedRSWait: [0]
+        - FusedRSWait: [0, 1]
       BenchmarkJoinParameters:
       BenchmarkFinalParameters:
         - ProblemSizes:

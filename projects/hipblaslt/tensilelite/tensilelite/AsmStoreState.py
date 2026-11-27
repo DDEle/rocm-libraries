@@ -141,8 +141,10 @@ class StoreState:
 
     # StoreState constructor:
     def __init__(self, kernelWriter, kernel, gwvw, edge, beta, atomic, elements, vectorDataTypes, dim, isWorkspace=False,
-                 emitGateResidual=False):
+                 emitGateResidual=False, fusedRSRecv=False):
         self.kernelWriter = kernelWriter
+        # FusedA2A=GemmRS FusedRSWait=1 RECV pass: a receive-slot staging block per element.
+        self.fusedRSRecv = fusedRSRecv
         self.kernel = kernel
         self.lsu = kernel["LocalSplitU"]
         self.lsuStartVgprOffset = 0
@@ -409,6 +411,10 @@ class StoreState:
         if kernel["_GlobalAccumulation"] == "MultipleBufferSingleKernel":
             self.numVgprsPerElement += self.cfg.numVgprsPerAddr   # addrGSUSyncVgprs
 
+        self.numVgprsPerRecv = int(ceil(kernel["ProblemType"]["DestDataType"].numBytes() * gwvw / 4))
+        if self.fusedRSRecv:
+            self.numVgprsPerElement += self.numVgprsPerRecv
+
         # Calculate align
         self.align = 1
         # align adjustment
@@ -418,6 +424,8 @@ class StoreState:
             self.align = max(self.align, self.cfg.numVgprPerValuC*gwvw)
         if int(ceil(self.cfg.numVgprsPerDataPerVI * gwvw)) > 1:
             self.align = max(self.align, int(ceil(self.cfg.numVgprsPerDataPerVI * gwvw)))
+        if self.fusedRSRecv:
+            self.align = max(self.align, self.numVgprsPerRecv)
 
     ##############################################################################
     # Setup data structures to feed store loops:
@@ -825,6 +833,7 @@ class StoreState:
         self.elementAddr              = []
         self.elementDataE             = []
         self.elementDataGate          = []
+        self.elementDataRecv          = []
         self.elementData              = []  # VGPR to use for element data, needed for atomic or beta
         self.elementDataBias          = []
         self.elementDataScaleAVec     = []
@@ -975,6 +984,10 @@ class StoreState:
             else:
                 dataGate = 0
             self.elementDataGate.append(dataGate)
+
+            if self.fusedRSRecv:
+                self.elementDataRecv.append(kw.vgprPool.checkOutAligned(self.numVgprsPerRecv, self.numVgprsPerRecv,
+                    "fused-RS recv data for ei=%u" % elementIdx, preventOverflow=False))
 
             if (kernel["ProblemType"]["UseScaleAB"] == "Vector") and isSingleKernel:
                 if coordOffset0 in scaleAVecVgprMap:

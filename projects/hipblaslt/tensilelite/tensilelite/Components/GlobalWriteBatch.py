@@ -33,7 +33,7 @@ from rocisa.instruction import BufferAtomicAddF32, BufferAtomicCmpswapB32, \
   SAndB64, SAtomicDec, SAtomicInc, SBarrier, SBfeU32, SBfmB32, SBfmB64, SBitcmp1B32, SBranch, \
   SCBranchExecNZ, SCBranchExecZ, \
   SCBranchSCC0, SCBranchSCC1, SCBranchVCCNZ, SCmpGtU32, SCmpLgU32, SCmpKGtU32, SCSelectB32, SCmpEQI32, SCmpEQU32, SCmpGtI32, SCmpLeI32, SCmpLeU32, SMinU32, SEndpgm, \
-  SAndN2B32, SCmpLtI32, \
+  SAndN2B32, SCmpLtI32, SCBranchVCCZ, SCmpLtU32, SSubBU32, GlobalInv, \
   SLShiftLeftB32, SLShiftLeftB64, SLShiftRightB32, SLShiftRightB64, SMovB32, SMovB64, SMulHIU32, SMulI32, \
   SNop, SOrB32, SOrB64, SOrSaveExecB32, SOrSaveExecB64, SSleep, SSubI32, SSubU32, \
   SSwapPCB64, SWaitCnt, SWaitAlu, VAShiftRightI32, VAddCCOU32, VAddCOU32, VAddF32, VAddF64, \
@@ -235,6 +235,120 @@ def emitFusedRSGate(module, recvLabelName):
   module.addComment0("fused-RS dispatch: FusedRSDst < 0 ? RECV : PUSH")
   module.add(SCmpLtI32(src0=sgpr("FusedRSDst"), src1=0, comment="FusedRSDst < 0? (own segment)"))
   module.add(SCBranchSCC1(labelName=recvLabelName, comment="own segment -> RECV pass"))
+
+FUSED_RS_POLL_SLEEP = 16
+
+def fusedRSRecvAdds(kernel):
+  """True where the GemmRS RECV pass adds the receive slots: FusedRSWait=1, D-writing (GSU=1) store trees."""
+  return kernel["ProblemType"]["FusedA2A"] == "GemmRS" and kernel["FusedRSWait"] != 0 \
+    and kernel["GlobalSplitU"] == 1
+
+def fusedA2ALoadFlagBaseByRank(module, kw, flagBaseSgpr, rankSgpr, groupOffSgpr):
+  """flagBaseSgpr (4-aligned quad) = peer_<rank>_flagPtr, peer_<rank>_bufPtr; groupOffSgpr = rank's peer
+  group offset."""
+  from .Signature import fusedA2AKernArgLayout
+  from .SdmaRingEmitter import PEER_GROUP_BYTES, OFF_flagPtr
+  layout = fusedA2AKernArgLayout()
+  fusedBase = kw.states.fusedA2AKernArgBase
+
+  imm = fusedBase + layout["peer_0_flagPtr"] + OFF_flagPtr
+  assert imm != 0, "peer-group load immediate must be nonzero"
+  module.add(SMulI32(dst=sgpr(groupOffSgpr), src0=sgpr(rankSgpr), src1=PEER_GROUP_BYTES,
+                     comment="rank * %d (peer group stride)" % PEER_GROUP_BYTES))
+  module.add(SLoadB128(dst=sgpr(flagBaseSgpr, 4), base=sgpr("KernArgAddress", 2),
+                       soffset=sgpr(groupOffSgpr), smem=SMEMModifiers(offset=imm),
+                       comment="peer flag + recv base"))
+  module.add(SWaitCnt(kmcnt=0, comment="wait peer flag + recv base load"))
+
+def fusedRSSlotBytes(module, dst, x, name):
+  """dst (SGPR pair) = x * segN * M * 2, the byte offset of receive slot x."""
+  module.add(SMulI32(dst=sgpr(dst), src0=sgpr(x), src1=sgpr("FusedNShard"), comment="fused-RS: %s * segN" % name))
+  module.add(SMulHIU32(dst=sgpr(dst + 1), src0=sgpr(dst), src1=sgpr("SizesFree+0"),
+                       comment="fused-RS: %s * segN * M (hi)" % name))
+  module.add(SMulI32(dst=sgpr(dst), src0=sgpr(dst), src1=sgpr("SizesFree+0"),
+                     comment="fused-RS: %s * segN * M (lo)" % name))
+  module.add(SLShiftLeftB64(dst=sgpr(dst, 2), src=sgpr(dst, 2), shiftHex=1, comment="fused-RS: in bytes"))
+
+def fusedRSOtherSourcesExec(module, tmp, rankW):
+  """EXEC = ((1 << W) - 1) & ~(1 << myRank), one lane per other source; rankW = (FusedMyRank, FusedW)."""
+  module.add(SBfmB32(dst=sgpr(tmp), src0=sgpr(rankW + 1), src1=0, comment="fused-RS: (1 << W) - 1"))
+  module.add(SBfmB32(dst=sgpr(tmp + 1), src0=1, src1=sgpr(rankW), comment="fused-RS: 1 << myRank"))
+  module.add(SAndN2B32(dst=sgpr(tmp), src0=sgpr(tmp), src1=sgpr(tmp + 1),
+                       comment="fused-RS: one lane per other source"))
+  module.add(SMovB32(dst=EXEC(), src=sgpr(tmp), comment="fused-RS: EXEC = other sources"))
+
+def fusedRSFlagPoll(module, flagBase, vOff, vVal, comment):
+  """One system-scope read of flag[lane] of the flag block at flagBase; VCC = the lanes whose flag != 1."""
+  module.add(VLShiftLeftB32(dst=vgpr(vOff), shiftHex=2, src=vgpr("Serial"),
+                            comment="fused-RS: lane j -> flag slot j"))
+  module.add(GlobalLoadB32(dst=vgpr(vVal), vaddr=vgpr(vOff), saddr=sgpr(flagBase, 2),
+                           modifier=GLOBALModifiers(offset=0, scope=CacheScope.SCOPE_SYS), comment=comment))
+  module.add(SWaitCnt(vlcnt=0, comment="fused-RS: wait flag poll"))
+  module.add(VCmpNeU32(VCC(), 1, vgpr(vVal), comment="fused-RS: flag[lane] != 1?"))
+
+def emitFusedRSRecvWait(module, kw):
+  """FusedA2A=GemmRS FusedRSWait=1 RECV wait, once before a store code tree. A RECV work-group
+  (FusedRSDst < 0) loads FusedMyRank, FusedW and FusedRSRecvDelta = peer_<myRank>_bufPtr - AddressD -
+  myRank*segN*M*2 bytes; with W > 1, wave 0 polls this card's flag block (one lane per other source,
+  system scope) until every slot reads 1, invalidates to system scope and reads the flags again, and every
+  wave passes a barrier. Returns the SGPR pairs (FusedMyRank, FusedW) and FusedRSRecvDelta."""
+  from .Signature import fusedA2AKernArgLayout
+  assert kw.states.kernel["WavefrontSize"] == 32, "FusedA2A=GemmRS RECV wait builds a wave32 EXEC mask"
+  assert kw.states.kernel["FusedRSWait"] == 1, kw.states.kernel["FusedRSWait"]
+  layout = fusedA2AKernArgLayout()
+  fusedBase = kw.states.fusedA2AKernArgBase
+  endLabel = Label(kw.labels.getNameInc("fusedRS_recv_wait_end"), "")
+  syncLabel = Label(kw.labels.getNameInc("fusedRS_recv_sync"), "")
+  pollLabel = Label(kw.labels.getNameInc("fusedRS_recv_poll"), "")
+  arrivedLabel = Label(kw.labels.getNameInc("fusedRS_recv_arrived"), "")
+  rankW = kw.sgprPool.checkOutAligned(2, 2, tag="fusedRS_recvRankW", preventOverflow=False)
+  delta = kw.sgprPool.checkOutAligned(2, 2, tag="fusedRS_recvDelta", preventOverflow=False)
+  flagBase = kw.sgprPool.checkOutAligned(4, 4, tag="fusedRS_recvFlagBase", preventOverflow=False)
+  tmp = kw.sgprPool.checkOutAligned(2, 2, tag="fusedRS_recvTmp", preventOverflow=False)
+
+  module.addComment1("fused-RS RECV wait")
+  module.add(SCmpLtI32(src0=sgpr("FusedRSDst"), src1=0, comment="fused-RS RECV wait: own segment?"))
+  module.add(SCBranchSCC0(labelName=endLabel.getLabelName(), comment="fused-RS: PUSH unit -> no wait"))
+  module.add(SLoadB64(dst=sgpr(rankW, 2), base=sgpr("KernArgAddress", 2),
+                      soffset=hex(fusedBase + layout["FusedMyRank"]), comment="fused-RS: FusedMyRank, FusedW"))
+  module.add(SWaitCnt(kmcnt=0, comment="fused-RS: wait FusedMyRank, FusedW"))
+  fusedA2ALoadFlagBaseByRank(module, kw, flagBase, rankW, tmp)
+  module.add(SSubU32(dst=sgpr(delta), src0=sgpr(flagBase + 2), src1=sgpr("AddressD"),
+                     comment="fused-RS: recv base - AddressD (lo)"))
+  module.add(SSubBU32(dst=sgpr(delta + 1), src0=sgpr(flagBase + 3), src1=sgpr("AddressD+1"),
+                      comment="fused-RS: recv base - AddressD (hi)"))
+  fusedRSSlotBytes(module, tmp, rankW, "myRank")
+  module.add(SSubU32(dst=sgpr(delta), src0=sgpr(delta), src1=sgpr(tmp), comment="fused-RS: FusedRSRecvDelta (lo)"))
+  module.add(SSubBU32(dst=sgpr(delta + 1), src0=sgpr(delta + 1), src1=sgpr(tmp + 1),
+                      comment="fused-RS: FusedRSRecvDelta (hi)"))
+  module.add(SCmpEQU32(src0=sgpr(rankW + 1), src1=1, comment="fused-RS: W == 1?"))
+  module.add(SCBranchSCC1(labelName=endLabel.getLabelName(), comment="fused-RS: W == 1 -> nothing to receive"))
+
+  module.add(VReadfirstlaneB32(dst=sgpr(tmp), src=vgpr("Serial"), comment="fused-RS: wave 0 polls"))
+  module.add(SCmpEQU32(src0=sgpr(tmp), src1=0, comment="fused-RS: wave 0?"))
+  module.add(SCBranchSCC0(labelName=syncLabel.getLabelName(), comment="fused-RS: other waves -> barrier"))
+  fusedRSOtherSourcesExec(module, tmp, rankW)
+  vOff = kw.vgprPool.checkOut(1, tag="fusedRS_recvPollOff")
+  vVal = kw.vgprPool.checkOut(1, tag="fusedRS_recvPollVal")
+  module.add(pollLabel)
+  fusedRSFlagPoll(module, flagBase, vOff, vVal, "fused-RS RECV: poll flag[lane]")
+  module.add(SCBranchVCCZ(labelName=arrivedLabel.getLabelName(), comment="fused-RS: every source arrived"))
+  module.add(SSleep(simm16=FUSED_RS_POLL_SLEEP, comment="fused-RS: back off between polls"))
+  module.add(SBranch(labelName=pollLabel.getLabelName(), comment="fused-RS: poll again"))
+  module.add(arrivedLabel)
+  module.add(GlobalInv(scope=CacheScope.SCOPE_SYS, comment="fused-RS RECV: acquire the receive slots"))
+  # The reload's wait also retires the global_inv.
+  fusedRSFlagPoll(module, flagBase, vOff, vVal, "fused-RS RECV: reload flag[lane] after global_inv")
+  module.add(SCBranchVCCNZ(labelName=pollLabel.getLabelName(), comment="fused-RS: a source is still sending"))
+  kw.vgprPool.checkIn(vVal)
+  kw.vgprPool.checkIn(vOff)
+  module.add(SMovB32(dst=EXEC(), src=-1, comment="fused-RS: full exec"))
+  module.add(syncLabel)
+  module.add(SBarrier(comment="fused-RS SDMA handshake sync: receive slots arrived"))
+  module.add(endLabel)
+  kw.sgprPool.checkIn(tmp)
+  kw.sgprPool.checkIn(flagBase)
+  return rankW, delta
 
 def emitFusedA2ANShardLatch(module, kw, sgprName):
   """Latch AM/W into a persistent SGPR in the PROLOGUE.
@@ -698,6 +812,8 @@ class GlobalWriteBatchWriter:
     assert self._checkAtomicPreconditions()
     module = Module(self.moduleName)
     self._prolog(module)
+    if self.ss.fusedRSRecv:
+      self._emitFusedRSRecvAdd(module)
     # The bias/SAV drain ordering prevents store-side LDS traffic from racing
     # cross-wave epilogue reads. Multi-DU emits the drain+barrier before
     # _emitAdd; non-multi-DU emits _emitAdd first.
@@ -1830,6 +1946,9 @@ class GlobalWriteBatchWriter:
           if dataGate not in checkedDataGate:
             self.parentWriter.vgprPool.checkIn(dataGate)
           checkedDataGate[dataGate] = 1
+
+      if self.ss.fusedRSRecv:
+        self.parentWriter.vgprPool.checkIn(self.ss.elementDataRecv[elementIdx])
 
       def checkScaleVec(dataScaleVec, checkedDataScaleVec):
         if dataScaleVec != 0:
@@ -3118,19 +3237,7 @@ class GlobalWriteBatchWriter:
       rankSgpr:     1 SGPR holding the rank index to select.
       groupOffSgpr: 1 SGPR, or the name of one, to receive the group offset.
     """
-    from .Signature import fusedA2AKernArgLayout
-    from .SdmaRingEmitter import PEER_GROUP_BYTES, OFF_flagPtr
-    layout = fusedA2AKernArgLayout()
-    fusedBase = self.parentWriter.states.fusedA2AKernArgBase
-
-    imm = fusedBase + layout["peer_0_flagPtr"] + OFF_flagPtr
-    assert imm != 0, "peer-group load immediate must be nonzero"
-    module.add(SMulI32(dst=sgpr(groupOffSgpr), src0=sgpr(rankSgpr), src1=PEER_GROUP_BYTES,
-                       comment="rank * %d (peer group stride)" % PEER_GROUP_BYTES))
-    module.add(SLoadB128(dst=sgpr(flagBaseSgpr, 4), base=sgpr("KernArgAddress", 2),
-                         soffset=sgpr(groupOffSgpr), smem=SMEMModifiers(offset=imm),
-                         comment="peer flag + recv base"))
-    module.add(SWaitCnt(kmcnt=0, comment="wait peer flag + recv base load"))
+    fusedA2ALoadFlagBaseByRank(module, self.parentWriter, flagBaseSgpr, rankSgpr, groupOffSgpr)
 
   def _fusedA2AComputeCopyFields(self, module, packetElementLog2,
                                  pS, jS, myRankS, nS, nShardS,
@@ -4142,6 +4249,54 @@ class GlobalWriteBatchWriter:
     module.add(afterLabel)
     module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: restore full exec after single-lane handshake"))
 
+  def _emitFusedRSRecvAdd(self, module: Module):
+    """FusedA2A=GemmRS RECV pass, FusedRSWait=1: for each source src != myRank, load the batch's elements of
+    receive slot src into elementDataRecv and add them, as FP32, to the batch's values. The slot is read
+    through SrdD + FusedRSRecvDelta + src*segN*M*2 with D's address VGPRs, offsets and row steps."""
+    kw = self.parentWriter
+    rankW, delta = kw.states.fusedRSRecvSgprs
+    nElements = len(self.batchElements)
+    bps = int(self.kernel["ProblemType"]["DestDataType"].numBytes() * self.gwvw)
+    srcSgpr = kw.sgprPool.checkOut(1, tag="fusedRS_recvSrc", preventOverflow=False)
+    offSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedRS_recvOff", preventOverflow=False)
+    srdSgpr = kw.sgprPool.checkOutAligned(4, 4, tag="fusedRS_recvSrd", preventOverflow=False)
+    loopLabel = Label(kw.labels.getNameInc("fusedRS_recv_src"), "")
+    nextLabel = Label(kw.labels.getNameInc("fusedRS_recv_next"), "")
+    module.addComment1("fused-RS RECV: add the other sources' receive slots")
+    module.add(SMovB32(dst=sgpr(srcSgpr), src=0, comment="fused-RS: src = 0"))
+    module.add(SMovB64(dst=sgpr(srdSgpr + 2, 2), src=sgpr("SrdD+2", 2), comment="fused-RS: D's limit and flags"))
+    module.add(loopLabel)
+    module.add(SCmpEQU32(src0=sgpr(srcSgpr), src1=sgpr(rankW), comment="fused-RS: src == myRank?"))
+    module.add(SCBranchSCC1(labelName=nextLabel.getLabelName(), comment="fused-RS: skip the own slot"))
+    fusedRSSlotBytes(module, offSgpr, srcSgpr, "src")
+    module.add(SAddU32(dst=sgpr(offSgpr), src0=sgpr(offSgpr), src1=sgpr(delta), comment="fused-RS: + FusedRSRecvDelta (lo)"))
+    module.add(SAddCU32(dst=sgpr(offSgpr + 1), src0=sgpr(offSgpr + 1), src1=sgpr(delta + 1),
+                        comment="fused-RS: + FusedRSRecvDelta (hi)"))
+    module.add(SAddU32(dst=sgpr(srdSgpr), src0=sgpr("SrdD+0"), src1=sgpr(offSgpr), comment="fused-RS: slot SRD (lo)"))
+    module.add(SAddCU32(dst=sgpr(srdSgpr + 1), src0=sgpr("SrdD+1"), src1=sgpr(offSgpr + 1), comment="fused-RS: slot SRD (hi)"))
+    for elementIdx in range(nElements):
+      addrCalc = self.ss.elementAddr[elementIdx]
+      if self.ss.optSrdIncForRow and addrCalc.rowInc:
+        module.add(addrCalc.incrementToNextRow(self.kernel, "D", self.ss, self.tmpS01, dst=srdSgpr))
+      module.add(kw.chooseGlobalRead(True, bps, self.ss.elementDataRecv[elementIdx],
+                                     vgpr(addrCalc.addrDVgpr), sgpr(srdSgpr, 4), soffset=0,
+                                     offset=addrCalc.globalOffset, comment="fused-RS RECV: load slot src"))
+    for elementIdx in range(nElements):
+      module.add(SWaitCnt(vlcnt=nElements - 1 - elementIdx, comment="fused-RS: element %u of slot src" % elementIdx))
+      for vi in range(self.gwvw):
+        sumIdx = self.ss.elementSumIdx[elementIdx] + vi - kw.states.c.startVgprValu
+        module.add(VCvtBF16toFP32(dst=vgpr(self.tmpVgpr), src=vgpr(self.ss.elementDataRecv[elementIdx] + vi // 2),
+                                  vgprMask=None, vi=vi))
+        module.add(VAddF32(dst=vgpr("ValuC+%u" % sumIdx), src0=vgpr(self.tmpVgpr), src1=vgpr("ValuC+%u" % sumIdx),
+                           comment="fused-RS: += slot src"))
+    module.add(nextLabel)
+    module.add(SAddU32(dst=sgpr(srcSgpr), src0=sgpr(srcSgpr), src1=1, comment="fused-RS: next src"))
+    module.add(SCmpLtU32(src0=sgpr(srcSgpr), src1=sgpr(rankW + 1), comment="fused-RS: src < W?"))
+    module.add(SCBranchSCC1(labelName=loopLabel.getLabelName(), comment="fused-RS: next source"))
+    kw.sgprPool.checkIn(srdSgpr)
+    kw.sgprPool.checkIn(offSgpr)
+    kw.sgprPool.checkIn(srcSgpr)
+
   def _emitFusedRSHandshake(self, module: Module):
     """Emit the FusedA2A=GemmRS handshake of the store pass being emitted.
 
@@ -4310,22 +4465,12 @@ class GlobalWriteBatchWriter:
     flagBaseSgpr = kw.sgprPool.checkOutAligned(4, 4, tag="fusedRS_drainFlagBase", preventOverflow=False)
     tmpSgpr = kw.sgprPool.checkOut(2, tag="fusedRS_drainTmp", preventOverflow=False)
     self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, rankWSgpr, tmpSgpr)
-    module.add(SBfmB32(dst=sgpr(tmpSgpr), src0=sgpr(wSgpr), src1=0, comment="fused-RS: (1 << W) - 1"))
-    module.add(SBfmB32(dst=sgpr(tmpSgpr + 1), src0=1, src1=sgpr(rankWSgpr), comment="fused-RS: 1 << myRank"))
-    module.add(SAndN2B32(dst=sgpr(tmpSgpr), src0=sgpr(tmpSgpr), src1=sgpr(tmpSgpr + 1),
-                         comment="fused-RS: one lane per other source"))
-    module.add(self.getEdgeMovInstType()(dst=EXEC(), src=sgpr(tmpSgpr), comment="fused-RS: EXEC = other sources"))
+    fusedRSOtherSourcesExec(module, tmpSgpr, rankWSgpr)
 
     vOff = kw.vgprPool.checkOut(1, tag="fusedRS_drainPollOff")
     vVal = kw.vgprPool.checkOut(1, tag="fusedRS_drainPollVal")
     module.add(pollLabel)
-    module.add(VLShiftLeftB32(dst=vgpr(vOff), shiftHex=2, src=vgpr("Serial"),
-                              comment="fused-RS: lane j -> flag slot j"))
-    module.add(GlobalLoadB32(dst=vgpr(vVal), vaddr=vgpr(vOff), saddr=sgpr(flagBaseSgpr, 2),
-                             modifier=self._fusedA2ASysModifier(isStore=False),
-                             comment="fused-RS: poll flag[lane]"))
-    module.add(SWaitCnt(vlcnt=0, comment="fused-RS: wait flag poll"))
-    module.add(VCmpNeU32(VCC(), 1, vgpr(vVal), comment="fused-RS: flag[lane] != 1?"))
+    fusedRSFlagPoll(module, flagBaseSgpr, vOff, vVal, "fused-RS: poll flag[lane]")
     module.add(SCBranchVCCNZ(labelName=pollLabel.getLabelName(), comment="fused-RS: a source is still sending"))
     module.add(VMovB32(dst=vgpr(vVal), src=0, comment="fused-RS: zero"))
     module.add(GlobalStoreB32(vaddr=vgpr(vOff), src=vgpr(vVal), saddr=sgpr(flagBaseSgpr, 2),

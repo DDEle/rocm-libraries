@@ -4,11 +4,16 @@
 
 Every work-group of every rank runs, as wave 0 of the work-group, from the store-pass gate through its
 handshake against one shared memory, after the emitted FusedRSWgRemap has given it its tile.  An SDMA
-model executes the packets the work-groups put on their queues.  Not a test module.
+model executes the packets the work-groups put on their queues.  Tile runs every wave of one work-group
+from the start of a store code tree to its handshake: the RECV wait, the receive-slot reduce and the D
+stores, against modelled flags and receive buffers.  Loads and global_inv count on LOADcnt until an
+s_wait_loadcnt retires them; reading or overwriting the destination of an outstanding load fails.  Not a
+test module.
 """
 
 import functools
 import re
+import struct
 import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -33,6 +38,10 @@ HANDSHAKE_END = "fused-RS: restore full exec after the handshake"
 POLL = "fused-RS: poll flag[lane]"
 SEND_POLL = "fused-RS: poll the outbound counter"
 DRAIN_START = "fused-RS: W == 1?"
+RECV_WAIT = "fused-RS RECV wait: own segment?"
+RECV_WAIT_END = r"label_fusedRS_recv_wait_end\w*"
+RECV_POLL = "fused-RS RECV: poll flag[lane]"
+RECV_LOAD = "fused-RS RECV: load slot src"
 
 M32 = 0xFFFFFFFF
 LANES = 32
@@ -46,11 +55,24 @@ _SPIN_LIMIT = 10000
 
 
 @functools.lru_cache(maxsize=None)
-def emit(cluster_dim=None):
-    """[(base, src, err)] of the GemmRS kernels; cluster_dim is a tuple or None."""
+def emit(cluster_dim=None, wait=0):
+    """[(base, src, err)] of the GemmRS kernels with FusedRSWait=wait; cluster_dim is a tuple or None."""
     with tempfile.TemporaryDirectory() as tmp:
-        return emit_kernels_from_config(rs_config(tmp, cluster_dim), limit=8, arch=ARCH,
+        return emit_kernels_from_config(rs_config(tmp, cluster_dim, wait), limit=8, arch=ARCH,
                                         cluster_dim=list(cluster_dim) if cluster_dim else None)
+
+
+def f32(b):
+    return struct.unpack("<f", struct.pack("<I", b & M32))[0]
+
+
+def f32_bits(x):
+    return struct.unpack("<I", struct.pack("<f", x))[0]
+
+
+def bf16(b):
+    """Round-to-nearest-even of the FP32 bit pattern b to BF16 bits."""
+    return (b + 0x7FFF + (b >> 16 & 1)) >> 16 & 0xFFFF
 
 
 def _split(line):
@@ -78,6 +100,12 @@ class Kernel:
                 self.labels[m.group(1)] = i
         self.gates = [i for i, (code, c) in enumerate(self.lines) if code and c == GATE]
         assert self.gates, "no GemmRS store-pass gate"
+        self.waits = [i for i, (code, c) in enumerate(self.lines) if code and c == RECV_WAIT]
+        self.waves = int(re.search(r"\.max_flat_workgroup_size:\s+(\d+)", src).group(1)) // LANES
+        self.num_acc = self.mt0 * self.mt1 // (self.waves * LANES)
+        # Store code trees: the line of each Summation_End label.
+        self.trees = {c[:-1]: i for i, (c, _x) in enumerate(self.lines)
+                      if re.fullmatch(r"label_Summation_End(_OptNLL|_\d+):", c)}
         self.remap = _remap_body(src)
         layout = fusedA2AKernArgLayout()
         rank_w = next(code for code, c in self.lines if c == "FusedMyRank, FusedW")
@@ -93,6 +121,11 @@ class Kernel:
 
     def sreg(self, name):
         return self.eval(name)
+
+    def wait_end(self, wait):
+        """Line of the end label of the RECV wait at line `wait`."""
+        return self.labels[next(m.group(0) for code, _c in self.lines[wait:]
+                                for m in [re.fullmatch(RECV_WAIT_END + ":", code)] if m)[:-1]]
 
     def passes(self, gate):
         """(PUSH lines, RECV lines) of the two store passes behind the gate at line `gate`."""
@@ -110,13 +143,17 @@ class Kernel:
         return self._decoded[i]
 
     def _decode(self, code):
-        if not code or code.startswith(".") or code.endswith(":"):
+        if not code or code.startswith((".", "/*")) or code.endswith(":"):
             return None
         op, _, rest = code.partition(" ")
-        if op.startswith(_SKIPPED):
+        if op == "s_wait_loadcnt":
+            return op, [("imm", int(rest, 0))], {}
+        if op.startswith(_SKIPPED) and not op.startswith("s_wait_loadcnt"):
             return None
         parts = [p.strip() for p in rest.split(",")] if rest else []
         mods = {}
+        if op == "global_inv":
+            parts, mods = [], dict(m.partition(":")[::2] for m in rest.split())
         if parts:
             last = parts[-1].split()
             parts[-1] = last[0]
@@ -126,6 +163,9 @@ class Kernel:
         return op, [self._operand(p) for p in parts], mods
 
     def _operand(self, tok):
+        half = re.fullmatch(r"(v.+)\.([lh])", tok)
+        if half:
+            return self._operand(half.group(1)) + (half.group(2),)
         if tok in ("exec_lo", "vcc_lo", "off", "null"):
             return (tok,)
         m = re.fullmatch(r"([sv])(\d+)", tok)
@@ -147,6 +187,20 @@ class Hang(Exception):
     pass
 
 
+_VALU_U32 = {
+    "v_lshrrev_b32": lambda a, b: b >> (a & 31),
+    "v_and_b32": lambda a, b: a & b,
+    "v_add_lshl_u32": lambda a, b, c: (a + b) << (c & 31) & M32,
+    "v_mul_lo_u32": lambda a, b: a * b & M32,
+}
+_VALU_F32 = {
+    "v_mul_f32": lambda a, b: f32_bits(f32(a) * f32(b)),
+    "v_add_f32": lambda a, b: f32_bits(f32(a) + f32(b)),
+    "v_cvt_f32_bf16": lambda a: a << 16,
+    "v_cvt_pk_bf16_f32": lambda a, b: bf16(a) | bf16(b) << 16,
+}
+
+
 @dataclass
 class Launch:
     copies: list = field(default_factory=list)          # (rank, queue, fields)
@@ -155,6 +209,10 @@ class Launch:
     polls: list = field(default_factory=list)           # (rank, comment, exec)
     drains: list = field(default_factory=list)          # rank
     passes: list = field(default_factory=list)          # (rank, wg, "PUSH"|"RECV")
+    events: list = field(default_factory=list)          # (wave, "inv")
+    log: list = field(default_factory=list)             # ("ready", rank, wg) | ("drain", rank, None)
+    inv_pending: int = 0
+    inv_done: int = 0
 
 
 class World:
@@ -236,9 +294,10 @@ class World:
                 out.append((u, wg0, wg1, reg))
         return sorted(out, key=lambda t: t[:3])
 
-    def run_wg(self, launch, rank, reg, gate):
+    def run_wg(self, launch, rank, reg, gate, wait=None):
         """Generator: wave 0 of one work-group from the gate to the end of its handshake; yields on
-        every taken backward branch."""
+        every taken backward branch.  With `wait` (line of a RECV wait), from the start of its store code
+        tree to the end of the wait, then from the gate."""
         k = self.k
         s = {}
         for name in ("WorkGroup0", "WorkGroup1", "FusedRSDst", "FusedTokenTiles", "FusedNShard",
@@ -251,19 +310,25 @@ class World:
         s[k.sreg("sgprSizesFree+1")] = self.n
         s[k.sreg("sgprStrideD1J")] = self.m
         s[k.sreg("sgprFusedPeerGroupPtr")] = 0
+        if wait is not None:
+            s.update(self._store_sgprs(rank, reg, 0, 1.0))
         v = {k.sreg("vgprSerial"): list(range(LANES))}
-        st = dict(s=s, v=v, scc=None, exec=M32, vcc=0)
+        st = dict(s=s, v=v, scc=None, exec=M32, vcc=0, wave=0, pending=[], busy={})
 
-        pc = gate
+        pc = gate if wait is None else max(t for t in k.trees.values() if t < wait)
+        wait_end = None if wait is None else k.wait_end(wait)
+        wg = (reg["s[sgprWorkGroup0]"], reg["s[sgprWorkGroup1]"])
         recv_label = k.lines[gate + 1][0].split()[1]
         steps = 0
         started = False
         while True:
+            if pc == wait_end:
+                launch.log.append(("ready", rank, wg))
+                pc = gate
             code, comment = k.lines[pc]
             if not started and comment == HANDSHAKE_START:
                 started = True
-                launch.passes.append((rank, (reg["s[sgprWorkGroup0]"], reg["s[sgprWorkGroup1]"]),
-                                      "RECV" if pc > k.labels[recv_label] else "PUSH"))
+                launch.passes.append((rank, wg, "RECV" if pc > k.labels[recv_label] else "PUSH"))
             if not started and pc > gate + 1:
                 pc += 1
                 continue
@@ -272,8 +337,9 @@ class World:
                 raise Hang(f"rank {rank}: {steps} instructions")
             if comment in (POLL, SEND_POLL):
                 launch.polls.append((rank, comment, st["exec"]))
-            if comment == DRAIN_START:
+            if comment == DRAIN_START and started:
                 launch.drains.append(rank)
+                launch.log.append(("drain", rank, None))
             nxt = self._step(launch, rank, st, pc)
             if comment == HANDSHAKE_END:
                 return
@@ -287,7 +353,7 @@ class World:
         if ins is None:
             return pc + 1
         op, a, mods = ins
-        s, v = st["s"], st["v"]
+        s, v, busy = st["s"], st["v"], st["busy"]
 
         def rd(o, lane=0, i=0):
             kind = o[0]
@@ -297,9 +363,10 @@ class World:
                 assert o[1] + i in s, f"line {pc} {k.lines[pc][0]!r} reads unset s{o[1] + i}"
                 return s[o[1] + i]
             if kind == "v":
+                assert not busy.get(o[1] + i), f"line {pc} {k.lines[pc][0]!r} reads v{o[1] + i} before its load"
                 val = v.get(o[1] + i, [None] * LANES)[lane]
                 assert val is not None, f"line {pc} {k.lines[pc][0]!r} reads unset v{o[1] + i} lane {lane}"
-                return val
+                return val >> 16 if o[3:] == ("h",) else val & 0xFFFF if o[3:] == ("l",) else val
             if kind == "exec_lo":
                 return st["exec"]
             if kind == "vcc_lo":
@@ -321,10 +388,12 @@ class World:
 
         def wv(o, lane, val, i=0):
             assert o[1] + i != k.sreg("vgprSerial"), f"line {pc} writes Serial"
+            assert loading or not busy.get(o[1] + i), f"line {pc} {k.lines[pc][0]!r} overwrites pending v{o[1] + i}"
             v.setdefault(o[1] + i, [None] * LANES)[lane] = val & M32
 
         lanes = [i for i in range(LANES) if st["exec"] >> i & 1]
         label = lambda o: k.labels[o[1]]
+        loading = op.startswith(("buffer_load", "global_load", "global_atomic"))
 
         if op == "s_branch":
             return label(a[0])
@@ -374,6 +443,11 @@ class World:
             st["scc"] = int(sx(rd(a[0])) < sx(rd(a[1])))
         elif op == "s_cmp_eq_u64":
             st["scc"] = int(rd64(a[0]) == rd64(a[1]))
+        elif op == "s_bitcmp1_b32":
+            st["scc"] = rd(a[0]) >> (rd(a[1]) & 31) & 1
+        elif op == "s_cselect_b32":
+            assert st["scc"] is not None, f"line {pc} reads SCC before any write"
+            ws(a[0], rd(a[1]) if st["scc"] else rd(a[2]))
         elif op in ("s_load_b32", "s_load_b64", "s_load_b128"):
             addr = rd64(a[1]) + rd(a[2]) + int(mods.get("offset", "0"), 0)
             for i in range(a[0][2]):
@@ -382,6 +456,9 @@ class World:
             ws(a[0], rd(a[1], lanes[0] if lanes else 0))
         elif op == "v_cmp_ne_u32":
             st["vcc"] = sum(1 << i for i in lanes if rd(a[1], i) != rd(a[2], i))
+        elif op in _VALU_U32:
+            for i in lanes:
+                wv(a[0], i, _VALU_U32[op](*(rd(o, i) for o in a[1:])))
         elif op in ("v_mov_b32", "v_add_nc_u32", "v_lshlrev_b32", "v_lshl_or_b32", "v_add_co_u32",
                     "v_add_co_ci_u32"):
             vcc = 0
@@ -400,10 +477,38 @@ class World:
                 wv(a[0], i, r)
             if op in ("v_add_co_u32", "v_add_co_ci_u32"):
                 st["vcc"] = vcc
+        elif op == "v_swap_b32":
+            for i in lanes:
+                x, y = rd(a[0], i), rd(a[1], i)
+                wv(a[0], i, y)
+                wv(a[1], i, x)
+        elif op in _VALU_F32:
+            for i in lanes:
+                wv(a[0], i, _VALU_F32[op](*(rd(o, i) for o in a[1:])))
+        elif op == "s_wait_loadcnt":
+            while len(st["pending"]) > a[0][1]:
+                regs = st["pending"].pop(0)
+                if regs is None:
+                    launch.inv_pending -= 1
+                    launch.inv_done += 1
+                for r in regs or ():
+                    busy[r] -= 1
+        elif op == "global_inv":
+            assert mods.get("scope") == "SCOPE_SYS", f"line {pc}: {k.lines[pc][0]!r}"
+            launch.events.append((st["wave"], "inv"))
+            launch.inv_pending += 1
+            st["pending"].append(None)
+        elif op.startswith("buffer_"):
+            self._buffer(launch, st, op, a, mods, lanes, rd, wv)
         elif op.startswith("global_"):
             self._global(launch, rank, st, op, a, mods, lanes, rd, wv)
         else:
             pytest.fail(f"line {pc}: instruction not modelled: {k.lines[pc][0]!r}")
+        if loading:
+            regs = range(a[0][1], a[0][1] + a[0][2])
+            st["pending"].append(regs)
+            for r in regs:
+                busy[r] = busy.get(r, 0) + 1
         return pc + 1
 
     def _global(self, launch, rank, st, op, a, mods, lanes, rd, wv):
@@ -438,6 +543,84 @@ class World:
             else:
                 pytest.fail(f"global instruction not modelled: {op}")
 
+    def _buffer(self, tile, st, op, a, mods, lanes, rd, wv):
+        assert "offen" in mods and a[3][0] == "null", f"buffer access form not modelled: {op} {a} {mods}"
+        nbytes = {"b32": 4, "b64": 8, "b128": 16}[op.rsplit("_", 1)[1]]
+        words = [rd(a[2], 0, i) for i in range(4)]
+        base = words[0] | (words[1] & 0x1FFFFFF) << 32
+        records = (words[1] >> 25 | words[2] << 7) & M32
+        for i in lanes:
+            off = rd(a[1], i) + int(mods.get("offset", "0"), 0)
+            if off + nbytes > records:
+                tile.oob.append((st["wave"], op, off))
+                continue
+            for d in range(nbytes // 4):
+                addr = base + off + 4 * d
+                if op.startswith("buffer_store"):
+                    self.mem[addr] = rd(a[0], i, d)
+                    tile.stores.append((st["wave"], addr))
+                else:
+                    wv(a[0], i, tile.read32(addr), d)
+
+    def _store_sgprs(self, rank, reg, wave, alpha):
+        """{SGPR: value} on entry to a store code tree."""
+        k = self.k
+        s = {}
+        for name in ("WorkGroup0", "WorkGroup1", "FusedRSDst", "FusedTokenTiles", "FusedNShard",
+                     "FusedTotalWGs", "NumWorkGroups0", "NumWorkGroups1"):
+            s[k.sreg("sgpr" + name)] = reg["s[sgpr%s]" % name]
+        srd = self.d(rank) + reg["s[sgprWorkGroup1]"] * k.mt1 * self.m * 2
+        oob = int(k.sets["BufferOOB"], 0)
+        for name, value in (("KernArgAddress", self.kernarg(rank)), ("FusedCounterPtr", self.counters(rank)),
+                            ("AddressD", self.d(rank)),
+                            ("SrdD", srd & M32 | ((srd >> 32 & 0x1FFFFFF) | (oob & 127) << 25) << 32),
+                            ("SrdD+2", oob >> 7 | int(k.sets["Srd127_96"], 0) << 32)):
+            s[k.sreg("sgpr" + name)], s[k.sreg("sgpr" + name) + 1] = value & M32, value >> 32
+        for name, value in (("SizesFree+0", self.m), ("SizesFree+1", self.n), ("StrideD1J", self.m),
+                            ("StrideC1J", self.m), ("GSU", 1), ("Alpha", f32_bits(alpha)),
+                            ("FusedPeerGroupPtr", 0)):
+            s[k.sreg("sgpr" + name)] = value
+        if k.sets.get("sgprWaveIdx", "UNDEF") != "UNDEF":
+            s[k.sreg("sgprWaveIdx")] = wave
+        return s
+
+    def run_wave(self, tile, rank, reg, wave, start):
+        """Generator: wave `wave` of one work-group from line `start` until it enters a handshake (returns
+        "RECV") or the store-pass gate selects the PUSH pass (returns "PUSH"); yields "barrier" at every
+        s_barrier_wait and "spin" on every taken backward branch."""
+        k = self.k
+        s = self._store_sgprs(rank, reg, wave, tile.alpha)
+        v = {k.sreg("vgprSerial"): [wave * LANES + i for i in range(LANES)]}
+        valu_c = k.sreg("vgprValuC")
+        for r in range(k.num_acc):
+            v[valu_c + r] = [f32_bits(tile.acc(wave, r, i)) for i in range(LANES)]
+        st = dict(s=s, v=v, scc=None, exec=M32, vcc=0, wave=wave, pending=[], busy={})
+        gate_branches = {g + 1 for g in k.gates}
+        pc, steps = start, 0
+        while True:
+            code, comment = k.lines[pc]
+            if comment == HANDSHAKE_START:
+                return "RECV"
+            if code.startswith("s_barrier_wait"):
+                tile.events.append((wave, "barrier"))
+                yield "barrier"
+                pc += 1
+                continue
+            steps += 1
+            if steps > _SPIN_LIMIT * 50:
+                raise Hang(f"wave {wave}: {steps} instructions")
+            if comment == RECV_POLL:
+                tile.events.append((wave, "poll"))
+            nxt = self._step(tile, rank, st, pc)
+            if pc in gate_branches and nxt == pc + 1:
+                return "PUSH"
+            if nxt <= pc:
+                yield "spin"
+            pc = nxt
+
+    def tile(self, rank, reg, start, acc, alpha, recv_value):
+        return Tile(self, rank, reg, start, acc, alpha, recv_value)
+
     def launch(self, last="recv", gate=None):
         """One launch on every rank; `last` picks the final work-group of each rank: the last RECV
         unit, or the last PUSH unit."""
@@ -455,6 +638,19 @@ class World:
                 self._finish([self.run_wg(launch, rank, reg, gate)], launch)
             finals.append(self.run_wg(launch, rank, wgs[-1][3], gate))
         self._finish(finals, launch)
+        self.pump(launch)
+        return launch
+
+    def launch_all(self, order, gate=None):
+        """One launch on every rank with every work-group live at once, each from the RECV wait of the
+        store tree of `gate`, scheduled round-robin in `order`: [(rank, index in dispatch order)]."""
+        k = self.k
+        gate = k.gates[0] if gate is None else gate
+        wait = max(i for i in k.waits if i < gate)
+        regs = {(r, i): t[3] for r in range(self.w) for i, t in enumerate(self.work_groups(r))}
+        assert sorted(order) == sorted(regs), order
+        launch = Launch()
+        self._finish([self.run_wg(launch, r, regs[(r, i)], gate, wait) for r, i in order], launch)
         self.pump(launch)
         return launch
 
@@ -479,3 +675,55 @@ class World:
 
     def outbound(self, rank):
         return self.flags(rank) + FUSED_A2A_OUTBOUND_OFFSET
+
+
+class Tile:
+    """Every wave of one work-group of `rank`, from line `start` of the kernel, against `world`'s memory.
+    acc(wave, register, lane) is the FP32 accumulator value; the receive buffer of `rank` reads as
+    recv_value(src, m, n) in the {M, N/W, W} layout, its own slot as NaN."""
+
+    def __init__(self, world, rank, reg, start, acc, alpha, recv_value):
+        self.world, self.rank, self.acc, self.alpha, self.recv_value = world, rank, acc, alpha, recv_value
+        self.events, self.stores, self.oob, self.incs = [], [], [], []
+        self.recv_reads = []        # (src, m, n) per BF16 read from this rank's receive buffer
+        self.unacquired = []        # receive reads with no retired global_inv, or one still outstanding
+        self.inv_pending = self.inv_done = 0
+        self.gens = {w: world.run_wave(self, rank, reg, w, start) for w in range(world.k.waves)}
+        self.at, self.passes = {}, {}
+
+    def read32(self, addr):
+        w = self.world
+        rel = addr - w.recv(self.rank)
+        if not 0 <= rel < w.w * w.seg_n * w.m * 2:
+            return w.mem.get(addr, 0)
+        if self.inv_pending or not self.inv_done:
+            self.unacquired.append(rel)
+        row, byte = divmod(rel, w.m * 2)
+        src, seg_row = divmod(row, w.seg_n)
+        n = self.rank * w.seg_n + seg_row
+        out = 0
+        for h in range(2):
+            m = byte // 2 + h
+            self.recv_reads.append((src, m, n))
+            out |= (0x7FC0 if src == self.rank else bf16(f32_bits(self.recv_value(src, m, n)))) << 16 * h
+        return out
+
+    def run(self, rounds):
+        """Schedules the waves round-robin for at most `rounds` rounds; True once every wave is done."""
+        for _ in range(rounds):
+            for w, g in list(self.gens.items()):
+                if self.at.get(w) == "barrier":
+                    continue
+                try:
+                    self.at[w] = next(g)
+                except StopIteration as e:
+                    self.passes[w] = e.value
+                    del self.gens[w]
+                    self.at.pop(w, None)
+            if not self.gens:
+                return True
+            if all(self.at.get(w) == "barrier" for w in self.gens):
+                if self.passes:
+                    raise Hang(f"waves {sorted(self.gens)} wait on a barrier waves {sorted(self.passes)} left")
+                self.at.clear()
+        return False

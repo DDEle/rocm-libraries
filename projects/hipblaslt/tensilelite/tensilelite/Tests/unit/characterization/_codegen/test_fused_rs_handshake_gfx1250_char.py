@@ -5,8 +5,11 @@
 Runs the emitted store-pass gate and handshake of every work-group of every rank (fused_rs_launch),
 twice on the same memory, with the last work-group to tally on each rank a RECV or a PUSH unit, and
 checks the counter3 election, the DRAIN waits and that every flag, counter and cursor is back at
-zero for the next launch.
+zero for the next launch.  For FusedRSWait=1, also runs every work-group of every rank at once from the
+RECV wait, in several orders, and checks that each rank's DRAIN follows every work-group's wait.
 """
+
+import random
 
 import pytest
 
@@ -20,8 +23,8 @@ _WORLDS = [1, 2, 3, 4]
 _GRIDS = [(1, 1), (2, 2)]
 
 
-def _kernels(cluster_dim):
-    results = L.emit(cluster_dim)
+def _kernels(cluster_dim, wait=0):
+    results = L.emit(cluster_dim, wait)
     assert results and all(err == 0 for _b, _s, err in results)
     return [(base, L.Kernel(src, cluster_dim)) for base, src, _err in results]
 
@@ -48,9 +51,10 @@ def _check_launch(where, world, launch, n):
             assert world.mem.get(addr, 0) == 0, f"{where}: rank {r} counter {addr:#x}"
 
 
+@pytest.mark.parametrize("wait", [0, 1])
 @pytest.mark.parametrize("cluster_dim", _CLUSTERS)
-def test_fused_rs_gfx1250_handshake(cluster_dim):
-    for base, k in _kernels(cluster_dim):
+def test_fused_rs_gfx1250_handshake(cluster_dim, wait):
+    for base, k in _kernels(cluster_dim, wait):
         for world_size in _WORLDS:
             for r_units, seg_bands in _GRIDS:
                 for last in ("recv", "push") if world_size > 1 else ("recv",):
@@ -65,9 +69,34 @@ def test_fused_rs_gfx1250_handshake(cluster_dim):
                                 assert launch.passes[-1][2] == "PUSH", where
 
 
-def test_fused_rs_gfx1250_handshake_every_store_variant():
-    for base, k in _kernels((2, 2)) + _kernels(None):
+@pytest.mark.parametrize("wait", [0, 1])
+def test_fused_rs_gfx1250_handshake_every_store_variant(wait):
+    for base, k in _kernels((2, 2), wait) + _kernels(None, wait):
         for gate in k.gates:
             world = L.World(k, 3, 2, 2, 3)
             for n, last in enumerate(("push", "recv")):
                 _check_launch(f"Kernel {base!r} gate line {gate} last {last}", world, world.launch(last, gate), n)
+
+
+@pytest.mark.parametrize("cluster_dim", _CLUSTERS)
+def test_fused_rs_gfx1250_handshake_with_recv_wait(cluster_dim):
+    for base, k in _kernels(cluster_dim, 1):
+        for gate in (k.gates[0], k.gates[-1]):
+            for world_size in _WORLDS[1:]:
+                world = L.World(k, world_size, 2, 2, 3)
+                units = [(r, i) for r in range(world_size) for i in range(len(world.work_groups(r)))]
+                for n, seed in enumerate((None, "reversed", 1, 2)):
+                    order = units if seed is None else units[::-1] if seed == "reversed" else \
+                        random.Random(seed).sample(units, len(units))
+                    where = f"Kernel {base!r} gate line {gate} W={world_size} order {seed} launch {n}"
+                    launch = world.launch_all(order, gate)
+                    _check_launch(where, world, launch, n)
+                    for r in range(world_size):
+                        recv = {(t[3]["s[sgprWorkGroup0]"], t[3]["s[sgprWorkGroup1]"])
+                                for t in world.work_groups(r) if t[3]["s[sgprFusedRSDst]"] == L.M32}
+                        log = [(i, kind, wg) for i, (kind, rank, wg) in enumerate(launch.log) if rank == r]
+                        ready = [wg for _i, kind, wg in log if kind == "ready" and wg in recv]
+                        assert sorted(ready) == sorted(recv), f"{where}: rank {r} RECV units through the wait"
+                        drain = [i for i, kind, _wg in log if kind == "drain"]
+                        assert len(drain) == 1 and all(i < drain[0] for i, kind, _wg in log if kind == "ready"), (
+                            f"{where}: rank {r} DRAIN before a work-group left the RECV wait")

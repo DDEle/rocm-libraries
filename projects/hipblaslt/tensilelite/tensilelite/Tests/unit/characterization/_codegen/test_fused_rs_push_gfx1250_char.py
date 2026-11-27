@@ -28,8 +28,8 @@ _NO_SDST = ("s_cmp", "s_cbranch", "s_branch", "s_wait", "s_barrier", "s_nop", "s
             "s_sleep", "s_endpgm", "s_store", "s_buffer_store", "s_atomic", "s_dcache")
 
 
-def _kernels(cluster_dim):
-    results = L.emit(cluster_dim)
+def _kernels(cluster_dim, wait=0):
+    results = L.emit(cluster_dim, wait)
     assert results
     for base, _src, err in results:
         assert err == 0, base
@@ -90,9 +90,10 @@ def _check_counters(where, world, launch):
         assert world.mem.get(addr, 0) == 0, f"{where}: counter {addr:#x} left at {world.mem[addr]}"
 
 
+@pytest.mark.parametrize("wait", [0, 1])
 @pytest.mark.parametrize("cluster_dim", _CLUSTERS)
-def test_fused_rs_gfx1250_push(cluster_dim):
-    for base, k in _kernels(cluster_dim):
+def test_fused_rs_gfx1250_push(cluster_dim, wait):
+    for base, k in _kernels(cluster_dim, wait):
         for world_size in _WORLDS:
             for r_units, seg_bands in _GRIDS:
                 world = L.World(k, world_size, r_units, seg_bands, drain=3)
@@ -104,9 +105,10 @@ def test_fused_rs_gfx1250_push(cluster_dim):
                     _check_counters(where, world, launch)
 
 
+@pytest.mark.parametrize("wait", [0, 1])
 @pytest.mark.parametrize("cluster_dim", _CLUSTERS)
-def test_fused_rs_gfx1250_store_passes(cluster_dim):
-    for base, k in _kernels(cluster_dim):
+def test_fused_rs_gfx1250_store_passes(cluster_dim, wait):
+    for base, k in _kernels(cluster_dim, wait):
         assert_assembles(k.src, base)
         for gate in k.gates:
             push, recv = k.passes(gate)

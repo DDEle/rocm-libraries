@@ -81,7 +81,7 @@ from .Components.LraTileAssignment import mx2dFreeOffset
 from .Components.GL2Prefetch import GL2PrefetchLoad
 from .Components.ClusterLoad import ClusterLoadTDM
 from .Components.GlobalWriteBatch import GlobalWriteBatchWriter, emitFusedA2AGate, FusedA2ADirect, \
-    emitFusedA2ADirectPrologue, emitFusedRSGate
+    emitFusedA2ADirectPrologue, emitFusedRSGate, emitFusedRSRecvWait, fusedRSRecvAdds
 from .Components.Signature import FUSED_A2A_A2AGEMM_DONE_OFFSET, FUSED_A2A_A2AGEMM_FLAG_OFFSET, \
     FUSED_A2A_CURSOR_BYTES, FUSED_A2A_DRAIN_SEND, FUSED_A2A_LINE_BYTES, FUSED_A2A_MAX_RANKS, \
     PEER_GROUP_BYTES, fusedA2AKernArgLayout
@@ -20537,6 +20537,8 @@ class KernelWriterAssembly(KernelWriter):
         module.add(VMovB32(dst=vgpr("AmaxOut"), src="0"))
     if self.states.numStoreSgprToLoad or self.states.numStoreSgprToLoad2: # Wait for kernel args
       module.add(SWaitCnt(kmcnt=0, comment="wait for %u bytes of kern args."%((self.states.numStoreSgprToLoad+self.states.numStoreSgprToLoad2) * 4)))
+    if kernel["ProblemType"]["FusedA2A"] == "GemmRS" and kernel["FusedRSWait"] != 0:
+      self.states.fusedRSRecvSgprs = emitFusedRSRecvWait(module, self)
 
     if not noGSUBranch:
       labelMB = Label(self.labels.getNameInc("GW_MB"), comment="Global Write MB")
@@ -21616,6 +21618,10 @@ class KernelWriterAssembly(KernelWriter):
     kernel["GlobalSplitU"] = gsuBackup
     kernel["_GlobalAccumulation"] = gsuAccumBackup
     self.states.bpeCexternal = bpeCexternalBackup
+    if self.states.fusedRSRecvSgprs is not None:
+      for sgprIdx in self.states.fusedRSRecvSgprs:
+        self.sgprPool.checkIn(sgprIdx)
+      self.states.fusedRSRecvSgprs = None
     return module, deferredGSU0
 
   def getMBSKGSUTotal(self, kernel):
@@ -21933,6 +21939,8 @@ class KernelWriterAssembly(KernelWriter):
     ss = StoreState(self, kernel, gwvw, edge, beta, atomic, element,
                     vectorDataTypes, dim=factorDim,
                     emitGateResidual=emitGateResidual)
+    ssRecv = StoreState(self, kernel, gwvw, edge, beta, atomic, element, vectorDataTypes, dim=factorDim,
+                        emitGateResidual=emitGateResidual, fusedRSRecv=True) if fusedRSRecvAdds(kernel) else None
     # New store arm: any dwordx4 base hoisted in a previous arm is unreachable from here.
     self.states.subtileStoreArmId += 1
     # Each arm re-derives SrdD from the tile origin, so the rows an absolutely
@@ -21946,6 +21954,9 @@ class KernelWriterAssembly(KernelWriter):
       actPCMaxTempSgpr_ = actPCMaxTempSgpr
 
     numElementsPerBatch, nBatchesPerRow, numBatches, numSgprs = self.refineOccupancy(kernel, atomic, element, actPCMaxTempSgpr_, gwvw, maxVgprs, ss, beta, edge)
+    if ssRecv is not None:
+      recvBatching = self.refineOccupancy(kernel, atomic, element, actPCMaxTempSgpr_, gwvw, maxVgprs, ssRecv, beta, edge)
+      numSgprs = max(numSgprs, recvBatching[3])
 
     # set atomicW after we potentially resize GWVW
     atomicW = min(gwvw, self.getVectorAtomicWidth(kernel))
@@ -22078,7 +22089,10 @@ class KernelWriterAssembly(KernelWriter):
         # single hoisted runtime gate, so factor the body into a closure that returns
         # a Module (rather than adding directly to actLoopModule) and can be replayed
         # from the same codegen-state after an explicit ss/biasLocalBarrierInit reset.
-        def _emit_batch_loop():
+        def _emit_batch_loop(ss=ss, numElementsPerBatch=numElementsPerBatch, nBatchesPerRow=nBatchesPerRow,
+                             numBatches=numBatches, numBatchesCLS=numBatchesCLS,
+                             next_firing_per_batch=next_firing_per_batch,
+                             next_rowInc_per_batch=next_rowInc_per_batch):
           nonlocal biasLocalBarrierInit
           m = Module("storeBatchLoop")
           # codeAccVgprRead / codeMulAlpha are consumed in-place (popFirstItem) by
@@ -22160,7 +22174,15 @@ class KernelWriterAssembly(KernelWriter):
             actLoopModule.add(localLabel)
             # LOCAL pass
             self.states.fusedA2ADispatchMode = "RECV" if gemmRS else "LOCAL"
-            actLoopModule.add(_emit_batch_loop())
+            if ssRecv is not None:
+              recvEPB, recvBPR, recvBatches, _ = recvBatching
+              ssRecv.resetState()
+              ssRecv.firstBatch = True
+              ssRecv.lsuStartVgprOffset = 0
+              actLoopModule.add(_emit_batch_loop(ssRecv, recvEPB, recvBPR, recvBatches, recvBatches,
+                                                 [0] * recvBatches, [0] * recvBatches))
+            else:
+              actLoopModule.add(_emit_batch_loop())
             actLoopModule.add(afterLabel)
             assert self.states.fusedRSTallyLabel is None, "the GemmRS RECV pass placed no counter3 tally"
           finally:

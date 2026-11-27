@@ -38,19 +38,36 @@ def test_is_fused_push_without_problem_type():
     assert isFusedPush({}) is False
 
 
+@pytest.mark.parametrize("wait", [0, 1])
 @pytest.mark.parametrize("cluster", [[1, 1], [2, 2], [4, 2], [2, 4]])
-def test_gemm_rs_gfx1250_is_accepted(_gp_gfx942, request, assembler, capsys, cluster):
-    sol, out = _derive_rs(request, assembler, capsys, ClusterDim=cluster)
+def test_gemm_rs_gfx1250_is_accepted(_gp_gfx942, request, assembler, capsys, cluster, wait):
+    sol, out = _derive_rs(request, assembler, capsys, ClusterDim=cluster, FusedRSWait=wait)
     assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
     assert sol["InternalSupportParams"]["SupportUserGSU"] is False
-    assert sol["FusedRSWait"] == 0
+    assert sol["FusedRSWait"] == wait
 
 
-@pytest.mark.parametrize("wait", [1, 2])
-def test_gemm_rs_rejects_fused_rs_wait(_gp_gfx942, request, assembler, capsys, wait):
-    sol, out = _derive_rs(request, assembler, capsys, FusedRSWait=wait)
+def test_gemm_rs_rejects_fused_rs_wait_2(_gp_gfx942, request, assembler, capsys):
+    sol, out = _derive_rs(request, assembler, capsys, FusedRSWait=2)
     assert sol.get("Valid") is False
-    assert "FusedA2A=GemmRS requires FusedRSWait=0" in out
+    assert "FusedA2A=GemmRS requires FusedRSWait 0 or 1" in out
+
+
+@pytest.mark.parametrize("overrides, msg", [
+    ({"InterleaveAlpha": 2}, "InterleaveAlpha != 2"),
+    ({"CompactLoopStore": True}, "CompactLoopStore=False"),
+    ({"StoreRemapVectorWidth": -1}, "StoreRemapVectorWidth=0"),
+    ({"StoreRemapVectorWidth": 8}, "StoreRemapVectorWidth=0"),
+])
+def test_gemm_rs_wait_rejects(_gp_gfx942, request, assembler, capsys, overrides, msg):
+    sol, out = _derive_rs(request, assembler, capsys, FusedRSWait=1, **overrides)
+    assert sol.get("Valid") is False
+    assert "FusedA2A=GemmRS with FusedRSWait=1 requires " + msg in out
+
+
+def test_gemm_rs_wait_0_keeps_interleave_alpha_2(_gp_gfx942, request, assembler, capsys):
+    sol, out = _derive_rs(request, assembler, capsys, InterleaveAlpha=2)
+    assert sol.get("Valid") is True, f"expected accept, rejected with: {out!r}"
 
 
 @pytest.mark.parametrize("arch", ["gfx950", "gfx942"])

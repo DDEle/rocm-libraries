@@ -45,13 +45,13 @@ _WORLDS = [1, 2, 3, 4, 8]
 _GRIDS = [(1, 1), (3, 2), (4, 3), (5, 1)]
 
 
-def _rs_config(tmp_path, cluster_dim):
+def _rs_config(tmp_path, cluster_dim, wait=0):
     with open(_CLUSTER if cluster_dim else _PLAIN) as f:
         config = yaml.safe_load(f)
     problem_type, group = config["BenchmarkProblems"][0]
     problem_type.update(FusedA2A="GemmRS", UseBeta=False)
     forks = [p for p in group["ForkParameters"]
-             if not {"ClusterDim", "ClusterAIDMapping"} & set(p)] + [{"FusedRSWait": [0]}]
+             if not {"ClusterDim", "ClusterAIDMapping"} & set(p)] + [{"FusedRSWait": [wait]}]
     if cluster_dim:
         forks += [{"ClusterDim": [list(cluster_dim)]}, {"ClusterAIDMapping": [-1]}]
     group["ForkParameters"] = forks

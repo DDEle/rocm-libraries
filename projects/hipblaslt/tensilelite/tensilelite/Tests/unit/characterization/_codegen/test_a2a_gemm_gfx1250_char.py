@@ -24,9 +24,9 @@ _ARCH = "gfx1250"
 _CONFIG = os.path.normpath(
     os.path.join(
         os.path.dirname(__file__),
-        os.pardir,  # characterization/
-        os.pardir,  # unit/
-        os.pardir,  # tensilelite/Tests/
+        os.pardir,
+        os.pardir,
+        os.pardir,
         "common", "comm", "gfx1250", "a2a_gemm.yaml",
     )
 )
@@ -150,7 +150,7 @@ def test_a2a_gemm_gfx1250_flags_are_system_scope(results):
 
 def test_a2a_gemm_gfx1250_packet_stores_alone_under_narrow_exec(results):
     """In the enqueue's copy loop, each narrowed EXEC span holds only the ring stores and
-    ends in the full-mask reset, so the backend scheduler keeps it whole."""
+    ends in the full-mask reset."""
     for base, src, _err in results:
         insts = _instructions(src)
         begin = next(i for i, ln in enumerate(insts) if "blocks placed this pass" in ln)

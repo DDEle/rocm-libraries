@@ -794,6 +794,17 @@ TEST_F(DAGSchedulerPassTest, ExecMaskGroup_NotMisclassified) {
     EXPECT_EQ(countStinkyInstructions(*bb), 1);
 }
 
+TEST_F(DAGSchedulerPassTest, ExecMaskGroup_SccDestIsImplicit) {
+    StinkyInstruction* anchor = createVAddInBlock(bb, arch, 0, 1, 2);
+
+    AsmIRBuilder builder(*bb, arch);
+    StinkyInstruction* group = builder.createExecMaskGroup(anchor);
+    group->addDestReg(StinkyRegister::getSCCRegister());
+    group->addModifier<ExecGroupData>(ExecGroupData{{}});
+
+    EXPECT_TRUE(isImplicitDest(group->getDestReg(0), *group));
+}
+
 TEST_F(DAGSchedulerPassTest, ExecMaskGroup_InheritsSideEffectFromChildren) {
     StinkyInstruction* sideEffecting = createDSWriteInBlock(bb, arch, 0, 1);  // no MemTokenData
     bb->removeIR(sideEffecting);

@@ -15,6 +15,8 @@
 #include <hipblaslt/hipblaslt-ext.hpp>
 #include <hipblaslt/hipblaslt.h>
 
+#include "rocblaslt_fused_a2a_peers.hpp"
+
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -29,6 +31,15 @@ namespace
     {
         int deviceCount = 0;
         return hipGetDeviceCount(&deviceCount) == hipSuccess && deviceCount > 0;
+    }
+
+    bool onGfx1250()
+    {
+        int             device = 0;
+        hipDeviceProp_t prop{};
+        return hipGetDevice(&device) == hipSuccess
+               && hipGetDeviceProperties(&prop, device) == hipSuccess
+               && std::string(prop.gcnArchName).find("gfx1250") != std::string::npos;
     }
 
     // A zeroed, fine-grained flag region on the current device, sized for
@@ -431,6 +442,30 @@ namespace
 
         EXPECT_EQ(hipblasLtFusionDestroy(prologue), HIPBLAS_STATUS_SUCCESS);
         EXPECT_EQ(hipblasLtMatmulDescDestroy(matmulDesc), HIPBLAS_STATUS_SUCCESS);
+    }
+
+    /************************************************************************
+     * Ranks a gfx1250 epilogue writes directly: those with an empty queue entry.
+     ***********************************************************************/
+
+    TEST(FusedA2ADirectRanks_pre_checkin, EmptyQueueEntriesAreTheDirectRanks)
+    {
+        hipblasLtSdmaQueue_t partial = fakeQueue(0x30000);
+        partial.doorbell             = nullptr;
+        const hipblasLtSdmaQueue_t queues[4]
+            = {fakeQueue(0x10000), hipblasLtSdmaQueue_t{}, partial, hipblasLtSdmaQueue_t{}};
+        EXPECT_EQ(rocblaslt::fusedA2ADirectRanks(queues, 4), 0xAu);
+        EXPECT_EQ(rocblaslt::fusedA2ADirectRanks(queues, 1), 0u);
+        EXPECT_EQ(rocblaslt::fusedA2ADirectRanks(nullptr, 4), 0u);
+    }
+
+    TEST(FusedA2ADirectRanks_pre_checkin, DrainCarriesTheDirectRanks)
+    {
+        constexpr uint32_t both
+            = TensileLite::FUSED_A2A_DRAIN_RECV | TensileLite::FUSED_A2A_DRAIN_SEND;
+        EXPECT_EQ(rocblaslt::fusedA2ADrainFor(HIPBLASLT_A2A_COMPLETION_IN_KERNEL_FULL, 0, 4), both);
+        EXPECT_EQ(rocblaslt::fusedA2ADrainFor(HIPBLASLT_A2A_COMPLETION_IN_KERNEL_FULL, 0xA, 4),
+                  both | 0xAu << 8 | 2u << 16);
     }
 
     /************************************************************************
@@ -1136,6 +1171,23 @@ namespace
                   HIPBLAS_STATUS_SUCCESS);
 
         EXPECT_EQ(heuristic(), HIPBLAS_STATUS_INVALID_VALUE);
+    }
+
+    TEST_F(FusedA2ADispatch_pre_checkin, EmptyQueueEntryIsADirectRankOnGfx1250Only)
+    {
+        registerOneRank();
+        completeAndAttach();
+        makeD();
+
+        const hipblasLtSdmaQueue_t empty{};
+        ASSERT_EQ(hipblasLtFusionSetAttribute(
+                      fused, HIPBLASLT_FUSION_A2A_SDMA_QUEUES, &empty, sizeof(empty)),
+                  HIPBLAS_STATUS_SUCCESS);
+
+        if(onGfx1250())
+            EXPECT_NE(heuristic(), HIPBLAS_STATUS_INVALID_VALUE);
+        else
+            EXPECT_EQ(heuristic(), HIPBLAS_STATUS_INVALID_VALUE);
     }
 
     TEST_F(FusedA2ADispatch_pre_checkin, RejectsMissingCommunicator)

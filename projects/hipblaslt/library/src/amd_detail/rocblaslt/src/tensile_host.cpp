@@ -3169,7 +3169,12 @@ namespace
                                                                       fusedInfo.commChannel,
                                                                       fusedInfo.a2aSdmaQueues);
             inputs.fusedA2AMyRank  = prob.fused_a2a_rank;
-            inputs.fusedA2ADrain   = rocblaslt::fusedA2ADrainFor(fusedInfo.a2aCompletionMode);
+            const uint32_t direct  = fusedInfo.mode == RocblasltFusionInfo::Mode::GemmA2A
+                                         ? rocblaslt::fusedA2ADirectRanks(fusedInfo.a2aSdmaQueues,
+                                                                         prob.fused_a2a_world)
+                                         : 0u;
+            inputs.fusedA2ADrain   = rocblaslt::fusedA2ADrainFor(
+                fusedInfo.a2aCompletionMode, direct, prob.fused_a2a_world);
         }
 #endif
 

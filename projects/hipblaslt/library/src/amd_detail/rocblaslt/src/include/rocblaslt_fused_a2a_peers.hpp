@@ -25,11 +25,28 @@ namespace rocblaslt
                              == 0,
                   "HIPBLASLT_DEVICE_COMM_FLAG_ALIGNMENT no longer matches the flag block layout");
 
-    // The drain bits this layer asks for. IN_KERNEL_FULL maps to both.
-    constexpr uint32_t fusedA2ADrainFor(hipblasLtA2ACompletionMode_t mode)
+    constexpr bool sdmaQueueEmpty(const hipblasLtSdmaQueue_t& q)
+    {
+        return q.queueBuf == nullptr && q.rptr == nullptr && q.wptr == nullptr
+               && q.doorbell == nullptr;
+    }
+
+    // Bit j set iff queues[j] is empty: a gfx1250 epilogue writes those ranks directly.
+    inline uint32_t fusedA2ADirectRanks(const hipblasLtSdmaQueue_t* queues, uint32_t world)
+    {
+        uint32_t ranks = 0;
+        for(uint32_t j = 0; queues != nullptr && j < world; ++j)
+            if(sdmaQueueEmpty(queues[j]))
+                ranks |= 1u << j;
+        return ranks;
+    }
+
+    // FusedDrain for this layer. IN_KERNEL_FULL maps to both drains and the direct ranks.
+    constexpr uint32_t
+        fusedA2ADrainFor(hipblasLtA2ACompletionMode_t mode, uint32_t directRanks, uint32_t world)
     {
         return mode == HIPBLASLT_A2A_COMPLETION_IN_KERNEL_FULL
-                   ? (TensileLite::FUSED_A2A_DRAIN_RECV | TensileLite::FUSED_A2A_DRAIN_SEND)
+                   ? TensileLite::fusedA2ADrain(directRanks, world)
                    : 0u;
     }
 

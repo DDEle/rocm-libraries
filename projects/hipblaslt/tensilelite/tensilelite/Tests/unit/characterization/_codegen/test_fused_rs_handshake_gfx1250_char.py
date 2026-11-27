@@ -5,7 +5,7 @@
 Runs the emitted store-pass gate and handshake of every work-group of every rank (fused_rs_launch),
 twice on the same memory, with the last work-group to tally on each rank a RECV or a PUSH unit, and
 checks the counter3 election, the DRAIN waits and that every flag, counter and cursor is back at
-zero for the next launch.  For FusedRSWait=1, also runs every work-group of every rank at once from the
+zero for the next launch.  For FusedRSWait 1 and 2, also runs every work-group of every rank at once from the
 RECV wait, in several orders, and checks that each rank's DRAIN follows every work-group's wait.
 """
 
@@ -51,7 +51,7 @@ def _check_launch(where, world, launch, n):
             assert world.mem.get(addr, 0) == 0, f"{where}: rank {r} counter {addr:#x}"
 
 
-@pytest.mark.parametrize("wait", [0, 1])
+@pytest.mark.parametrize("wait", [0, 1, 2])
 @pytest.mark.parametrize("cluster_dim", _CLUSTERS)
 def test_fused_rs_gfx1250_handshake(cluster_dim, wait):
     for base, k in _kernels(cluster_dim, wait):
@@ -69,7 +69,7 @@ def test_fused_rs_gfx1250_handshake(cluster_dim, wait):
                                 assert launch.passes[-1][2] == "PUSH", where
 
 
-@pytest.mark.parametrize("wait", [0, 1])
+@pytest.mark.parametrize("wait", [0, 1, 2])
 def test_fused_rs_gfx1250_handshake_every_store_variant(wait):
     for base, k in _kernels((2, 2), wait) + _kernels(None, wait):
         for gate in k.gates:
@@ -78,9 +78,10 @@ def test_fused_rs_gfx1250_handshake_every_store_variant(wait):
                 _check_launch(f"Kernel {base!r} gate line {gate} last {last}", world, world.launch(last, gate), n)
 
 
+@pytest.mark.parametrize("wait", [1, 2])
 @pytest.mark.parametrize("cluster_dim", _CLUSTERS)
-def test_fused_rs_gfx1250_handshake_with_recv_wait(cluster_dim):
-    for base, k in _kernels(cluster_dim, 1):
+def test_fused_rs_gfx1250_handshake_with_recv_wait(cluster_dim, wait):
+    for base, k in _kernels(cluster_dim, wait):
         for gate in (k.gates[0], k.gates[-1]):
             for world_size in _WORLDS[1:]:
                 world = L.World(k, world_size, 2, 2, 3)

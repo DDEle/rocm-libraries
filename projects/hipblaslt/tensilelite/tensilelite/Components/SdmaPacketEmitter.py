@@ -244,14 +244,14 @@ class SdmaPacketEmitter:
                            src1=vgpr(pktV + COPY_DW_RECT),
                            comment="SUBWIN DW11: rect_x-1|rect_y-1"))
 
-    def emitBuildAtomicPacketUniformV(self, module, pktV):
+    def emitBuildAtomicPacketUniformV(self, module, pktV, addend=1):
         if self.gfx1250:
             module.add(VMovB32(dst=vgpr(pktV + 0), src=hex(ATOMIC_HEADER_DW0_GFX1250),
                                comment="ATOMIC DW0: op=ATOMIC operation=ADD_RTN_32 scope=SYS"))
         else:
             module.add(VMovB32(dst=vgpr(pktV + 0), src=hex(ATOMIC_HEADER_DW0),
                                comment="ATOMIC DW0: op=ATOMIC operation=ADD_RTN_32"))
-        module.add(VMovB32(dst=vgpr(pktV + 3), src=1, comment="ATOMIC DW3: src_data lo (addend)"))
+        module.add(VMovB32(dst=vgpr(pktV + 3), src=addend, comment="ATOMIC DW3: src_data lo (addend)"))
         for dw in range(4, ATOMIC_PACKET_DWORDS):
             module.add(VMovB32(dst=vgpr(pktV + dw), src=0, comment="ATOMIC DW%d: 0" % dw))
 

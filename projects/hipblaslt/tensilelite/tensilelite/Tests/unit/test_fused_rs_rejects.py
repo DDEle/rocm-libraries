@@ -38,7 +38,7 @@ def test_is_fused_push_without_problem_type():
     assert isFusedPush({}) is False
 
 
-@pytest.mark.parametrize("wait", [0, 1])
+@pytest.mark.parametrize("wait", [0, 1, 2])
 @pytest.mark.parametrize("cluster", [[1, 1], [2, 2], [4, 2], [2, 4]])
 def test_gemm_rs_gfx1250_is_accepted(_gp_gfx942, request, assembler, capsys, cluster, wait):
     sol, out = _derive_rs(request, assembler, capsys, ClusterDim=cluster, FusedRSWait=wait)
@@ -47,10 +47,11 @@ def test_gemm_rs_gfx1250_is_accepted(_gp_gfx942, request, assembler, capsys, clu
     assert sol["FusedRSWait"] == wait
 
 
-def test_gemm_rs_rejects_fused_rs_wait_2(_gp_gfx942, request, assembler, capsys):
-    sol, out = _derive_rs(request, assembler, capsys, FusedRSWait=2)
+@pytest.mark.parametrize("wait", [-1, 3])
+def test_gemm_rs_rejects_unknown_fused_rs_wait(_gp_gfx942, request, assembler, capsys, wait):
+    sol, out = _derive_rs(request, assembler, capsys, FusedRSWait=wait)
     assert sol.get("Valid") is False
-    assert "FusedA2A=GemmRS requires FusedRSWait 0 or 1" in out
+    assert "FusedA2A=GemmRS requires FusedRSWait 0, 1 or 2" in out
 
 
 @pytest.mark.parametrize("overrides, msg", [
@@ -59,10 +60,11 @@ def test_gemm_rs_rejects_fused_rs_wait_2(_gp_gfx942, request, assembler, capsys)
     ({"StoreRemapVectorWidth": -1}, "StoreRemapVectorWidth=0"),
     ({"StoreRemapVectorWidth": 8}, "StoreRemapVectorWidth=0"),
 ])
-def test_gemm_rs_wait_rejects(_gp_gfx942, request, assembler, capsys, overrides, msg):
-    sol, out = _derive_rs(request, assembler, capsys, FusedRSWait=1, **overrides)
+@pytest.mark.parametrize("wait", [1, 2])
+def test_gemm_rs_wait_rejects(_gp_gfx942, request, assembler, capsys, overrides, msg, wait):
+    sol, out = _derive_rs(request, assembler, capsys, FusedRSWait=wait, **overrides)
     assert sol.get("Valid") is False
-    assert "FusedA2A=GemmRS with FusedRSWait=1 requires " + msg in out
+    assert "FusedA2A=GemmRS with FusedRSWait=%d requires %s" % (wait, msg) in out
 
 
 def test_gemm_rs_wait_0_keeps_interleave_alpha_2(_gp_gfx942, request, assembler, capsys):
@@ -131,6 +133,7 @@ def test_fused_rs_wait_default_keeps_kernel_names(_gp_gfx942, request, assembler
     assert rs0.get("Valid") is True, f"expected accept, rejected with: {out!r}"
     assert "_FRSW0" in getKernelNameMin(rs0._state, False)
     assert "FRSW" not in getKernelNameMin(dict(rs0._state, FusedRSWait=1), False)
+    assert "_FRSW2" in getKernelNameMin(dict(rs0._state, FusedRSWait=2), False)
 
 
 # ---------------------------------------------------------------------------

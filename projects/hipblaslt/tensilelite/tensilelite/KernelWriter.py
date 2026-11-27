@@ -601,7 +601,7 @@ class StateValues:
     self.fusedA2ADirect = None
     # GemmRS: the RECV pass's counter3 tally label, which the PUSH pass's handshake branches to.
     self.fusedRSTallyLabel = None
-    # GemmRS FusedRSWait=1: (FusedMyRank/FusedW pair, FusedRSRecvDelta pair) from the RECV wait.
+    # GemmRS FusedRSWait 1 or 2: (FusedMyRank/FusedW pair, FusedRSRecvDelta pair) from the RECV wait.
     self.fusedRSRecvSgprs = None
 
     self.preloadGuard = []

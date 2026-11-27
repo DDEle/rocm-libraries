@@ -239,7 +239,7 @@ def emitFusedRSGate(module, recvLabelName):
 FUSED_RS_POLL_SLEEP = 16
 
 def fusedRSRecvAdds(kernel):
-  """True where the GemmRS RECV pass adds the receive slots: FusedRSWait=1, D-writing (GSU=1) store trees."""
+  """True where the GemmRS RECV pass adds the receive slots: FusedRSWait 1 or 2, D-writing (GSU=1) store trees."""
   return kernel["ProblemType"]["FusedA2A"] == "GemmRS" and kernel["FusedRSWait"] != 0 \
     and kernel["GlobalSplitU"] == 1
 
@@ -277,24 +277,47 @@ def fusedRSOtherSourcesExec(module, tmp, rankW):
                        comment="fused-RS: one lane per other source"))
   module.add(SMovB32(dst=EXEC(), src=sgpr(tmp), comment="fused-RS: EXEC = other sources"))
 
-def fusedRSFlagPoll(module, flagBase, vOff, vVal, comment):
-  """One system-scope read of flag[lane] of the flag block at flagBase; VCC = the lanes whose flag != 1."""
+def fusedRSFlagPoll(module, flagBase, vOff, vVal, comment, want=None, bits=False):
+  """One system-scope read of flag[lane] of the flag block at flagBase; VCC = the lanes whose flag != 1, or,
+  with the SGPR `want`, whose flag != want, or with `bits`, whose flag lacks a bit of want."""
   module.add(VLShiftLeftB32(dst=vgpr(vOff), shiftHex=2, src=vgpr("Serial"),
                             comment="fused-RS: lane j -> flag slot j"))
   module.add(GlobalLoadB32(dst=vgpr(vVal), vaddr=vgpr(vOff), saddr=sgpr(flagBase, 2),
                            modifier=GLOBALModifiers(offset=0, scope=CacheScope.SCOPE_SYS), comment=comment))
   module.add(SWaitCnt(vlcnt=0, comment="fused-RS: wait flag poll"))
-  module.add(VCmpNeU32(VCC(), 1, vgpr(vVal), comment="fused-RS: flag[lane] != 1?"))
+  if want is None:
+    module.add(VCmpNeU32(VCC(), 1, vgpr(vVal), comment="fused-RS: flag[lane] != 1?"))
+    return
+  if bits:
+    module.add(VAndB32(dst=vgpr(vVal), src0=sgpr(want), src1=vgpr(vVal), comment="fused-RS: flag[lane] & band bit"))
+  module.add(VCmpNeU32(VCC(), sgpr(want), vgpr(vVal),
+                       comment="fused-RS: band bit missing?" if bits else "fused-RS: flag[lane] != every band?"))
+
+def fusedRSBand(module, dst, ck):
+  """The SGPR holding this work-group's absolute band, WorkGroup1 >> log2(ck): WorkGroup1, or dst."""
+  if ck == 1:
+    return "WorkGroup1"
+  module.add(SLShiftRightB32(dst=sgpr(dst), shiftHex=int(log2(ck)), src=sgpr("WorkGroup1"),
+                             comment="fused-RS: band = WorkGroup1 >> log2(Ck=%u)" % ck))
+  return dst
+
+def fusedRSBandBit(module, dst, bandS, rankS):
+  """dst = 1 << (bandS - rankS * segBands), the bit of absolute band bandS in owner rankS's flag slots."""
+  module.add(SMulI32(dst=sgpr(dst), src0=sgpr(rankS), src1=sgpr("FusedTokenTiles"),
+                     comment="fused-RS: owner's first band = owner * segBands"))
+  module.add(SSubU32(dst=sgpr(dst), src0=sgpr(bandS), src1=sgpr(dst), comment="fused-RS: band in the segment"))
+  module.add(SBfmB32(dst=sgpr(dst), src0=1, src1=sgpr(dst), comment="fused-RS: band bit"))
 
 def emitFusedRSRecvWait(module, kw):
-  """FusedA2A=GemmRS FusedRSWait=1 RECV wait, once before a store code tree. A RECV work-group
+  """FusedA2A=GemmRS FusedRSWait 1 or 2 RECV wait, once before a store code tree. A RECV work-group
   (FusedRSDst < 0) loads FusedMyRank, FusedW and FusedRSRecvDelta = peer_<myRank>_bufPtr - AddressD -
   myRank*segN*M*2 bytes; with W > 1, wave 0 polls this card's flag block (one lane per other source,
-  system scope) until every slot reads 1, invalidates to system scope and reads the flags again, and every
-  wave passes a barrier. Returns the SGPR pairs (FusedMyRank, FusedW) and FusedRSRecvDelta."""
+  system scope) until every slot reads 1 (FusedRSWait=2: has the bit of the work-group's band), invalidates
+  to system scope and reads the flags again, and every wave passes a barrier. Returns the SGPR pairs
+  (FusedMyRank, FusedW) and FusedRSRecvDelta."""
   from .Signature import fusedA2AKernArgLayout
   assert kw.states.kernel["WavefrontSize"] == 32, "FusedA2A=GemmRS RECV wait builds a wave32 EXEC mask"
-  assert kw.states.kernel["FusedRSWait"] == 1, kw.states.kernel["FusedRSWait"]
+  assert kw.states.kernel["FusedRSWait"] in (1, 2), kw.states.kernel["FusedRSWait"]
   layout = fusedA2AKernArgLayout()
   fusedBase = kw.states.fusedA2AKernArgBase
   endLabel = Label(kw.labels.getNameInc("fusedRS_recv_wait_end"), "")
@@ -328,17 +351,21 @@ def emitFusedRSRecvWait(module, kw):
   module.add(SCmpEQU32(src0=sgpr(tmp), src1=0, comment="fused-RS: wave 0?"))
   module.add(SCBranchSCC0(labelName=syncLabel.getLabelName(), comment="fused-RS: other waves -> barrier"))
   fusedRSOtherSourcesExec(module, tmp, rankW)
+  want = None
+  if kw.states.kernel["FusedRSWait"] == 2:
+    want = tmp
+    fusedRSBandBit(module, want, fusedRSBand(module, tmp + 1, kw.states.kernel["ClusterDim"][1]), rankW)
   vOff = kw.vgprPool.checkOut(1, tag="fusedRS_recvPollOff")
   vVal = kw.vgprPool.checkOut(1, tag="fusedRS_recvPollVal")
   module.add(pollLabel)
-  fusedRSFlagPoll(module, flagBase, vOff, vVal, "fused-RS RECV: poll flag[lane]")
+  fusedRSFlagPoll(module, flagBase, vOff, vVal, "fused-RS RECV: poll flag[lane]", want, bits=True)
   module.add(SCBranchVCCZ(labelName=arrivedLabel.getLabelName(), comment="fused-RS: every source arrived"))
   module.add(SSleep(simm16=FUSED_RS_POLL_SLEEP, comment="fused-RS: back off between polls"))
   module.add(SBranch(labelName=pollLabel.getLabelName(), comment="fused-RS: poll again"))
   module.add(arrivedLabel)
   module.add(GlobalInv(scope=CacheScope.SCOPE_SYS, comment="fused-RS RECV: acquire the receive slots"))
   # The reload's wait also retires the global_inv.
-  fusedRSFlagPoll(module, flagBase, vOff, vVal, "fused-RS RECV: reload flag[lane] after global_inv")
+  fusedRSFlagPoll(module, flagBase, vOff, vVal, "fused-RS RECV: reload flag[lane] after global_inv", want, bits=True)
   module.add(SCBranchVCCNZ(labelName=pollLabel.getLabelName(), comment="fused-RS: a source is still sending"))
   kw.vgprPool.checkIn(vVal)
   kw.vgprPool.checkIn(vOff)
@@ -3457,7 +3484,7 @@ class GlobalWriteBatchWriter:
       bandRows:     token rows per band, MT1 * token-tiles per band.
     """
     from .Signature import fusedA2AKernArgLayout
-    from .SdmaPacketEmitter import SdmaPacketEmitter, COPY_PACKET_DWORDS
+    from .SdmaPacketEmitter import SdmaPacketEmitter, ATOMIC_PACKET_DWORDS, COPY_PACKET_DWORDS
     from .SdmaRingEmitter import SdmaRingEmitter, CURSOR_PAIR_BYTES
 
     kw        = self.parentWriter
@@ -3466,6 +3493,8 @@ class GlobalWriteBatchWriter:
     gfx1250   = kw.states.version[:2] == (12, 5)
     pkt       = SdmaPacketEmitter(gfx1250=gfx1250)
     ring      = SdmaRingEmitter(groupImm=fusedBase + layout["peer_0_flagPtr"], gfx1250=gfx1250)
+    bandAtomic = self.kernel["ProblemType"]["FusedA2A"] == "GemmRS" and self.kernel["FusedRSWait"] == 2
+    reserveDwords = COPY_PACKET_DWORDS + (ATOMIC_PACKET_DWORDS if bandAtomic else 0)
 
     module.addComment1("fused-A2A: build + submit the SDMA COPY_SUBWIN packet")
 
@@ -3552,11 +3581,14 @@ class GlobalWriteBatchWriter:
     pendSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_sdmaPend", preventOverflow=False)
     offSgpr  = kw.sgprPool.checkOut(1, tag="fusedA2A_sdmaOff", preventOverflow=False)
     ring.emitReserveQueueSpace(module, kw, "FusedPeerGroupPtr", "FusedCounterPtr", cursorOffSgpr,
-                               cachedIdxSgpr, COPY_PACKET_DWORDS * 4, curSgpr, offSgpr)
+                               cachedIdxSgpr, reserveDwords * 4, curSgpr, offSgpr)
     module.add(SMovB64(dst=sgpr(pendSgpr, 2), src=sgpr(curSgpr, 2),
                        comment="pending = reserved base"))
     ring.emitPlacePacket(module, kw, "FusedPeerGroupPtr", pktBlock, COPY_PACKET_DWORDS,
                          pendSgpr, offSgpr)
+    if bandAtomic:
+      self._emitFusedRSBandAtomic(module, pkt, ring, pktBlock, dstRankSgpr, myRankSgpr, flagBaseSgpr, tmpSgpr,
+                                  bandSgpr, pendSgpr)
     ring.emitSubmitPacket(module, kw, "FusedPeerGroupPtr", "FusedCounterPtr", cursorOffSgpr,
                           curSgpr, pendSgpr)
 
@@ -3568,13 +3600,13 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(cursorOffSgpr)
 
   def _emitFusedA2AQueueTailAtomics(self, module, dstRankSgpr, myRankSgpr,
-                                    flagBaseSgpr, tmpSgpr):
+                                    flagBaseSgpr, tmpSgpr, peerFlag=True):
     """Close this card's queue to dst_rank with two ATOMIC ADD_RTN_32 in one
     reservation, behind every COPY already on it:
       peer_flagPtr[dst_rank][my_rank]               += 1   (dst_rank's DRAIN_RECV)
       peer_flagPtr[my_rank] + FUSED_A2A_OUTBOUND_OFFSET += 1   (this card's DRAIN_SEND)
     Once every queue has carried them, each flag slot reads 1 and the outbound
-    counter reads W (on gfx1250, W - FusedDrain[23:16]).
+    counter reads W (on gfx1250, W - FusedDrain[23:16]).  Without peerFlag, only the outbound ATOMIC.
 
     MUST be emitted after the last _emitFusedA2ASdmaIssue submit on this queue.
 
@@ -3595,7 +3627,8 @@ class GlobalWriteBatchWriter:
     pkt       = SdmaPacketEmitter(gfx1250=gfx1250)
     ring      = SdmaRingEmitter(groupImm=fusedBase + layout["peer_0_flagPtr"], gfx1250=gfx1250)
 
-    module.addComment1("fused-A2A: build + submit the SDMA queue-tail ATOMICs (peer flag, outbound)")
+    module.addComment1("fused-A2A: build + submit the SDMA queue-tail ATOMICs (%s)"
+                       % ("peer flag, outbound" if peerFlag else "outbound"))
 
     # A SCRATCH group offset: the loader overwrites it, and the ring emitters
     # below need FusedPeerGroupPtr left pointing at dst_rank's queue.
@@ -3624,16 +3657,19 @@ class GlobalWriteBatchWriter:
     else:
       pktBlock = kw.sgprPool.checkOutAligned(ATOMIC_PACKET_DWORDS, 4,
                                              tag="fusedA2A_obPacket", preventOverflow=False)
-    flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_obFlagAddr", preventOverflow=False)
-    self._fusedA2AComputeFlagAddr(module, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
-    self._emitFusedA2ABuildAtomic(module, pkt, pktBlock, flagAddrSgpr)
-    kw.sgprPool.checkIn(flagAddrSgpr)
+    if peerFlag:
+      flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_obFlagAddr", preventOverflow=False)
+      self._fusedA2AComputeFlagAddr(module, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
+      self._emitFusedA2ABuildAtomic(module, pkt, pktBlock, flagAddrSgpr)
+      kw.sgprPool.checkIn(flagAddrSgpr)
+    else:
+      self._emitFusedA2ABuildAtomic(module, pkt, pktBlock, selfBaseSgpr)
 
     curSgpr  = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_obCur", preventOverflow=False)
     pendSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedA2A_obPend", preventOverflow=False)
     offSgpr  = kw.sgprPool.checkOut(1, tag="fusedA2A_obOff", preventOverflow=False)
     ring.emitReserveQueueSpace(module, kw, "FusedPeerGroupPtr", "FusedCounterPtr", cursorOffSgpr,
-                               cachedIdxSgpr, 2 * ATOMIC_PACKET_DWORDS * 4, curSgpr, offSgpr)
+                               cachedIdxSgpr, (2 if peerFlag else 1) * ATOMIC_PACKET_DWORDS * 4, curSgpr, offSgpr)
     module.add(SMovB64(dst=sgpr(pendSgpr, 2), src=sgpr(curSgpr, 2),
                        comment="pending = reserved base"))
     ring.emitPlacePacket(module, kw, "FusedPeerGroupPtr", pktBlock, ATOMIC_PACKET_DWORDS,
@@ -3643,16 +3679,17 @@ class GlobalWriteBatchWriter:
     # (emitPlacePacket, BLOCK REUSE); the wrap padding went out with it.
     #
     # gfx1250: the block of lane 1, built and placed inside one narrow-EXEC span.
-    if gfx1250:
-      module.add(self.getEdgeMovInstType()(EXEC(), 2, "fused-A2A: the outbound ATOMIC lane"))
-    else:
-      module.add(SMovB32(dst=sgpr(offSgpr), src=0, comment="outbound ATOMIC follows the flag ATOMIC: no further padding"))
-    self._emitFusedA2ABuildAtomic(module, pkt, pktBlock, selfBaseSgpr)
-    ring.emitPlacePacket(module, kw, "FusedPeerGroupPtr", pktBlock, ATOMIC_PACKET_DWORDS,
-                         pendSgpr, None if gfx1250 else offSgpr)
-    if gfx1250:
-      module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: end of the outbound ATOMIC lane"))
-      module.add(self.getEdgeMovInstType()(EXEC(), 1, "fused-A2A: back to lane 0"))
+    if peerFlag:
+      if gfx1250:
+        module.add(self.getEdgeMovInstType()(EXEC(), 2, "fused-A2A: the outbound ATOMIC lane"))
+      else:
+        module.add(SMovB32(dst=sgpr(offSgpr), src=0, comment="outbound ATOMIC follows the flag ATOMIC: no further padding"))
+      self._emitFusedA2ABuildAtomic(module, pkt, pktBlock, selfBaseSgpr)
+      ring.emitPlacePacket(module, kw, "FusedPeerGroupPtr", pktBlock, ATOMIC_PACKET_DWORDS,
+                           pendSgpr, None if gfx1250 else offSgpr)
+      if gfx1250:
+        module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: end of the outbound ATOMIC lane"))
+        module.add(self.getEdgeMovInstType()(EXEC(), 1, "fused-A2A: back to lane 0"))
     ring.emitSubmitPacket(module, kw, "FusedPeerGroupPtr", "FusedCounterPtr", cursorOffSgpr,
                           curSgpr, pendSgpr)
 
@@ -3664,14 +3701,33 @@ class GlobalWriteBatchWriter:
     kw.sgprPool.checkIn(cursorOffSgpr)
     kw.sgprPool.checkIn(selfBaseSgpr)
 
-  def _emitFusedA2ABuildAtomic(self, module, pkt, pktBlock, dstAddrSgpr):
-    """The ATOMIC packet raising the 2-SGPR target, into pktBlock: SGPRs, or on
+  def _emitFusedRSBandAtomic(self, module, pkt, ring, pktBlock, ownerSgpr, myRankSgpr, flagBaseSgpr, tmpSgpr,
+                             bandSgpr, pendSgpr):
+    """FusedRSWait=2: place, behind the band's COPY in its reservation, the ATOMIC adding the band's bit
+    (fusedRSBandBit) to peer_flagPtr[owner][myRank]. Lane 1 builds and places it (emitPlacePacket, BLOCK REUSE).
+    tmpSgpr: 2 scratch SGPRs."""
+    from .SdmaPacketEmitter import ATOMIC_PACKET_DWORDS
+    kw = self.parentWriter
+    assert pkt.gfx1250, "FusedA2A=GemmRS places packets from VGPR lanes"
+    flagAddrSgpr = kw.sgprPool.checkOutAligned(2, 2, tag="fusedRS_bandFlagAddr", preventOverflow=False)
+    self._fusedA2AComputeFlagAddr(module, flagBaseSgpr, myRankSgpr, flagAddrSgpr, tmpSgpr)
+    fusedRSBandBit(module, tmpSgpr + 1, bandSgpr, ownerSgpr)
+    module.add(self.getEdgeMovInstType()(EXEC(), 2, "fused-RS: the band ATOMIC lane"))
+    self._emitFusedA2ABuildAtomic(module, pkt, pktBlock, flagAddrSgpr, sgpr(tmpSgpr + 1))
+    ring.emitPlacePacket(module, kw, "FusedPeerGroupPtr", pktBlock, ATOMIC_PACKET_DWORDS, pendSgpr, None)
+    module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-RS: end of the band ATOMIC lane"))
+    module.add(self.getEdgeMovInstType()(EXEC(), 1, "fused-RS: back to lane 0"))
+    kw.sgprPool.checkIn(flagAddrSgpr)
+
+  def _emitFusedA2ABuildAtomic(self, module, pkt, pktBlock, dstAddrSgpr, addend=1):
+    """The ATOMIC packet adding `addend` to the 2-SGPR target, into pktBlock: SGPRs, or on
     gfx1250 the VGPRs of the active lanes."""
     if not pkt.gfx1250:
+      assert addend == 1, addend
       pkt.emitBuildAtomicPacket(module, pktBlock, dstAddrSgpr)
       return
     from .SdmaPacketEmitter import SIGNAL_DW_ADDR
-    pkt.emitBuildAtomicPacketUniformV(module, pktBlock)
+    pkt.emitBuildAtomicPacketUniformV(module, pktBlock, addend)
     module.add(VMovB32(dst=vgpr(pktBlock + SIGNAL_DW_ADDR), src=sgpr(dstAddrSgpr),
                        comment="ATOMIC DW1: addr lo"))
     module.add(VMovB32(dst=vgpr(pktBlock + SIGNAL_DW_ADDR + 1), src=sgpr(dstAddrSgpr + 1),
@@ -4250,7 +4306,7 @@ class GlobalWriteBatchWriter:
     module.add(self.getEdgeMovInstType()(EXEC(), -1, "fused-A2A: restore full exec after single-lane handshake"))
 
   def _emitFusedRSRecvAdd(self, module: Module):
-    """FusedA2A=GemmRS RECV pass, FusedRSWait=1: for each source src != myRank, load the batch's elements of
+    """FusedA2A=GemmRS RECV pass, FusedRSWait 1 or 2: for each source src != myRank, load the batch's elements of
     receive slot src into elementDataRecv and add them, as FP32, to the batch's values. The slot is read
     through SrdD + FusedRSRecvDelta + src*segN*M*2 with D's address VGPRs, offsets and row steps."""
     kw = self.parentWriter
@@ -4351,11 +4407,8 @@ class GlobalWriteBatchWriter:
                                 comment="fused-RS: WGs per band = M-tiles * Ck=%u" % ck))
     module.add(SSubU32(dst=sgpr(targetSgpr), src0=sgpr(targetSgpr), src1=1,
                        comment="fused-RS: counter1 wrap limit = WGs per band - 1"))
-    bandSgpr = "WorkGroup1"
-    if ck > 1:
-      bandSgpr = kw.sgprPool.checkOut(1, tag="fusedRS_band", preventOverflow=False)
-      module.add(SLShiftRightB32(dst=sgpr(bandSgpr), shiftHex=int(log2(ck)), src=sgpr("WorkGroup1"),
-                                 comment="fused-RS: band = WorkGroup1 >> log2(Ck=%u)" % ck))
+    bandSgpr = fusedRSBand(module, kw.sgprPool.checkOut(1, tag="fusedRS_band", preventOverflow=False)
+                           if ck > 1 else None, ck)
     module.add(SLShiftLeftB32(dst=sgpr(tmpSgpr), src=sgpr(bandSgpr), shiftHex=2,
                               comment="fused-RS: counter1 index = band; * 4"))
     module.add(SAddU32(dst=sgpr(counterSgpr), src0=sgpr("FusedCounterPtr"), src1=sgpr(tmpSgpr),
@@ -4397,7 +4450,8 @@ class GlobalWriteBatchWriter:
     module.add(SCBranchSCC0(labelName=notLastLabel.getLabelName(), comment="fused-RS: no -> no queue tail"))
     kw.sgprPool.checkIn(limit2Sgpr)
     kw.sgprPool.checkIn(counter2Sgpr)
-    self._emitFusedA2AQueueTailAtomics(module, "FusedRSDst", myRankSgpr, flagBaseSgpr, tmpSgpr)
+    self._emitFusedA2AQueueTailAtomics(module, "FusedRSDst", myRankSgpr, flagBaseSgpr, tmpSgpr,
+                                       peerFlag=self.kernel["FusedRSWait"] != 2)
     module.add(notLastLabel)
     kw.sgprPool.checkIn(flagBaseSgpr)
     kw.sgprPool.checkIn(tmpSgpr)
@@ -4435,9 +4489,9 @@ class GlobalWriteBatchWriter:
 
   def _emitFusedRSDrain(self, module: Module):
     """DRAIN, run by lane 0 of the last WG to tally; skipped when W == 1.  Inbound, regardless of
-    FusedDrain: wait until every other source's slot of this card's flag block reads 1, then zero
-    those slots.  Outbound, under DRAIN_SEND: wait until the outbound counter reads W - 1, then zero
-    it.  The cursor region is cleared in every case."""
+    FusedDrain: wait until every other source's slot of this card's flag block reads 1 (FusedRSWait=2:
+    (1 << segBands) - 1), then zero those slots.  Outbound, under DRAIN_SEND: wait until the outbound
+    counter reads W - 1, then zero it.  The cursor region is cleared in every case."""
     from .Signature import (FUSED_A2A_CURSOR_BYTES, FUSED_A2A_DRAIN_SEND, FUSED_A2A_OUTBOUND_OFFSET,
                             fusedA2AKernArgLayout)
     from .SdmaRingEmitter import SdmaRingEmitter
@@ -4466,11 +4520,17 @@ class GlobalWriteBatchWriter:
     tmpSgpr = kw.sgprPool.checkOut(2, tag="fusedRS_drainTmp", preventOverflow=False)
     self._fusedA2ALoadFlagBaseByRank(module, flagBaseSgpr, rankWSgpr, tmpSgpr)
     fusedRSOtherSourcesExec(module, tmpSgpr, rankWSgpr)
+    want = None
+    if self.kernel["FusedRSWait"] == 2:
+      want = tmpSgpr
+      module.add(SSubU32(dst=sgpr(want), src0=32, src1=sgpr("FusedTokenTiles"), comment="fused-RS: 32 - segBands"))
+      module.add(SLShiftRightB32(dst=sgpr(want), shiftHex=sgpr(want), src=-1,
+                                 comment="fused-RS: every band = (1 << segBands) - 1"))
 
     vOff = kw.vgprPool.checkOut(1, tag="fusedRS_drainPollOff")
     vVal = kw.vgprPool.checkOut(1, tag="fusedRS_drainPollVal")
     module.add(pollLabel)
-    fusedRSFlagPoll(module, flagBaseSgpr, vOff, vVal, "fused-RS: poll flag[lane]")
+    fusedRSFlagPoll(module, flagBaseSgpr, vOff, vVal, "fused-RS: poll flag[lane]", want)
     module.add(SCBranchVCCNZ(labelName=pollLabel.getLabelName(), comment="fused-RS: a source is still sending"))
     module.add(VMovB32(dst=vgpr(vVal), src=0, comment="fused-RS: zero"))
     module.add(GlobalStoreB32(vaddr=vgpr(vOff), src=vgpr(vVal), saddr=sgpr(flagBaseSgpr, 2),

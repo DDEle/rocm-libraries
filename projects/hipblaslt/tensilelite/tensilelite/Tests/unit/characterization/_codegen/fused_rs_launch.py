@@ -37,10 +37,12 @@ HANDSHAKE_START = "fused-RS: full exec before wave-0 election"
 HANDSHAKE_END = "fused-RS: restore full exec after the handshake"
 POLL = "fused-RS: poll flag[lane]"
 SEND_POLL = "fused-RS: poll the outbound counter"
+FLAG_CLEAR = "fused-RS: clear flag[lane]"
 DRAIN_START = "fused-RS: W == 1?"
 RECV_WAIT = "fused-RS RECV wait: own segment?"
 RECV_WAIT_END = r"label_fusedRS_recv_wait_end\w*"
 RECV_POLL = "fused-RS RECV: poll flag[lane]"
+RECV_RELOAD = "fused-RS RECV: reload flag[lane] after global_inv"
 RECV_LOAD = "fused-RS RECV: load slot src"
 
 M32 = 0xFFFFFFFF
@@ -204,9 +206,11 @@ _VALU_F32 = {
 @dataclass
 class Launch:
     copies: list = field(default_factory=list)          # (rank, queue, fields)
-    queues: dict = field(default_factory=lambda: defaultdict(list))   # (rank, queue) -> [("COPY"|"ATOMIC", ...)]
+    # (rank, queue) -> [("COPY", fields) | ("ATOMIC", addr, addend)]
+    queues: dict = field(default_factory=lambda: defaultdict(list))
     incs: list = field(default_factory=list)            # (rank, addr, limit)
     polls: list = field(default_factory=list)           # (rank, comment, exec)
+    inbound: dict = field(default_factory=dict)         # rank -> its flag slots when its DRAIN clears them
     drains: list = field(default_factory=list)          # rank
     passes: list = field(default_factory=list)          # (rank, wg, "PUSH"|"RECV")
     events: list = field(default_factory=list)          # (wave, "inv")
@@ -261,6 +265,8 @@ class World:
                 at = self.queue(r, j) + done % SDMA_QUEUE_SIZE
                 dw = [self.mem.get(at + 4 * i, 0) for i in range(COPY_PACKET_DWORDS)]
                 op = dw[0] & 0xFF
+                size = {SDMA_OP_COPY_SUBWIN: COPY_PACKET_DWORDS, SDMA_OP_ATOMIC: ATOMIC_PACKET_DWORDS}.get(op, 1) * 4
+                assert done % SDMA_QUEUE_SIZE + size <= SDMA_QUEUE_SIZE, f"queue {(r, j)}: packet across the ring end"
                 if op == 0:
                     done += 4
                 elif op == SDMA_OP_COPY_SUBWIN:
@@ -276,7 +282,7 @@ class World:
                 elif op == SDMA_OP_ATOMIC:
                     addr = dw[SIGNAL_DW_ADDR] | dw[SIGNAL_DW_ADDR + 1] << 32
                     self.mem[addr] = (self.mem.get(addr, 0) + dw[3]) & M32
-                    launch.queues[(r, j)].append(("ATOMIC", addr))
+                    launch.queues[(r, j)].append(("ATOMIC", addr, dw[3]))
                     done += 4 * ATOMIC_PACKET_DWORDS
                 else:
                     pytest.fail(f"queue {(r, j)}: unknown SDMA packet {dw[0]:#x}")
@@ -340,6 +346,8 @@ class World:
             if comment == DRAIN_START and started:
                 launch.drains.append(rank)
                 launch.log.append(("drain", rank, None))
+            if comment == FLAG_CLEAR:
+                launch.inbound[rank] = [self.mem.get(self.flags(rank) + 4 * j, 0) for j in range(self.w)]
             nxt = self._step(launch, rank, st, pc)
             if comment == HANDSHAKE_END:
                 return

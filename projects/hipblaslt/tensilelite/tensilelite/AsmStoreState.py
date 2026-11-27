@@ -143,7 +143,7 @@ class StoreState:
     def __init__(self, kernelWriter, kernel, gwvw, edge, beta, atomic, elements, vectorDataTypes, dim, isWorkspace=False,
                  emitGateResidual=False, fusedRSRecv=False):
         self.kernelWriter = kernelWriter
-        # FusedA2A=GemmRS FusedRSWait=1 RECV pass: a receive-slot staging block per element.
+        # FusedA2A=GemmRS FusedRSWait 1 or 2 RECV pass: a receive-slot staging block per element.
         self.fusedRSRecv = fusedRSRecv
         self.kernel = kernel
         self.lsu = kernel["LocalSplitU"]

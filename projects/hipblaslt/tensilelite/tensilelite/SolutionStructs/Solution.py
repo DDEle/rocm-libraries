@@ -2802,15 +2802,16 @@ class Solution(collections.abc.Mapping):
       if state["UseSubtileImpl"]:
         reject(state, printRejectionReason, "FusedA2A=GemmRS requires UseSubtileImpl=0")
         return
-      if state["FusedRSWait"] not in (0, 1):
-        reject(state, printRejectionReason, "FusedA2A=GemmRS requires FusedRSWait 0 or 1")
+      if state["FusedRSWait"] not in (0, 1, 2):
+        reject(state, printRejectionReason, "FusedA2A=GemmRS requires FusedRSWait 0, 1 or 2")
         return
-      if state["FusedRSWait"] == 1:
+      if state["FusedRSWait"] != 0:
         for bad, need in ((state["InterleaveAlpha"] == 2, "InterleaveAlpha != 2"),
                           (state["CompactLoopStore"], "CompactLoopStore=False"),
                           (state["StoreRemapVectorWidth"] != 0, "StoreRemapVectorWidth=0")):
           if bad:
-            reject(state, printRejectionReason, "FusedA2A=GemmRS with FusedRSWait=1 requires " + need)
+            reject(state, printRejectionReason,
+                   "FusedA2A=GemmRS with FusedRSWait=%d requires %s" % (state["FusedRSWait"], need))
             return
 
     if state["A2ASubRounds"] != 1 and fusedA2A != "A2AGemm":

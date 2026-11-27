@@ -1,6 +1,6 @@
 # Copyright Advanced Micro Devices, Inc., or its affiliates.
 # SPDX-License-Identifier: MIT
-"""gfx1250 fused GEMM+RS (FusedA2A: GemmRS) RECV wait and reduce (FusedRSWait=1) characterization.
+"""gfx1250 fused GEMM+RS (FusedA2A: GemmRS) RECV wait and reduce (FusedRSWait 1 and 2) characterization.
 
 Runs every wave of one work-group (fused_rs_launch.Tile) from the start of each store code tree through
 the RECV wait, the receive-slot reduce and the D stores, against modelled flags and receive buffers, for
@@ -71,10 +71,10 @@ def _origin(k, reg):
 
 
 @functools.lru_cache(maxsize=None)
-def _position(cluster_dim, base, tree):
+def _position(cluster_dim, wait, base, tree):
     """{(dm, dn): (wave, register, lane)} of the accumulator a tile element is stored from, from W=1 launches
     (no wait, no source to add) whose accumulators hold wave, register % 256, register // 256 and lane."""
-    k = dict(_kernels(cluster_dim, 1))[base]
+    k = dict(_kernels(cluster_dim, wait))[base]
     parts = []
     for part in (lambda w, r, i: w, lambda w, r, i: r % 256, lambda w, r, i: r // 256, lambda w, r, i: i):
         world = L.World(k, 1, 1, 1, drain=3)
@@ -103,13 +103,14 @@ def _check_order(where, k, tile, world_size):
     assert not tile.unacquired, f"{where}: {len(tile.unacquired)} receive reads before global_inv retired"
 
 
+@pytest.mark.parametrize("wait", [1, 2])
 @pytest.mark.parametrize("cluster_dim", _CLUSTERS)
-def test_fused_rs_gfx1250_recv_wait_and_reduce(cluster_dim):
+def test_fused_rs_gfx1250_recv_wait_and_reduce(cluster_dim, wait):
     rounding = {"own rounded first": 0, "sources added first": 0}
-    for base, k in _kernels(cluster_dim, 1):
+    for base, k in _kernels(cluster_dim, wait):
         for tree in k.trees:
             alpha = _alpha(tree)
-            pos = _position(cluster_dim, base, tree)
+            pos = _position(cluster_dim, wait, base, tree)
             for world_size in _WORLDS:
                 for rank in range(world_size):
                     where = f"Kernel {base!r} {tree} W={world_size} rank {rank}"
@@ -170,12 +171,13 @@ def _wait_block(k, start):
     return [(code, c) for code, c in k.lines[start:k.wait_end(start)] if code]
 
 
+@pytest.mark.parametrize("wait", [1, 2])
 @pytest.mark.parametrize("cluster_dim", _CLUSTERS)
-def test_fused_rs_gfx1250_recv_wait_code(cluster_dim):
+def test_fused_rs_gfx1250_recv_wait_code(cluster_dim, wait):
     for base, k in _kernels(cluster_dim, 0):
         assert not [c for _code, c in k.lines if c in (L.RECV_WAIT, L.RECV_POLL, L.RECV_LOAD)], (
             f"Kernel {base!r}: FusedRSWait=0 waits or reduces")
-    for base, k in _kernels(cluster_dim, 1):
+    for base, k in _kernels(cluster_dim, wait):
         assert_assembles(k.src, base)
         waits = [i for i, (_code, c) in enumerate(k.lines) if c == L.RECV_WAIT]
         trees = sorted(k.trees.values())
@@ -183,13 +185,18 @@ def test_fused_rs_gfx1250_recv_wait_code(cluster_dim):
         for tree, wait in zip(trees, waits):
             first_gate = min(g for g in k.gates if g > tree)
             assert tree < wait < first_gate, f"Kernel {base!r}: wait at {wait} not before the gates of {tree}"
-            codes = [code for code, _c in _wait_block(k, wait)]
+            block = _wait_block(k, wait)
+            codes = [code for code, _c in block]
             inv = codes.index("global_inv scope:SCOPE_SYS")
             first = lambda p, at=0: next(i for i, c in enumerate(codes[at:], at) if c.startswith(p))
-            order = [first("global_load_b32"), first("s_sleep"), inv, first("s_wait_loadcnt 0", inv),
+            reload = next(i for i, (_code, c) in enumerate(block) if c == L.RECV_RELOAD)
+            order = [first("global_load_b32"), first("s_sleep"), inv, reload, first("s_wait_loadcnt 0", reload),
                      first("s_barrier_signal -1", inv), first("s_barrier_wait -1", inv)]
             assert order == sorted(order), f"Kernel {base!r}: wait order {order}"
-            assert "scope:SCOPE_SYS" in codes[order[0]], codes[order[0]]
+            assert "scope:SCOPE_SYS" in codes[order[0]] and "scope:SCOPE_SYS" in codes[reload], codes[order[0]]
+            recv_load = next(i for i in range(k.wait_end(wait), len(k.lines)) if k.lines[i][1] == L.RECV_LOAD)
+            assert recv_load < next(t for t in trees + [len(k.lines)] if t > wait), (
+                f"Kernel {base!r}: no receive load in the store tree of the wait at {wait}")
             assert sum(c.startswith("global_inv") for c in codes) == 1
             assert sum(c.startswith("s_barrier_wait") for c in codes) == 1
         for gate in k.gates:

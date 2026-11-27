@@ -59,16 +59,30 @@ def _check_copies(where, world, launch):
             assert sorted(rows.get((j, r), [])) == want, f"{where}: rank {r} sends {rows.get((j, r))} to {j}"
 
 
-def _check_queues(where, world, launch):
+def _check_queues(where, world, launch, wait):
+    """FusedRSWait 0, 1: the band COPYs, then +1 to the owner's flag slot and +1 to the outbound counter.
+    FusedRSWait 2: each band COPY followed by +(1 << band in the segment) to the owner's flag slot, then +1 to
+    the outbound counter."""
+    band_rows = world.k.mt1 * world.k.ck
     for r in range(world.w):
         for j in range(world.w):
             q = launch.queues.get((r, j), [])
             if j == r:
                 assert q == [], f"{where}: rank {r} uses its own queue"
                 continue
-            assert [p[0] for p in q] == ["COPY"] * world.seg_bands + ["ATOMIC"] * 2, f"{where}: queue {(r, j)}"
-            assert q[-2][1] == world.flags(j) + 4 * r and q[-1][1] == world.outbound(r), (
-                f"{where}: queue {(r, j)} tail targets {q[-2][1]:#x}, {q[-1][1]:#x}")
+            at = f"{where}: queue {(r, j)}"
+            assert q[-1] == ("ATOMIC", world.outbound(r), 1), f"{at} ends {q[-1]}"
+            if wait != 2:
+                assert [p[0] for p in q] == ["COPY"] * world.seg_bands + ["ATOMIC"] * 2, at
+                assert q[-2] == ("ATOMIC", world.flags(j) + 4 * r, 1), f"{at} tail {q[-2]}"
+                continue
+            assert [p[0] for p in q] == ["COPY", "ATOMIC"] * world.seg_bands + ["ATOMIC"], at
+            bits = []
+            for (_c, f), atomic in zip(q[:-1:2], q[1:-1:2]):
+                band = ((f["src"] - world.d(r)) // (2 * world.m) - j * world.seg_n) // band_rows
+                assert atomic == ("ATOMIC", world.flags(j) + 4 * r, 1 << band), f"{at}: band {band} {atomic}"
+                bits.append(band)
+            assert sorted(bits) == list(range(world.seg_bands)), f"{at}: bands {bits}"
 
 
 def _check_counters(where, world, launch):
@@ -90,7 +104,7 @@ def _check_counters(where, world, launch):
         assert world.mem.get(addr, 0) == 0, f"{where}: counter {addr:#x} left at {world.mem[addr]}"
 
 
-@pytest.mark.parametrize("wait", [0, 1])
+@pytest.mark.parametrize("wait", [0, 1, 2])
 @pytest.mark.parametrize("cluster_dim", _CLUSTERS)
 def test_fused_rs_gfx1250_push(cluster_dim, wait):
     for base, k in _kernels(cluster_dim, wait):
@@ -101,11 +115,11 @@ def test_fused_rs_gfx1250_push(cluster_dim, wait):
                     where = f"Kernel {base!r} W={world_size} grid {(r_units, seg_bands)} launch {n}"
                     launch = world.launch()
                     _check_copies(where, world, launch)
-                    _check_queues(where, world, launch)
+                    _check_queues(where, world, launch, wait)
                     _check_counters(where, world, launch)
 
 
-@pytest.mark.parametrize("wait", [0, 1])
+@pytest.mark.parametrize("wait", [0, 1, 2])
 @pytest.mark.parametrize("cluster_dim", _CLUSTERS)
 def test_fused_rs_gfx1250_store_passes(cluster_dim, wait):
     for base, k in _kernels(cluster_dim, wait):
